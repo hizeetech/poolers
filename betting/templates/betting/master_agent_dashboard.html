@@ -1,0 +1,127 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Master Agent Dashboard - Pool Betting{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2 class="text-center text-primary">Master Agent Dashboard for {{ request.user.get_full_name|default:request.user.email }}</h2>
+            <p class="lead text-center text-muted">Overview of your downline performance and management tools.</p>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row">
+        <!-- Summary Statistics Cards -->
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100 border-primary">
+                <div class="card-body">
+                    <h5 class="card-title text-primary">Total Downline Users</h5>
+                    <p class="card-text fs-3 fw-bold">{{ total_downline_users }}</p>
+                    <p class="card-text text-muted">Including Super Agents, Agents, and Players.</p>
+                </div>
+                <div class="card-footer bg-light border-top-0">
+                    <a href="{% url 'downline_users' %}" class="text-primary text-decoration-none">View All Users <i class="fas fa-arrow-right"></i></a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100 border-success">
+                <div class="card-body">
+                    <h5 class="card-title text-success">Total Downline Stake</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_downline_stake|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total amount staked by your downline users.</p>
+                </div>
+                <div class="card-footer bg-light border-top-0">
+                    <a href="{% url 'downline_bets' %}" class="text-success text-decoration-none">View All Bets <i class="fas fa-arrow-right"></i></a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100 border-info">
+                <div class="card-body">
+                    <h5 class="card-title text-info">Total Downline Winnings</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_downline_winnings|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total payouts to your downline users.</p>
+                </div>
+                <div class="card-footer bg-light border-top-0">
+                    <a href="{% url 'downline_bets' %}" class="text-info text-decoration-none">Analyze Payouts <i class="fas fa-arrow-right"></i></a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <!-- Additional breakdown -->
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Downline User Breakdown</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Super Agents
+                            <span class="badge bg-secondary rounded-pill">{{ total_downline_agents }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Agents
+                            <span class="badge bg-secondary rounded-pill">{{ total_downline_agents }}</span> {# Assuming total_downline_agents also includes direct agents for now #}
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Players
+                            <span class="badge bg-secondary rounded-pill">{{ total_downline_players }}</span>
+                        </li>
+                    </ul>
+                </div>
+                <div class="card-footer bg-light border-top-0">
+                    <a href="{% url 'downline_users' %}" class="text-primary text-decoration-none">Manage Downline Users <i class="fas fa-external-link-alt"></i></a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0">Quick Links</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item">
+                            <a href="{% url 'manage_fixtures' %}" class="text-decoration-none d-block py-2">
+                                <i class="fas fa-futbol me-2"></i> Manage Fixtures (Admin View)
+                            </a>
+                        </li>
+                        <li class="list-group-item">
+                            <a href="{% url 'withdraw_request_list' %}" class="text-decoration-none d-block py-2">
+                                <i class="fas fa-wallet me-2"></i> View Withdrawal Requests (Admin View)
+                            </a>
+                        </li>
+                        <li class="list-group-item">
+                            <a href="{% url 'manage_agent_payouts' %}" class="text-decoration-none d-block py-2">
+                                <i class="fas fa-money-bill-wave me-2"></i> Manage Agent Payouts (Admin View)
+                            </a>
+                        </li>
+                        <li class="list-group-item">
+                            <a href="{% url 'profile' %}" class="text-decoration-none d-block py-2">
+                                <i class="fas fa-user-circle me-2"></i> My Profile
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include Font Awesome for icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

@@ -1,0 +1,59 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-10 col-lg-9">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title text-center mb-4 fw-bold text-dark">{{ report_title }}</h2>
+
+                    {# Display Django messages #}
+                    {% if messages %}
+                        <ul class="messages list-unstyled px-0 mx-0">
+                            {% for message in messages %}
+                                <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
+                                    {{ message }}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+
+                    {% if downline_wallets %}
+                        <div class="table-responsive mt-4">
+                            <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm">
+                                <thead class="bg-light">
+                                    <tr>
+                                        <th scope="col">User Email</th>
+                                        <th scope="col">User Type</th>
+                                        <th scope="col">Current Balance (₦)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for wallet in downline_wallets %}
+                                        <tr>
+                                            <td>{{ wallet.user.email }}</td>
+                                            <td>{{ wallet.user.get_user_type_display }}</td>
+                                            <td>{{ wallet.balance|floatformat:2 }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-center text-muted">No downline wallet data available for this report.</p>
+                    {% endif %}
+
+                    <div class="text-center mt-4">
+                        <a href="{% url 'betting:agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

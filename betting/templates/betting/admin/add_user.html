@@ -1,0 +1,33 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Add New User - Admin{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Add New User</h2>
+
+    <div class="card border-0 shadow-sm p-4">
+        <form method="post" class="row g-3">
+            {% csrf_token %}
+            {% for field in form %}
+                <div class="mb-3 col-md-6">
+                    <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}:</label>
+                    {{ field }}
+                    {% if field.help_text %}
+                        <div class="form-text text-muted">{{ field.help_text }}</div>
+                    {% endif %}
+                    {% for error in field.errors %}
+                        <div class="text-danger small">{{ error }}</div>
+                    {% endfor %}
+                </div>
+            {% endfor %}
+
+            <div class="col-12 mt-4 d-flex justify-content-start gap-2">
+                <button type="submit" class="btn btn-primary rounded-pill px-4 py-2">Add User</button>
+                <a href="{% url 'betting_admin:manage_users' %}" class="btn btn-secondary rounded-pill px-4 py-2">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

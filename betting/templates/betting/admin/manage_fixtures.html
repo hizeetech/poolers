@@ -1,0 +1,71 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Manage Fixtures{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Manage Fixtures</h2>
+
+    <div class="mb-4 d-flex justify-content-between align-items-center"> {# Added align-items-center for vertical alignment #} {# Link back to Admin Dashboard #}
+        <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-secondary rounded-pill px-4 py-2 shadow-sm">
+            <i class="fas fa-arrow-left me-2"></i> Back to Dashboard
+        </a>
+        {# Link to add a new fixture #}
+        <a href="{% url 'betting_admin:add_fixture' %}" class="btn btn-success rounded-pill px-4 py-2 shadow-sm">
+            <i class="fas fa-plus-circle me-2"></i> Add New Fixture
+        </a>
+    </div>
+
+    {% if fixtures %}
+    <div class="table-responsive shadow-sm rounded-lg">
+        <table class="table table-hover table-striped mb-0">
+            <thead class="bg-dark text-white">
+                <tr>
+                    <th scope="col" class="py-3 px-4">ID</th>
+                    <th scope="col" class="py-3 px-4">S/N</th>
+                    <th scope="col" class="py-3 px-4">Period</th>
+                    <th scope="col" class="py-3 px-4">Match</th>
+                    <th scope="col" class="py-3 px-4">Date/Time</th>
+                    <th scope="col" class="py-3 px-4">Status</th>
+                    <th scope="col" class="py-3 px-4">Score</th>
+                    <th scope="col" class="py-3 px-4">Result</th>
+                    <th scope="col" class="py-3 px-4">Odds</th>
+                    <th scope="col" class="py-3 px-4 text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for fixture in fixtures %}
+                <tr>
+                    <td class="py-3 px-4">{{ fixture.id|truncatechars:8 }}</td>
+                    <td class="py-3 px-4">{{ fixture.serial_number|default:"-" }}</td>
+                    <td class="py-3 px-4">{{ fixture.betting_period.name }}</td>
+                    <td class="py-3 px-4">{{ fixture.home_team }} vs {{ fixture.away_team }}</td>
+                    <td class="py-3 px-4">{{ fixture.match_date|date:"Y-m-d" }} {{ fixture.match_time|time:"H:i" }}</td>
+                    <td class="py-3 px-4">
+                        <span class="badge 
+                            {% if fixture.status == 'scheduled' %}bg-warning text-dark
+                            {% elif fixture.status == 'finished' %}bg-info text-dark
+                            {% elif fixture.status == 'settled' %}bg-success
+                            {% elif fixture.status == 'cancelled' %}bg-danger
+                            {% endif %}">
+                            {{ fixture.get_status_display }}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4">{% if fixture.home_score is not None and fixture.away_score is not None %}{{ fixture.home_score }}-{{ fixture.away_score }}{% else %}N/A{% endif %}</td>
+                    <td class="py-3 px-4">{% if fixture.result %}{{ fixture.get_result_display }}{% else %}N/A{% endif %}</td>
+                    <td class="py-3 px-4 small">
+                        H:{{ fixture.home_win_odd|floatformat:2 }} | D:{{ fixture.draw_odd|floatformat:2 }} | A:{{ fixture.away_win_odd|floatformat:2 }}<br> O1.5:{{ fixture.over1_5_odd|floatformat:2 }} | U1.5:{{ fixture.under1_5_odd|floatformat:2 }}<br>                        O2.5:{{ fixture.over2_5_odd|floatformat:2 }} | U2.5:{{ fixture.under2_5_odd|floatformat:2 }}<br> BTTSY:{{ fixture.btts_yes_odd|floatformat:2 }} | BTTSN:{{ fixture.btts_no_odd|floatformat:2 }}
+                    </td>
+                    <td class="py-3 px-4 text-end">
+                        <a href="{% url 'betting_admin:edit_fixture' fixture_id=fixture.id %}" class="btn btn-sm btn-outline-primary me-1 rounded-pill">Edit</a>
+                        <a href="{% url 'betting_admin:delete_fixture' fixture_id=fixture.id %}" class="btn btn-sm btn-outline-danger me-1 rounded-pill">Delete</a> {% if fixture.status == 'pending' or fixture.status == 'completed' %}
+                        <a href="{% url 'betting_admin:declare_result' fixture_id=fixture.id %}" class="btn btn-sm btn-outline-info rounded-pill">Declare Result</a> {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info text-center" role="alert">
+        No fixtures found. Click "Add New Fixture" to get started!
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

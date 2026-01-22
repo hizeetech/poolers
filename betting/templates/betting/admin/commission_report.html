@@ -1,0 +1,81 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">{{ report_title }}</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Report</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_commission_report' %}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="user_filter" class="form-label">Agent:</label>
+                <select name="user" id="user_filter" class="form-select rounded-md">
+                    <option value="all">All Agents</option>
+                    {% for user_obj in all_users %}
+                        <option value="{{ user_obj.id }}" {% if user_obj.id|stringformat:"s" == current_user_filter %}selected{% endif %}>{{ user_obj.email }} ({{ user_obj.get_user_type_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="start_date" class="form-label">Start Date:</label>
+                <input type="date" name="start_date" id="start_date" class="form-control rounded-md" value="{{ start_date_filter }}">
+            </div>
+            <div class="col-md-4">
+                <label for="end_date" class="form-label">End Date:</label>
+                <input type="date" name="end_date" id="end_date" class="form-control rounded-md" value="{{ end_date_filter }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
+
+    {% if commission_data %}
+        {% for data in commission_data %}
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-header bg-dark text-white rounded-top">
+                <h5 class="mb-0">Commission for {{ data.agent.email }} ({{ data.agent.get_user_type_display }})</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Report Period:
+                        <span class="fw-bold">{{ data.start_date|date:"Y-m-d" }} to {{ data.end_date|date:"Y-m-d" }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Total Turnover (from downline bets):
+                        <span class="fw-bold">₦{{ data.total_turnover|floatformat:2 }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Total Winnings Paid (to downline users):
+                        <span class="fw-bold">₦{{ data.total_winnings|floatformat:2 }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Gross Gaming Revenue (GGR):
+                        <span class="fw-bold">₦{{ data.ggr|floatformat:2 }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Commission Rate:
+                        <span class="fw-bold">{{ data.commission_rate|floatformat:2 }}%</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-primary text-white rounded-bottom">
+                        <strong>Calculated Commission Amount:</strong>
+                        <strong class="fs-5">₦{{ data.commission_amount|floatformat:2 }}</strong>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="text-center text-muted">No commission data available for this report based on current filters.</p>
+    {% endif %}
+
+    <div class="text-center mt-4">
+        <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Admin Dashboard</a>
+    </div>
+
+</div>
+{% endblock %}

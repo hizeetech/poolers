@@ -1,0 +1,61 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Manage Agent Payouts{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Manage Agent Payouts</h2>
+
+    {% if agent_payouts %}
+    <div class="table-responsive shadow-sm rounded-lg">
+        <table class="table table-hover table-striped mb-0">
+            <thead class="bg-dark text-white">
+                <tr>
+                    <th scope="col" class="py-3 px-4">ID</th>
+                    <th scope="col" class="py-3 px-4">Agent</th>
+                    <th scope="col" class="py-3 px-4">Period</th>
+                    <th scope="col" class="py-3 px-4">Turnover</th>
+                    <th scope="col" class="py-3 px-4">Winnings</th>
+                    <th scope="col" class="py-3 px-4">GGR</th>
+                    <th scope="col" class="py-3 px-4">Commission Rate</th>
+                    <th scope="col" class="py-3 px-4">Commission</th>
+                    <th scope="col" class="py-3 px-4">Status</th>
+                    <th scope="col" class="py-3 px-4 text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for payout in agent_payouts %}
+                <tr>
+                    <td class="py-3 px-4">{{ payout.id|truncatechars:8 }}</td>
+                    <td class="py-3 px-4">{{ payout.agent.email }} ({{ payout.agent.get_user_type_display }})</td>
+                    <td class="py-3 px-4">{{ payout.betting_period.name }}</td>
+                    <td class="py-3 px-4">₦{{ payout.total_turnover|floatformat:2 }}</td>
+                    <td class="py-3 px-4">₦{{ payout.total_winnings|floatformat:2 }}</td>
+                    <td class="py-3 px-4">₦{{ payout.ggr|floatformat:2 }}</td>
+                    <td class="py-3 px-4">{{ payout.commission_rate|floatformat:2 }}%</td>
+                    <td class="py-3 px-4">₦{{ payout.commission_amount|floatformat:2 }}</td>
+                    <td class="py-3 px-4">
+                        <span class="badge 
+                            {% if payout.status == 'pending' %}bg-warning text-dark
+                            {% elif payout.status == 'settled' %}bg-success
+                            {% endif %}">
+                            {{ payout.get_status_display }}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4 text-end">
+                        {% if payout.status == 'pending' %}
+                        <form method="post" action="{% url 'betting_admin:mark_payout_settled' payout_id=payout.id %}" class="d-inline-block">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-primary rounded-pill" onclick="return confirm('Are you sure you want to mark this payout as settled?');">Mark Settled</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted">Settled</span> {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info text-center" role="alert">
+        No agent payouts found.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

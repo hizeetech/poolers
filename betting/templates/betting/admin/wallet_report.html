@@ -1,0 +1,57 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">{{ report_title }}</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Wallets</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_wallet_report' %}" class="row g-3 align-items-end">
+            <div class="col-md-6">
+                <label for="user_filter" class="form-label">User:</label>
+                <select name="user" id="user_filter" class="form-select rounded-md">
+                    <option value="all">All Users</option>
+                    {% for user_obj in all_users %}
+                        <option value="{{ user_obj.id }}" {% if user_obj.id|stringformat:"s" == current_user_filter %}selected{% endif %}>{{ user_obj.email }} ({{ user_obj.get_user_type_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
+
+    {% if wallets %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">User Email</th>
+                        <th scope="col">User Type</th>
+                        <th scope="col">Current Balance</th>
+                        <th scope="col">Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for wallet in wallets %}
+                    <tr>
+                        <td>{{ wallet.user.email }}</td>
+                        <td>{{ wallet.user.get_user_type_display }}</td>
+                        <td>₦{{ wallet.balance|floatformat:2 }}</td>
+                        <td>{{ wallet.last_updated|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            No wallet data found for the selected filters.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

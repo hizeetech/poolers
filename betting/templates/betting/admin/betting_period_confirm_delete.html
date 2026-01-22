@@ -1,0 +1,18 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Confirm Delete Betting Period{% endblock %} {% block content %}
+<div class="container py-4">
+    <div class="card shadow-sm p-4 bg-light mx-auto" style="max-width: 600px;">
+        <div class="card-body">
+            <h2 class="card-title h3 mb-4 text-danger fw-semibold">Confirm Deletion</h2>
+            <p class="card-text mb-4">Are you sure you want to delete the betting period:<br>
+                <strong>{{ betting_period.name }}</strong> (from {{ betting_period.start_date|date:"Y-m-d" }} to {{ betting_period.end_date|date:"Y-m-d" }})?</p>
+            <p class="card-text text-danger fw-bold">This action cannot be undone.</p>
+
+            <form method="post" action="{% url 'betting_admin:delete_betting_period' period_id=betting_period.id %}" class="d-flex justify-content-end gap-2 mt-4">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger rounded-pill shadow-sm">Confirm Delete</button>
+                <a href="{% url 'betting_admin:manage_betting_periods' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Cancel</a>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

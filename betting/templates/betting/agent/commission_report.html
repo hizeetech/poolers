@@ -1,0 +1,99 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Commission Report{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2 class="text-center text-primary">{{ report_title }}</h2>
+            <p class="lead text-center text-muted">Commission earnings based on Gross Gaming Revenue (GGR).</p>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row mb-3">
+        <div class="col-12">
+            <form method="get" class="row g-3 align-items-center">
+                <div class="col-md-6">
+                    <label for="commission_period" class="form-label visually-hidden">Select Period</label>
+                    <select class="form-select" id="commission_period" name="period_dates" onchange="this.form.submit()">
+                        {% for period in commission_periods %}
+                            <option value="{{ period.start_date|date:'Y-m-d' }}|{{ period.end_date|date:'Y-m-d' }}" 
+                                {% if period.start_date == selected_start_date and period.end_date == selected_end_date %}selected{% endif %}>
+                                {{ period.name }}
+                            </option>
+                        {% endfor %}
+                    </select> {# Hidden inputs to capture selected dates if JS not used or directly submitted #}
+                    <input type="hidden" name="start_date" value="{{ selected_start_date|date:'Y-m-d' }}">
+                    <input type="hidden" name="end_date" value="{{ selected_end_date|date:'Y-m-d' }}">
+                </div>
+                <div class="col-md-6 d-flex justify-content-end">
+                    {# This button will trigger the form submission via JS onchange, or manual submit #} {# <button type="submit" class="btn btn-primary">Go</button> #}
+                </div>
+            </form>
+        </div>
+    </div>
+    <script>
+        // JavaScript to update hidden start_date and end_date fields based on select change
+        document.getElementById('commission_period').addEventListener('change', function() {
+            const [startDate, endDate] = this.value.split('|');
+            document.querySelector('input[name="start_date"]').value = startDate;
+            document.querySelector('input[name="end_date"]').value = endDate;
+            this.form.submit(); // Automatically submit the form
+        });
+    </script>
+
+    <div class="row mb-4">
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-info h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-info">Total Turnover</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_turnover|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total stake amount for the period.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-danger h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-danger">Total Winnings</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_winnings|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total payouts for winning tickets in the period.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-success h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-success">Gross Gaming Revenue (GGR)</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ ggr|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Calculated as Turnover - Winnings.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-warning h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Your Commission ({{ commission_rate|floatformat:0 }}%)</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ commission|floatformat:2 }}</p>
+                    <p class="card-text text-muted">This is {{ commission_rate|floatformat:0 }}% of the GGR.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# You could add a table of individual tickets here if needed, similar to sales report #} {# For now, just show the summary #}
+
+</div>
+
+<!-- Include Font Awesome for icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

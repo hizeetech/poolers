@@ -1,0 +1,41 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Ticket Status - Pool Betting{% endblock %} {% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow-lg p-4 mt-5">
+            <h2 class="text-center mb-4">Ticket Status</h2>
+            {% if bet_ticket %}
+            <p><strong>Ticket ID:</strong> {{ bet_ticket.ticket_id }}</p>
+            <p><strong>Status:</strong> <span class="badge {% if bet_ticket.status == 'won' %}bg-success{% elif bet_ticket.status == 'lost' %}bg-danger{% elif bet_ticket.status == 'voided' %}bg-warning text-dark{% else %}bg-info text-dark{% endif %}">{{ bet_ticket.status|upper }}</span></p>
+            <p><strong>Stake Amount:</strong> {{ bet_ticket.stake_amount }} NGN</p>
+            <p><strong>Total Odd:</strong> {{ bet_ticket.total_odd }}</p>
+            <p><strong>Potential Winning:</strong> {{ bet_ticket.potential_winning }} NGN</p>
+            <p><strong>Bonus Amount:</strong> {{ bet_ticket.bonus_amount }} NGN</p>
+            <p><strong>Maximum Winning:</strong> {{ bet_ticket.max_winning }} NGN</p>
+            <p><strong>Bet Time:</strong> {{ bet_ticket.bet_time|date:"F d, Y H:i" }}</p>
+
+            <h4 class="mt-4">Selections:</h4>
+            <ul class="list-group">
+                {% for selection in selections %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>{{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}</strong><br>
+                        <small>
+                                    Your Pick: {{ selection.bet_type }} (Odd: {{ selection.odd_selected }}) <br>
+                                    Result: {% if selection.fixture.full_time_result %}{{ selection.fixture.get_full_time_result_display }}{% else %}Pending{% endif %}
+                                </small>
+                    </div>
+                    {% if selection.fixture.is_settled %} {% if selection.fixture.full_time_result == selection.bet_type %}
+                    <span class="badge bg-success">WIN</span> {% else %}
+                    <span class="badge bg-danger">LOSS</span> {% endif %} {% else %}
+                    <span class="badge bg-secondary">OPEN</span> {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+
+            <button class="btn btn-primary mt-4" onclick="window.print()">Print Ticket</button> {% else %}
+            <p class="text-center">No ticket found with that ID or an error occurred.</p>
+            <a href="{% url 'fixtures' %}" class="btn btn-secondary mt-3">Back to Fixtures</a> {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

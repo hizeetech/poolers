@@ -1,0 +1,47 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Declare Fixture Result{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Declare Result for: <br>
+        <small class="text-muted">{{ fixture.home_team }} vs {{ fixture.away_team }} ({{ fixture.match_date|date:"Y-m-d H:i" }})</small>
+    </h2>
+
+    <form method="post" action="{% url 'betting_admin:declare_result' fixture_id=fixture.id %}" class="p-4 bg-light rounded-lg shadow-sm">
+        {% csrf_token %} {% if form.errors %}
+        <div class="alert alert-danger" role="alert">
+            Please correct the following errors:
+            <ul class="mb-0">
+                {% for field in form %} {% if field.errors %}
+                <li><strong>{{ field.label }}:</strong> {{ field.errors|join:", " }}</li>
+                {% endif %} {% endfor %} {% if form.non_field_errors %}
+                <li>{{ form.non_field_errors|join:", " }}</li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="row g-3">
+            <div class="col-md-6 mb-3">
+                <label for="{{ form.home_score.id_for_label }}" class="form-label text-muted">{{ form.home_score.label }}:</label> {{ form.home_score }} {% if form.home_score.errors %} {% for error in form.home_score.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %} {% endif %}
+            </div>
+            <div class="col-md-6 mb-3">
+                <label for="{{ form.away_score.id_for_label }}" class="form-label text-muted">{{ form.away_score.label }}:</label> {{ form.away_score }} {% if form.away_score.errors %} {% for error in form.away_score.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %} {% endif %}
+            </div>
+            <div class="col-12 mb-3">
+                <label for="{{ form.result.id_for_label }}" class="form-label text-muted">{{ form.result.label }}:</label> {{ form.result }} {% if form.result.help_text %}
+                <div class="form-text text-muted">{{ form.result.help_text }}</div>
+                {% endif %} {% if form.result.errors %} {% for error in form.result.errors %}
+                <div class="invalid-feedback d-block">{{ error }}</div>
+                {% endfor %} {% endif %}
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-end gap-2 mt-4">
+            <button type="submit" class="btn btn-primary rounded-pill shadow-sm">Declare Result</button>
+            <a href="{% url 'betting_admin:manage_fixtures' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registration Confirmation</title>
+</head>
+
+<body>
+    <p>Dear {{ user.first_name|default:user.email }},</p>
+    <p>Thank you for registering with PoolBetting!</p>
+    <p>Your account details are:</p>
+    <p><strong>Username (Email):</strong> {{ user.email }}</p>
+    <p><strong>Temporary Password:</strong> {{ password }}</p>
+    <p>Please log in and consider changing your password for security.</p>
+    <p><a href="http://127.0.0.1:8000/login/">Login to your account</a></p>
+    <p>If you did not register for this service, please ignore this email.</p>
+    <p>Best regards,</p>
+    <p>The PoolBetting Team</p>
+</body>
+
+</html>

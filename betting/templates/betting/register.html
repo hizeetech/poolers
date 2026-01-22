@@ -1,0 +1,129 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Register{% endblock %} {% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-7">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title text-center mb-4 fw-bold text-dark">Create Your Account</h2>
+
+                    {# Display Django messages #} {% if messages %}
+                    <ul class="messages list-unstyled px-0 mx-0">
+                        {% for message in messages %}
+                        <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
+                            {{ message }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %} {# End of if messages #}
+
+                    <form method="post" class="needs-validation" novalidate>
+                        {% csrf_token %} {# Render email field #}
+                        <div class="mb-3">
+                            <label for="{{ form.email.id_for_label }}" class="form-label text-muted fw-medium">{{ form.email.label }}</label>
+                            <input type="email" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.email.id_for_label }}" name="{{ form.email.name }}" placeholder="Enter your email" value="{{ form.email.value|default_if_none:'' }}" required>
+                        </div>
+
+                        {# Render first_name field #}
+                        <div class="mb-3">
+                            <label for="{{ form.first_name.id_for_label }}" class="form-label text-muted fw-medium">{{ form.first_name.label }}</label>
+                            <input type="text" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.first_name.id_for_label }}" name="{{ form.first_name.name }}" placeholder="Enter your first name" value="{{ form.first_name.value|default_if_none:'' }}">
+                            {% if form.first_name.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.first_name.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render last_name field #}
+                        <div class="mb-3">
+                            <label for="{{ form.last_name.id_for_label }}" class="form-label text-muted fw-medium">{{ form.last_name.label }}</label>
+                            <input type="text" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.last_name.id_for_label }}" name="{{ form.last_name.name }}" placeholder="Enter your last name" value="{{ form.last_name.value|default_if_none:'' }}">
+                            {% if form.last_name.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.last_name.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render phone_number field #}
+                        <div class="mb-3">
+                            <label for="{{ form.phone_number.id_for_label }}" class="form-label text-muted fw-medium">{{ form.phone_number.label }}</label>
+                            <input type="tel" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.phone_number.id_for_label }}" name="{{ form.phone_number.name }}" placeholder="Enter your phone number (e.g., +234...)" value="{{ form.phone_number.value|default_if_none:'' }}">                            {% if form.phone_number.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.phone_number.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render shop_address field #}
+                        <div class="mb-3">
+                            <label for="{{ form.shop_address.id_for_label }}" class="form-label text-muted fw-medium">{{ form.shop_address.label }}</label>
+                            <input type="text" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.shop_address.id_for_label }}" name="{{ form.shop_address.name }}" placeholder="Enter your shop address (optional)" value="{{ form.shop_address.value|default_if_none:'' }}">                            {% if form.shop_address.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.shop_address.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render user_type field #}
+                        <div class="mb-3">
+                            <label class="form-label text-muted fw-medium">{{ form.user_type.label }}</label>
+                            <div class="form-check">
+                                {% for choice in form.user_type %}
+                                <div class="form-check">
+                                    {{ choice.tag }}
+                                    <label class="form-check-label" for="{{ choice.id_for_label }}">
+                                        {{ choice.choice_label }}
+                                    </label>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% if form.user_type.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.user_type.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render password field #}
+                        <div class="mb-3">
+                            <label for="{{ form.password.id_for_label }}" class="form-label text-muted fw-medium">{{ form.password.label }}</label>
+                            <input type="password" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.password.id_for_label }}" name="{{ form.password.name }}" placeholder="Enter your password" required>
+                            {% if form.password.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.password.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# Render password2 (confirm password) field #}
+                        <div class="mb-4">
+                            <label for="{{ form.password2.id_for_label }}" class="form-label text-muted fw-medium">{{ form.password2.label }}</label>
+                            <input type="password" class="form-control form-control-lg rounded-pill px-4 py-2" id="{{ form.password2.id_for_label }}" name="{{ form.password2.name }}" placeholder="Confirm your password" required>
+                            {% if form.password2.errors %}
+                            <div class="text-danger small mt-1">
+                                {% for error in form.password2.errors %} {{ error }} {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {# This is for non-field errors, if any, for the entire form (e.g., password mismatch) #} {% if form.non_field_errors %}
+                        <div class="text-danger small mb-3">
+                            {% for error in form.non_field_errors %} {{ error }} {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <div class="d-grid gap-2 mb-3">
+                            <button type="submit" class="btn btn-primary btn-lg rounded-pill shadow-sm fw-bold">Register</button>
+                        </div>
+
+                        <p class="text-center text-muted mt-3">
+                            Already have an account? <a href="{% url 'betting:login' %}" class="text-decoration-none fw-semibold text-primary">Login Here</a>
+                        </p>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

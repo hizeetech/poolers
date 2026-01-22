@@ -1,0 +1,83 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Manage Users{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Manage Users</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Users</h4>
+        <form method="GET" action="{% url 'betting_admin:manage_users' %}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="user_type_filter" class="form-label">User Type:</label>
+                <select name="user_type" id="user_type_filter" class="form-select rounded-md">
+                    <option value="all">All Types</option>
+                    {% for value, label in user_type_choices %}
+                        <option value="{{ value }}" {% if value == current_user_type_filter %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="search_query" class="form-label">Search (Email/Name/Phone):</label>
+                <input type="text" name="q" id="search_query" class="form-control rounded-md" value="{{ current_search_query }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+             <div class="col-12 col-md-auto">
+                {# Ensured the URL name 'add_user' is correct within 'betting_admin' namespace #}
+                <a href="{% url 'betting_admin:add_user' %}" class="btn btn-success w-100 rounded-pill px-4 py-2">Add New User</a>
+            </div>
+        </form>
+    </div>
+
+    {% if users %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Email</th>
+                        <th scope="col">User Type</th>
+                        <th scope="col">Name</th>
+                        <th scope="col">Phone</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user_obj in users %}
+                    <tr>
+                        <td>{{ user_obj.email }}</td>
+                        <td>{{ user_obj.get_user_type_display }}</td>
+                        <td>{{ user_obj.first_name }} {{ user_obj.last_name }}</td>
+                        <td>{{ user_obj.phone_number|default:"N/A" }}</td>
+                        <td>
+                            <span class="badge {% if user_obj.is_active %}bg-success{% else %}bg-danger{% endif %}">
+                                {% if user_obj.is_active %}Active{% else %}Inactive{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-2">
+                                <a href="{% url 'betting_admin:edit_user' user_id=user_obj.id %}" class="btn btn-sm btn-outline-primary rounded-pill">Edit</a>
+                                {% if user_obj != request.user %} {# Prevent deleting self #}
+                                    <form action="{% url 'betting_admin:delete_user' user_id=user_obj.id %}" method="post" onsubmit="return confirm('Are you sure you want to delete user {{ user_obj.email }}? This action is irreversible.');" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">Delete</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            No users found matching the selected criteria.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

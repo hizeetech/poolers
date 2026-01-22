@@ -1,0 +1,115 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Bet Ticket Details - {{ bet_ticket.ticket_id }}{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Bet Ticket Details</h2>
+
+    <div class="row row-cols-1 row-cols-md-2 g-3 mb-4">
+        <div class="col">
+            <p class="text-muted mb-0">Ticket ID:</p>
+            <p class="fs-5 text-dark fw-bold">{{ bet_ticket.ticket_id }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">User:</p>
+            <p class="fs-5 text-dark">{{ bet_ticket.user.email }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Stake Amount:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.stake_amount|floatformat:2 }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Total Odd:</p>
+            <p class="fs-5 text-dark">{{ bet_ticket.total_odd|floatformat:2 }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Potential Winning:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.potential_winning|floatformat:2 }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Max Winning:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.max_winning|floatformat:2 }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Status:</p>
+            <p class="fs-5 
+                {% if bet_ticket.status == 'won' %}text-success fw-bold
+                {% elif bet_ticket.status == 'lost' %}text-danger fw-bold
+                {% elif bet_ticket.status == 'deleted' or bet_ticket.status == 'cancelled' %}text-muted
+                {% else %}text-warning fw-bold{% endif %}">
+                {{ bet_ticket.get_status_display }}
+            </p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Placed At:</p>
+            <p class="fs-5 text-dark">{{ bet_ticket.placed_at|date:"Y-m-d H:i" }}</p>
+        </div>
+        {% if bet_ticket.deleted_by %}
+        <div class="col">
+            <p class="text-muted mb-0">Deleted By:</p>
+            <p class="fs-5 text-dark">{{ bet_ticket.deleted_by.email }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Deleted At:</p>
+            <p class="fs-5 text-dark">{{ bet_ticket.deleted_at|date:"Y-m-d H:i" }}</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <h3 class="h4 mb-3 text-dark fw-semibold">Selections</h3>
+    {% if bet_ticket.selections.all %}
+    <div class="table-responsive shadow-sm rounded-lg mb-4">
+        <table class="table table-hover table-striped mb-0">
+            <thead class="bg-dark text-white">
+                <tr>
+                    <th scope="col" class="py-3 px-4">Fixture</th>
+                    <th scope="col" class="py-3 px-4">Bet Type</th>
+                    <th scope="col" class="py-3 px-4">Odd Selected</th>
+                    <th scope="col" class="py-3 px-4">Result</th>
+                    <th scope="col" class="py-3 px-4">Winning Selection?</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for selection in bet_ticket.selections.all %}
+                <tr>
+                    <td class="py-3 px-4 fw-medium">
+                        {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }} ({{ selection.fixture.match_date }})
+                    </td>
+                    <td class="py-3 px-4 text-muted">{{ selection.get_bet_type_display }}</td>
+                    <td class="py-3 px-4 text-muted">{{ selection.odd_selected|floatformat:2 }}</td>
+                    <td class="py-3 px-4 text-muted">
+                        {% if selection.fixture.result %} {{ selection.fixture.get_result_display }} ({{ selection.fixture.home_score }}-{{ selection.fixture.away_score }}) {% else %} N/A {% endif %}
+                    </td>
+                    <td class="py-3 px-4">
+                        {% if selection.is_winning_selection == True %}
+                        <span class="badge bg-success">Yes</span> {% elif selection.is_winning_selection == False %}
+                        <span class="badge bg-danger">No</span> {% else %}
+                        <span class="badge bg-secondary">N/A (Void)</span> {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info text-center" role="alert">No selections for this ticket.</div>
+    {% endif %}
+
+    <div class="mt-4 d-flex justify-content-end gap-2">
+        {% if bet_ticket.status == 'pending' %}
+        <form method="post" action="{% url 'betting_admin:admin_void_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to VOID/DELETE this ticket and refund stake? This action cannot be undone.');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger rounded-pill shadow-sm">
+                    Void/Delete Ticket
+                </button>
+        </form>
+        <form method="post" action="{% url 'betting_admin:betting_settle_won_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to SETTLE this ticket as WON and payout winnings? This action cannot be undone.');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-success rounded-pill shadow-sm">
+                    Settle as Won
+                </button>
+        </form>
+        {% else %}
+        <p class="text-muted">This ticket is {{ bet_ticket.get_status_display|lower }}. No further actions.</p>
+        {% endif %}
+        <a href="{% url 'betting_admin:betting_tickets_report' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Back to Report</a>
+    </div>
+</div>
+{% endblock %}

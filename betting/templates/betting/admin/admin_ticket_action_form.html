@@ -1,0 +1,35 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}{{ action_title }} - Admin{% endblock %} {% block content %}
+<div class="container mt-4">
+    <div class="card shadow-lg rounded-3">
+        <div class="card-header bg-danger text-white rounded-top-3">
+            <h4 class="mb-0">{{ action_title }}</h4>
+        </div>
+        <div class="card-body">
+            {% if messages %} {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %} {% endif %}
+
+            <p class="text-muted mb-4">
+                Please enter the Bet Ticket ID to {{ action_title|lower }}.
+            </p>
+
+            <form method="post" action="" class="needs-validation" novalidate>
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label for="{{ form.ticket_id.id_for_label }}" class="form-label">{{ form.ticket_id.label }}</label> {{ form.ticket_id }} {% if form.ticket_id.errors %}
+                    <div class="invalid-feedback d-block">
+                        {% for error in form.ticket_id.errors %}{{ error }}{% endfor %}
+                    </div>
+                    {% endif %} {% if form.ticket_id.help_text %}
+                    <div class="form-text">{{ form.ticket_id.help_text }}</div>
+                    {% endif %}
+                </div>
+                <button type="submit" class="btn btn-danger rounded-pill mt-3 py-2 px-4">{{ action_title }}</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

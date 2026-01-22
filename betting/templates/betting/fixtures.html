@@ -1,0 +1,749 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Fixtures - Pool Betting{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="d-flex align-items-center mb-4 gap-3">
+        <h2 class="fw-bold text-primary mb-0">Fixtures</h2>
+        <div class="dropdown" style="z-index: 1030;">
+            <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                {% if current_betting_period %}{{ current_betting_period.name }}{% else %}Select Period{% endif %}
+            </button>
+            <ul class="dropdown-menu" aria-labelledby="bettingPeriodDropdown">
+                {% for period in active_periods %}
+                <li><a class="dropdown-item" href="{% url 'betting:fixtures_with_period' period.id %}">{{ period.name }}</a></li>
+                {% empty %}
+                <li><span class="dropdown-item-text text-muted">No active betting periods.</span></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    {% if messages %} {% for message in messages %}
+    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endfor %} {% endif %}
+
+    <div class="row">
+        <div class="col-md-8">
+            {% if current_betting_period %}
+            <h3 class="mb-3 text-secondary">{{ current_betting_period.name }} Fixtures</h3>
+            {% if fixtures %} {% for fixture in fixtures %}
+            <div class="card mb-3 shadow-sm rounded-3">
+                <div class="card-body">
+                    <h5 class="card-title text-primary">
+                        {% if fixture.serial_number %}<span class="badge bg-secondary me-2">#{{ fixture.serial_number }}</span>{% endif %}
+                        {{ fixture.home_team }} vs {{ fixture.away_team }}
+                    </h5>
+                    <p class="card-text text-muted">
+                        {{ fixture.match_date|date:"D, M d" }} {{ fixture.match_time|time:"H:i" }}
+                    </p>
+                    <div class="d-flex flex-wrap gap-2" id="fixture-{{ fixture.id }}-buttons">
+                        <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="home_win" data-odd="{{ fixture.home_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} Win ({{ fixture.home_win_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        H: {{ fixture.home_win_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="draw" data-odd="{{ fixture.draw_odd|floatformat:2 }}" data-selection-text="Draw ({{ fixture.draw_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        D: {{ fixture.draw_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="away_win" data-odd="{{ fixture.away_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.away_team }} Win ({{ fixture.away_win_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        A: {{ fixture.away_win_odd|floatformat:2 }}
+                                    </button>
+                        <!-- Additional Bet Types -->
+                        <button class="btn btn-outline-info btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="home_dnb" data-odd="{{ fixture.home_dnb_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} DNB ({{ fixture.home_dnb_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        H DNB: {{ fixture.home_dnb_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-info btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="away_dnb" data-odd="{{ fixture.away_dnb_odd|floatformat:2 }}" data-selection-text="{{ fixture.away_team }} DNB ({{ fixture.away_dnb_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        A DNB: {{ fixture.away_dnb_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_1_5" data-odd="{{ fixture.over_1_5_odd|floatformat:2 }}" data-selection-text="Over 1.5 Goals ({{ fixture.over_1_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        O 1.5: {{ fixture.over_1_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_1_5" data-odd="{{ fixture.under_1_5_odd|floatformat:2 }}" data-selection-text="Under 1.5 Goals ({{ fixture.under_1_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        U 1.5: {{ fixture.under_1_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_2_5" data-odd="{{ fixture.over_2_5_odd|floatformat:2 }}" data-selection-text="Over 2.5 Goals ({{ fixture.over_2_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        O 2.5: {{ fixture.over_2_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_2_5" data-odd="{{ fixture.under_2_5_odd|floatformat:2 }}" data-selection-text="Under 2.5 Goals ({{ fixture.under_2_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        U 2.5: {{ fixture.under_2_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_3_5" data-odd="{{ fixture.over_3_5_odd|floatformat:2 }}" data-selection-text="Over 3.5 Goals ({{ fixture.over_3_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        O 3.5: {{ fixture.over_3_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_3_5" data-odd="{{ fixture.under_3_5_odd|floatformat:2 }}" data-selection-text="Under 3.5 Goals ({{ fixture.under_3_5_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        U 3.5: {{ fixture.under_3_5_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-success btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="btts_yes" data-odd="{{ fixture.btts_yes_odd|floatformat:2 }}" data-selection-text="BTTS Yes ({{ fixture.btts_yes_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        BTTS Y: {{ fixture.btts_yes_odd|floatformat:2 }}
+                                    </button>
+                        <button class="btn btn-outline-danger btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="btts_no" data-odd="{{ fixture.btts_no_odd|floatformat:2 }}" data-selection-text="BTTS No ({{ fixture.btts_no_odd|floatformat:2 }})"
+                            data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                                        BTTS N: {{ fixture.btts_no_odd|floatformat:2 }}
+                                    </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %} {% else %}
+            <p class="alert alert-info rounded-3 shadow-sm">No fixtures available for this period.</p>
+            {% endif %} {% else %}
+            <p class="alert alert-warning rounded-3 shadow-sm">Please select a betting period from the dropdown.</p>
+            {% endif %}
+        </div>
+
+        <div class="col-md-4">
+            <div class="card shadow-lg rounded-3 sticky-top" style="top: 20px;">
+                <div class="card-header bg-primary text-white text-center rounded-top-3">
+                    <h4 class="mb-0">Your Betslip</h4>
+                </div>
+                <div class="card-body">
+                    <div id="betslip-selections" class="mb-3">
+                        <p class="text-muted text-center" id="empty-betslip-message">No selections yet.</p>
+                    </div>
+                    <hr>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="system_bet_checkbox">
+                        <label class="form-check-label" for="system_bet_checkbox">
+                            Play as System Bet (Permutation)
+                        </label>
+                    </div>
+                    <div class="mb-3">
+                        <label for="permutation_count" class="form-label fw-bold">Permutation Count (k of n)</label>
+                        <input type="number" min="2" id="permutation_count" class="form-control rounded-pill" value="2" disabled>
+                        <small class="text-muted" id="permutation-info">*Select at least 3 bets to enable.*</small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="stake_amount" class="form-label fw-bold" id="stake-label">Stake Amount (per line) (₦)</label>
+                        <input type="number" step="0.01" min="0.01" id="stake_amount" class="form-control rounded-pill" value="100">
+                    </div>
+                    <div class="d-flex justify-content-between mb-2" id="lines-count-div" style="display: none !important;">
+                         <span class="fw-bold">No. of Lines:</span>
+                         <span id="number-of-lines" class="fw-bold text-secondary">1</span>
+                    </div>
+                    <div class="mb-3" id="total-stake-container" style="display: none !important;">
+                        <label for="total_stake_input" class="form-label fw-bold">Total Stake (₦)</label>
+                        <input type="number" step="0.01" min="1" id="total_stake_input" class="form-control rounded-pill">
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="fw-bold">Total Odds:</span>
+                        <span id="total-odds" class="fw-bold text-success">0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="fw-bold">Min. Potential Winning:</span>
+                        <span id="min-winning" class="fw-bold text-secondary">₦0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="fw-bold">Max. Potential Winning:</span>
+                        <span id="potential-winning" class="fw-bold text-info">₦0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-3">
+                        <span class="fw-bold">Bonus:</span>
+                        <span id="bonus-amount" class="fw-bold text-warning">₦0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-3">
+                        <span class="fw-bold">Maximum Winning:</span>
+                        <span id="max-winning" class="fw-bold text-success">₦0.00</span>
+                    </div>
+                    <button id="place-bet-btn" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm">Place Bet</button>
+                    <div id="response-message" class="mt-3 text-center d-none"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Print Ticket Modal -->
+<div class="modal fade" id="printTicketModal" tabindex="-1" aria-labelledby="printTicketModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title" id="printTicketModalLabel">Bet Ticket Successfully Placed!</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="ticket-content-to-print">
+                <h6 class="text-center text-secondary mb-3">Your Bet Details</h6>
+                <p><strong>Ticket ID:</strong> <span id="modal-ticket-id"></span></p>
+                <p><strong>Stake Amount:</strong> <span id="modal-stake-amount"></span></p>
+                <p><strong>Total Odds:</strong> <span id="modal-total-odds"></span></p>
+                <p><strong>Potential Winning:</strong> <span id="modal-potential-winning"></span></p>
+                <p><strong>Bonus:</strong> <span id="modal-bonus-amount"></span></p>
+                <p><strong>Max Winning:</strong> <span id="modal-max-winning"></span></p>
+                <h6 class="mt-4 text-secondary">Selections:</h6>
+                <ul id="modal-selections-list" class="list-group list-group-flush">
+                    <!-- Selections will be dynamically added here -->
+                </ul>
+                <div class="text-center mt-4">
+                    <p class="text-muted small">Thank you for betting with PoolBetting!</p>
+                    <p class="text-muted small">Generated: <span id="modal-generation-time"></span></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary rounded-pill" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary rounded-pill" id="print-ticket-btn">Print Ticket</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %} {% block extra_js %}
+<script>
+    // Global array to store selected bets
+    let selectedBets = [];
+    const totalStakeInput = document.getElementById('total_stake_input');
+    const stakeAmountInput = document.getElementById('stake_amount');
+    const totalOddsSpan = document.getElementById('total-odds');
+    const potentialWinningSpan = document.getElementById('potential-winning');
+    const bonusAmountSpan = document.getElementById('bonus-amount');
+    const minWinningSpan = document.getElementById('min-winning');
+    const maxWinningSpan = document.getElementById('max-winning');
+    const betslipSelectionsDiv = document.getElementById('betslip-selections');
+    const emptyBetslipMessage = document.getElementById('empty-betslip-message');
+    const placeBetBtn = document.getElementById('place-bet-btn');
+    const responseMessageDiv = document.getElementById('response-message');
+    const printTicketModal = new bootstrap.Modal(document.getElementById('printTicketModal'));
+
+    // System Bet Elements
+    const systemBetCheckbox = document.getElementById('system_bet_checkbox');
+    const permutationCountInput = document.getElementById('permutation_count');
+    const permutationInfo = document.getElementById('permutation-info');
+    const linesCountDiv = document.getElementById('lines-count-div');
+    const numberOfLinesSpan = document.getElementById('number-of-lines');
+    const totalStakeContainer = document.getElementById('total-stake-container');
+    const stakeLabel = document.getElementById('stake-label');
+
+    // Function to display messages (mimicking Django messages)
+    function displayMessage(message, type) {
+        const alertClass = `alert-${type}`;
+        responseMessageDiv.innerHTML = `<div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                                            ${message}
+                                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                        </div>`;
+        responseMessageDiv.classList.remove('d-none');
+        // Auto-dismiss after a few seconds (optional)
+        setTimeout(() => {
+            responseMessageDiv.classList.add('d-none');
+            responseMessageDiv.innerHTML = '';
+        }, 5000); // Hide after 5 seconds
+    }
+
+    // Helper function to generate combinations
+    function getCombinations(values, k) {
+        let i, subI, ret = [], sub, next;
+        for (i = 0; i < values.length; i++) {
+            if (k === 1) {
+                ret.push([values[i]]);
+            } else {
+                sub = getCombinations(values.slice(i + 1), k - 1);
+                for (subI = 0; subI < sub.length; subI++) {
+                    next = sub[subI];
+                    next.unshift(values[i]);
+                    ret.push(next);
+                }
+            }
+        }
+        return ret;
+    }
+
+    // Function to update the bet slip display and calculations
+    function updateBetslip() {
+        betslipSelectionsDiv.innerHTML = ''; // Clear current selections
+        let currentTotalOdds = 1;
+
+        // System Bet Logic Update
+        const isSystemBet = systemBetCheckbox.checked;
+        const totalSelections = selectedBets.length;
+
+        // Update Permutation Input State
+        if (isSystemBet) {
+            permutationCountInput.disabled = false;
+            stakeLabel.textContent = "Stake Amount (per line) (₦)";
+            linesCountDiv.style.setProperty('display', 'flex', 'important');
+            totalStakeContainer.style.setProperty('display', 'block', 'important');
+            
+            // Set min/max for permutation
+            permutationCountInput.max = Math.max(1, totalSelections - 1); // Usually k < n
+            permutationCountInput.min = 2;
+            
+            if (totalSelections < 3) {
+                 permutationInfo.textContent = "*Select at least 3 bets to enable system bets.*";
+                 permutationCountInput.disabled = true; // Still disabled if not enough selections
+            } else {
+                 permutationInfo.textContent = `Select between 2 and ${totalSelections - 1}`;
+            }
+
+            // Validate current value
+            let k = parseInt(permutationCountInput.value);
+            if (k >= totalSelections && totalSelections > 2) {
+                k = totalSelections - 1;
+                permutationCountInput.value = k;
+            }
+             if (k < 2) {
+                k = 2;
+                permutationCountInput.value = k;
+            }
+
+        } else {
+            permutationCountInput.disabled = true;
+            stakeLabel.textContent = "Stake Amount (₦)";
+            linesCountDiv.style.setProperty('display', 'none', 'important');
+            totalStakeContainer.style.setProperty('display', 'none', 'important');
+            permutationInfo.textContent = "*Only active for permutation bets.*";
+        }
+
+
+        if (selectedBets.length === 0) {
+            emptyBetslipMessage.classList.remove('d-none');
+            totalOddsSpan.textContent = '0.00';
+            numberOfLinesSpan.textContent = '0';
+        } else {
+            emptyBetslipMessage.classList.add('d-none');
+            
+            // Calculate Odds
+            if (isSystemBet && totalSelections >= 3) {
+                // For system bets, total odds is variable. We usually show Max Odds or Range.
+                // Or we just show "System x/y".
+                totalOddsSpan.textContent = "Variable"; 
+            } else {
+                 selectedBets.forEach((bet) => {
+                    currentTotalOdds *= parseFloat(bet.odd);
+                });
+                totalOddsSpan.textContent = currentTotalOdds.toFixed(2);
+            }
+
+            // Render Bets
+            selectedBets.forEach((bet) => {
+                const selectionDiv = document.createElement('div');
+                selectionDiv.classList.add('d-flex', 'flex-column', 'py-1', 'px-2', 'border-bottom', 'border-light', 'mb-2', 'bg-light', 'rounded-3');
+                // Enhanced display: Betting Period, Game, Date, Time, Odd, Bet Type
+                selectionDiv.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center w-100 mb-1">
+                        <small class="text-muted fw-bold">${bet.fixture_period_name}</small>
+                        <button type="button" class="btn-close btn-sm remove-selection-btn" data-fixture-id="${bet.fixture_id}" aria-label="Remove"></button>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center w-100">
+                        <span class="text-dark fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</span>
+                        <span class="badge bg-primary text-white fs-6">${bet.bet_type_display}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center w-100">
+                        <small class="text-muted">${bet.fixture_match_date} ${bet.fixture_match_time}</small>
+                        <span class="fw-bold text-success">Odd: ${parseFloat(bet.odd).toFixed(2)}</span>
+                    </div>
+                `;
+                betslipSelectionsDiv.appendChild(selectionDiv);
+            });
+        }
+
+        calculateSystemAndWinnings('per_line'); // Default update
+        updateButtonHighlights(); 
+    }
+
+    // Combined Calculation Function
+    function calculateSystemAndWinnings(source = 'per_line') {
+        const isSystemBet = systemBetCheckbox.checked;
+        const totalSelections = selectedBets.length;
+        let numLines = 1;
+        let stakePerLine = parseFloat(stakeAmountInput.value) || 0;
+        let totalStake = 0;
+        let potentialWin = 0;
+        let maxWin = 0;
+        let minWin = 0;
+
+        if (isSystemBet && totalSelections >= 3) {
+            const k = parseInt(permutationCountInput.value) || 2;
+            
+            // Calculate Combinations
+            const combinations = getCombinations(selectedBets, k);
+            numLines = combinations.length;
+
+            // Handle 2-way binding for stake
+            if (source === 'total') {
+                totalStake = parseFloat(totalStakeInput.value) || 0;
+                stakePerLine = totalStake / numLines;
+                stakeAmountInput.value = stakePerLine.toFixed(2);
+            } else {
+                // source === 'per_line' or default
+                totalStake = stakePerLine * numLines;
+                totalStakeInput.value = totalStake.toFixed(2);
+            }
+
+            // Calculate Max Winning (Sum of all winning lines if all selections win)
+            let totalSystemReturn = 0;
+            combinations.forEach(combo => {
+                let lineOdds = 1;
+                combo.forEach(bet => {
+                    lineOdds *= parseFloat(bet.odd);
+                });
+                totalSystemReturn += (lineOdds * stakePerLine);
+            });
+            maxWin = totalSystemReturn;
+            potentialWin = maxWin; 
+
+            // Calculate Minimum Winning
+            // Find the k selections with the lowest odds
+            const sortedOdds = [...selectedBets].map(b => parseFloat(b.odd)).sort((a, b) => a - b);
+            const minKOdds = sortedOdds.slice(0, k);
+            let minLineOdds = 1;
+            minKOdds.forEach(odd => minLineOdds *= odd);
+            minWin = minLineOdds * stakePerLine;
+
+        } else {
+             // Standard Accumulator
+             numLines = 1;
+             
+             // Standard bet only uses stake per line as total stake
+             totalStake = stakePerLine;
+             
+             // Sync inputs (though total is hidden, good to keep consistent)
+             totalStakeInput.value = totalStake.toFixed(2);
+
+             const totalOdds = parseFloat(totalOddsSpan.textContent) || 0;
+             if(totalOddsSpan.textContent === 'Variable') {
+                 maxWin = 0;
+             } else {
+                 maxWin = stakePerLine * totalOdds;
+             }
+             potentialWin = maxWin;
+             minWin = maxWin; // For acca, min winning is same as max (all must win)
+        }
+
+        // Update UI
+        numberOfLinesSpan.textContent = numLines;
+        potentialWinningSpan.textContent = `₦${potentialWin.toFixed(2)}`; // Shows Max Potential
+        minWinningSpan.textContent = `₦${minWin.toFixed(2)}`;
+
+        // Bonus and Final Max Calculation
+        calculateBonusAndMaxWinning(potentialWin, isSystemBet, minWin);
+    }
+
+
+    // Function to calculate bonus and max winning
+    function calculateBonusAndMaxWinning(potential, isSystemBet, minWin) {
+        let bonus = 0;
+        
+        if (!isSystemBet) {
+            if (selectedBets.length >= 5) {
+                bonus = potential * 0.10; 
+            } else if (selectedBets.length >= 3) {
+                bonus = potential * 0.05; 
+            }
+        }
+
+        bonusAmountSpan.textContent = `₦${bonus.toFixed(2)}`;
+        let maxWinning = potential + bonus;
+
+        // Client-side max winning limit 
+        const clientSideMaxWinningLimit = 10000000.00;
+        if (maxWinning > clientSideMaxWinningLimit) {
+            maxWinning = clientSideMaxWinningLimit;
+        }
+
+        maxWinningSpan.textContent = `₦${maxWinning.toFixed(2)}`;
+        
+        // Also apply cap to min winning if needed (usually min winning is small enough, but good practice)
+        // For Min Winning display, we usually don't add bonus if it's not applicable to the base condition?
+        // Let's assume bonus only applies to "Potential" (Max).
+    }
+
+    // Function to update button highlights based on selectedBets array
+    function updateButtonHighlights() {
+        document.querySelectorAll('.bet-selection-btn').forEach(button => {
+            const fixtureId = button.dataset.fixtureId;
+            const betType = button.dataset.betType;
+
+            // Check if this button's selection is in the selectedBets array
+            const isSelected = selectedBets.some(bet => bet.fixture_id === fixtureId && bet.bet_type === betType);
+
+            if (isSelected) {
+                button.classList.add('btn-success'); // Highlight in green for selected
+                button.classList.remove('btn-outline-primary', 'btn-outline-info', 'btn-outline-secondary', 'btn-outline-danger'); // Remove outlines
+            } else {
+                // Determine original color based on bet-type prefix
+                if (betType.startsWith('home_win') || betType.startsWith('draw') || betType.startsWith('away_win')) {
+                    button.classList.add('btn-outline-primary');
+                } else if (betType.startsWith('home_dnb') || betType.startsWith('away_dnb')) {
+                    button.classList.add('btn-outline-info');
+                } else if (betType.startsWith('over') || betType.startsWith('under')) {
+                    button.classList.add('btn-outline-secondary');
+                } else if (betType.startsWith('btts_yes')) {
+                    button.classList.add('btn-outline-success'); // Specific for BTTS Yes
+                } else if (betType.startsWith('btts_no')) {
+                    button.classList.add('btn-outline-danger'); // Specific for BTTS No
+                }
+                button.classList.remove('btn-success'); // Remove highlight
+            }
+        });
+    }
+
+    // Helper to get display text for bet type
+    function getBetTypeDisplay(betType) {
+        const betTypeMap = {
+            'home_win': 'Home Win',
+            'draw': 'Draw',
+            'away_win': 'Away Win',
+            'home_dnb': 'Home DNB',
+            'away_dnb': 'Away DNB',
+            'over1_5': 'Over 1.5',
+            'under1_5': 'Under 1.5',
+            'over2_5': 'Over 2.5',
+            'under2_5': 'Under 2.5',
+            'over3_5': 'Over 3.5',
+            'under3_5': 'Under 3.5',
+            'btts_yes': 'BTTS Yes',
+            'btts_no': 'BTTS No',
+        };
+        return betTypeMap[betType] || betType; // Fallback to raw bet type if not found
+    }
+
+
+    // Event listener for adding/removing selections
+    document.addEventListener('DOMContentLoaded', () => {
+        
+        // System Bet Listeners
+        systemBetCheckbox.addEventListener('change', updateBetslip);
+        permutationCountInput.addEventListener('input', updateBetslip);
+
+
+        document.querySelectorAll('.bet-selection-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const fixtureId = this.dataset.fixtureId;
+                const betType = this.dataset.betType;
+                const odd = parseFloat(this.dataset.odd);
+                const selectionText = this.dataset.selectionText; // Keep this for simpler display option
+                const periodName = this.dataset.periodName;
+                const homeTeam = this.dataset.homeTeam;
+                const awayTeam = this.dataset.awayTeam;
+                const matchDate = this.dataset.matchDate;
+                const matchTime = this.dataset.matchTime;
+
+                // Remove any existing selection for this fixture before adding/updating
+                selectedBets = selectedBets.filter(bet => bet.fixture_id !== fixtureId);
+
+                // Add the new selection with full details
+                selectedBets.push({
+                    fixture_id: fixtureId,
+                    bet_type: betType,
+                    bet_type_display: getBetTypeDisplay(betType), // Add display name
+                    odd: odd,
+                    selection_text: selectionText, // This can still be used for short display
+                    fixture_period_name: periodName,
+                    fixture_home_team: homeTeam,
+                    fixture_away_team: awayTeam,
+                    fixture_match_date: matchDate,
+                    fixture_match_time: matchTime,
+                });
+
+                displayMessage('Selection added/updated.', 'info');
+                updateBetslip();
+            });
+        });
+
+        // Event listener for removing selections from bet slip
+        betslipSelectionsDiv.addEventListener('click', function(event) {
+            if (event.target.classList.contains('remove-selection-btn')) {
+                const fixtureIdToRemove = event.target.dataset.fixtureId;
+                selectedBets = selectedBets.filter(bet => bet.fixture_id !== fixtureIdToRemove);
+                displayMessage('Selection removed.', 'info');
+                updateBetslip();
+            }
+        });
+
+        // Event listener for stake amount input changes
+        stakeAmountInput.addEventListener('input', () => {
+             calculateSystemAndWinnings('per_line');
+        });
+        
+        // Event listener for Total Stake input changes
+        totalStakeInput.addEventListener('input', () => {
+             calculateSystemAndWinnings('total');
+        });
+
+
+        // Place Bet Button Click Handler
+        placeBetBtn.addEventListener('click', async function() {
+            responseMessageDiv.classList.add('d-none'); // Hide previous messages
+            responseMessageDiv.innerHTML = '';
+            placeBetBtn.disabled = true; // Disable button to prevent multiple submissions
+
+            const stakeAmount = stakeAmountInput.value; // Send stake per line
+            const totalStake = totalStakeInput.value; // Validation check
+            const isSystemBet = systemBetCheckbox.checked;
+            const permutationCount = permutationCountInput.value;
+
+            if (selectedBets.length === 0) {
+                displayMessage('Error: No selections made.', 'danger');
+                placeBetBtn.disabled = false;
+                return;
+            }
+            if (!totalStake || parseFloat(totalStake) <= 0) {
+                displayMessage('Error: Please enter a valid stake amount.', 'danger');
+                placeBetBtn.disabled = false;
+                return;
+            }
+            if (isSystemBet && selectedBets.length < 3) {
+                 displayMessage('Error: System bets require at least 3 selections.', 'danger');
+                 placeBetBtn.disabled = false;
+                 return;
+            }
+
+            const formData = new FormData();
+            formData.append('selections', JSON.stringify(selectedBets));
+            formData.append('stake_amount', stakeAmount); // Backend expects stake per line
+            formData.append('is_system_bet', isSystemBet); // Send system bet flag
+            formData.append('permutation_count', permutationCount); // Send k value
+            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}'); // Include CSRF token
+
+            try {
+                const response = await fetch('{% url "betting:place_bet" %}', {
+                    method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json',
+                    },
+                    body: formData,
+                });
+
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    const data = await response.json();
+                    if (data.success) {
+                        try {
+                            displayMessage(data.message + (data.ticket_id ? ` Your ticket ID: ${data.ticket_id}` : ''), 'success');
+                            
+                            // Populate and show the print modal
+                            const ticketIdEl = document.getElementById('modal-ticket-id');
+                            if(ticketIdEl) ticketIdEl.textContent = data.ticket_id;
+                            
+                            const modalStakeEl = document.getElementById('modal-stake-amount');
+                            if(modalStakeEl) modalStakeEl.textContent = `₦${totalStakeInput.value}`; 
+                            
+                            const modalTotalOddsEl = document.getElementById('modal-total-odds');
+                            if(modalTotalOddsEl) modalTotalOddsEl.textContent = totalOddsSpan.textContent;
+                            
+                            const modalMinWinEl = document.getElementById('modal-min-winning');
+                            if(modalMinWinEl) modalMinWinEl.textContent = minWinningSpan.textContent;
+                            
+                            const modalPotWinEl = document.getElementById('modal-potential-winning');
+                            if(modalPotWinEl) modalPotWinEl.textContent = potentialWinningSpan.textContent;
+                            
+                            const modalBonusEl = document.getElementById('modal-bonus-amount');
+                            if(modalBonusEl) modalBonusEl.textContent = bonusAmountSpan.textContent;
+                            
+                            const modalMaxWinEl = document.getElementById('modal-max-winning');
+                            if(modalMaxWinEl) modalMaxWinEl.textContent = maxWinningSpan.textContent;
+                            
+                            const modalTimeEl = document.getElementById('modal-generation-time');
+                            if(modalTimeEl) modalTimeEl.textContent = new Date().toLocaleString();
+
+                            const modalSelectionsList = document.getElementById('modal-selections-list');
+                            if (modalSelectionsList) {
+                                modalSelectionsList.innerHTML = '';
+                                selectedBets.forEach(bet => {
+                                    const li = document.createElement('li');
+                                    li.classList.add('list-group-item', 'd-flex', 'flex-column');
+                                    li.innerHTML = `
+                                        <span class="fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</span>
+                                        <small class="text-muted">${bet.fixture_match_date} ${bet.fixture_match_time} - ${bet.bet_type_display} @ ${parseFloat(bet.odd).toFixed(2)}</small>
+                                        <small class="text-muted">Period: ${bet.fixture_period_name}</small>
+                                    `;
+                                    modalSelectionsList.appendChild(li);
+                                });
+                                
+                                if(isSystemBet) {
+                                    const li = document.createElement('li');
+                                    li.classList.add('list-group-item', 'bg-light', 'text-center', 'fw-bold');
+                                    li.textContent = `System Bet: ${permutationCount} of ${selectedBets.length} (${numberOfLinesSpan ? numberOfLinesSpan.textContent : 'N/A'} lines)`;
+                                    modalSelectionsList.prepend(li);
+                                }
+                            }
+                            
+                            if (typeof printTicketModal !== 'undefined' && printTicketModal) {
+                                printTicketModal.show();
+                            } else {
+                                console.warn('printTicketModal is not defined or initialized.');
+                            }
+
+                            selectedBets = []; 
+                            updateBetslip(); 
+                            stakeAmountInput.value = '100'; 
+                        } catch (jsError) {
+                            console.error('Error processing success response:', jsError);
+                            // Even if UI update fails, show simple success message
+                            alert('Bet placed successfully! Ticket ID: ' + data.ticket_id);
+                        }
+                    } else {
+                        displayMessage('Error placing bet: ' + data.message, 'danger');
+                    }
+                } else {
+                    // Response is not JSON (likely HTML error page)
+                    const text = await response.text();
+                    console.error("Non-JSON response:", text);
+                    displayMessage('Server Error: The server returned an unexpected response (HTML). Check console for details.', 'danger');
+                }
+
+            } catch (error) {
+                console.error('Fetch error:', error);
+                displayMessage('An unexpected error occurred. Please try again.', 'danger');
+            } finally {
+                placeBetBtn.disabled = false; // Re-enable button
+            }
+        });
+
+        // Print button inside the modal
+        document.getElementById('print-ticket-btn').addEventListener('click', function() {
+            // Store current body content
+            const originalBody = document.body.innerHTML;
+            const printContent = document.getElementById('ticket-content-to-print').outerHTML; // Get outerHTML to include the main wrapper div
+
+            // Create a new window or iframe to control printing scope
+            const printWindow = window.open('', '', 'height=600,width=400'); // Narrower window for preview
+            printWindow.document.write('<html><head><title>Print Ticket</title>');
+            
+            // Custom CSS for Thermal Printer (58mm/80mm)
+            printWindow.document.write('<style>');
+            printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 5px; color: #000; }');
+            printWindow.document.write('h6 { font-size: 16px; text-align: center; margin: 10px 0; font-weight: bold; text-transform: uppercase; }');
+            printWindow.document.write('p { font-size: 12px; margin: 2px 0; line-height: 1.2; }');
+            printWindow.document.write('ul { list-style: none; padding: 0; margin: 10px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }');
+            printWindow.document.write('li { padding: 5px 0; border-bottom: 1px dotted #ccc; }');
+            printWindow.document.write('li:last-child { border-bottom: none; }');
+            printWindow.document.write('.text-center { text-align: center; }');
+            printWindow.document.write('.text-muted { font-size: 10px; }');
+            printWindow.document.write('strong { font-weight: bold; }');
+            printWindow.document.write('</style>');
+            
+            printWindow.document.write('</head><body>');
+            printWindow.document.write(printContent); // Write only the content to print
+            printWindow.document.write('</body></html>');
+            printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
+            // No need to reload original window, print is in new window
+            // If you want to close the modal after printing, do it here
+            printTicketModal.hide(); // Hide the modal after print command
+        });
+
+        // Initial update when page loads
+        updateBetslip();
+    });
+
+    // NOTE for Django view (views.py):
+    // Please ensure the `place_bet` view in `betting/views.py` has the following correction:
+    // In the `for s_data in selections_list:` loop, change:
+    //   `elif bet_type == 'over3_5':`
+    //   `    odd_value = fixture.over3_3_odd`
+    // To:
+    //   `elif bet_type == 'over3_5':`
+    //   `    odd_value = fixture.over3_5_odd`
+    // And similar for any other typos like `under2_2_odd` if present.
+</script>
+{% endblock %}

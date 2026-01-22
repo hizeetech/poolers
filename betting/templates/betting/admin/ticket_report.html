@@ -1,0 +1,108 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Ticket Report - Admin{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Admin Ticket Report</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Tickets</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_ticket_report' %}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="status_filter" class="form-label">Status:</label>
+                <select name="status" id="status_filter" class="form-select rounded-md">
+                    {% for value, label in status_choices %}
+                        <option value="{{ value }}" {% if value == current_status_filter %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="user_filter" class="form-label">User:</label>
+                <select name="user" id="user_filter" class="form-select rounded-md">
+                    <option value="all">All Users</option>
+                    {% for user_obj in all_users %}
+                        <option value="{{ user_obj.id }}" {% if user_obj.id|stringformat:"s" == current_user_filter %}selected{% endif %}>{{ user_obj.email }} ({{ user_obj.get_user_type_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="start_date" class="form-label">Start Date:</label>
+                <input type="date" name="start_date" id="start_date" class="form-control rounded-md" value="{{ start_date_filter }}">
+            </div>
+            <div class="col-md-4">
+                <label for="end_date" class="form-label">End Date:</label>
+                <input type="date" name="end_date" id="end_date" class="form-control rounded-md" value="{{ end_date_filter }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
+
+    {% if bet_tickets %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Ticket ID</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Stake</th>
+                        <th scope="col">Total Odd</th>
+                        <th scope="col">Potential Winning</th>
+                        <th scope="col">Max Winning</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Placed At</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ticket in bet_tickets %}
+                    <tr>
+                        <td>{{ ticket.ticket_id }}</td>
+                        <td>{{ ticket.user.email }}</td>
+                        <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
+                        <td>{{ ticket.total_odd|floatformat:2 }}x</td>
+                        <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
+                        <td>₦{{ ticket.max_winning|floatformat:2 }}</td>
+                        <td>
+                            <span class="badge 
+                                {% if ticket.status == 'pending' %}bg-secondary
+                                {% elif ticket.status == 'won' %}bg-success
+                                {% elif ticket.status == 'lost' %}bg-danger
+                                {% elif ticket.status == 'deleted' %}bg-warning text-dark
+                                {% elif ticket.status == 'cashed_out' %}bg-info
+                                {% elif ticket.status == 'cancelled' %}bg-dark
+                                {% endif %}">
+                                {{ ticket.get_status_display }}
+                            </span>
+                        </td>
+                        <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-2">
+                                <a href="{% url 'betting_admin:admin_ticket_details' ticket.id %}" class="btn btn-sm btn-outline-primary rounded-pill">Details</a>
+                                {% if ticket.status == 'pending' %}
+                                    <form action="{% url 'betting_admin:admin_void_ticket_single' ticket.id %}" method="post" onsubmit="return confirm('Are you sure you want to VOID this ticket? This action is irreversible and will refund stake.');" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-warning rounded-pill">Void</button>
+                                    </form>
+                                    <form action="{% url 'betting_admin:admin_settle_won_ticket_single' ticket.id %}" method="post" onsubmit="return confirm('Are you sure you want to manually settle this ticket as WON? This will payout winnings.');" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-success rounded-pill">Settle Won</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            No bet tickets found for the selected filters.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

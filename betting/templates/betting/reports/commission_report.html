@@ -1,0 +1,81 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-10 col-lg-9">
+            <div class="card shadow-lg border-0 rounded-4">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title text-center mb-4 fw-bold text-dark">{{ report_title }}</h2>
+
+                    {# Date filter form #}
+                    <form method="get" class="mb-4 row align-items-end g-3">
+                        <div class="col-md-4">
+                            <label for="start_date" class="form-label">Start Date:</label>
+                            <input type="date" id="start_date" name="start_date" class="form-control rounded-md" value="{{ start_date_filter|default_if_none:'' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="end_date" class="form-label">End Date:</label>
+                            <input type="date" id="end_date" name="end_date" class="form-control rounded-md" value="{{ end_date_filter|default_if_none:'' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <button type="submit" class="btn btn-primary rounded-pill px-4 w-100">Apply Filter</button>
+                        </div>
+                    </form>
+
+                    {# Display Django messages #}
+                    {% if messages %}
+                        <ul class="messages list-unstyled px-0 mx-0">
+                            {% for message in messages %}
+                                <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
+                                    {{ message }}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+
+                    {% if commission_data %}
+                        {% for data in commission_data %}
+                        <div class="mb-4 p-3 bg-light rounded-3 shadow-sm">
+                            <h4 class="fw-bold text-secondary">Commission Period: {{ data.start_date|date:"M d, Y" }} - {{ data.end_date|date:"M d, Y" }}</h4>
+                            <ul class="list-group list-group-flush">
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    Total Turnover:
+                                    <span class="fw-bold">₦{{ data.total_turnover|floatformat:2 }}</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    Total Winnings Paid:
+                                    <span class="fw-bold">₦{{ data.total_winnings|floatformat:2 }}</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    Gross Gaming Revenue (GGR):
+                                    <span class="fw-bold">₦{{ data.ggr|floatformat:2 }}</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    Commission Rate:
+                                    <span class="fw-bold">{{ data.commission_rate|floatformat:2 }}%</span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center bg-primary text-white rounded-bottom">
+                                    <strong>Your Commission Amount:</strong>
+                                    <strong class="fs-5">₦{{ data.commission_amount|floatformat:2 }}</strong>
+                                </li>
+                            </ul>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-center text-muted">No commission data available for this report within the selected period.</p>
+                    {% endif %}
+
+                    <div class="text-center mt-4">
+                        <a href="{% url 'betting:agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

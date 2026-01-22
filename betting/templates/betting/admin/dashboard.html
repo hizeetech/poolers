@@ -1,0 +1,91 @@
+{% extends 'betting/admin/base.html' %} 
+{% load static %} 
+
+{% block title %}Admin Dashboard{% endblock %} 
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Admin Dashboard Overview</h2>
+
+    {# Overview Cards Section #}
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
+        {# Total Users Card #}
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-primary-subtle text-primary-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Total Users</h3>
+                    <p class="card-text fs-1 fw-bold text-primary">{{ total_users }}</p>
+                    <p class="card-text fs-6 text-muted">Players: {{ total_players }} | Cashiers: {{ total_cashiers }}</p>
+                    <p class="card-text fs-6 text-muted">Agents: {{ total_agents }} | Super Agents: {{ total_super_agents }}</p>
+                    <p class="card-text fs-6 text-muted">Master Agents: {{ total_master_agents }} | Admins: {{ total_admins }}</p>
+                </div>
+            </div>
+        </div>
+
+        {# Betting Statistics Card #}
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-success-subtle text-success-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Betting Statistics</h3>
+                    <p class="card-text fs-1 fw-bold text-success">{{ total_bets_placed }} <span class="fs-5 fw-normal text-success">Bets Placed</span></p>
+                    <p class="card-text fs-6 text-muted">Total Stake: ₦{{ total_stake_amount|floatformat:2 }}</p>
+                    <p class="card-text fs-6 text-muted">Total Potential Winnings: ₦{{ total_potential_winning|floatformat:2 }}</p>
+                </div>
+            </div>
+        </div>
+
+        {# Financial Overview Card #}
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-warning-subtle text-warning-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Financial Overview</h3>
+                    <p class="card-text fs-1 fw-bold text-warning">₦{{ total_deposits|floatformat:2 }} <span class="fs-5 fw-normal text-warning">Deposits</span></p>
+                    <p class="card-text fs-6 text-muted">Total Withdrawals: ₦{{ total_withdrawals|floatformat:2 }}</p>
+                    <p class="card-text fs-6 text-muted">Pending Bets: {{ pending_bets }}</p>
+                    <p class="card-text fs-6 text-muted">Won Bets: {{ won_bets }} | Lost Bets: {{ lost_bets }} | Deleted Bets: {{ deleted_bets }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Quick Actions & Reports Section #}
+    <div class="card border-0 shadow-sm p-4 bg-light">
+        <div class="card-body">
+            <h3 class="h4 card-title mb-4 fw-semibold">Quick Actions & Reports</h3>
+            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3">
+                <div class="col">
+                    <a href="{% url 'betting_admin:manage_fixtures' %}" class="btn btn-primary w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-futbol me-2"></i> Manage Fixtures
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:manage_users' %}" class="btn btn-info w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-users me-2"></i> Manage Users
+                    </a>
+                </div>
+                <div class="col">
+                    {# CORRECTED URL NAME: from betting_tickets_report to admin_ticket_report #}
+                    <a href="{% url 'betting_admin:admin_ticket_report' %}" class="btn btn-success w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-ticket-alt me-2"></i> View All Tickets Report
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:withdraw_request_list' %}" class="btn btn-warning w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-money-check-alt me-2"></i> Withdrawal Requests
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:manage_agent_payouts' %}" class="btn btn-danger w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-hand-holding-usd me-2"></i> Manage Agent Payouts
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:manage_betting_periods' %}" class="btn btn-dark w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-calendar-alt me-2"></i> Betting Periods
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

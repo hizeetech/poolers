@@ -1,0 +1,194 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}My Wallet{% endblock %} {% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-10 col-lg-9">
+            <div class="card shadow-lg border-0 rounded-4 mb-4">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title text-center mb-4 fw-bold text-dark">My Wallet</h2>
+
+                    {# Display Django messages #} {% if messages %}
+                    <ul class="messages list-unstyled px-0 mx-0">
+                        {% for message in messages %}
+                        <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
+                            {{ message }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+
+                    <div class="text-center mb-4">
+                        <p class="lead text-muted mb-0">Current Balance:</p>
+                        <h3 class="fw-bold text-success fs-1">₦{{ wallet.balance|floatformat:2 }}</h3>
+                    </div>
+
+                    {# Deposit Section #}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-primary">Deposit Funds</h4>
+                    <form id="depositForm" action="{% url 'betting:initiate_deposit' %}" method="post" class="mb-4">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="id_amount_deposit" class="form-label">Amount (₦)</label>
+                            <input type="number" name="amount" id="id_amount_deposit" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 5000" min="100" required>
+                        </div>
+                        <button type="submit" class="btn btn-success rounded-pill px-4 py-2 w-100">Initiate Deposit</button>
+                    </form>
+                    <p class="text-center text-muted small">Powered by Paystack</p>
+
+
+                    {# Withdrawal Section #}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-danger">Withdraw Funds</h4>
+                    <form action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
+                            <input type="number" name="amount" id="id_amount_withdraw" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 2000" min="100" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_bank_name" class="form-label">Bank Name</label>
+                            <input type="text" name="bank_name" id="id_bank_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Zenith Bank" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_account_name" class="form-label">Account Name</label>
+                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., John Doe" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_account_number" class="form-label">Account Number</label>
+                            <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
+                        </div>
+                        <button type="submit" class="btn btn-danger rounded-pill px-4 py-2 w-100">Request Withdrawal</button>
+                    </form>
+
+                    {# Wallet Transfer Section (Conditional, e.g., for agents/cashiers) #} {% if request.user.user_type != 'player' %}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-info">Wallet Transfer</h4>
+                    <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-4">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="id_recipient_email" class="form-label">Recipient Email</label>
+                            <input type="email" name="recipient_identifier" id="id_recipient_email" class="form-control rounded-pill px-4 py-2" placeholder="Recipient's email" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_transfer_amount" class="form-label">Amount (₦)</label>
+                            <input type="number" name="amount" id="id_transfer_amount" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 1000" min="100" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_transaction_type" class="form-label">Transaction Type</label>
+                            <select name="transaction_type" id="id_transaction_type" class="form-select rounded-pill px-4 py-2" required>
+                                <option value="credit">Credit (Transfer Out)</option>
+                                <option value="debit">Debit (Take From)</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_description" class="form-label">Description (Optional)</label>
+                            <input type="text" name="description" id="id_description" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Funds for betting">
+                        </div>
+                        <button type="submit" class="btn btn-info rounded-pill px-4 py-2 w-100">Perform Transfer</button>
+                    </form>
+                    {% endif %} {# Recent Transactions Section #}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-secondary">Recent Transactions</h4>
+                    {% if transactions %}
+                    <div class="table-responsive">
+                        <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm">
+                            <thead class="bg-light">
+                                <tr>
+                                    <th scope="col">Date</th>
+                                    <th scope="col">Type</th>
+                                    <th scope="col">Amount</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for transaction in transactions %}
+                                <tr>
+                                    <td>{{ transaction.timestamp|date:"M d, Y H:i" }}</td>
+                                    <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}">
+                                                {{ transaction.get_transaction_type_display }}
+                                            </span></td>
+                                    <td>₦{{ transaction.amount|floatformat:2 }}</td>
+                                    <td>
+                                        <span class="badge bg-{{ transaction.status|lower }}">
+                                                    {{ transaction.get_status_display }}
+                                                </span>
+                                    </td>
+                                    <td>{{ transaction.description }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-center text-muted">No recent transactions.</p>
+                    {% endif %}
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %} {% block extra_js %}
+<script src="https://js.paystack.co/v1/inline.js"></script>
+<script>
+    document.getElementById('depositForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const amount = document.getElementById('id_amount_deposit').value;
+        if (!amount || parseFloat(amount) <= 0) {
+            alert('Please enter a valid amount.');
+            return;
+        }
+
+        try {
+            const response = await fetch(this.action, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({
+                    amount: amount
+                })
+            });
+
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("Received non-JSON response from server");
+            }
+
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                if (typeof PaystackPop === 'undefined') {
+                    alert('Paystack SDK failed to load. Please check your internet connection.');
+                    return;
+                }
+                const handler = PaystackPop.setup({
+                    key: '{{ paystack_public_key }}', // Replace with your public key
+                    email: data.email,
+                    amount: data.amount, // amount in kobo
+                    ref: data.reference,
+                    onClose: function() {
+                        console.log('Payment window closed.');
+                        // Optionally, redirect or show a message
+                    },
+                    callback: function(response) {
+                        const message = 'Payment complete! Reference: ' + response.reference;
+                        console.log(message);
+                        // Redirect to the verify_deposit view to complete the transaction
+                        window.location.href = "{% url 'betting:verify_deposit' %}?reference=" + response.reference;
+                    }
+                });
+                handler.openIframe();
+            } else {
+                alert('Error initiating deposit: ' + (data.message || 'Unknown error'));
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('An error occurred during deposit initiation: ' + error.message);
+        }
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Delete Bet Ticket - Pool Betting{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2 class="text-center text-danger">Delete Bet Ticket</h2>
+            <p class="lead text-center text-muted">Enter the ID of the ticket you wish to delete and refund.</p>
+            <p class="text-center text-danger"><strong>WARNING:</strong> Deleting a ticket will refund its stake. This action is irreversible.</p>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow-sm border-danger">
+                <div class="card-header bg-danger text-white">
+                    <h5 class="mb-0">Delete Bet Ticket</h5>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %} {# Non-field errors #} {% if form.non_field_errors %}
+                        <div class="alert alert-danger" role="alert">
+                            {% for error in form.non_field_errors %} {{ error }} {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <div class="mb-3">
+                            <label for="{{ form.ticket_id.id_for_label }}" class="form-label">{{ form.ticket_id.label }}</label> {{ form.ticket_id }} {% if form.ticket_id.errors %}
+                            <div class="text-danger small">{{ form.ticket_id.errors }}</div>
+                            {% endif %}
+                            <small class="form-text text-muted">{{ form.ticket_id.help_text }}</small>
+                        </div>
+
+                        <button type="submit" class="btn btn-danger mt-3">
+                            <i class="fas fa-trash-alt me-2"></i> Delete Ticket & Refund Stake
+                        </button>
+                        <a href="{% if request.user.is_staff %}{% url 'admin_dashboard' %}{% else %}{% url 'master_agent_dashboard' %}{% endif %}" class="btn btn-secondary mt-3">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include Font Awesome for icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

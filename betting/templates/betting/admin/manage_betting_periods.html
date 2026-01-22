@@ -1,0 +1,49 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Manage Betting Periods{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Manage Betting Periods</h2>
+
+    <div class="mb-4 d-flex justify-content-end">
+        <a href="{% url 'betting_admin:add_betting_period' %}" class="btn btn-success rounded-pill px-4 py-2 shadow-sm">
+            <i class="fas fa-plus-circle me-2"></i> Add New Period
+        </a>
+    </div>
+
+    {% if betting_periods %}
+    <div class="table-responsive shadow-sm rounded-lg">
+        <table class="table table-hover table-striped mb-0">
+            <thead class="bg-dark text-white">
+                <tr>
+                    <th scope="col" class="py-3 px-4">ID</th>
+                    <th scope="col" class="py-3 px-4">Name</th>
+                    <th scope="col" class="py-3 px-4">Start Date</th>
+                    <th scope="col" class="py-3 px-4">End Date</th>
+                    <th scope="col" class="py-3 px-4">Is Active</th>
+                    <th scope="col" class="py-3 px-4 text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for period in betting_periods %}
+                <tr>
+                    <td class="py-3 px-4">{{ period.id|truncatechars:8 }}</td>
+                    <td class="py-3 px-4">{{ period.name }}</td>
+                    <td class="py-3 px-4">{{ period.start_date|date:"Y-m-d" }}</td>
+                    <td class="py-3 px-4">{{ period.end_date|date:"Y-m-d" }}</td>
+                    <td class="py-3 px-4">
+                        <i class="fas {% if period.is_active %}fa-check-circle text-success{% else %}fa-times-circle text-danger{% endif %}"></i>
+                    </td>
+                    <td class="py-3 px-4 text-end">
+                        <a href="{% url 'betting_admin:edit_betting_period' period_id=period.id %}" class="btn btn-sm btn-outline-primary me-1 rounded-pill">Edit</a>
+                        <a href="{% url 'betting_admin:delete_betting_period' period_id=period.id %}" class="btn btn-sm btn-outline-danger rounded-pill">Delete</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info text-center" role="alert">
+        No betting periods found. Click "Add New Period" to get started!
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

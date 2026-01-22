@@ -1,0 +1,292 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PoolBetting Admin{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fa;
+        }
+        .sidebar {
+            width: 250px;
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+            background-color: #343a40;
+            padding-top: 20px;
+            color: white;
+            overflow-y: auto; /* Enable scrolling for long sidebars */
+        }
+        .sidebar .nav-link {
+            color: #adb5bd;
+            padding: 10px 15px;
+            transition: background-color 0.3s, color 0.3s;
+            border-radius: 0.5rem; /* Rounded corners for nav links */
+        }
+        .sidebar .nav-link:hover,
+        .sidebar .nav-link.active {
+            background-color: #495057;
+            color: white;
+        }
+        .sidebar .nav-link i {
+            margin-right: 10px;
+        }
+        .content {
+            margin-left: 250px;
+            padding: 20px;
+        }
+        .navbar-brand-custom { /* Custom class for the main brand to avoid conflicts */
+            font-weight: bold;
+            color: white;
+            padding-left: 15px;
+            margin-bottom: 20px;
+            display: block;
+            text-decoration: none; /* Ensure no underline */
+        }
+        .card {
+            border-radius: 0.75rem; /* More rounded cards */
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05); /* Subtle shadow */
+        }
+        .btn-primary {
+            background-color: #007bff;
+            border-color: #007bff;
+            border-radius: 0.5rem;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+            border-color: #0056b3;
+        }
+        .table {
+            border-radius: 0.75rem;
+            overflow: hidden; /* Ensures rounded corners are visible for tables */
+        }
+        .table thead {
+            background-color: #e9ecef;
+        }
+        .form-control, .form-select {
+            border-radius: 0.5rem;
+        }
+        .messages {
+            list-style: none;
+            padding: 0;
+        }
+        .messages li {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            font-weight: bold;
+        }
+        .messages .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .messages .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .messages .warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+        .messages .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        /* Collapsible sidebar sections */
+        .collapsible-header {
+            cursor: pointer;
+            padding: 10px 15px;
+            color: #adb5bd;
+            transition: background-color 0.3s;
+            border-radius: 0.5rem;
+        }
+        .collapsible-header:hover {
+            background-color: #495057;
+        }
+        .collapsible-header.active {
+            background-color: #495057;
+            color: white;
+        }
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background-color: #495057;
+            border-radius: 0.5rem;
+            margin-top: 5px;
+        }
+        .collapsible-content.show {
+            max-height: 500px; /* Adjust as needed for content length */
+            transition: max-height 0.5s ease-in;
+        }
+        .collapsible-content .nav-link {
+            padding-left: 35px; /* Indent sub-items */
+            border-left: 3px solid transparent;
+        }
+        .collapsible-content .nav-link:hover,
+        .collapsible-content .nav-link.active {
+            border-left-color: #007bff;
+        }
+        .collapsible-header .fa-caret-down {
+            transition: transform 0.3s ease;
+        }
+        .collapsible-header.active .fa-caret-down {
+            transform: rotate(180deg);
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+                padding-bottom: 0;
+            }
+            .content {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="d-flex">
+        <div class="sidebar">
+            <a class="navbar-brand-custom text-center d-block py-3" href="{% url 'betting_admin:dashboard' %}">PoolBetting Admin</a>
+            <ul class="nav flex-column">
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:dashboard' %}active{% endif %}" href="{% url 'betting_admin:dashboard' %}">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if 'fixture' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_fixtures' %}">
+                        <i class="fas fa-futbol"></i> Manage Fixtures
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if 'user' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_users' %}"> {# Updated condition slightly for active state #}
+                        <i class="fas fa-users"></i> Manage Users
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if 'withdrawal' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:withdraw_request_list' %}">
+                        <i class="fas fa-money-check-alt me-2"></i> Withdrawal Requests
+                    </a>
+                </li>
+                 <li class="nav-item">
+                    <a class="nav-link {% if 'period' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_betting_periods' %}">
+                        <i class="fas fa-calendar-alt"></i> Betting Periods
+                    </a>
+                </li>
+                 <li class="nav-item">
+                    <a class="nav-link {% if 'payout' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_agent_payouts' %}">
+                        <i class="fas fa-hand-holding-dollar"></i> Agent Payouts
+                    </a>
+                </li>
+
+                <!-- Reporting Section - Collapsible -->
+                <li class="nav-item">
+                    <div class="collapsible-header {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#reportsCollapse" aria-expanded="{% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}true{% else %}false{% endif %}" aria-controls="reportsCollapse">
+                        <i class="fas fa-chart-line"></i> Reports <i class="fas fa-caret-down float-end mt-1"></i>
+                    </div>
+                    <div class="collapse collapsible-content {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}show{% endif %}" id="reportsCollapse">
+                        <ul class="nav flex-column ps-3">
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_ticket_report' %}active{% endif %}" href="{% url 'betting_admin:admin_ticket_report' %}">Ticket Report</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_wallet_report' %}active{% endif %}" href="{% url 'betting_admin:admin_wallet_report' %}">Wallet Report</a>
+                            </li>
+                             <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_sales_winnings_report' %}active{% endif %}" href="{% url 'betting_admin:admin_sales_winnings_report' %}">Sales & Winnings Report</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_commission_report' %}active{% endif %}" href="{% url 'betting_admin:admin_commission_report' %}">Commission Report</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_activity_log' %}active{% endif %}" href="{% url 'betting_admin:admin_activity_log' %}">Activity Logs</a>
+                            </li>
+                        </ul>
+                    </div>
+                </li>
+
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'betting:user_logout' %}"> 
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <div class="content flex-grow-1">
+            <nav class="navbar navbar-expand-lg navbar-light bg-light rounded-md mb-4 shadow-sm">
+                <div class="container-fluid">
+                    {# Admin Panel title with Bootstrap classes for proper alignment #}
+                    <a class="navbar-brand fw-bold" href="#">{% block page_header %}Admin Panel{% endblock %}</a>
+                    
+                    <div class="d-flex align-items-center ms-auto"> {# Use align-items-center for vertical alignment #}
+                        <span class="navbar-text me-3 text-dark"> {# Ensure text is visible #}
+                            Welcome, {{ request.user.first_name|default:request.user.email }} ({{ request.user.get_user_type_display }})
+                        </span>
+                        <a href="{% url 'betting:profile' %}" class="btn btn-sm btn-outline-secondary rounded-pill me-2">
+                            <i class="fas fa-user-circle me-1"></i> Profile
+                        </a>
+                        <a href="{% url 'betting:user_logout' %}" class="btn btn-sm btn-danger rounded-pill"> 
+                            <i class="fas fa-sign-out-alt me-1"></i> Logout
+                        </a>
+                    </div>
+                </div>
+            </nav>
+
+            {% if messages %}
+                <ul class="messages">
+                    {% for message in messages %}
+                        <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+
+            {% block content %}
+            <!-- Content of specific admin page will be inserted here -->
+            {% endblock %}
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // JavaScript for collapsible sidebar sections
+        document.addEventListener('DOMContentLoaded', function() {
+            var collapsibleHeaders = document.querySelectorAll('.collapsible-header');
+            collapsibleHeaders.forEach(function(header) {
+                header.addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    var targetId = this.dataset.bsTarget;
+                    var targetElement = document.querySelector(targetId);
+                    if (targetElement.classList.contains('show')) {
+                        targetElement.classList.remove('show');
+                        targetElement.style.maxHeight = '0';
+                    } else {
+                        targetElement.classList.add('show');
+                        targetElement.style.maxHeight = targetElement.scrollHeight + 'px'; // Set to actual height
+                    }
+                });
+            });
+
+            // Set initial max-height for open collapsible sections on page load
+            document.querySelectorAll('.collapsible-content.show').forEach(function(content) {
+                content.style.maxHeight = content.scrollHeight + 'px';
+            });
+        });
+    </script>
+</body>
+</html>

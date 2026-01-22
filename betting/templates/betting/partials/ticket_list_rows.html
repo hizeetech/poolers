@@ -1,0 +1,63 @@
+{% load betting_extras %}
+{% for t in tickets %}
+<tr>
+    <td>{{ t.ticket_id }}</td>
+    <td>{{ t.get_bet_type_display|title }}</td>
+    <td class="text-center">{{ t.selections.count }}</td>
+    <td>
+        <span class="badge 
+            {% if t.status == 'pending' %}bg-warning text-dark
+            {% elif t.status == 'won' %}bg-success
+            {% elif t.status == 'lost' %}bg-danger
+            {% elif t.status == 'cancelled' %}bg-secondary
+            {% else %}bg-dark{% endif %}">
+            {{ t.get_status_display }}
+        </span>
+    </td>
+    <td>₦{{ t.stake_amount|floatformat:0 }}</td>
+    <td>₦{{ t.potential_winning|floatformat:0 }}</td>
+    <td>₦{{ t.get_min_potential_winning|floatformat:0 }}</td>
+    <td>₦{{ t.max_winning|floatformat:0 }}</td>
+    <td>
+        {% if t.status == 'won' or t.status == 'cashed_out' %}
+            <span class="text-success fw-bold">₦{{ t.max_winning|floatformat:0 }}</span>
+        {% else %}
+            <span class="text-muted">-</span>
+        {% endif %}
+    </td>
+    <td class="small">{% if t.status != 'pending' %}{{ t.last_updated|date:"y-m-d H:i" }}{% else %}-{% endif %}</td>
+    <td><span class="user-col-truncate" title="{{ t.user.email }}">{{ t.user.email }}</span></td>
+    <td class="small">{{ t.placed_at|date:"y-m-d H:i" }}</td>
+    <td class="text-end">
+        <!-- View Button -->
+        <form method="post" action="{% url 'betting:check_ticket_status' %}" class="d-inline">
+            {% csrf_token %}
+            <input type="hidden" name="ticket_id" value="{{ t.ticket_id }}">
+            <button type="submit" class="btn btn-sm btn-info text-white me-1">View</button>
+        </form>
+
+        <!-- Void Button Logic -->
+        {% if request.user.user_type == 'agent' and t.status == 'pending' %}
+            {% if t.user.user_type == 'cashier' and t.user.agent == request.user %}
+                {% if t|is_within_void_window:void_window and not t.has_computed_results %}
+                    <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
+                       class="btn btn-sm btn-danger"
+                       onclick="return confirm('Are you sure you want to void this ticket? This action cannot be undone.');">
+                       Void
+                    </a>
+                {% endif %}
+            {% endif %}
+        {% endif %}
+        
+        {% if request.user.is_superuser or request.user.user_type == 'admin' %}
+            {% if t.status == 'pending' %}
+                 <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
+                       class="btn btn-sm btn-danger"
+                       onclick="return confirm('Are you sure you want to void this ticket?');">
+                       Void (Admin)
+                 </a>
+            {% endif %}
+        {% endif %}
+    </td>
+</tr>
+{% endfor %}

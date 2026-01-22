@@ -1,0 +1,321 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+
+{% block title %}Manage Cashiers{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h3 text-dark fw-bold">My Cashiers</h1>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createCashierModal">
+            <i class="fas fa-plus-circle me-1"></i> Create Cashier
+        </button>
+    </div>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-striped mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Email</th>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Prefix</th>
+                            <th>Balance</th>
+                            <th>Joined</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cashier in cashiers %}
+                        <tr>
+                            <td>{{ cashier.email }}</td>
+                            <td>{{ cashier.get_full_name }}</td>
+                            <td>{{ cashier.phone_number|default:"-" }}</td>
+                            <td>{{ cashier.cashier_prefix|default:"-" }}</td>
+                            <td class="fw-bold text-success">₦{{ cashier.wallet.balance|floatformat:2 }}</td>
+                            <td>{{ cashier.date_joined|date:"M d, Y" }}</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-success me-1" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#creditCashierModal"
+                                        data-id="{{ cashier.id }}"
+                                        data-email="{{ cashier.email }}"
+                                        title="Credit Cashier">
+                                    <i class="fas fa-wallet"></i> Credit
+                                </button>
+                                <button class="btn btn-sm btn-outline-primary me-1" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#editCashierModal"
+                                        data-id="{{ cashier.id }}"
+                                        data-email="{{ cashier.email }}"
+                                        data-firstname="{{ cashier.first_name }}"
+                                        data-lastname="{{ cashier.last_name }}"
+                                        data-phone="{{ cashier.phone_number }}"
+                                        title="Edit Details">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#deleteCashierModal"
+                                        data-id="{{ cashier.id }}"
+                                        data-email="{{ cashier.email }}"
+                                        title="Delete Cashier">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center py-4 text-muted">
+                                No cashiers found. Click "Create Cashier" to add one.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if cashiers.has_other_pages %}
+        <div class="card-footer bg-white">
+            <nav aria-label="Page navigation">
+                <ul class="pagination justify-content-center mb-0">
+                    {% if cashiers.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ cashiers.previous_page_number }}">Previous</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled">
+                        <span class="page-link">Previous</span>
+                    </li>
+                    {% endif %}
+
+                    {% for i in cashiers.paginator.page_range %}
+                        {% if cashiers.number == i %}
+                        <li class="page-item active">
+                            <span class="page-link">{{ i }}</span>
+                        </li>
+                        {% else %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ i }}">{{ i }}</a>
+                        </li>
+                        {% endif %}
+                    {% endfor %}
+
+                    {% if cashiers.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ cashiers.next_page_number }}">Next</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled">
+                        <span class="page-link">Next</span>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Create Cashier Modal -->
+<div class="modal fade" id="createCashierModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Cashier</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'betting:agent_create_cashier' %}" method="post">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Email Address *</label>
+                        <input type="email" name="email" class="form-control" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">First Name</label>
+                            <input type="text" name="first_name" class="form-control">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" name="last_name" class="form-control">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Phone Number</label>
+                        <input type="text" name="phone_number" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Cashier Prefix (e.g., CSH01)</label>
+                        <input type="text" name="cashier_prefix" class="form-control" placeholder="Optional but recommended">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password *</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirm Password *</label>
+                        <input type="password" name="confirm_password" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Cashier</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Cashier Modal -->
+<div class="modal fade" id="editCashierModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Cashier</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="editCashierForm" method="post">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Email Address</label>
+                        <input type="email" name="email" id="edit_email" class="form-control" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">First Name</label>
+                            <input type="text" name="first_name" id="edit_first_name" class="form-control">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" name="last_name" id="edit_last_name" class="form-control">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Phone Number</label>
+                        <input type="text" name="phone_number" id="edit_phone_number" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Credit Cashier Modal -->
+<div class="modal fade" id="creditCashierModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Credit Cashier</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="creditCashierForm" method="post">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <p>Crediting cashier: <strong id="credit_cashier_email"></strong></p>
+                    <div class="alert alert-info">
+                        The amount will be deducted from your agent wallet.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Amount (₦)</label>
+                        <input type="number" name="amount" class="form-control" step="0.01" min="1" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Credit Account</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Cashier Modal -->
+<div class="modal fade" id="deleteCashierModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Cashier</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="deleteCashierForm" method="post">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <p>Are you sure you want to delete cashier <strong id="delete_cashier_email"></strong>?</p>
+                    <p class="text-danger small">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Delete Permanently</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Edit Modal Handler
+        var editModal = document.getElementById('editCashierModal');
+        editModal.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget;
+            var id = button.getAttribute('data-id');
+            var email = button.getAttribute('data-email');
+            var firstName = button.getAttribute('data-firstname');
+            var lastName = button.getAttribute('data-lastname');
+            var phone = button.getAttribute('data-phone');
+
+            var form = document.getElementById('editCashierForm');
+            form.action = "{% url 'betting:agent_edit_cashier' 0 %}".replace('0', id);
+            
+            document.getElementById('edit_email').value = email;
+            document.getElementById('edit_first_name').value = firstName;
+            document.getElementById('edit_last_name').value = lastName;
+            document.getElementById('edit_phone_number').value = phone;
+        });
+
+        // Credit Modal Handler
+        var creditModal = document.getElementById('creditCashierModal');
+        creditModal.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget;
+            var id = button.getAttribute('data-id');
+            var email = button.getAttribute('data-email');
+
+            var form = document.getElementById('creditCashierForm');
+            form.action = "{% url 'betting:agent_credit_cashier' 0 %}".replace('0', id);
+            
+            document.getElementById('credit_cashier_email').textContent = email;
+        });
+
+        // Delete Modal Handler
+        var deleteModal = document.getElementById('deleteCashierModal');
+        deleteModal.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget;
+            var id = button.getAttribute('data-id');
+            var email = button.getAttribute('data-email');
+
+            var form = document.getElementById('deleteCashierForm');
+            form.action = "{% url 'betting:agent_delete_cashier' 0 %}".replace('0', id);
+            
+            document.getElementById('delete_cashier_email').textContent = email;
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Declare Result - {{ fixture.home_team }} vs {{ fixture.away_team }}{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="mb-0">Declare Result for: {{ fixture.home_team }} vs {{ fixture.away_team }}</h3>
+                    <p class="mb-0">{{ fixture.match_date }} at {{ fixture.match_time }}</p>
+                </div>
+                <div class="card-body">
+                    {% if messages %} {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                    {% endfor %} {% endif %} {% if fixture.status == 'settled' %}
+                    <div class="alert alert-info">This fixture has already been settled.</div>
+                    <p><strong>Final Score:</strong> {{ fixture.home_score }} - {{ fixture.away_score }}</p>
+                    <p><strong>Result:</strong> {{ fixture.get_result_display }}</p>
+                    <a href="{% url 'manage_fixtures' %}" class="btn btn-secondary">Back to Manage Fixtures</a> {% else %}
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="home_score" class="form-label">Home Team Score ({{ fixture.home_team }})</label>
+                            <input type="number" class="form-control" id="home_score" name="home_score" required min="0" value="{{ fixture.home_score|default_if_none:'' }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="away_score" class="form-label">Away Team Score ({{ fixture.away_team }})</label>
+                            <input type="number" class="form-control" id="away_score" name="away_score" required min="0" value="{{ fixture.away_score|default_if_none:'' }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="result_choice" class="form-label">Match Result</label>
+                            <select class="form-select" id="result_choice" name="result_choice" required>
+                                    <option value="">Select Result</option>
+                                    <option value="home_win" {% if fixture.result == 'home_win' %}selected{% endif %}>Home Win ({{ fixture.home_team }} wins)</option>
+                                    <option value="draw" {% if fixture.result == 'draw' %}selected{% endif %}>Draw</option>
+                                    <option value="away_win" {% if fixture.result == 'away_win' %}selected{% endif %}>Away Win ({{ fixture.away_team }} wins)</option>
+                                </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Declare Result & Settle Bets</button>
+                        <a href="{% url 'betting_admin:manage_fixtures' %}" class="btn btn-secondary">Cancel</a>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,149 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Sales & Winnings Report{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2 class="text-center text-primary">{{ report_title }}</h2>
+            <p class="lead text-center text-muted">Overview of sales and winnings for your downline.</p>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row justify-content-center">
+        <div class="col-md-10">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row mb-3">
+        <div class="col-12">
+            <form method="get" class="row g-3 align-items-center">
+                <div class="col-md-4">
+                    <label for="status_filter" class="form-label visually-hidden">Report Type</label>
+                    <select class="form-select" id="status_filter" name="status">
+                        {% for choice_value, choice_label in status_choices %}
+                            <option value="{{ choice_value }}" {% if current_status_filter == choice_value %}selected{% endif %}>{{ choice_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="start_date" class="form-label visually-hidden">Start Date</label>
+                    <input type="date" class="form-control" id="start_date" name="start_date" value="{{ start_date_filter }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="end_date" class="form-label visually-hidden">End Date</label>
+                    <input type="date" class="form-control" id="end_date" name="end_date" value="{{ end_date_filter }}">
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-info h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-info">Total Turnover</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_turnover|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total stake amount placed by your downline.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <div class="card shadow-sm border-success h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-success">Total Winnings</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_winnings|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total amount paid out for winning tickets.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card shadow-sm border-danger h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-danger">Total Losses (Stakes)</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_losses|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total stake on lost tickets.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card shadow-sm border-warning h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">Total Voids (Stakes)</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_voids|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total stake on cancelled/voided tickets.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-3">
+            <div class="card shadow-sm border-secondary h-100">
+                <div class="card-body">
+                    <h5 class="card-title text-secondary">Total Deleted (Stakes)</h5>
+                    <p class="card-text fs-3 fw-bold">₦{{ total_deleted|floatformat:2 }}</p>
+                    <p class="card-text text-muted">Total stake on administratively deleted tickets.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-md-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Detailed Bet Tickets</h5>
+                </div>
+                <div class="card-body">
+                    {% if bet_tickets %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Ticket ID</th>
+                                    <th>User</th>
+                                    <th>Stake</th>
+                                    <th>Potential Win</th>
+                                    <th>Actual Win</th>
+                                    <th>Status</th>
+                                    <th>Placed At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for ticket in bet_tickets %}
+                                <tr>
+                                    <td>{{ ticket.id }}</td>
+                                    <td>{{ ticket.user.email }}</td>
+                                    <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
+                                    <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
+                                    <td>
+                                        {% if ticket.status == 'won' %} ₦{{ ticket.potential_winning|floatformat:2 }} {% else %} ₦0.00 {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge {% if ticket.status == 'won' %}bg-success{% elif ticket.status == 'lost' %}bg-danger{% elif ticket.status == 'pending' %}bg-warning{% elif ticket.status == 'cancelled' or ticket.status == 'deleted' %}bg-secondary{% else %}bg-info{% endif %}">
+                                                {{ ticket.status|title }}
+                                            </span>
+                                    </td>
+                                    <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-center">No bet tickets found for the selected filters.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include Font Awesome for icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

@@ -1,0 +1,72 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Wallet Transfer - Pool Betting{% endblock %} {% block content %}
+<div class="container mt-5">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2 class="text-center text-primary">Wallet Transfer</h2>
+            <p class="lead text-center text-muted">Credit or debit funds to your downline users.</p>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Transfer Funds</h5>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %} {# Non-field errors #} {% if form.non_field_errors %}
+                        <div class="alert alert-danger" role="alert">
+                            {% for error in form.non_field_errors %} {{ error }} {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <div class="mb-3">
+                            <label for="{{ form.recipient_identifier.id_for_label }}" class="form-label">{{ form.recipient_identifier.label }}</label> {{ form.recipient_identifier }} {% if form.recipient_identifier.errors %}
+                            <div class="text-danger small">{{ form.recipient_identifier.errors }}</div>
+                            {% endif %}
+                            <small class="form-text text-muted">{{ form.recipient_identifier.help_text }}</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="{{ form.amount.id_for_label }}" class="form-label">{{ form.amount.label }}</label> {{ form.amount }} {% if form.amount.errors %}
+                            <div class="text-danger small">{{ form.amount.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="{{ form.transaction_type.id_for_label }}" class="form-label">{{ form.transaction_type.label }}</label> {{ form.transaction_type }} {% if form.transaction_type.errors %}
+                            <div class="text-danger small">{{ form.transaction_type.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="{{ form.description.id_for_label }}" class="form-label">{{ form.description.label }}</label> {{ form.description }} {% if form.description.errors %}
+                            <div class="text-danger small">{{ form.description.errors }}</div>
+                            {% endif %}
+                        </div>
+
+                        <button type="submit" class="btn btn-primary mt-3">Perform Transfer</button>
+                        <a href="{% url 'wallet' %}" class="btn btn-secondary mt-3">Back to Wallet</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include Font Awesome for icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

@@ -1,0 +1,31 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.hero-section {
+    background: linear-gradient(to right, #007bff, #0056b3);
+    color: white;
+    padding: 80px 0;
+    border-radius: 8px;
+}
+
+.fixture-card .odds-selection button {
+    width: 60px;
+    /* Adjust as needed */
+}
+
+.fixture-card .odds-selection button.active {
+    background-color: #28a745;
+    /* Highlight selected odd */
+    color: white;
+    border-color: #28a745;
+}
+
+.betslip-item {
+    border-bottom: 1px dashed #eee;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+
+/* Add more custom styles for responsiveness, spacing, etc. */

@@ -1,0 +1,145 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Agent Dashboard{% endblock %} {% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="text-center text-dark fw-bold mb-4">Agent/Cashier Dashboard</h1>
+            <p class="lead text-center">Welcome, {{ request.user.first_name|default:request.user.email }}! Your user type is: {{ request.user.get_user_type_display }}.</p>
+
+            <div class="row mt-5">
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card shadow-sm rounded-lg">
+                        <div class="card-body">
+                            <h5 class="card-title text-primary">Total Downline Turnover</h5>
+                            <p class="card-text fs-4 fw-bold">₦{{ total_downline_turnover|floatformat:2 }}</p>
+                            <p class="card-text text-muted small">Calculated based on downline activity.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card shadow-sm rounded-lg">
+                        <div class="card-body">
+                            <h5 class="card-title text-primary">Total Downline Winnings Paid</h5>
+                            <p class="card-text fs-4 fw-bold">₦{{ total_downline_winnings|floatformat:2 }}</p>
+                            <p class="card-text text-muted small">Paid out to downline users.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card shadow-sm rounded-lg">
+                        <div class="card-body">
+                            <h5 class="card-title text-primary">Downline GGR</h5>
+                            <p class="card-text fs-4 fw-bold">₦{{ downline_ggr|floatformat:2 }}</p>
+                            <p class="card-text text-muted small">Gross Gaming Revenue from your downline.</p>
+                        </div>
+                    </div>
+                </div>
+                {% if request.user.user_type != 'cashier' %}
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card shadow-sm rounded-lg">
+                        <div class="card-body">
+                            <h5 class="card-title text-primary">Earned Commission</h5>
+                            <p class="card-text fs-4 fw-bold">₦{{ earned_commission|floatformat:2 }}</p>
+                            <p class="card-text text-muted small">Your share from downline GGR.</p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="mt-5 text-center">
+                <a href="{% url 'betting:fixtures' %}" class="btn btn-primary btn-lg rounded-pill px-4 me-2">View Fixtures</a>
+                <a href="{% url 'betting:wallet' %}" class="btn btn-outline-secondary btn-lg rounded-pill px-4">My Wallet</a>
+            </div>
+
+            <div class="mt-5">
+                <h3>Quick Actions:</h3>
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:wallet_transfer' %}" class="text-decoration-none">Perform Wallet Transfer (e.g., credit players/cashiers)</a>
+                    </li>
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:downline_users' %}" class="text-decoration-none">Manage Downline Users</a>
+                    </li>
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:downline_bets' %}" class="text-decoration-none">View Downline Bets</a>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="mt-5">
+                <h3>Reports:</h3>
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:agent_wallet_report' %}" class="text-decoration-none">Wallet Report (Downline)</a>
+                    </li>
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:agent_sales_winnings_report' %}" class="text-decoration-none">Sales & Winnings Report (Downline)</a>
+                    </li>
+                    {% if request.user.user_type != 'cashier' %} {# Cashiers usually don't earn commission directly from sales #}
+                    <li class="list-group-item">
+                        <a href="{% url 'betting:agent_commission_report' %}" class="text-decoration-none">Commission Report</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+
+            <div class="card shadow-sm rounded-lg mt-5 mb-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">Top Performing Downline Users (by GGR)</h5>
+                </div>
+                <div class="card-body">
+                    {% if top_performers %}
+                    <ul class="list-group list-group-flush">
+                        {% for performer in top_performers %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            {{ performer.email }} ({{ performer.get_user_type_display }})
+                            <span class="badge bg-primary rounded-pill">₦{{ performer.user_ggr|floatformat:2 }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="text-center text-muted">No top performers to display.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card shadow-sm rounded-lg mb-4">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0">Recent Downline Activity</h5>
+                </div>
+                <div class="card-body">
+                    {% if recent_downline_transactions %}
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Description</th>
+                                    <th>Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for transaction in recent_downline_transactions %}
+                                <tr>
+                                    <td>{{ transaction.user.email }}</td>
+                                    <td>{{ transaction.get_transaction_type_display }}</td>
+                                    <td>₦{{ transaction.amount|floatformat:2 }}</td>
+                                    <td>{{ transaction.description }}</td>
+                                    <td>{{ transaction.timestamp|date:"Y-m-d H:i" }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-center text-muted">No recent downline activity.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

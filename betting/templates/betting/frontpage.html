@@ -1,0 +1,63 @@
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Welcome to PoolBetting{% endblock %} {% block content %}
+<div class="container text-center py-5">
+    <h1 class="display-4 fw-bold text-dark mb-4 animate__animated animate__fadeInDown">
+        Place Your Bets, Win Big!
+    </h1>
+    <p class="lead text-muted mb-5 animate__animated animate__fadeInUp">
+        Experience the thrill of secure and exciting pool betting.
+    </p>
+
+    <div class="row justify-content-center mb-5 animate__animated animate__zoomIn">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-lg border-0 rounded-4 overflow-hidden">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title h4 fw-semibold text-center mb-4">Check Your Bet Ticket Status</h2>
+                    <form method="GET" action="{% url 'betting:check_ticket_status' %}" class="needs-validation" novalidate>
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="ticket_id" class="form-label visually-hidden">Enter Ticket ID</label>
+                            <input type="text" class="form-control form-control-lg rounded-pill px-4 py-2" id="ticket_id" name="ticket_id" placeholder="Enter your Ticket ID" required>
+                            <div class="invalid-feedback text-start">
+                                Please enter a valid Ticket ID.
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-lg w-100 rounded-pill shadow-sm animate__animated animate__pulse animate__infinite">
+                            <i class="fas fa-search me-2"></i> Check Status
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row row-cols-1 row-cols-md-3 g-4 animate__animated animate__fadeInUp">
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm rounded-4">
+                <div class="card-body">
+                    <i class="fas fa-futbol fa-3x text-primary mb-3"></i>
+                    <h5 class="card-title fw-semibold">Daily Fixtures</h5>
+                    <p class="card-text text-muted">Access a wide range of daily football fixtures from various leagues.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm rounded-4">
+                <div class="card-body">
+                    <i class="fas fa-ticket-alt fa-3x text-success mb-3"></i>
+                    <h5 class="card-title fw-semibold">Easy Betting</h5>
+                    <p class="card-text text-muted">Place your bets quickly and easily with our intuitive interface.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm rounded-4">
+                <div class="card-body">
+                    <i class="fas fa-wallet fa-3x text-info mb-3"></i>
+                    <h5 class="card-title fw-semibold">Secure Wallet</h5>
+                    <p class="card-text text-muted">Manage your funds securely with instant deposits and withdrawals.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

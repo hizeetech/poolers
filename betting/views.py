@@ -1,0 +1,2963 @@
+import itertools
+import os
+import traceback
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib import messages
+from django.conf import settings
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value
+from django.db import transaction as db_transaction
+from django.utils import timezone
+from datetime import timedelta, date
+import logging
+import requests # For Paystack API calls
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from decimal import Decimal, InvalidOperation # Import InvalidOperation
+import uuid # For UUIDField
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from django.urls import reverse # Import reverse for dynamic URL lookup
+from django.contrib.auth import authenticate, login, logout # Ensure these are imported
+
+from .models import (
+    User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
+    BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog
+)
+from .forms import (
+    UserRegistrationForm, LoginForm, PasswordChangeForm, ProfileEditForm, 
+    InitiateDepositForm, WithdrawFundsForm, WalletTransferForm,
+    BetTicketForm, CheckTicketStatusForm, DeclareResultForm,
+    AdminUserCreationForm, AdminUserChangeForm, WithdrawalActionForm,
+    FixtureForm, BettingPeriodForm 
+)
+
+# Setup logger for this app
+logger = logging.getLogger('betting') # Use the 'betting' logger defined in settings.py
+
+
+# --- Helper Functions for User Permissions and Logging ---
+
+def is_admin(user):
+    return user.is_authenticated and user.user_type == 'admin'
+
+def is_master_agent(user):
+    return user.is_authenticated and user.user_type == 'master_agent'
+
+def is_super_agent(user):
+    return user.is_authenticated and user.user_type == 'super_agent'
+
+def is_agent(user):
+    return user.is_authenticated and user.user_type == 'agent'
+
+def is_cashier(user):
+    return user.is_authenticated and user.user_type == 'cashier'
+
+def is_player(user):
+    return user.is_authenticated and user.user_type == 'player'
+
+
+def log_admin_activity(request, action_description):
+    """Logs administrative actions."""
+    if request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == 'admin'):
+        ActivityLog.objects.create(
+            user=request.user,
+            action=action_description,
+            ip_address=request.META.get('REMOTE_ADDR'),
+            session_key=request.session.session_key,
+            user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown')
+        )
+
+# --- General Authentication Views ---
+
+def frontpage(request):
+    return render(request, 'betting/frontpage.html')
+
+def register_user(request):
+    if request.method == 'POST':
+        form = UserRegistrationForm(request.POST, request=request) # Pass request to form
+        if form.is_valid():
+            user = form.save(request=request) # Pass request to form's save method for messages
+            messages.success(request, 'Registration successful. Please log in.')
+            return redirect('betting:login')
+        else:
+            # Handle field errors
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            # Handle non-field errors
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Error: {error}")
+    else:
+        form = UserRegistrationForm()
+    return render(request, 'betting/register.html', {'form': form})
+
+
+def user_login(request):
+    logger.debug("Entering user_login view.")
+    if request.method == 'POST':
+        post_data = request.POST.copy()
+        # Map 'email' to 'username' for AuthenticationForm compatibility
+        if 'email' in post_data:
+            post_data['username'] = post_data['email']
+        
+        # Pass request to the form
+        form = LoginForm(request=request, data=post_data) 
+        
+        logger.debug(f"LoginForm initialized. Is POST request: {request.method == 'POST'}")
+        logger.debug(f"POST data: {post_data}")
+        
+        if form.is_valid():
+            logger.debug("LoginForm is valid.")
+            user = form.get_user()
+            logger.debug(f"Attempting to authenticate user: {getattr(user, 'email', None)}")
+            if user is not None:
+                logger.debug(f"Authentication successful for user: {user.email}. User ID: {user.id}")
+                login(request, user)
+                logger.debug(f"User {user.email} logged in. Redirecting...")
+                messages.success(request, f'Welcome, {user.first_name or user.email}!')
+                
+                if user.is_superuser or user.user_type == 'admin':
+                    return redirect('betting_admin:dashboard')
+                elif user.user_type == 'master_agent':
+                    return redirect('betting:master_agent_dashboard')
+                elif user.user_type == 'super_agent':
+                    return redirect('betting:super_agent_dashboard')
+                elif user.user_type == 'agent':
+                    return redirect('betting:agent_dashboard')
+                elif user.user_type == 'cashier':
+                    return redirect('betting:wallet')
+                else: # Player or unassigned type
+                    return redirect('betting:fixtures')
+            else: # This block is theoretically unreachable if form.is_valid() implies user is not None
+                logger.debug("Authentication failed. User is None after form.is_valid().")
+                messages.error(request, 'An unexpected authentication error occurred. Please try again.')
+        else:
+            logger.debug("LoginForm is NOT valid.")
+            # Log and display field-specific errors
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+                    logger.debug(f"  Field '{field}': {error}")
+            # Log and display non-field errors explicitly
+            if form.non_field_errors():
+                logger.debug(f"  Non-field errors: {form.non_field_errors()}")
+                for error in form.non_field_errors():
+                    messages.error(request, f"Login Error: {error}")
+    else:
+        logger.debug("GET request for login page.")
+        form = LoginForm()
+    return render(request, 'betting/login.html', {'form': form})
+
+
+@login_required
+def user_logout(request):
+    logout(request)
+    messages.info(request, 'You have been logged out.')
+    return redirect('betting:frontpage')
+
+# --- Fixtures & Betting Views ---
+
+@login_required
+def fixtures_view(request, period_id=None):
+    current_betting_period = None
+    if period_id:
+        current_betting_period = get_object_or_404(BettingPeriod, id=period_id)
+        fixtures = Fixture.objects.filter(betting_period=current_betting_period).order_by('match_time')
+    else:
+        # Get the latest open betting period
+        current_betting_period = BettingPeriod.objects.filter(
+            start_date__lte=timezone.now().date(),
+            end_date__gte=timezone.now().date(),
+            is_active=True
+        ).order_by('-start_date').first()
+
+        # Fallback: if no currently running period, get the next upcoming active period
+        if not current_betting_period:
+            current_betting_period = BettingPeriod.objects.filter(
+                start_date__gt=timezone.now().date(),
+                is_active=True
+            ).order_by('start_date').first()
+        
+        # Fallback 2: if still no period, get the latest active period (could be past)
+        if not current_betting_period:
+            current_betting_period = BettingPeriod.objects.filter(
+                is_active=True
+            ).order_by('-start_date').first()
+
+        if current_betting_period:
+            fixtures = Fixture.objects.filter(betting_period=current_betting_period).order_by('match_time')
+        else:
+            fixtures = Fixture.objects.none() # No active period, no fixtures
+
+    # Filter out fixtures that are not active or have invalid status
+    if fixtures:
+        fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled'])
+
+    all_periods = BettingPeriod.objects.all().order_by('-start_date')
+    active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
+
+    context = {
+        'fixtures': fixtures,
+        'current_betting_period': current_betting_period,
+        'all_periods': all_periods,
+        'active_periods': active_periods,
+        'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
+    }
+    return render(request, 'betting/fixtures.html', context)
+
+
+@login_required
+@db_transaction.atomic
+def place_bet(request):
+    try:
+        if request.method == 'POST':
+            # Debug logging
+            logger.info(f"Place Bet Request Keys: {list(request.POST.keys())}")
+
+            # Check if this is the new JS-based bet placement
+            if 'selections' in request.POST:
+                try:
+                    selections_data = json.loads(request.POST.get('selections'))
+                    stake_amount_str = request.POST.get('stake_amount')
+                    if not stake_amount_str:
+                         return JsonResponse({'success': False, 'message': 'Stake amount is missing.'})
+                    stake_amount_per_line = Decimal(stake_amount_str)
+                    
+                    is_system_bet = request.POST.get('is_system_bet') == 'true'
+                    permutation_count = int(request.POST.get('permutation_count', 0))
+
+                    if not selections_data:
+                        return JsonResponse({'success': False, 'message': 'No bets selected.'})
+
+                    # Basic Validation of selections
+                    valid_selections = []
+                    for sel in selections_data:
+                        # Support both camelCase (legacy/API) and snake_case (frontend) keys
+                        fixture_id = sel.get('fixtureId') or sel.get('fixture_id')
+                        if not fixture_id:
+                            return JsonResponse({'success': False, 'message': 'Missing fixture ID.'})
+
+                        try:
+                            fixture = Fixture.objects.get(id=fixture_id)
+                        except Fixture.DoesNotExist:
+                            return JsonResponse({'success': False, 'message': 'Fixture not found.'})
+
+                        # Validate fixture status
+                        if fixture.status != 'scheduled': # Assuming 'scheduled' is the status for open matches
+                            return JsonResponse({'success': False, 'message': f'Betting closed for {fixture.home_team} vs {fixture.away_team}'})
+                        if not fixture.betting_period.is_active:
+                                return JsonResponse({'success': False, 'message': f'Betting period closed for {fixture.home_team} vs {fixture.away_team}'})
+                        
+                        # Validate odds and outcome
+                        outcome = sel.get('outcome') or sel.get('bet_type')
+                        if not outcome:
+                            return JsonResponse({'success': False, 'message': 'Missing bet outcome.'})
+
+                        # Normalize outcome keys (frontend vs backend mismatch)
+                        outcome_map = {
+                            'over1_5': 'over_1_5',
+                            'under1_5': 'under_1_5',
+                            'over2_5': 'over_2_5',
+                            'under2_5': 'under_2_5',
+                            'over3_5': 'over_3_5',
+                            'under3_5': 'under_3_5',
+                        }
+                        outcome = outcome_map.get(outcome, outcome)
+
+                        # Verify odd matches server side to prevent tampering (simplified check)
+                        # For now we assume the odd sent is correct or we re-fetch. 
+                        # Better to re-fetch.
+                        if outcome == 'home_win': odd = fixture.home_win_odd
+                        elif outcome == 'draw': odd = fixture.draw_odd
+                        elif outcome == 'away_win': odd = fixture.away_win_odd
+                        elif outcome == 'home_dnb': odd = fixture.home_dnb_odd
+                        elif outcome == 'away_dnb': odd = fixture.away_dnb_odd
+                        elif outcome == 'over_1_5': odd = fixture.over_1_5_odd
+                        elif outcome == 'under_1_5': odd = fixture.under_1_5_odd
+                        elif outcome == 'over_2_5': odd = fixture.over_2_5_odd
+                        elif outcome == 'under_2_5': odd = fixture.under_2_5_odd
+                        elif outcome == 'over_3_5': odd = fixture.over_3_5_odd
+                        elif outcome == 'under_3_5': odd = fixture.under_3_5_odd
+                        elif outcome == 'btts_yes': odd = fixture.btts_yes_odd
+                        elif outcome == 'btts_no': odd = fixture.btts_no_odd
+                        else:
+                            return JsonResponse({'success': False, 'message': f'Invalid outcome for {fixture.home_team} vs {fixture.away_team}'})
+
+                        valid_selections.append({
+                            'fixture': fixture,
+                            'bet_type': outcome,
+                            'odd': odd
+                        })
+
+                    # Calculate Total Stake and Combinations
+                    
+                    if is_system_bet and len(valid_selections) >= 3:
+                        # System Bet Logic
+                        if permutation_count < 2 or permutation_count > len(valid_selections):
+                                return JsonResponse({'success': False, 'message': 'Invalid permutation count.'})
+                        
+                        combinations = list(itertools.combinations(valid_selections, permutation_count))
+                        num_lines = len(combinations)
+                        total_stake = stake_amount_per_line * num_lines
+                        
+                        bet_type = 'system'
+                        system_min_count = permutation_count
+                    else:
+                        # Single or Accumulator Logic (1 line)
+                        num_lines = 1
+                        total_stake = stake_amount_per_line
+                        
+                        bet_type = 'multiple' if len(valid_selections) > 1 else 'single'
+                        system_min_count = None
+
+                    # Check Wallet
+                    try:
+                        user_wallet = Wallet.objects.select_for_update().get(user=request.user)
+                    except Wallet.DoesNotExist:
+                        return JsonResponse({'success': False, 'message': 'User wallet not found.'})
+
+                    if user_wallet.balance < total_stake:
+                        return JsonResponse({'success': False, 'message': f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}'})
+
+                    # Deduct Balance
+                    user_wallet.balance -= total_stake
+                    user_wallet.save()
+
+                    # Calculate Potential Winning (Max Winning) for the single ticket
+                    if bet_type == 'system':
+                        # Sum of max winning of all lines
+                        max_winning = Decimal('0.00')
+                        for combo in combinations:
+                            line_odd = Decimal('1.00')
+                            for sel in combo:
+                                line_odd *= sel['odd']
+                            max_winning += (stake_amount_per_line * line_odd)
+                        potential_win = max_winning.quantize(Decimal('0.01'))
+                        total_ticket_odd = Decimal('0.00') # Variable for system bets
+                    else:
+                        total_ticket_odd = Decimal('1.00')
+                        for sel in valid_selections:
+                            total_ticket_odd *= sel['odd']
+                        potential_win = (stake_amount_per_line * total_ticket_odd).quantize(Decimal('0.01'))
+                        max_winning = potential_win
+
+                    # Create Single BetTicket
+                    bet_ticket = BetTicket.objects.create(
+                        user=request.user,
+                        stake_amount=total_stake, # Total stake for the ticket
+                        total_odd=total_ticket_odd,
+                        potential_winning=potential_win,
+                        max_winning=max_winning,
+                        status='pending',
+                        bet_type=bet_type,
+                        system_min_count=system_min_count
+                    )
+                    
+                    # Create Selections
+                    for sel in valid_selections:
+                        Selection.objects.create(
+                            bet_ticket=bet_ticket,
+                            fixture=sel['fixture'],
+                            bet_type=sel['bet_type'],
+                            odd_selected=sel['odd']
+                        )
+
+                    # Transaction Record (Summary)
+                    Transaction.objects.create(
+                        user=request.user,
+                        transaction_type='bet_placement',
+                        amount=total_stake,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Placed bet. Type: {bet_type.title()}. Ticket ID: {bet_ticket.ticket_id}",
+                        related_bet_ticket=bet_ticket,
+                        timestamp=timezone.now()
+                    )
+
+                    return JsonResponse({
+                        'success': True, 
+                        'message': f'Successfully placed bet!',
+                        'ticket_id': bet_ticket.ticket_id
+                    })
+
+                except json.JSONDecodeError:
+                    return JsonResponse({'success': False, 'message': 'Invalid data format.'})
+                except Exception as e:
+                    logger.error(f"Error placing bet: {e}")
+                    traceback.print_exc()
+                    return JsonResponse({'success': False, 'message': f'An error occurred: {str(e)}'})
+
+            # Fallback to old single bet form logic
+            elif 'fixture_id' in request.POST:
+                form = BetTicketForm(request.POST)
+                if form.is_valid():
+                    # Retrieve data from form
+                    fixture_id = form.cleaned_data['fixture_id']
+                    selected_outcome = form.cleaned_data['selected_outcome']
+                    stake_amount = form.cleaned_data['stake_amount']
+
+                    fixture = get_object_or_404(Fixture, id=fixture_id)
+
+                    # Basic validation: ensure fixture is still open for betting
+                    if fixture.status != 'scheduled':
+                        messages.error(request, 'Betting is closed for this fixture.')
+                        return redirect('betting:fixtures')
+                    
+                    # Ensure the betting period is active
+                    if not fixture.betting_period.is_active or fixture.betting_period.end_date < timezone.now().date():
+                        messages.error(request, 'The betting period for this fixture is closed.')
+                        return redirect('betting:fixtures')
+
+                    # Get the correct odd based on selected_outcome
+                    if selected_outcome == 'home_win':
+                        odd = fixture.home_win_odd 
+                    elif selected_outcome == 'draw':
+                        odd = fixture.draw_odd
+                    elif selected_outcome == 'away_win':
+                        odd = fixture.away_win_odd 
+                    elif selected_outcome == 'home_dnb':
+                        odd = fixture.home_dnb_odd
+                    elif selected_outcome == 'away_dnb':
+                        odd = fixture.away_dnb_odd
+                    elif selected_outcome == 'over_1_5':
+                        odd = fixture.over1_5_odd
+                    elif selected_outcome == 'under_1_5':
+                        odd = fixture.under1_5_odd
+                    elif selected_outcome == 'over_2_5':
+                        odd = fixture.over2_5_odd
+                    elif selected_outcome == 'under_2_5':
+                        odd = fixture.under2_5_odd
+                    elif selected_outcome == 'over_3_5':
+                        odd = fixture.over3_5_odd
+                    elif selected_outcome == 'under_3_5':
+                        odd = fixture.under3_5_odd
+                    elif selected_outcome == 'btts_yes':
+                        odd = fixture.btts_yes_odd
+                    elif selected_outcome == 'btts_no':
+                        odd = fixture.btts_no_odd
+                    else:
+                        messages.error(request, 'Invalid outcome selected.')
+                        return redirect('betting:fixtures')
+
+                    # Check if user has sufficient balance
+                    user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+                    if user_wallet.balance < stake_amount:
+                        messages.error(request, 'Insufficient balance to place this bet.')
+                        return redirect('betting:wallet')
+
+                    # Calculate potential winning and max winning (assuming max_winning = potential_winning for simple bets)
+                    potential_winning = stake_amount * odd
+                    max_winning = potential_winning # For single bet, max_winning is same as potential_winning
+
+                    # Deduct stake from wallet
+                    user_wallet.balance -= stake_amount
+                    user_wallet.save()
+
+                    # Create BetTicket
+                    bet_ticket = BetTicket.objects.create(
+                        user=request.user,
+                        stake_amount=stake_amount,
+                        total_odd=odd, # For a single bet, total_odd is just the odd of the selected outcome
+                        potential_winning=potential_winning,
+                        max_winning=max_winning,
+                        status='pending'
+                    )
+                    # Create Selection for the bet ticket
+                    Selection.objects.create(
+                        bet_ticket=bet_ticket,
+                        fixture=fixture,
+                        bet_type=selected_outcome, # Corrected field name
+                        odd_selected=odd # Store the odd at the time of betting
+                    )
+
+                    # Record Transaction
+                    Transaction.objects.create(
+                        user=request.user,
+                        transaction_type='bet_placement',
+                        amount=stake_amount,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Bet placed on {fixture.home_team} vs {fixture.away_team} for {selected_outcome}",
+                        related_bet_ticket=bet_ticket,
+                        timestamp=timezone.now()
+                    )
+
+                    messages.success(request, f'Bet placed successfully! Your ticket ID is {bet_ticket.ticket_id}. Potential winning: ₦{potential_winning:.2f}')
+                    return redirect('betting:fixtures') # Redirect back to fixtures with errors
+                else:
+                    for field, errors in form.errors.items():
+                        for error in errors:
+                            messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+                    if form.non_field_errors():
+                        for error in form.non_field_errors():
+                            messages.error(request, f"Betting Error: {error}")
+                    return redirect('betting:fixtures') # Redirect back to fixtures with errors
+            
+            else:
+                # Unknown request format - likely AJAX missing data
+                logger.warning(f"Invalid place_bet request params: {request.POST.keys()}")
+                # If it looks like the new JS form (has 'is_system_bet' or 'stake_amount') OR if it's an AJAX request
+                if 'is_system_bet' in request.POST or 'stake_amount' in request.POST or request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.META.get('HTTP_ACCEPT', ''):
+                    return JsonResponse({'success': False, 'message': 'Invalid request parameters. Missing selections data.'})
+                
+                messages.error(request, 'Invalid request parameters.')
+                return redirect('betting:fixtures')
+
+        messages.error(request, 'Invalid request to place bet.')
+        return redirect('betting:fixtures')
+    except Exception as e:
+        logger.error(f"Unexpected error in place_bet: {e}")
+        traceback.print_exc()
+        if 'is_system_bet' in request.POST or 'stake_amount' in request.POST or request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.META.get('HTTP_ACCEPT', ''):
+             return JsonResponse({'success': False, 'message': f'An unexpected error occurred: {str(e)}'})
+        messages.error(request, 'An unexpected error occurred. Please try again.')
+        return redirect('betting:fixtures')
+
+def check_ticket_status(request):
+    ticket = None
+    tickets = []
+    # Default 60 mins if not set
+    void_window_str = SystemSetting.get_setting('ticket_cancellation_window_minutes', '60')
+    try:
+        void_window = int(void_window_str)
+    except (ValueError, TypeError):
+        void_window = 60
+
+    if request.method == 'POST':
+        form = CheckTicketStatusForm(request.POST) 
+        if form.is_valid():
+            ticket = form.ticket 
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Ticket Check Error: {error}")
+    else:
+        form = CheckTicketStatusForm()
+    
+    # Populate tickets based on user hierarchy
+    if request.user.is_authenticated:
+        if request.user.is_superuser or request.user.user_type == 'admin':
+            tickets = BetTicket.objects.all().order_by('-placed_at')
+        elif request.user.user_type == 'master_agent':
+            tickets = BetTicket.objects.filter(
+                Q(user__master_agent=request.user) | 
+                Q(user__super_agent__master_agent=request.user) |
+                Q(user__agent__master_agent=request.user) |
+                Q(user__agent__super_agent__master_agent=request.user)
+            ).order_by('-placed_at')
+        elif request.user.user_type == 'super_agent':
+             tickets = BetTicket.objects.filter(
+                Q(user__super_agent=request.user) |
+                Q(user__agent__super_agent=request.user)
+            ).order_by('-placed_at')
+        elif request.user.user_type == 'agent':
+            tickets = BetTicket.objects.filter(
+                Q(user__agent=request.user)
+            ).order_by('-placed_at')
+        else: # Player/Cashier
+            tickets = BetTicket.objects.filter(user=request.user).order_by('-placed_at')
+
+    # Apply Filters
+    ticket_id_query = request.GET.get('ticket_id')
+    status_query = request.GET.get('status')
+    bet_type_query = request.GET.get('bet_type')
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+    settled_date_from = request.GET.get('settled_date_from')
+    settled_date_to = request.GET.get('settled_date_to')
+
+    if ticket_id_query:
+        tickets = tickets.filter(ticket_id__icontains=ticket_id_query)
+    
+    if status_query and status_query != 'all':
+        tickets = tickets.filter(status=status_query)
+        
+    if bet_type_query and bet_type_query != 'all':
+        tickets = tickets.filter(bet_type=bet_type_query)
+        
+    if date_from:
+        try:
+            tickets = tickets.filter(placed_at__date__gte=date_from)
+        except (ValueError, TypeError): pass
+        
+    if date_to:
+        try:
+            tickets = tickets.filter(placed_at__date__lte=date_to)
+        except (ValueError, TypeError): pass
+
+    if settled_date_from:
+        try:
+            # Filter by last_updated for settled tickets
+            tickets = tickets.filter(last_updated__date__gte=settled_date_from).exclude(status='pending')
+        except (ValueError, TypeError): pass
+        
+    if settled_date_to:
+        try:
+            tickets = tickets.filter(last_updated__date__lte=settled_date_to).exclude(status='pending')
+        except (ValueError, TypeError): pass
+
+    # Apply limit after filtering
+    tickets = tickets[:50]
+
+    # AJAX Polling Check
+    if request.method == 'GET' and request.GET.get('action') == 'poll_tickets':
+        return render(request, 'betting/partials/ticket_list_rows.html', {
+            'tickets': tickets,
+            'void_window': void_window,
+            'now': timezone.now()
+        })
+
+    context = {
+        'form': form, 
+        'ticket': ticket, 
+        'tickets': tickets,
+        'void_window': void_window,
+        'now': timezone.now(),
+        'bet_type_choices': BetTicket.BET_TYPE_CHOICES,
+        'status_choices': BetTicket.STATUS_CHOICES,
+    }
+    return render(request, 'betting/check_ticket.html', context)
+
+
+@login_required
+@db_transaction.atomic
+def agent_void_ticket(request, ticket_id):
+    ticket = get_object_or_404(BetTicket, ticket_id=ticket_id)
+    void_window_str = SystemSetting.get_setting('ticket_cancellation_window_minutes', '60')
+    try:
+        void_window = int(void_window_str)
+    except (ValueError, TypeError):
+        void_window = 60
+    
+    # Permission Check
+    can_void = False
+    if request.user.is_superuser or request.user.user_type == 'admin':
+        can_void = True
+    elif request.user.user_type == 'agent':
+        # Agent can only void tickets from their cashiers
+        if ticket.user.user_type == 'cashier' and ticket.user.agent == request.user:
+            # Check window
+            time_diff = (timezone.now() - ticket.placed_at).total_seconds() / 60
+            if time_diff <= void_window:
+                can_void = True
+            else:
+                messages.error(request, "Cancellation window has expired for this ticket.")
+                return redirect('betting:check_ticket_status')
+        else:
+             messages.error(request, "You can only void tickets placed by your cashiers.")
+             return redirect('betting:check_ticket_status')
+    
+    if not can_void:
+        messages.error(request, "You do not have permission to void this ticket.")
+        return redirect('betting:check_ticket_status')
+
+    if ticket.status in ['cancelled', 'deleted']:
+        messages.error(request, "Ticket is already voided.")
+        return redirect('betting:check_ticket_status')
+
+    if ticket.status != 'pending':
+         messages.error(request, "Only pending tickets can be voided.")
+         return redirect('betting:check_ticket_status')
+
+    # Void Process
+    ticket.status = 'cancelled'
+    ticket.deleted_by = request.user
+    ticket.deleted_at = timezone.now()
+    ticket.save() # This triggers the pre_save signal to refund stake
+
+    if request.user.is_superuser or request.user.user_type == 'admin':
+        log_admin_activity(request, f"Voided ticket {ticket.ticket_id} for user {ticket.user.email}")
+    
+    messages.success(request, f"Ticket {ticket.ticket_id} voided and stake refunded successfully.")
+    return redirect('betting:check_ticket_status')
+
+# --- Wallet & Payments Views ---
+
+@login_required
+def wallet_view(request):
+    wallet = get_object_or_404(Wallet, user=request.user)
+    transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:20] # Last 20 transactions
+    pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
+
+    context = {
+        'wallet': wallet,
+        'transactions': transactions,
+        'initiate_deposit_form': InitiateDepositForm(),
+        'withdraw_funds_form': WithdrawFundsForm(instance=UserWithdrawal(user=request.user)), # Pass instance for initial validation
+        'wallet_transfer_form': WalletTransferForm(sender_user=request.user), # Pass sender_user
+        'pending_withdrawals': pending_withdrawals,
+        'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
+    }
+    return render(request, 'betting/wallet.html', context)
+
+@login_required
+@db_transaction.atomic
+def initiate_deposit(request):
+    if request.method == 'POST':
+        # Handle JSON Request (AJAX)
+        if request.content_type == 'application/json' or request.headers.get('Content-Type', '').startswith('application/json'):
+            try:
+                data = json.loads(request.body)
+                amount = float(data.get('amount', 0))
+                
+                if amount <= 0:
+                     return JsonResponse({'status': 'error', 'message': 'Invalid amount.'}, status=400)
+                
+                reference = str(uuid.uuid4())
+                
+                # Create a pending transaction record
+                Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='deposit',
+                    amount=amount,
+                    status='pending',
+                    description='Pending online deposit via Paystack',
+                    paystack_reference=reference, # Store the reference
+                    timestamp=timezone.now()
+                )
+                
+                # Return data for frontend to initialize Paystack Popup
+                return JsonResponse({
+                    'status': 'success',
+                    'email': request.user.email,
+                    'amount': int(amount * 100), # Amount in kobo
+                    'reference': reference
+                })
+            except Exception as e:
+                return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+        form = InitiateDepositForm(request.POST)
+        if form.is_valid():
+            amount = form.cleaned_data['amount']
+            
+            # Generate a unique reference
+            reference = str(uuid.uuid4())
+
+            # Create a pending transaction record
+            Transaction.objects.create(
+                user=request.user,
+                transaction_type='deposit',
+                amount=amount,
+                status='pending',
+                description='Pending online deposit via Paystack',
+                paystack_reference=reference, # Store the reference
+                timestamp=timezone.now()
+            )
+
+            # Paystack API call to initiate payment
+            paystack_secret_key = settings.PAYSTACK_SECRET_KEY
+            url = "https://api.paystack.co/transaction/initialize"
+            headers = {
+                "Authorization": f"Bearer {paystack_secret_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "email": request.user.email,
+                "amount": int(amount * 100), # Amount in kobo
+                "reference": reference,
+                "callback_url": request.build_absolute_uri(reverse('betting:verify_deposit')),
+                "metadata": {
+                    "user_id": str(request.user.id),
+                    "user_email": request.user.email,
+                }
+            }
+            try:
+                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+                response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+                response_data = response.json()
+
+                if response_data['status']:
+                    messages.info(request, "Redirecting to Paystack for payment.")
+                    return redirect(response_data['data']['authorization_url'])
+                else:
+                    messages.error(request, f"Paystack initialization failed: {response_data['message']}")
+                    # Update transaction status to failed
+                    Transaction.objects.filter(paystack_reference=reference).update(
+                        status='failed',
+                        description=f"Paystack initialization failed: {response_data['message']}"
+                    )
+            except requests.exceptions.Timeout:
+                messages.error(request, "Paystack request timed out. Please try again.")
+                Transaction.objects.filter(paystack_reference=reference).update(
+                    status='failed',
+                    description="Paystack request timed out."
+                )
+            except requests.exceptions.RequestException as e:
+                messages.error(request, f"Error communicating with Paystack: {e}")
+                Transaction.objects.filter(paystack_reference=reference).update(
+                    status='failed',
+                    description=f"Error communicating with Paystack: {e}"
+                )
+            except json.JSONDecodeError:
+                messages.error(request, "Invalid response from Paystack.")
+                Transaction.objects.filter(paystack_reference=reference).update(
+                    status='failed',
+                    description="Invalid JSON response from Paystack."
+                )
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Deposit Error: {error}")
+    return redirect('betting:wallet') # Redirect back to wallet on error or GET request
+
+
+@login_required
+@db_transaction.atomic
+def verify_deposit(request):
+    reference = request.GET.get('trxref') or request.GET.get('reference')
+    if not reference:
+        messages.error(request, "Payment reference not found.")
+        return redirect('betting:wallet')
+
+    transaction_record = get_object_or_404(Transaction, paystack_reference=reference, user=request.user)
+
+    if transaction_record.status == 'completed':
+        messages.success(request, "This deposit has already been successfully verified.")
+        return redirect('betting:wallet')
+    
+    if transaction_record.status == 'failed':
+        messages.error(request, "This deposit previously failed.")
+        return redirect('betting:wallet')
+
+    paystack_secret_key = settings.PAYSTACK_SECRET_KEY
+    url = f"https://api.paystack.co/transaction/verify/{reference}"
+    headers = {
+        "Authorization": f"Bearer {paystack_secret_key}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        response_data = response.json()
+
+        if response_data['status'] and response_data['data']['status'] == 'success':
+            amount_verified = Decimal(response_data['data']['amount'] / 100) # Convert kobo to naira
+            
+            if amount_verified != transaction_record.amount:
+                # Mismatch between initiated and verified amount
+                messages.error(request, "Amount mismatch during verification. Please contact support.")
+                transaction_record.status = 'failed'
+                transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
+                transaction_record.save()
+                return redirect('betting:wallet')
+
+            # Update wallet balance
+            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+            user_wallet.balance += amount_verified
+            user_wallet.save()
+
+            # Update transaction record
+            transaction_record.status = 'completed'
+            transaction_record.is_successful = True
+            transaction_record.description = "Online deposit via Paystack successful."
+            transaction_record.timestamp = timezone.now() # Update timestamp to completion time
+            transaction_record.save()
+
+            messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+        else:
+            messages.error(request, f"Payment verification failed: {response_data['data'].get('message', 'Unknown error')}")
+            transaction_record.status = 'failed'
+            transaction_record.description = f"Paystack verification failed: {response_data['data'].get('message', 'Unknown error')}"
+            transaction_record.save()
+            
+    except requests.exceptions.Timeout:
+        messages.error(request, "Paystack verification timed out. Please try again.")
+        transaction_record.status = 'failed'
+        transaction_record.description = "Paystack verification timed out."
+        transaction_record.save()
+    except requests.exceptions.RequestException as e:
+        messages.error(request, f"Error verifying payment with Paystack: {e}")
+        transaction_record.status = 'failed'
+        transaction_record.description = f"Error verifying payment with Paystack: {e}"
+        transaction_record.save()
+    except json.JSONDecodeError:
+        messages.error(request, "Invalid response from Paystack during verification.")
+        transaction_record.status = 'failed'
+        transaction_record.description = "Invalid JSON response from Paystack during verification."
+        transaction_record.save()
+
+    return redirect('betting:wallet')
+
+
+@login_required
+@db_transaction.atomic
+def withdraw_funds(request):
+    if request.method == 'POST':
+        # Pass an instance for validation in the form's clean method
+        form = WithdrawFundsForm(request.POST, instance=UserWithdrawal(user=request.user))
+        if form.is_valid():
+            amount = form.cleaned_data['amount']
+            bank_name = form.cleaned_data['bank_name']
+            account_number = form.cleaned_data['account_number']
+
+            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+
+            if user_wallet.balance < amount:
+                messages.error(request, 'Insufficient balance for withdrawal.')
+                return redirect('betting:wallet')
+
+            # Deduct funds immediately (or hold them) and create withdrawal request
+            user_wallet.balance -= amount
+            user_wallet.save()
+
+            UserWithdrawal.objects.create(
+                user=request.user,
+                amount=amount,
+                bank_name=bank_name,
+                account_name=form.cleaned_data['account_name'], # Corrected to use cleaned_data
+                account_number=account_number,
+                status='pending' # Set to pending for admin approval
+            )
+            messages.success(request, 'Withdrawal request submitted successfully. It will be reviewed by an admin.')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Withdrawal Error: {error}")
+    return redirect('betting:wallet')
+
+
+@login_required
+@db_transaction.atomic
+def wallet_transfer(request):
+    if request.method == 'POST':
+        form = WalletTransferForm(sender_user=request.user, data=request.POST) # Pass sender_user explicitly
+        if form.is_valid():
+            recipient = form.cleaned_data['recipient_user_obj'] # Get recipient object from form's clean method
+            amount = form.cleaned_data['amount']
+            transaction_type = form.cleaned_data['transaction_type']
+            description = form.cleaned_data['description']
+
+            sender_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+            recipient_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=recipient)
+
+            if transaction_type == 'credit':
+                sender_wallet.balance -= amount
+                recipient_wallet.balance += amount
+                transfer_description_sender = f"Sent funds to {recipient.email}: {description}"
+                transfer_description_recipient = f"Received funds from {request.user.email}: {description}"
+                transaction_type_sender = 'wallet_transfer_out' # Corrected type
+                transaction_type_recipient = 'wallet_transfer_in' # Corrected type
+            elif transaction_type == 'debit':
+                sender_wallet.balance += amount
+                recipient_wallet.balance -= amount
+                transfer_description_sender = f"Received funds from {recipient.email}: {description}"
+                transfer_description_recipient = f"Sent funds to {request.user.email}: {description}"
+                transaction_type_sender = 'wallet_transfer_in' # From sender's perspective
+                transaction_type_recipient = 'wallet_transfer_out' # From recipient's perspective
+            
+            sender_wallet.save()
+            recipient_wallet.save()
+
+            Transaction.objects.create(
+                user=request.user,
+                initiating_user=request.user,
+                target_user=recipient,
+                transaction_type=transaction_type_sender,
+                amount=amount,
+                is_successful=True,
+                status='completed',
+                description=transfer_description_sender,
+                timestamp=timezone.now()
+            )
+            Transaction.objects.create(
+                user=recipient,
+                initiating_user=request.user, # The one who initiated it
+                target_user=recipient,
+                transaction_type=transaction_type_recipient,
+                amount=amount,
+                is_successful=True,
+                status='completed',
+                description=transfer_description_recipient,
+                timestamp=timezone.now()
+            )
+            messages.success(request, f'Successfully completed transfer of ₦{amount:.2f} to/from {recipient.email}.')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Transfer Error: {error}")
+    return redirect('betting:wallet')
+
+
+# --- User Profile Views ---
+
+@login_required
+def profile_view(request):
+    user_wallet = get_object_or_404(Wallet, user=request.user)
+    transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:10] # Last 10 transactions
+
+    # Calculate total deposits and withdrawals in the view
+    total_deposits = Transaction.objects.filter(
+        user=request.user, 
+        transaction_type='deposit', 
+        is_successful=True
+    ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+
+    total_withdrawals = UserWithdrawal.objects.filter(
+        user=request.user, 
+        status='approved'
+    ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+
+
+    if request.method == 'POST':
+        profile_form = ProfileEditForm(request.POST, instance=request.user)
+        password_form = PasswordChangeForm(request.user, request.POST)
+        
+        if 'profile_submit' in request.POST:
+            if profile_form.is_valid():
+                profile_form.save()
+                messages.success(request, 'Your profile has been updated successfully.')
+                return redirect('betting:profile')
+            else:
+                for field, errors in profile_form.errors.items():
+                    for error in errors:
+                        messages.error(request, f"Profile - {field.replace('_', ' ').title()}: {error}")
+                if profile_form.non_field_errors():
+                    for error in profile_form.non_field_errors():
+                        messages.error(request, f"Profile Error: {error}")
+        
+        elif 'password_submit' in request.POST:
+            if password_form.is_valid():
+                password_form.save()
+                messages.success(request, 'Your password has been changed successfully. Please log in again.')
+                return redirect('betting:login') # Redirect to login after password change
+            else:
+                for field, errors in password_form.errors.items():
+                    for error in errors:
+                        messages.error(request, f"Password - {field.replace('_', ' ').title()}: {error}")
+                if password_form.non_field_errors():
+                    for error in password_form.non_field_errors():
+                        messages.error(request, f"Password Error: {error}")
+    else:
+        profile_form = ProfileEditForm(instance=request.user)
+        password_form = PasswordChangeForm(request.user)
+
+    context = {
+        'profile_form': profile_form,
+        'password_form': password_form,
+        'wallet': user_wallet,
+        'transactions': transactions,
+        'total_deposits': total_deposits,       # Add to context
+        'total_withdrawals': total_withdrawals, # Add to context
+    }
+    return render(request, 'betting/profile.html', context)
+
+
+@login_required
+def change_password(request):
+    if request.method == 'POST':
+        form = PasswordChangeForm(request.user, request.POST)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Your password was successfully updated!')
+            return redirect('betting:login') # Log out user after password change for security
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Password Change Error: {error}")
+    else:
+        form = PasswordChangeForm(request.user)
+    return render(request, 'betting/change_password.html', {'form': form})
+
+
+# --- Agent/Super Agent/Master Agent specific Views ---
+
+@login_required
+@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent'])
+def agent_dashboard(request):
+    user = request.user
+    today = timezone.now().date()
+    start_of_week = today - timedelta(days=today.weekday()) # Monday
+    start_of_month = today.replace(day=1)
+
+    # Get downline users
+    if user.user_type == 'master_agent':
+        downline_users_qs = User.objects.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        )
+    elif user.user_type == 'super_agent':
+        downline_users_qs = User.objects.filter(
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        )
+    elif user.user_type == 'agent':
+        downline_users_qs = User.objects.filter(agent=user)
+    else:
+        downline_users_qs = User.objects.none()
+
+    total_downline_users = downline_users_qs.count()
+
+    # Calculate GGR for downline (sum of GGR from their bet tickets)
+    # GGR is Turnover - Winnings
+    # We need to consider all bet tickets placed by downline users
+    downline_bet_tickets = BetTicket.objects.filter(
+        user__in=downline_users_qs
+    ).exclude(status='deleted')
+
+    # Aggregate total turnover and winnings for downline
+    total_downline_turnover = downline_bet_tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+    total_downline_winnings = downline_bet_tickets.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+    
+    downline_ggr = total_downline_turnover - total_downline_winnings
+
+    # Commission calculations (simplified example - actual logic might be complex based on rules)
+    # Assuming commission rate is stored in SystemSetting or per user type
+    commission_rate = Decimal('0.05') # Example: 5%
+    try:
+        system_setting = SystemSetting.objects.get(key='default_commission_rate') # Changed to 'key'
+        commission_rate = Decimal(system_setting.value) # Convert value to Decimal
+    except (SystemSetting.DoesNotExist, InvalidOperation):
+        logger.warning("InvalidOperation: default_commission_rate in SystemSetting is not a valid decimal or not found. Using 0.05.")
+        pass # Use default if setting not found or invalid
+    
+
+    earned_commission = downline_ggr * commission_rate
+
+    # Top performing users/agents (example: based on GGR)
+    # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
+    top_performers = downline_users_qs.annotate(
+        user_total_stake=Sum(
+            Case(When(bet_tickets__status__in=['won', 'lost', 'pending', 'cashed_out', 'cancelled'], then=F('bet_tickets__stake_amount')), default=Value(0), output_field=DecimalField())
+        ),
+        user_total_winnings=Sum(
+            Case(When(bet_tickets__status='won', then=F('bet_tickets__potential_winning')), default=Value(0), output_field=DecimalField())
+        ),
+    ).annotate(
+        user_ggr=F('user_total_stake') - F('user_total_winnings')
+    ).order_by('-user_ggr')[:5] # Top 5 based on GGR
+
+    # Recent activity from downline users
+    recent_downline_transactions = Transaction.objects.filter(
+        Q(user__in=downline_users_qs) | Q(initiating_user__in=downline_users_qs)
+    ).order_by('-timestamp')[:10]
+
+    context = {
+        'user': user,
+        'total_downline_users': total_downline_users,
+        'total_downline_turnover': total_downline_turnover,
+        'total_downline_winnings': total_downline_winnings,
+        'downline_ggr': downline_ggr,
+        'earned_commission': earned_commission,
+        'top_performers': top_performers,
+        'recent_downline_transactions': recent_downline_transactions,
+    }
+    return render(request, 'betting/agent_dashboard.html', context)
+
+
+@login_required
+@user_passes_test(is_master_agent)
+def master_agent_dashboard(request):
+    return agent_dashboard(request)
+
+
+@login_required
+@user_passes_test(is_super_agent)
+def super_agent_dashboard(request):
+    return agent_dashboard(request)
+
+
+@login_required
+@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent', 'admin'])
+def downline_users(request):
+    user = request.user
+    user_type_filter = request.GET.get('user_type', 'all')
+    search_query = request.GET.get('q', '')
+
+    queryset = User.objects.all()
+
+    # Filter based on current user's hierarchy
+    if user.user_type == 'master_agent':
+        queryset = queryset.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        )
+    elif user.user_type == 'super_agent':
+        queryset = queryset.filter(
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        )
+    elif user.user_type == 'agent':
+        queryset = queryset.filter(agent=user)
+    else:
+        queryset = User.objects.none() # Non-admin/agent types only see themselves
+
+    # Apply user type filter from GET parameter
+    if user_type_filter != 'all':
+        queryset = queryset.filter(user_type=user_type_filter)
+
+    # Apply search query
+    if search_query:
+        queryset = queryset.filter(
+            Q(email__icontains=search_query) |
+            Q(first_name__icontains=search_query) |
+            Q(last_name__icontains=search_query) |
+            Q(phone_number__icontains=search_query)
+        )
+
+    # Exclude the logged-in user from the list if they are in the downline
+    # Unless the user is an admin viewing all users
+    if not (user.is_superuser or user.user_type == 'admin'):
+        queryset = queryset.exclude(pk=user.pk)
+
+    paginator = Paginator(queryset.order_by('email'), 10) # 10 users per page
+    page_number = request.GET.get('page')
+
+    try:
+        downline_users_paginated = paginator.page(page_number)
+    except PageNotAnInteger:
+        downline_users_paginated = paginator.page(1)
+    except EmptyPage:
+        downline_users_paginated = paginator.page(paginator.num_pages)
+
+    context = {
+        'downline_users': downline_users_paginated,
+        'user_type_choices': User.USER_TYPE_CHOICES,
+        'current_user_type_filter': user_type_filter,
+        'current_search_query': search_query,
+    }
+    return render(request, 'betting/downline_users.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent', 'admin'])
+def downline_bets(request):
+    user = request.user
+    status_filter = request.GET.get('status', 'all')
+    user_filter = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    # Default to last 30 days if no dates provided
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    # Determine downline users based on logged-in user's hierarchy
+    if user.user_type == 'admin' or user.is_superuser:
+        downline_users_qs = User.objects.all() # Admins can see all users' bets
+    elif user.user_type == 'master_agent':
+        downline_users_qs = User.objects.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        )
+    elif user.user_type == 'super_agent':
+        downline_users_qs = User.objects.filter(
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        )
+    elif user.user_type == 'agent':
+        downline_users_qs = User.objects.filter(agent=user)
+    else:
+        downline_users_qs = User.objects.none() # Should not happen with decorator, but for safety
+
+    # Filter bet tickets by downline users
+    bet_tickets = BetTicket.objects.filter(user__in=downline_users_qs)
+
+    # Apply status filter
+    if status_filter != 'all':
+        bet_tickets = bet_tickets.filter(status=status_filter)
+
+    # Apply specific user filter if provided
+    if user_filter != 'all':
+        try:
+            user_id = int(user_filter)
+            bet_tickets = bet_tickets.filter(user__id=user_id)
+        except (ValueError, TypeError):
+            pass # Invalid user ID, ignore filter
+
+    # Apply date filters
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            bet_tickets = bet_tickets.filter(placed_at__date__gte=start_date)
+        except ValueError:
+            messages.error(request, "Invalid start date format.")
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            bet_tickets = bet_tickets.filter(placed_at__date__lte=end_date)
+        except ValueError:
+            messages.error(request, "Invalid end date format.")
+
+    paginator = Paginator(bet_tickets.order_by('-placed_at'), 10) # 10 tickets per page
+    page_number = request.GET.get('page')
+
+    try:
+        downline_bet_tickets_paginated = paginator.page(page_number)
+    except PageNotAnInteger:
+        downline_bet_tickets_paginated = paginator.page(1)
+    except EmptyPage:
+        downline_bet_tickets_paginated = paginator.page(paginator.num_pages)
+
+    context = {
+        'bet_tickets': downline_bet_tickets_paginated,
+        'status_choices': [('all', 'All')] + list(BetTicket.STATUS_CHOICES),
+        'current_status_filter': status_filter,
+        'all_downline_users': downline_users_qs.order_by('email'), # For the user filter dropdown
+        'current_user_filter': user_filter,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+    }
+    return render(request, 'betting/downline_bets.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent', 'admin'])
+def agent_wallet_report(request):
+    user = request.user
+    user_filter = request.GET.get('user', 'all')
+
+    # Determine downline users whose wallets to report on
+    if user.user_type == 'admin' or user.is_superuser:
+        report_users_qs = User.objects.all() # Admins can see all
+    elif user.user_type == 'master_agent':
+        report_users_qs = User.objects.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        )
+    elif user.user_type == 'super_agent':
+        report_users_qs = User.objects.filter(
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        )
+    elif user.user_type == 'agent':
+        report_users_qs = User.objects.filter(agent=user)
+    else:
+        report_users_qs = User.objects.none()
+
+    # Filter wallets by the determined users
+    wallets = Wallet.objects.filter(user__in=report_users_qs)
+
+    # Apply specific user filter if provided in GET params
+    if user_filter != 'all':
+        try:
+            filter_user_id = int(user_filter)
+            wallets = wallets.filter(user__id=filter_user_id)
+        except (ValueError, TypeError):
+            pass # Invalid user ID, ignore filter
+
+    context = {
+        'report_title': 'Agent/Admin Wallet Report',
+        'wallets': wallets.order_by('user__email'),
+        'all_users': report_users_qs.order_by('email'), # For the filter dropdown
+        'current_user_filter': user_filter,
+    }
+    return render(request, 'betting/wallet_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def agent_sales_winnings_report(request):
+    user = request.user
+    user_filter = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    # Default to last 30 days if no dates provided
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    # Determine relevant users based on hierarchy
+    if user.user_type == 'admin' or user.is_superuser:
+        relevant_users_qs = User.objects.all()
+    elif user.user_type == 'master_agent':
+        relevant_users_qs = User.objects.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        ).distinct()
+    elif user.user_type == 'super_agent':
+        relevant_users_qs = User.objects.filter(
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        ).distinct()
+    elif user.user_type == 'agent':
+        relevant_users_qs = User.objects.filter(agent=user).distinct()
+    else:
+        relevant_users_qs = User.objects.none() # Should not be reached due to decorator
+
+    # Apply specific user filter if provided
+    if user_filter != 'all':
+        try:
+            filter_user_id = int(user_filter)
+            relevant_users_qs = relevant_users_qs.filter(id=filter_user_id)
+        except (ValueError, TypeError):
+            pass # Invalid user ID, ignore filter
+
+    # Aggregate sales and winnings for each relevant user within the date range
+    report_data = []
+    for u in relevant_users_qs.order_by('email'):
+        bets_by_user = BetTicket.objects.filter(
+            user=u,
+            placed_at__date__gte=start_date,
+            placed_at__date__lt=end_date + timedelta(days=1) # Include full end date
+        ).exclude(status='deleted')
+
+        total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+        total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+        
+        net_result = total_stake - total_winnings
+
+        if total_stake > Decimal('0.00') or total_winnings > Decimal('0.00'): # Only include users with activity
+            report_data.append({
+                'user': u,
+                'total_stake': total_stake,
+                'total_winnings': total_winnings,
+                'net_result': net_result,
+            })
+
+    context = {
+        'report_title': 'Agent/Admin Sales & Winnings Report',
+        'report_data': report_data,
+        'all_users': relevant_users_qs.order_by('email'),
+        'current_user_filter': user_filter,
+        'start_date_filter': start_date.isoformat(),
+        'end_date_filter': end_date.isoformat(),
+    }
+    return render(request, 'betting/sales_winnings_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def agent_commission_report(request):
+    user = request.user
+    agent_filter_id = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    commission_data = []
+    agents_to_report_on = User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email')
+
+    if agent_filter_id != 'all':
+        try:
+            selected_agent = User.objects.get(id=int(agent_filter_id))
+            agents_to_report_on = User.objects.filter(pk=selected_agent.pk)
+        except (ValueError, User.DoesNotExist):
+            agents_to_report_on = User.objects.none() 
+            messages.error(request, "Selected agent not found.")
+
+    for agent_user in agents_to_report_on:
+        downline_for_commission = User.objects.none()
+        if agent_user.user_type == 'master_agent':
+            downline_for_commission = User.objects.filter(
+                Q(master_agent=agent_user) |
+                Q(super_agent__master_agent=agent_user) |
+                Q(agent__super_agent__master_agent=agent_user)
+            )
+        elif agent_user.user_type == 'super_agent':
+            downline_for_commission = User.objects.filter(
+                Q(super_agent=agent_user) |
+                Q(agent__super_agent=agent_user)
+            )
+        elif agent_user.user_type == 'agent':
+            downline_for_commission = User.objects.filter(agent=agent_user)
+        
+        bets_in_period = BetTicket.objects.filter(
+            user__in=downline_for_commission,
+            placed_at__date__gte=start_date,
+            placed_at__date__lt=end_date + timedelta(days=1)
+        ).exclude(status='deleted')
+
+        total_turnover = bets_in_period.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+        total_winnings = bets_in_period.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+
+        ggr = total_turnover - total_winnings
+
+        commission_rate = Decimal('0.00') 
+        try:
+            if agent_user.user_type == 'master_agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='master_agent_commission_rate').value)
+            elif agent_user.user_type == 'super_agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='super_agent_commission_rate').value)
+            elif agent_user.user_type == 'agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='agent_commission_rate').value)
+        except (SystemSetting.DoesNotExist, InvalidOperation):
+            logger.warning(f"Commission rate setting not found or invalid for {agent_user.user_type}. Using 0%.")
+
+        commission = ggr * commission_rate
+
+        commission_data.append({
+            'agent': agent_user,
+            'start_date': start_date,
+            'end_date': end_date,
+            'total_turnover': total_turnover,
+            'total_winnings': total_winnings,
+            'ggr': ggr,
+            'commission_rate': commission_rate * 100, 
+            'commission_amount': commission,
+        })
+    
+    context = {
+        'report_title': 'Agent/Admin Commission Report',
+        'commission_data': commission_data,
+        'all_users': agents_to_report_on, # Only show agents current user can report on
+        'current_user_filter': agent_filter_id,
+        'start_date_filter': start_date.isoformat(),
+        'end_date_filter': end_date.isoformat(),
+    }
+    return render(request, 'betting/admin/commission_report.html', context)
+
+
+# --- Admin Dashboard & Management Views ---
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_dashboard(request):
+    total_users = User.objects.count()
+    total_players = User.objects.filter(user_type='player').count()
+    total_cashiers = User.objects.filter(user_type='cashier').count()
+    total_agents = User.objects.filter(user_type='agent').count()
+    total_super_agents = User.objects.filter(user_type='super_agent').count()
+    total_master_agents = User.objects.filter(user_type='master_agent').count()
+    total_admins = User.objects.filter(user_type='admin').count()
+
+    total_bets_placed = BetTicket.objects.count()
+    total_stake_amount = BetTicket.objects.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+    total_potential_winning = BetTicket.objects.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+    
+    total_deposits = Transaction.objects.filter(transaction_type='deposit', is_successful=True).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+    total_withdrawals = UserWithdrawal.objects.filter(status='approved').aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+
+    pending_bets = BetTicket.objects.filter(status='pending').count()
+    won_bets = BetTicket.objects.filter(status='won').count()
+    lost_bets = BetTicket.objects.filter(status='lost').count()
+    deleted_bets = BetTicket.objects.filter(status='deleted').count() # Tickets marked as deleted/voided
+
+    context = {
+        'total_users': total_users,
+        'total_players': total_players,
+        'total_cashiers': total_cashiers,
+        'total_agents': total_agents,
+        'total_super_agents': total_super_agents,
+        'total_master_agents': total_master_agents,
+        'total_admins': total_admins,
+        'total_bets_placed': total_bets_placed,
+        'total_stake_amount': total_stake_amount,
+        'total_potential_winning': total_potential_winning,
+        'total_deposits': total_deposits,
+        'total_withdrawals': total_withdrawals,
+        'pending_bets': pending_bets,
+        'won_bets': won_bets,
+        'lost_bets': lost_bets,
+        'deleted_bets': deleted_bets,
+    }
+    return render(request, 'betting/admin/dashboard.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def manage_users(request):
+    user_type_filter = request.GET.get('user_type', 'all')
+    search_query = request.GET.get('q', '')
+
+    users_queryset = User.objects.all().order_by('email') # Default ordering
+
+    if user_type_filter != 'all':
+        users_queryset = users_queryset.filter(user_type=user_type_filter)
+    
+    if search_query:
+        users_queryset = users_queryset.filter(
+            Q(email__icontains=search_query) |
+            Q(first_name__icontains=search_query) |
+            Q(last_name__icontains=search_query) |
+            Q(phone_number__icontains=search_query)
+        )
+
+    # Exclude the currently logged-in user from the list to prevent self-deletion issues
+    users_queryset = users_queryset.exclude(pk=request.user.pk)
+
+    paginator = Paginator(users_queryset, 10) # Show 10 users per page
+    page_number = request.GET.get('page')
+
+    try:
+        users = paginator.page(page_number)
+    except PageNotAnInteger:
+        users = paginator.page(1)
+    except EmptyPage:
+        users = paginator.page(paginator.num_pages)
+
+    context = {
+        'users': users,
+        'user_type_choices': User.USER_TYPE_CHOICES, # Assuming this is accessible from the User model
+        'current_user_type_filter': user_type_filter,
+        'current_search_query': search_query,
+    }
+    return render(request, 'betting/admin/manage_users.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def add_user(request):
+    if request.method == 'POST':
+        form = AdminUserCreationForm(request.POST, request=request) # Pass request to form
+        if form.is_valid():
+            user = form.save()
+            Wallet.objects.create(user=user, balance=0) # Create a wallet for the new user
+            messages.success(request, f"User {user.email} added successfully.")
+            log_admin_activity(request, f"Added new user: {user.email} ({user.get_user_type_display()})")
+            return redirect('betting_admin:manage_users')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Add User Error: {error}")
+    else:
+        form = AdminUserCreationForm(request=request) # Pass request to form for initial display
+    return render(request, 'betting/admin/add_user.html', {'form': form})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def edit_user(request, user_id):
+    user_to_edit = get_object_or_404(User, id=user_id)
+
+    # Prevent editing superusers if logged-in user is not a superuser themselves
+    if not request.user.is_superuser and user_to_edit.is_superuser:
+        messages.error(request, "You do not have permission to edit superuser accounts.")
+        return redirect('betting_admin:manage_users')
+    
+    # Prevent editing self if it would lead to permission issues
+    if request.user.pk == user_to_edit.pk and not request.user.is_superuser:
+        messages.warning(request, "You are trying to edit your own account. Use the 'Profile' page for personal changes, or ensure you have superuser privileges for advanced changes.")
+        # Optionally redirect to profile page for self-edits, or proceed with warning
+        # return redirect('betting:profile')
+
+    if request.method == 'POST':
+        form = AdminUserChangeForm(request.POST, instance=user_to_edit, request=request) # Pass request to form
+        if form.is_valid():
+            user = form.save()
+            messages.success(request, f"User {user.email} updated successfully.")
+            log_admin_activity(request, f"Edited user: {user.email} ({user.get_user_type_display()})")
+            return redirect('betting_admin:manage_users')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Edit User Error: {error}")
+    else:
+        form = AdminUserChangeForm(instance=user_to_edit, request=request) # Pass request to form for initial display
+    return render(request, 'betting/admin/edit_user.html', {'form': form, 'user_to_edit': user_to_edit})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def delete_user(request, user_id):
+    user_to_delete = get_object_or_404(User, id=user_id)
+
+    if user_to_delete == request.user:
+        messages.error(request, "You cannot delete your own account.")
+        return redirect('betting_admin:manage_users')
+
+    # Prevent deleting superusers if logged-in user is not a superuser themselves
+    if user_to_delete.is_superuser and not request.user.is_superuser:
+        messages.error(request, "You do not have permission to delete superuser accounts.")
+        return redirect('betting_admin:manage_users')
+    
+    # Only allow admin to delete other admins (not superusers)
+    if user_to_delete.user_type == 'admin' and not request.user.is_superuser:
+        messages.error(request, "Only a superuser can delete other admin accounts.")
+        return redirect('betting_admin:manage_users')
+
+    user_email = user_to_delete.email # Capture email before deletion
+    
+    if request.method == 'POST':
+        try:
+            # Transfer wallet balance of deleted user to admin's wallet (or specific system account)
+            # Find or create an an admin wallet for receiving funds
+            admin_user_wallet = Wallet.objects.get_or_create(user=request.user)[0]
+            deleted_user_wallet = Wallet.objects.get(user=user_to_delete)
+
+            if deleted_user_wallet.balance > Decimal('0.00'):
+                admin_user_wallet.balance += deleted_user_wallet.balance
+                admin_user_wallet.save()
+
+                # Record transaction for the transfer
+                Transaction.objects.create(
+                    user=user_to_delete,
+                    initiating_user=request.user,
+                    target_user=request.user,
+                    transaction_type='wallet_balance_transfer_on_deletion',
+                    amount=deleted_user_wallet.balance,
+                    is_successful=True,
+                    status='completed',
+                    description=f"Wallet balance of {user_email} transferred to admin upon deletion.",
+                    timestamp=timezone.now()
+                )
+                messages.info(request, f"Wallet balance of {user_email} (₦{deleted_user_wallet.balance:.2f}) transferred to your wallet.")
+
+
+            # Mark related bet tickets as 'deleted' (void) and refund their stake
+            # This handles cases where user is deleted but their bets are still active
+            related_bet_tickets = BetTicket.objects.filter(user=user_to_delete).exclude(status__in=['deleted', 'won', 'lost', 'cashed_out', 'cancelled'])
+            for ticket in related_bet_tickets:
+                ticket.status = 'deleted'
+                ticket.deleted_by = request.user
+                ticket.deleted_at = timezone.now()
+                ticket.save()
+                
+                user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                user_wallet.balance += ticket.stake_amount
+                user_wallet.save()
+
+                Transaction.objects.create(
+                    user=ticket.user,
+                    initiating_user=request.user,
+                    target_user=request.user,
+                    transaction_type='fixture_deletion_refund',
+                    amount=ticket.stake_amount,
+                    is_successful=True,
+                    status='completed',
+                    description=f"Refund for stake on ticket {ticket.id} due to fixture deletion: {fixture_name}",
+                    related_bet_ticket=ticket,
+                    timestamp=timezone.now()
+                )
+                log_admin_activity(request, f"Refunded ticket {ticket.id} due to deletion of fixture {fixture_name}.")
+
+            user_to_delete.delete()
+            messages.success(request, f"User {user_email} and associated data (wallet, transactions, bets) deleted successfully.")
+            log_admin_activity(request, f"Deleted user: {user_email}")
+            return redirect('betting_admin:manage_users')
+        except Exception as e:
+            messages.error(request, f"An error occurred while deleting user {user_email}: {e}")
+            log_admin_activity(request, f"Failed to delete user: {user_email} - Error: {e}")
+            return redirect('betting_admin:manage_users')
+    
+    messages.error(request, "Invalid request for user deletion.")
+    return redirect('betting_admin:manage_users')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def manage_fixtures(request):
+    status_filter = request.GET.get('status', 'all')
+    period_filter = request.GET.get('period', 'all')
+    search_query = request.GET.get('q', '')
+
+    fixtures_queryset = Fixture.objects.all()
+
+    if status_filter != 'all':
+        fixtures_queryset = fixtures_queryset.filter(status=status_filter)
+    
+    if period_filter != 'all':
+        try:
+            period_id = int(period_filter)
+            fixtures_queryset = fixtures_queryset.filter(betting_period__id=period_id)
+        except (ValueError, TypeError):
+            pass # Invalid period ID
+
+    if search_query:
+        fixtures_queryset = fixtures_queryset.filter(
+            Q(home_team__icontains=search_query) |
+            Q(away_team__icontains=search_query)
+        )
+
+    paginator = Paginator(fixtures_queryset.order_by('-match_time'), 10) # 10 fixtures per page
+    page_number = request.GET.get('page')
+
+    try:
+        fixtures = paginator.page(page_number)
+    except PageNotAnInteger:
+        fixtures = paginator.page(1)
+    except EmptyPage:
+        fixtures = paginator.page(paginator.num_pages)
+
+    context = {
+        'fixtures': fixtures,
+        'fixture_status_choices': [('all', 'All')] + list(Fixture.STATUS_CHOICES),
+        'current_status_filter': status_filter,
+        'all_betting_periods': BettingPeriod.objects.all().order_by('-start_date'),
+        'current_period_filter': period_filter,
+        'current_search_query': search_query,
+    }
+    return render(request, 'betting/admin/manage_fixtures.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def add_fixture(request):
+    if request.method == 'POST':
+        form = FixtureForm(request.POST)
+        if form.is_valid():
+            fixture = form.save(commit=False)
+            # Assuming 'created_by' field exists on Fixture model. If not, remove this line.
+            # fixture.created_by = request.user 
+            fixture.save()
+            messages.success(request, f"Fixture {fixture.home_team} vs {fixture.away_team} added successfully.")
+            log_admin_activity(request, f"Added new fixture: {fixture.home_team} vs {fixture.away_team}")
+            return redirect('betting_admin:manage_fixtures')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Add Fixture Error: {error}")
+    else:
+        form = FixtureForm()
+    return render(request, 'betting/admin/add_fixture.html', {'form': form})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def edit_fixture(request, fixture_id):
+    fixture = get_object_or_404(Fixture, id=fixture_id)
+    if request.method == 'POST':
+        form = FixtureForm(request.POST, instance=fixture)
+        if form.is_valid():
+            fixture = form.save()
+            messages.success(request, f"Fixture {fixture.home_team} vs {fixture.away_team} updated successfully.")
+            log_admin_activity(request, f"Edited fixture: {fixture.home_team} vs {fixture.away_team}")
+            return redirect('betting_admin:manage_fixtures')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Edit Fixture Error: {error}")
+    else:
+        form = FixtureForm(instance=fixture)
+    return render(request, 'betting/admin/edit_fixture.html', {'form': form, 'fixture': fixture})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def delete_fixture(request, fixture_id):
+    fixture = get_object_or_404(Fixture, id=fixture_id)
+    fixture_name = f"{fixture.home_team} vs {fixture.away_team}"
+
+    if fixture.status != 'pending': # Assuming 'pending' means it's still open for betting. If your model uses 'open', replace 'pending'.
+        messages.error(request, f"Fixture '{fixture_name}' cannot be deleted as its status is '{fixture.status}'. Only 'pending' fixtures can be deleted.")
+        return redirect('betting_admin:manage_fixtures')
+
+    if request.method == 'POST':
+        try:
+            # Mark associated pending bets as deleted and refund stake
+            pending_bets = BetTicket.objects.filter(
+                selections__fixture=fixture, # Selects tickets that have this fixture
+                status='pending'
+            ).distinct() # Use distinct to avoid duplicates if a ticket has multiple selections
+
+            for ticket in pending_bets:
+                ticket.status = 'deleted'
+                ticket.deleted_by = request.user
+                ticket.deleted_at = timezone.now()
+                ticket.save()
+
+                user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                user_wallet.balance += ticket.stake_amount
+                user_wallet.save()
+
+                Transaction.objects.create(
+                    user=ticket.user,
+                    initiating_user=request.user,
+                    target_user=request.user,
+                    transaction_type='fixture_deletion_refund',
+                    amount=ticket.stake_amount,
+                    is_successful=True,
+                    status='completed',
+                    description=f"Refund for stake on ticket {ticket.id} due to fixture deletion: {fixture_name}",
+                    related_bet_ticket=ticket,
+                    timestamp=timezone.now()
+                )
+                log_admin_activity(request, f"Refunded ticket {ticket.id} due to deletion of fixture {fixture_name}.")
+
+            fixture.delete()
+            messages.success(request, f"Fixture '{fixture_name}' and associated pending bets (refunded) deleted successfully.")
+            log_admin_activity(request, f"Deleted fixture: {fixture_name}")
+            return redirect('betting_admin:manage_fixtures')
+        except Exception as e:
+            messages.error(request, f"An error occurred while deleting fixture '{fixture_name}': {e}")
+            log_admin_activity(request, f"Failed to delete fixture: {fixture_name} - Error: {e}")
+            return redirect('betting_admin:manage_fixtures')
+    
+    messages.error(request, "Invalid request for fixture deletion.")
+    return redirect('betting_admin:manage_fixtures')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def declare_result(request, fixture_id):
+    fixture = get_object_or_404(Fixture, id=fixture_id)
+
+    if fixture.status != 'pending': # Assuming fixtures are 'pending' before result declaration
+        messages.warning(request, f"Fixture is already '{fixture.status}'. Result cannot be declared again.")
+        return redirect('betting_admin:manage_fixtures')
+
+    if request.method == 'POST':
+        form = DeclareResultForm(request.POST, instance=fixture)
+        if form.is_valid():
+            # Get the result from the form.
+            # IMPORTANT: Your Fixture model has a 'result' field with choices like 'home_win', 'draw', etc.
+            # Your form's 'result' field correctly points to this.
+            # The 'winning_outcome' variable in the previous code snippet for fixture was not a model field.
+            # So, we should update the fixture.result directly.
+            fixture.home_score = form.cleaned_data['home_score']
+            fixture.away_score = form.cleaned_data['away_score']
+            fixture.result = form.cleaned_data['result'] # Use the form's cleaned data for result
+            fixture.status = form.cleaned_data['status'] 
+            fixture.save()
+
+            # Process all bet tickets related to this fixture
+            # Use select_related/prefetch_related if fetching many to reduce queries
+            bets_on_this_fixture = BetTicket.objects.filter(
+                ticket_selections__fixture=fixture 
+            ).distinct().select_for_update() 
+
+            for ticket in bets_on_this_fixture:
+                # Find the specific selection for *this* fixture within *this* ticket
+                selection_for_this_fixture = ticket.ticket_selections.filter(fixture=fixture).first()
+
+                if not selection_for_this_fixture:
+                    continue # Should not happen if query above is correct
+
+                if ticket.status == 'pending': 
+                    # Determine if the selection on this ticket for this fixture wins
+                    is_selection_winning = False
+                    # The following logic should mirror how results are actually determined
+                    # based on fixture.home_score, fixture.away_score and fixture.result (which is now correctly set)
+
+                    # Simplified: if the selection matches the declared fixture result, it's winning for that selection
+                    if selection_for_this_fixture.bet_type == fixture.result:
+                        is_selection_winning = True
+                    # Handle DNB cases where a draw voids the selection
+                    elif selection_for_this_fixture.bet_type == 'home_dnb' and fixture.result == 'draw':
+                        is_selection_winning = None # Voided
+                    elif selection_for_this_fixture.bet_type == 'away_dnb' and fixture.result == 'draw':
+                        is_selection_winning = None # Voided
+                    # Add more complex logic for Over/Under, BTTS if not covered by direct result match
+                    # (Your Fixture clean method already sets fixture.result based on scores, so this simplifies things)
+                    
+                    selection_for_this_fixture.is_winning_selection = is_selection_winning
+                    selection_for_this_fixture.save()
+
+                    # Re-evaluate entire ticket status after updating this selection
+                    # This logic should ideally be in a BetTicket method
+                    all_selections_evaluated = True
+                    ticket_still_winning = True
+                    ticket_is_cancelled = False
+
+                    for sel in ticket.ticket_selections.all():
+                        if sel.is_winning_selection is None: # Found a voided selection
+                            ticket_is_cancelled = True
+                            break
+                        if sel.is_winning_selection == False: # Found a losing selection
+                            ticket_still_winning = False
+                        
+                        # Check if fixture related to this selection is settled/cancelled
+                        if sel.fixture.status not in ['settled', 'cancelled']:
+                            all_selections_evaluated = False
+                            break # Not all fixtures on the ticket are settled yet
+
+                    if all_selections_evaluated:
+                        if ticket_is_cancelled:
+                            ticket.status = 'cancelled'
+                            # Refund stake for cancelled tickets
+                            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                            user_wallet.balance += ticket.stake_amount
+                            user_wallet.save()
+                            Transaction.objects.create(
+                                user=ticket.user,
+                                initiating_user=request.user, 
+                                target_user=ticket.user,
+                                transaction_type='ticket_cancellation_refund',
+                                amount=ticket.stake_amount,
+                                is_successful=True,
+                                status='completed',
+                                description=f"Refund for cancelled bet ticket {ticket.id} (due to voided selection in fixture {fixture.home_team} vs {fixture.away_team})",
+                                related_bet_ticket=ticket,
+                                timestamp=timezone.now()
+                            )
+                            messages.info(request, f"Ticket {ticket.id} is CANCELLED (stake refunded) due to fixture {fixture.home_team} vs {fixture.away_team} resulting in a void.")
+                            log_admin_activity(request, f"Ticket {ticket.id} CANCELLED and refunded due to fixture {fixture.id} void result.")
+                        elif ticket_still_winning:
+                            ticket.status = 'won'
+                            ticket.save()
+
+                            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                            user_wallet.balance += ticket.max_winning
+                            user_wallet.save()
+
+                            Transaction.objects.create(
+                                user=ticket.user,
+                                initiating_user=request.user, 
+                                target_user=ticket.user,
+                                transaction_type='bet_payout',
+                                amount=ticket.max_winning,
+                                is_successful=True,
+                                status='completed',
+                                description=f"Winnings for bet ticket {ticket.id} on {fixture.home_team} vs {fixture.away_team}",
+                                related_bet_ticket=ticket,
+                                timestamp=timezone.now()
+                            )
+                            messages.success(request, f"Ticket {ticket.id} is WON! Winnings of ₦{ticket.max_winning:.2f} paid to {ticket.user.email}.")
+                            log_admin_activity(request, f"Declared fixture {fixture.id} as WON for ticket {ticket.id} and paid out.")
+                        else:
+                            ticket.status = 'lost'
+                            ticket.save()
+                            messages.info(request, f"Ticket {ticket.id} is LOST.")
+                            log_admin_activity(request, f"Declared fixture {fixture.id} as LOST for ticket {ticket.id}.")
+                    
+                    ticket.save() # Save the ticket status update
+
+                elif ticket.status == 'deleted':
+                    messages.info(request, f"Ticket {ticket.id} was previously deleted and will not be processed for result.")
+                # No need for else (already processed) as per previous code, as it would be handled by the update logic above.
+
+
+            messages.success(request, f"Result declared for {fixture.home_team} vs {fixture.away_team} as '{fixture.get_result_display()}'. All associated tickets processed.")
+            log_admin_activity(request, f"Declared result for fixture {fixture.id} ({fixture.home_team} vs {fixture.away_team}) as {fixture.result}.")
+            return redirect('betting_admin:manage_fixtures')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Declare Result Error: {error}")
+    else:
+        form = DeclareResultForm(instance=fixture)
+    
+    context = {
+        'form': form,
+        'fixture': fixture,
+    }
+    return render(request, 'betting/admin/declare_result.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def withdraw_request_list(request):
+    status_filter = request.GET.get('status', 'all')
+    search_query = request.GET.get('q', '')
+
+    withdrawals_queryset = UserWithdrawal.objects.all().order_by('-request_time')
+
+    if status_filter != 'all':
+        withdrawals_queryset = withdrawals_queryset.filter(status=status_filter)
+    
+    if search_query:
+        withdrawals_queryset = withdrawals_queryset.filter(
+            Q(user__email__icontains=search_query) |
+            Q(bank_name__icontains=search_query) |
+            Q(account_number__icontains=search_query) |
+            Q(id__startswith=search_query)
+        )
+
+    paginator = Paginator(withdrawals_queryset, 10) # 10 requests per page
+    page_number = request.GET.get('page')
+
+    try:
+        withdrawals = paginator.page(page_number)
+    except PageNotAnInteger:
+        withdrawals = paginator.page(1)
+    except EmptyPage:
+        withdrawals = paginator.page(paginator.num_pages)
+
+    context = {
+        'withdrawals': withdrawals,
+        'status_choices': [('all', 'All')] + list(UserWithdrawal.STATUS_CHOICES),
+        'current_status_filter': status_filter,
+        'current_search_query': search_query,
+        'withdrawal_action_form': WithdrawalActionForm() # Form for approve/reject
+    }
+    return render(request, 'betting/admin/withdraw_request_list.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def approve_reject_withdrawal(request, withdrawal_id):
+    withdrawal_request = get_object_or_404(UserWithdrawal, id=withdrawal_id)
+
+    if withdrawal_request.status != 'pending':
+        messages.warning(request, f"This withdrawal request has already been {withdrawal_request.status}.")
+        return redirect('betting_admin:withdraw_request_list')
+
+    if request.method == 'POST':
+        form = WithdrawalActionForm(request.POST)
+        if form.is_valid():
+            action = form.cleaned_data['action']
+            reason = form.cleaned_data['reason']
+
+            if action == 'approve':
+                withdrawal_request.status = 'approved'
+                messages.success(request, f"Withdrawal request {withdrawal_id} approved. Funds should be disbursed.")
+                log_admin_activity(request, f"Approved withdrawal request {withdrawal_id} for user {withdrawal_request.user.email}")
+            elif action == 'reject':
+                withdrawal_request.status = 'rejected'
+                # Refund funds to user's wallet
+                user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=withdrawal_request.user)
+                user_wallet.balance += withdrawal_request.amount
+                user_wallet.save()
+
+                # Record the refund transaction
+                Transaction.objects.create(
+                    user=withdrawal_request.user,
+                    initiating_user=request.user, 
+                    target_user=withdrawal_request.user,
+                    transaction_type='withdrawal_refund',
+                    amount=withdrawal_request.amount,
+                    is_successful=True,
+                    status='completed',
+                    description=f"Refund for rejected withdrawal request {withdrawal_id}. Reason: {reason or 'No reason provided.'}",
+                    timestamp=timezone.now()
+                )
+                messages.info(request, f"Withdrawal request {withdrawal_id} rejected. Funds (₦{withdrawal_request.amount:.2f}) returned to {withdrawal_request.user.email}'s wallet. Reason: {reason or 'No reason provided.'}")
+                log_admin_activity(request, f"Rejected withdrawal request {withdrawal_id} for user {withdrawal_request.user.email}. Reason: {reason}")
+            
+            withdrawal_request.approved_rejected_by = request.user # Corrected field name
+            withdrawal_request.approved_rejected_time = timezone.now() # Corrected field name
+            withdrawal_request.admin_notes = reason # Corrected field name
+            withdrawal_request.save()
+
+            return redirect('betting_admin:withdraw_request_list')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Withdrawal Action Error: {error}")
+    
+    messages.error(request, "Invalid request for withdrawal action.")
+    return redirect('betting_admin:withdraw_request_list')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def manage_betting_periods(request):
+    periods = BettingPeriod.objects.all().order_by('-start_date')
+    paginator = Paginator(periods, 10) 
+    page_number = request.GET.get('page')
+
+    try:
+        betting_periods = paginator.page(page_number)
+    except PageNotAnInteger:
+        betting_periods = paginator.page(1)
+    except EmptyPage:
+        betting_periods = paginator.page(paginator.num_pages)
+
+    context = {
+        'betting_periods': betting_periods
+    }
+    return render(request, 'betting/admin/manage_betting_periods.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def add_betting_period(request):
+    if request.method == 'POST':
+        form = BettingPeriodForm(request.POST)
+        if form.is_valid():
+            period = form.save()
+            messages.success(request, f"Betting period '{period.name}' added successfully.")
+            log_admin_activity(request, f"Added new betting period: {period.name}")
+            return redirect('betting_admin:manage_betting_periods')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Add Betting Period Error: {error}")
+    else:
+        form = BettingPeriodForm()
+    return render(request, 'betting/admin/add_betting_period.html', {'form': form})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def edit_betting_period(request, period_id):
+    period = get_object_or_404(BettingPeriod, id=period_id)
+    if request.method == 'POST':
+        form = BettingPeriodForm(request.POST, instance=period)
+        if form.is_valid():
+            period = form.save()
+            messages.success(request, f"Betting period '{period.name}' updated successfully.")
+            log_admin_activity(request, f"Edited betting period: {period.name}")
+            return redirect('betting_admin:manage_betting_periods')
+        else:
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
+            if form.non_field_errors():
+                for error in form.non_field_errors():
+                    messages.error(request, f"Edit Betting Period Error: {error}")
+    else:
+        form = BettingPeriodForm(instance=period)
+    return render(request, 'betting/admin/edit_betting_period.html', {'form': form, 'period': period})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def delete_betting_period(request, period_id):
+    period = get_object_or_404(BettingPeriod, id=period_id)
+    period_name = period.name
+
+    if Fixture.objects.filter(betting_period=period).exclude(status__in=['settled', 'cancelled', 'deleted']).exists(): # Only allow deletion if no unsettled or active fixtures
+        messages.error(request, f"Cannot delete betting period '{period_name}'. There are active or unsettled fixtures associated with it.")
+        return redirect('betting_admin:manage_betting_periods')
+    
+    if request.method == 'POST':
+        try:
+            period.delete()
+            messages.success(request, f"Betting period '{period_name}' deleted successfully.")
+            log_admin_activity(request, f"Deleted betting period: {period_name}")
+            return redirect('betting_admin:manage_betting_periods')
+        except Exception as e:
+            messages.error(request, f"An error occurred while deleting betting period '{period_name}': {e}")
+            log_admin_activity(request, f"Failed to delete betting period: {period_name} - Error: {e}")
+            return redirect('betting_admin:manage_betting_periods')
+
+    messages.error(request, "Invalid request for betting period deletion.")
+    return redirect('betting_admin:manage_betting_periods')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def manage_agent_payouts(request):
+    status_filter = request.GET.get('status', 'all')
+    agent_filter = request.GET.get('agent', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    payouts_queryset = AgentPayout.objects.all()
+
+    if status_filter != 'all':
+        payouts_queryset = payouts_queryset.filter(status=status_filter)
+    
+    if agent_filter != 'all':
+        try:
+            agent_id = int(agent_filter)
+            payouts_queryset = payouts_queryset.filter(agent__id=agent_id)
+        except (ValueError, TypeError):
+            pass
+
+    # Corrected filter for payout_date (model has 'created_at' and 'settled_at' but not 'payout_date')
+    # Assuming filtering should be by 'created_at' for the payout request creation date
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            payouts_queryset = payouts_queryset.filter(created_at__date__gte=start_date)
+        except ValueError:
+            messages.error(request, "Invalid start date format.")
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            payouts_queryset = payouts_queryset.filter(created_at__date__lte=end_date)
+        except ValueError:
+            messages.error(request, "Invalid end date format.")
+
+    paginator = Paginator(payouts_queryset.order_by('-created_at'), 10) # Order by created_at
+    page_number = request.GET.get('page')
+
+    try:
+        agent_payouts = paginator.page(page_number)
+    except PageNotAnInteger:
+        agent_payouts = paginator.page(1)
+   
+    except EmptyPage:
+        agent_payouts = paginator.page(paginator.num_pages)
+
+    context = {
+        'agent_payouts': agent_payouts,
+        'status_choices': [('all', 'All')] + list(AgentPayout.STATUS_CHOICES),
+        'current_status_filter': status_filter,
+        'all_agents': User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email'),
+        'current_agent_filter': agent_filter,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+    }
+    return render(request, 'betting/admin/manage_agent_payouts.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def mark_payout_settled(request, payout_id):
+    payout = get_object_or_404(AgentPayout, id=payout_id)
+
+    if payout.status != 'pending':
+        messages.warning(request, f"Payout {payout.id} is already '{payout.status}'.")
+        return redirect('betting_admin:manage_agent_payouts')
+
+    if request.method == 'POST':
+        payout.status = 'settled'
+        payout.settled_by = request.user # Corrected field name
+        payout.settled_at = timezone.now() # Corrected field name
+        payout.save()
+        messages.success(request, f"Agent payout {payout.id} marked as settled.")
+        log_admin_activity(request, f"Marked agent payout {payout.id} for {payout.agent.email} as settled.")
+        return redirect('betting_admin:manage_agent_payouts')
+    
+    messages.error(request, "Invalid request for marking payout settled.")
+    return redirect('betting_admin:manage_agent_payouts')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_ticket_report(request):
+    status_filter = request.GET.get('status', 'all')
+    user_filter = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    bet_tickets_queryset = BetTicket.objects.all()
+
+    if status_filter != 'all':
+        bet_tickets_queryset = bet_tickets_queryset.filter(status=status_filter)
+    
+    if user_filter != 'all':
+        try:
+            user_id = int(user_filter)
+            bet_tickets_queryset = bet_tickets_queryset.filter(user__id=user_id)
+        except (ValueError, TypeError):
+            pass
+
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            bet_tickets_queryset = bet_tickets_queryset.filter(placed_at__date__gte=start_date)
+        except ValueError:
+            messages.error(request, "Invalid start date format.")
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            bet_tickets_queryset = bet_tickets_queryset.filter(placed_at__date__lte=end_date)
+        except ValueError:
+            messages.error(request, "Invalid end date format.")
+    
+    paginator = Paginator(bet_tickets_queryset.order_by('-placed_at'), 10)
+    page_number = request.GET.get('page')
+
+    try:
+        bet_tickets = paginator.page(page_number)
+    except PageNotAnInteger:
+        bet_tickets = paginator.page(1)
+    except EmptyPage:
+        bet_tickets = paginator.page(paginator.num_pages)
+
+    context = {
+        'bet_tickets': bet_tickets,
+        'status_choices': [('all', 'All')] + list(BetTicket.STATUS_CHOICES),
+        'current_status_filter': status_filter,
+        'all_users': User.objects.all().order_by('email'), # For user filter dropdown
+        'current_user_filter': user_filter,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+    }
+    return render(request, 'betting/admin/ticket_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_ticket_details(request, ticket_id):
+    ticket = get_object_or_404(BetTicket, id=ticket_id)
+    return render(request, 'betting/admin/ticket_detail.html', {'bet_ticket': ticket})
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def admin_void_ticket_single(request, ticket_id):
+    ticket = get_object_or_404(BetTicket, id=ticket_id)
+
+    if request.method == 'POST':
+        if ticket.status in ['won', 'lost', 'cashed_out', 'deleted', 'cancelled']:
+            messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be voided/deleted.")
+            return redirect('betting_admin:admin_ticket_report') 
+        
+        try:
+            ticket.status = 'deleted'
+            ticket.deleted_by = request.user
+            ticket.deleted_at = timezone.now()
+            ticket.save()
+
+            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+            user_wallet.balance += ticket.stake_amount
+            user_wallet.save()
+
+            Transaction.objects.create(
+                user=ticket.user,
+                initiating_user=request.user,
+                target_user=ticket.user,
+                transaction_type='ticket_deletion_refund',
+                amount=ticket.stake_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Admin void: Stake refunded for ticket {ticket.ticket_id}",
+                related_bet_ticket=ticket,
+                timestamp=timezone.now()
+            )
+            messages.success(request, f"Bet ticket {ticket.ticket_id} successfully voided/deleted and stake refunded to {ticket.user.email}.")
+            log_admin_activity(request, f"Voided/Deleted bet ticket {ticket.ticket_id} and refunded stake.")
+        except Exception as e:
+            messages.error(request, f"Failed to void ticket {ticket.ticket_id}: {e}")
+            log_admin_activity(request, f"Failed to void ticket {ticket.ticket_id}. Error: {e}")
+        
+    return redirect('betting_admin:admin_ticket_report') 
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@db_transaction.atomic
+def admin_settle_won_ticket_single(request, ticket_id):
+    ticket = get_object_or_404(BetTicket, id=ticket_id)
+
+    if request.method == 'POST':
+        if ticket.status != 'pending':
+            messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be manually settled as won.")
+            return redirect('betting_admin:admin_ticket_report') 
+
+        try:
+            ticket.status = 'won'
+            ticket.save()
+
+            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+            winnings_amount = ticket.max_winning
+            user_wallet.balance += winnings_amount
+            user_wallet.save()
+
+            Transaction.objects.create(
+                user=ticket.user,
+                initiating_user=request.user,
+                target_user=ticket.user,
+                transaction_type='bet_payout',
+                amount=winnings_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Admin payout: Winnings for Bet Ticket {ticket.ticket_id}",
+                related_bet_ticket=ticket,
+                timestamp=timezone.now()
+            )
+            messages.success(request, f"Bet ticket {ticket.ticket_id} settled as WON and winnings of ₦{winnings_amount:.2f} paid to {ticket.user.email}.")
+            log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON and paid out winnings.")
+        except Exception as e:
+            messages.error(request, f"Failed to settle ticket {ticket.ticket_id} as WON: {e}")
+            log_admin_activity(request, f"Failed to settle ticket {ticket.ticket_id} as WON. Error: {e}")
+        
+    return redirect('betting_admin:admin_ticket_report') 
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_wallet_report(request):
+    report_title = "Admin Wallet Report"
+    user_filter = request.GET.get('user', 'all')
+
+    wallets_queryset = Wallet.objects.all()
+
+    if user_filter != 'all':
+        try:
+            filter_user_id = int(user_filter)
+            wallets_queryset = wallets_queryset.filter(user__id=filter_user_id)
+        except (ValueError, TypeError):
+            pass 
+
+    paginator = Paginator(wallets_queryset.order_by('user__email'), 10)
+    page_number = request.GET.get('page')
+
+    try:
+        wallets = paginator.page(page_number)
+    except PageNotAnInteger:
+        wallets = paginator.page(1)
+    except EmptyPage:
+        wallets = paginator.page(paginator.num_pages)
+
+    context = {
+        'report_title': report_title,
+        'wallets': wallets,
+        'all_users': User.objects.all().order_by('email'), 
+        'current_user_filter': user_filter,
+    }
+    return render(request, 'betting/admin/wallet_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_sales_winnings_report(request):
+    report_title = "Admin Sales & Winnings Report"
+    user_filter = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    users_qs = User.objects.all()
+
+    if user_filter != 'all':
+        try:
+            filter_user_id = int(user_filter)
+            users_qs = users_qs.filter(id=filter_user_id)
+        except (ValueError, TypeError):
+            pass 
+
+    report_data = []
+    for u in users_qs.order_by('email'):
+        # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
+        bets_by_user = BetTicket.objects.filter(
+            user=u,
+            placed_at__date__gte=start_date,
+            placed_at__date__lt=end_date + timedelta(days=1) 
+        ).exclude(status='deleted')
+
+        total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+        total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+        
+        net_result = total_stake - total_winnings
+
+        if total_stake > Decimal('0.00') or total_winnings > Decimal('0.00'): 
+            report_data.append({
+                'user': u,
+                'total_stake': total_stake,
+                'total_winnings': total_winnings,
+                'ggr': net_result, # Changed net_result to ggr for consistency with definition
+            })
+    
+    paginator = Paginator(report_data, 10) 
+    page_number = request.GET.get('page')
+
+    try:
+        paginated_report_data = paginator.page(page_number)
+    except PageNotAnInteger:
+        paginated_report_data = paginator.page(1)
+    except EmptyPage:
+        paginated_report_data = paginator.page(paginator.num_pages)
+
+
+    context = {
+        'report_title': report_title,
+        'report_data': paginated_report_data,
+        'all_users': User.objects.all().order_by('email'), 
+        'current_user_filter': user_filter,
+        'start_date_filter': start_date.isoformat(),
+        'end_date_filter': end_date.isoformat(),
+    }
+    return render(request, 'betting/admin/sales_winnings_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_commission_report(request):
+    report_title = "Admin Commission Report"
+    agent_filter_id = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    commission_data = []
+    agents_to_report_on = User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email')
+
+    if agent_filter_id != 'all':
+        try:
+            selected_agent = User.objects.get(id=int(agent_filter_id))
+            agents_to_report_on = User.objects.filter(pk=selected_agent.pk)
+        except (ValueError, User.DoesNotExist):
+            agents_to_report_on = User.objects.none() 
+            messages.error(request, "Selected agent not found.")
+
+    for agent_user in agents_to_report_on:
+        downline_for_commission = User.objects.none()
+        if agent_user.user_type == 'master_agent':
+            downline_for_commission = User.objects.filter(
+                Q(master_agent=agent_user) |
+                Q(super_agent__master_agent=agent_user) |
+                Q(agent__super_agent__master_agent=agent_user)
+            )
+        elif agent_user.user_type == 'super_agent':
+            downline_for_commission = User.objects.filter(
+                Q(super_agent=agent_user) |
+                Q(agent__super_agent=agent_user)
+            )
+        elif agent_user.user_type == 'agent':
+            downline_for_commission = User.objects.filter(agent=agent_user)
+        
+        bets_in_period = BetTicket.objects.filter(
+            user__in=downline_for_commission,
+            placed_at__date__gte=start_date,
+            placed_at__date__lt=end_date + timedelta(days=1)
+        ).exclude(status='deleted')
+
+        total_turnover = bets_in_period.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
+        total_winnings = bets_in_period.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+
+        ggr = total_turnover - total_winnings
+
+        commission_rate = Decimal('0.00') 
+        try:
+            if agent_user.user_type == 'master_agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='master_agent_commission_rate').value)
+            elif agent_user.user_type == 'super_agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='super_agent_commission_rate').value)
+            elif agent_user.user_type == 'agent':
+                commission_rate = Decimal(SystemSetting.objects.get(key='agent_commission_rate').value)
+        except (SystemSetting.DoesNotExist, InvalidOperation):
+            logger.warning(f"Commission rate setting not found or invalid for {agent_user.user_type}. Using 0%.")
+
+        commission = ggr * commission_rate
+
+        commission_data.append({
+            'agent': agent_user,
+            'start_date': start_date,
+            'end_date': end_date,
+            'total_turnover': total_turnover,
+            'total_winnings': total_winnings,
+            'ggr': ggr,
+            'commission_rate': commission_rate * 100, 
+            'commission_amount': commission,
+        })
+    
+    context = {
+        'report_title': 'Agent/Admin Commission Report',
+        'commission_data': commission_data,
+        'all_users': agents_to_report_on, # Only show agents current user can report on
+        'current_user_filter': agent_filter_id,
+        'start_date_filter': start_date.isoformat(),
+        'end_date_filter': end_date.isoformat(),
+    }
+    return render(request, 'betting/admin/commission_report.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_activity_log(request):
+    report_title = "Admin Activity Log"
+    user_filter = request.GET.get('user', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    activity_logs_queryset = ActivityLog.objects.all().order_by('-timestamp')
+
+    if user_filter != 'all':
+        try:
+            user_id = int(user_filter)
+            activity_logs_queryset = activity_logs_queryset.filter(user__id=user_id)
+        except (ValueError, TypeError):
+            pass
+
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            activity_logs_queryset = activity_logs_queryset.filter(timestamp__date__gte=start_date)
+        except ValueError:
+            messages.error(request, "Invalid start date format.")
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            activity_logs_queryset = activity_logs_queryset.filter(timestamp__date__lte=end_date)
+        except ValueError:
+            messages.error(request, "Invalid end date format.")
+    
+    paginator = Paginator(activity_logs_queryset, 10)
+    page_number = request.GET.get('page')
+
+    try:
+        activity_logs = paginator.page(page_number)
+    except PageNotAnInteger:
+        activity_logs = paginator.page(1)
+    except EmptyPage:
+        activity_logs = paginator.page(paginator.num_pages)
+
+    context = {
+        'report_title': report_title,
+        'activity_logs': activity_logs,
+        'all_users': User.objects.all().order_by('email'), 
+        'current_user_filter': user_filter,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+    }
+    return render(request, 'betting/admin/activity_log.html', context)
+
+
+@login_required
+@user_passes_test(is_agent)
+def agent_cashier_list(request):
+    cashiers = User.objects.filter(agent=request.user, user_type='cashier').order_by('-date_joined')
+    paginator = Paginator(cashiers, 10)
+    page = request.GET.get('page')
+    try:
+        cashiers_page = paginator.page(page)
+    except PageNotAnInteger:
+        cashiers_page = paginator.page(1)
+    except EmptyPage:
+        cashiers_page = paginator.page(paginator.num_pages)
+
+    context = {
+        'cashiers': cashiers_page,
+    }
+    return render(request, 'betting/agent/cashier_list.html', context)
+
+@login_required
+@user_passes_test(is_agent)
+def agent_create_cashier(request):
+    if request.method == 'POST':
+        try:
+            email = request.POST.get('email')
+            password = request.POST.get('password')
+            confirm_password = request.POST.get('confirm_password')
+            first_name = request.POST.get('first_name')
+            last_name = request.POST.get('last_name')
+            phone_number = request.POST.get('phone_number')
+            cashier_prefix = request.POST.get('cashier_prefix')
+
+            if not cashier_prefix:
+                 # Auto-generate prefix if not provided: CSH + 5 random digits
+                 import random
+                 while True:
+                     cashier_prefix = f"CSH{random.randint(10000, 99999)}"
+                     if not User.objects.filter(cashier_prefix=cashier_prefix).exists():
+                         break
+
+            if password != confirm_password:
+                messages.error(request, "Passwords do not match.")
+                return redirect('betting:agent_cashier_list')
+
+            if User.objects.filter(email=email).exists():
+                messages.error(request, "Email already exists.")
+                return redirect('betting:agent_cashier_list')
+            
+            # Check prefix uniqueness if provided, though model constraints might handle it, better to check nicely
+            if cashier_prefix and User.objects.filter(cashier_prefix=cashier_prefix).exists():
+                messages.error(request, "Cashier prefix already in use.")
+                return redirect('betting:agent_cashier_list')
+
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                phone_number=phone_number,
+                user_type='cashier',
+                agent=request.user,
+                cashier_prefix=cashier_prefix
+            )
+            # Ensure wallet exists
+            Wallet.objects.get_or_create(user=user)
+            
+            messages.success(request, f"Cashier {email} created successfully.")
+        except Exception as e:
+            messages.error(request, f"Error creating cashier: {e}")
+            logger.error(f"Error creating cashier: {e}")
+    
+    return redirect('betting:agent_cashier_list')
+
+@login_required
+@user_passes_test(is_agent)
+def agent_edit_cashier(request, cashier_id):
+    if request.method == 'POST':
+        cashier = get_object_or_404(User, id=cashier_id, agent=request.user, user_type='cashier')
+        try:
+            cashier.first_name = request.POST.get('first_name')
+            cashier.last_name = request.POST.get('last_name')
+            cashier.phone_number = request.POST.get('phone_number')
+            # Email update is sensitive, usually requires verification, but for simplicity:
+            new_email = request.POST.get('email')
+            if new_email and new_email != cashier.email:
+                if User.objects.filter(email=new_email).exclude(id=cashier.id).exists():
+                     messages.error(request, "Email already in use by another user.")
+                     return redirect('betting:agent_cashier_list')
+                cashier.email = new_email
+            
+            cashier.save()
+            messages.success(request, f"Cashier {cashier.email} updated successfully.")
+        except Exception as e:
+            messages.error(request, f"Error updating cashier: {e}")
+    
+    return redirect('betting:agent_cashier_list')
+
+@login_required
+@user_passes_test(is_agent)
+def agent_delete_cashier(request, cashier_id):
+    if request.method == 'POST':
+        cashier = get_object_or_404(User, id=cashier_id, agent=request.user, user_type='cashier')
+        try:
+            # Check if cashier has active tickets or transactions?
+            # For now, just delete. Standard Django behavior will cascade or set null based on model defs.
+            # User model defines related_name='bet_tickets', on_delete=CASCADE usually for tickets.
+            # But let's check safety.
+            cashier.delete()
+            messages.success(request, "Cashier deleted successfully.")
+        except Exception as e:
+            messages.error(request, f"Error deleting cashier: {e}")
+    
+    return redirect('betting:agent_cashier_list')
+
+@login_required
+@user_passes_test(is_agent)
+@db_transaction.atomic
+def agent_credit_cashier(request, cashier_id):
+    if request.method == 'POST':
+        cashier = get_object_or_404(User, id=cashier_id, agent=request.user, user_type='cashier')
+        amount_str = request.POST.get('amount')
+        
+        try:
+            amount = Decimal(amount_str)
+            if amount <= 0:
+                messages.error(request, "Amount must be positive.")
+                return redirect('betting:agent_cashier_list')
+            
+            # Ensure wallets exist before locking
+            _ = request.user.wallet
+            _ = cashier.wallet
+
+            agent_wallet = Wallet.objects.select_for_update().get(user=request.user)
+            if agent_wallet.balance < amount:
+                messages.error(request, "Insufficient funds in your wallet.")
+                return redirect('betting:agent_cashier_list')
+            
+            cashier_wallet = Wallet.objects.select_for_update().get(user=cashier)
+            
+            # Perform transfer
+            agent_wallet.balance -= amount
+            agent_wallet.save()
+            
+            cashier_wallet.balance += amount
+            cashier_wallet.save()
+            
+            # Create transactions
+            Transaction.objects.create(
+                user=request.user,
+                transaction_type='wallet_transfer_out',
+                amount=amount,
+                status='completed',
+                is_successful=True,
+                target_user=cashier,
+                description=f"Transfer to cashier {cashier.email}"
+            )
+            
+            Transaction.objects.create(
+                user=cashier,
+                transaction_type='wallet_transfer_in',
+                amount=amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=request.user,
+                description=f"Received credit from agent {request.user.email}"
+            )
+            
+            messages.success(request, f"Successfully credited ₦{amount} to {cashier.email}.")
+            
+        except InvalidOperation:
+            messages.error(request, "Invalid amount format.")
+        except Exception as e:
+            messages.error(request, f"Error processing credit: {e}")
+            
+    return redirect('betting:agent_cashier_list')
+
+
+# --- API Endpoints (Placeholder implementations) ---
+
+@csrf_exempt
+def api_betting_periods(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for betting periods (placeholder).'})
+
+@csrf_exempt
+def api_fixtures(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for fixtures (placeholder).'})
+
+@csrf_exempt
+def api_place_bet(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for place bet (placeholder).'})
+
+@csrf_exempt
+def api_check_ticket_status(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for check ticket status (placeholder).'})
+
+@login_required
+def api_user_wallet(request):
+    try:
+        wallet = request.user.wallet
+        return JsonResponse({'status': 'success', 'balance': float(wallet.balance)})
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)})
+
+@csrf_exempt
+def api_initiate_deposit(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for initiate deposit (placeholder).'})
+
+@csrf_exempt
+def api_verify_deposit(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for verify deposit (placeholder).'})
+
+@csrf_exempt
+def api_withdraw_funds(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for withdraw funds (placeholder).'})
+
+@csrf_exempt
+def api_wallet_transfer(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for wallet transfer (placeholder).'})
+
+@csrf_exempt
+def api_user_profile(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for user profile (placeholder).'})
+
+@csrf_exempt
+def api_change_password(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for change password (placeholder).'})
+
+@csrf_exempt
+def api_user_transactions(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for user transactions (placeholder).'})
+
+@csrf_exempt
+def api_agent_commissions(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for agent commissions (placeholder).'})
+
+@csrf_exempt
+def api_agent_users(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for agent users (placeholder).'})
+
+@csrf_exempt
+def api_cashier_transactions(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for cashier transactions (placeholder).'})
+
+@csrf_exempt
+def api_bet_tickets(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for bet tickets (placeholder).'})
+
+@csrf_exempt
+def api_void_ticket(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for voiding a ticket (placeholder).'})
+
+@csrf_exempt
+def api_manage_users(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for managing users (placeholder).'})
+
+@csrf_exempt
+def api_system_settings(request):
+    return JsonResponse({'status': 'success', 'message': 'API endpoint for system settings (placeholder).'})

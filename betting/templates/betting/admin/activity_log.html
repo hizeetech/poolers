@@ -1,0 +1,71 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">{{ report_title }}</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Logs</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_activity_log' %}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="user_filter" class="form-label">User:</label>
+                <select name="user" id="user_filter" class="form-select rounded-md">
+                    <option value="all">All Users</option>
+                    {% for user_obj in all_users %}
+                        <option value="{{ user_obj.id }}" {% if user_obj.id|stringformat:"s" == current_user_filter %}selected{% endif %}>{{ user_obj.email }} ({{ user_obj.get_user_type_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label for="start_date" class="form-label">Start Date:</label>
+                <input type="date" name="start_date" id="start_date" class="form-control rounded-md" value="{{ start_date_filter }}">
+            </div>
+            <div class="col-md-4">
+                <label for="end_date" class="form-label">End Date:</label>
+                <input type="date" name="end_date" id="end_date" class="form-control rounded-md" value="{{ end_date_filter }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
+
+    {% if activity_logs %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Timestamp</th>
+                        <th scope="col">User</th>
+                        <th scope="col">User Type</th>
+                        <th scope="col">Action</th>
+                        <th scope="col">IP Address</th>
+                        {# <th scope="col">Session Key</th> #}
+                        {# <th scope="col">User Agent</th> #}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in activity_logs %}
+                    <tr>
+                        <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                        <td>{{ log.user.email|default:"N/A" }}</td>
+                        <td>{{ log.user.get_user_type_display|default:"N/A" }}</td>
+                        <td>{{ log.action }}</td>
+                        <td>{{ log.ip_address|default:"N/A" }}</td>
+                        {# <td>{{ log.session_key|default:"N/A" }}</td> #}
+                        {# <td>{{ log.user_agent|default:"N/A" }}</td> #}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            No activity logs found for the selected filters.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

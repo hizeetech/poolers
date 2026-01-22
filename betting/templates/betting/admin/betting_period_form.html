@@ -1,0 +1,33 @@
+{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}{% if form.instance.pk %}Edit Betting Period{% else %}Add Betting Period{% endif %}{% endblock %} {% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">{% if form.instance.pk %}Edit Betting Period{% else %}Add New Betting Period{% endif %}</h2>
+
+    <form method="post" action="{% if form.instance.pk %}{% url 'betting_admin:edit_betting_period' period_id=form.instance.pk %}{% else %}{% url 'betting_admin:add_betting_period' %}{% endif %}" class="p-4 bg-light rounded-lg shadow-sm">
+        {% csrf_token %} {% if form.errors %}
+        <div class="alert alert-danger" role="alert">
+            Please correct the following errors:
+            <ul class="mb-0">
+                {% for field in form %} {% if field.errors %}
+                <li><strong>{{ field.label }}:</strong> {{ field.errors|join:", " }}</li>
+                {% endif %} {% endfor %} {% if form.non_field_errors %}
+                <li>{{ form.non_field_errors|join:", " }}</li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %} {% for field in form %}
+        <div class="mb-3">
+            <label for="{{ field.id_for_label }}" class="form-label text-muted">{{ field.label }}:</label> {{ field }} {% if field.help_text %}
+            <div class="form-text text-muted">{{ field.help_text }}</div>
+            {% endif %} {% if field.errors %} {% for error in field.errors %}
+            <div class="invalid-feedback d-block">{{ error }}</div>
+            {% endfor %} {% endif %}
+        </div>
+        {% endfor %}
+
+        <div class="d-flex justify-content-end gap-2 mt-4">
+            <button type="submit" class="btn btn-primary rounded-pill shadow-sm">{% if form.instance.pk %}Update Period{% else %}Add Period{% endif %}</button>
+            <a href="{% url 'betting_admin:manage_betting_periods' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

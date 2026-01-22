@@ -26,7 +26,8 @@ urlpatterns = [
     path('withdraw/', views.withdraw_funds, name='withdraw_funds'),
     path('wallet-transfer/', views.wallet_transfer, name='wallet_transfer'),
 
-    # User Profile
+    # User Profile & Dashboard
+    path('dashboard/', views.user_dashboard, name='user_dashboard'),
     path('profile/', views.profile_view, name='profile'),
     path('change-password/', views.change_password, name='change_password'),
 
@@ -46,6 +47,7 @@ urlpatterns = [
     path('reports/wallet/', views.agent_wallet_report, name='agent_wallet_report'),
     path('reports/sales-winnings/', views.agent_sales_winnings_report, name='agent_sales_winnings_report'),
     path('reports/commission/', views.agent_commission_report, name='agent_commission_report'),
+    path('reports/admin-commission-financial/', views.admin_commission_financial_report, name='admin_commission_financial_report'),
 
     # Admin Dashboard URLs (if these are handled via views.py, not betting_admin_site)
     path('admin_dashboard/', views.admin_dashboard, name='admin_dashboard'),
@@ -58,7 +60,7 @@ urlpatterns = [
     path('delete_fixture/<int:fixture_id>/', views.delete_fixture, name='delete_fixture'),
     path('declare_result/<int:fixture_id>/', views.declare_result, name='declare_result'),
     path('withdrawals/', views.withdraw_request_list, name='withdraw_request_list'),
-    path('withdrawals/<uuid:withdrawal_id>/action/', views.approve_reject_withdrawal, name='approve_reject_withdrawal'),
+    path('withdrawals/<int:withdrawal_id>/action/', views.approve_reject_withdrawal, name='approve_reject_withdrawal'),
     path('manage_betting_periods/', views.manage_betting_periods, name='manage_betting_periods'),
     path('add_betting_period/', views.add_betting_period, name='add_betting_period'),
     path('edit_betting_period/<int:period_id>/', views.edit_betting_period, name='edit_betting_period'),

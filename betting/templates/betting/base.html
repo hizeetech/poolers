@@ -165,19 +165,8 @@
                             {{ user.email }}
                         </a>
                         <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="navbarDropdown">
+                            <li><a class="dropdown-item" href="{% url 'betting:user_dashboard' %}">Dashboard</a></li>
                             <li><a class="dropdown-item" href="{% url 'betting:profile' %}">Profile</a></li>
-                            
-                            {% if user.is_superuser or user.user_type == 'admin' %}
-                                <li><a class="dropdown-item" href="{% url 'betting:admin_dashboard' %}">Admin Dashboard</a></li>
-                            {% elif user.user_type == 'master_agent' %}
-                                <li><a class="dropdown-item" href="{% url 'betting:master_agent_dashboard' %}">Master Agent Dashboard</a></li>
-                            {% elif user.user_type == 'super_agent' %}
-                                <li><a class="dropdown-item" href="{% url 'betting:super_agent_dashboard' %}">Super Agent Dashboard</a></li>
-                            {% elif user.user_type == 'agent' %}
-                                <li><a class="dropdown-item" href="{% url 'betting:agent_dashboard' %}">Agent Dashboard</a></li>
-                            {% elif user.user_type == 'cashier' %}
-                                <li><a class="dropdown-item" href="{% url 'betting:agent_dashboard' %}">Cashier Dashboard</a></li>
-                            {% endif %}
                             
                             <li>
                                 <hr class="dropdown-divider">

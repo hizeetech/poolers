@@ -52,7 +52,7 @@ class BettingAdminSite(admin.AdminSite):
             path('users/delete/<int:user_id>/', self.admin_view(views.delete_user), name='delete_user'),
 
             path('withdrawals/', self.admin_view(views.withdraw_request_list), name='withdraw_request_list'),
-            path('withdrawals/<uuid:withdrawal_id>/action/', self.admin_view(views.approve_reject_withdrawal), name='approve_reject_withdrawal'),
+            path('withdrawals/<int:withdrawal_id>/action/', self.admin_view(views.approve_reject_withdrawal), name='approve_reject_withdrawal'),
 
             path('betting-periods/', self.admin_view(views.manage_betting_periods), name='manage_betting_periods'),
             path('betting-periods/add/', self.admin_view(views.add_betting_period), name='add_betting_period'),

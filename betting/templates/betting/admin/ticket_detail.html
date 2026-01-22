@@ -100,7 +100,7 @@
                     Void/Delete Ticket
                 </button>
         </form>
-        <form method="post" action="{% url 'betting_admin:betting_settle_won_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to SETTLE this ticket as WON and payout winnings? This action cannot be undone.');">
+        <form method="post" action="{% url 'betting_admin:admin_settle_won_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to SETTLE this ticket as WON and payout winnings? This action cannot be undone.');">
             {% csrf_token %}
             <button type="submit" class="btn btn-success rounded-pill shadow-sm">
                     Settle as Won
@@ -109,7 +109,7 @@
         {% else %}
         <p class="text-muted">This ticket is {{ bet_ticket.get_status_display|lower }}. No further actions.</p>
         {% endif %}
-        <a href="{% url 'betting_admin:betting_tickets_report' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Back to Report</a>
+        <a href="{% url 'betting_admin:admin_ticket_report' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Back to Report</a>
     </div>
 </div>
 {% endblock %}

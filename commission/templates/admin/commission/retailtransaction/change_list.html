@@ -1,0 +1,116 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    .rt-row {
+        display: flex;
+        padding: 10px;
+        border-bottom: 1px solid #eee;
+        align-items: center;
+    }
+    .rt-cell {
+        flex: 1;
+        padding: 0 10px;
+    }
+    .rt-name {
+        flex: 3;
+    }
+    .rt-details {
+        margin-left: 20px;
+        border-left: 2px solid #eee;
+    }
+    summary {
+        cursor: pointer;
+        list-style: none; /* Hide default triangle */
+    }
+    summary::-webkit-details-marker {
+        display: none;
+    }
+    summary::before {
+        content: '►';
+        margin-right: 5px;
+        display: inline-block;
+        transition: transform 0.2s;
+    }
+    details[open] > summary::before {
+        transform: rotate(90deg);
+    }
+    /* Headers */
+    .rt-header {
+        font-weight: bold;
+        background-color: #f8f9fa;
+        border-bottom: 2px solid #dee2e6;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Retail Transactions Hierarchy</h1>
+    
+    <div class="module">
+        <!-- Header Row -->
+        <div class="rt-row rt-header">
+            <div class="rt-cell rt-name">Hierarchy / Name</div>
+            <div class="rt-cell">Commission Plan</div>
+            <div class="rt-cell">Total Sales</div>
+            <div class="rt-cell">Total Winnings</div>
+            <div class="rt-cell">Total GGR</div>
+        </div>
+
+        {% for ma in hierarchy_data %}
+        <details>
+            <summary class="rt-row">
+                <div class="rt-cell rt-name">{{ ma.user.get_full_name|default:ma.user.email }} (Master Agent)</div>
+                <div class="rt-cell">{{ ma.plan|default:"-" }}</div>
+                <div class="rt-cell">{{ ma.sales|floatformat:2 }}</div>
+                <div class="rt-cell">{{ ma.winnings|floatformat:2 }}</div>
+                <div class="rt-cell">{{ ma.ggr|floatformat:2 }}</div>
+            </summary>
+            
+            <div class="rt-details">
+                {% for sa in ma.super_agents %}
+                <details>
+                    <summary class="rt-row">
+                        <div class="rt-cell rt-name">{{ sa.user.get_full_name|default:sa.user.email }} (Super Agent)</div>
+                        <div class="rt-cell">{{ sa.plan|default:"-" }}</div>
+                        <div class="rt-cell">{{ sa.sales|floatformat:2 }}</div>
+                        <div class="rt-cell">{{ sa.winnings|floatformat:2 }}</div>
+                        <div class="rt-cell">{{ sa.ggr|floatformat:2 }}</div>
+                    </summary>
+                    
+                    <div class="rt-details">
+                        {% for ag in sa.agents %}
+                        <details>
+                            <summary class="rt-row">
+                                <div class="rt-cell rt-name">{{ ag.user.get_full_name|default:ag.user.email }} (Agent)</div>
+                                <div class="rt-cell">{{ ag.plan|default:"-" }}</div>
+                                <div class="rt-cell">{{ ag.sales|floatformat:2 }}</div>
+                                <div class="rt-cell">{{ ag.winnings|floatformat:2 }}</div>
+                                <div class="rt-cell">{{ ag.ggr|floatformat:2 }}</div>
+                            </summary>
+                            
+                            <div class="rt-details">
+                                {% for ca in ag.cashiers %}
+                                <div class="rt-row">
+                                    <div class="rt-cell rt-name">{{ ca.user.get_full_name|default:ca.user.email }} (Cashier)</div>
+                                    <div class="rt-cell">-</div> <!-- Cashiers usually don't have commission plans displayed here -->
+                                    <div class="rt-cell">{{ ca.sales|floatformat:2 }}</div>
+                                    <div class="rt-cell">{{ ca.winnings|floatformat:2 }}</div>
+                                    <div class="rt-cell">{{ ca.ggr|floatformat:2 }}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endfor %}
+            </div>
+        </details>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

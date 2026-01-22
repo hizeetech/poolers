@@ -14,6 +14,7 @@ urlpatterns = [
     # Include ALL other betting app URLs (non-admin paths like frontpage, wallet, etc.)
     # IMPORTANT: Add the 'namespace' argument here for your betting app.
     path('', include(('betting.urls', 'betting'), namespace='betting')),
+    path('commission/', include('commission.urls')),
 ]
 
 if settings.DEBUG:

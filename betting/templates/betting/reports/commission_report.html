@@ -1,81 +1,137 @@
 {% extends 'betting/base.html' %}
 {% load static %}
 
-{% block title %}{{ report_title }}{% endblock %}
+{% block title %}{{ report_title }} - Pool Betting{% endblock %}
 
 {% block content %}
-<div class="container py-5">
-    <div class="row justify-content-center">
-        <div class="col-md-10 col-lg-9">
-            <div class="card shadow-lg border-0 rounded-4">
-                <div class="card-body p-4 p-md-5">
-                    <h2 class="card-title text-center mb-4 fw-bold text-dark">{{ report_title }}</h2>
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">{{ report_title }}</h2>
 
-                    {# Date filter form #}
-                    <form method="get" class="mb-4 row align-items-end g-3">
-                        <div class="col-md-4">
-                            <label for="start_date" class="form-label">Start Date:</label>
-                            <input type="date" id="start_date" name="start_date" class="form-control rounded-md" value="{{ start_date_filter|default_if_none:'' }}">
-                        </div>
-                        <div class="col-md-4">
-                            <label for="end_date" class="form-label">End Date:</label>
-                            <input type="date" id="end_date" name="end_date" class="form-control rounded-md" value="{{ end_date_filter|default_if_none:'' }}">
-                        </div>
-                        <div class="col-md-4">
-                            <button type="submit" class="btn btn-primary rounded-pill px-4 w-100">Apply Filter</button>
-                        </div>
-                    </form>
+    <!-- Filters -->
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter Report</h4>
+        <form method="GET" action="{% url 'betting:agent_commission_report' %}" class="row g-3 align-items-end">
+            {% if all_users %}
+            <div class="col-md-4">
+                <label for="user_filter" class="form-label">Agent:</label>
+                <select name="user" id="user_filter" class="form-select rounded-md">
+                    <option value="all">All Agents</option>
+                    {% for user_obj in all_users %}
+                        <option value="{{ user_obj.id }}" {% if user_obj.id|stringformat:"s" == current_user_filter %}selected{% endif %}>{{ user_obj.email }} ({{ user_obj.get_user_type_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+            <div class="col-md-4">
+                <label for="start_date" class="form-label">Start Date:</label>
+                <input type="date" name="start_date" id="start_date" class="form-control rounded-md" value="{{ start_date_filter }}">
+            </div>
+            <div class="col-md-4">
+                <label for="end_date" class="form-label">End Date:</label>
+                <input type="date" name="end_date" id="end_date" class="form-control rounded-md" value="{{ end_date_filter }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
 
-                    {# Display Django messages #}
-                    {% if messages %}
-                        <ul class="messages list-unstyled px-0 mx-0">
-                            {% for message in messages %}
-                                <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
-                                    {{ message }}
-                                </li>
-                            {% endfor %}
-                        </ul>
-                    {% endif %}
-
-                    {% if commission_data %}
-                        {% for data in commission_data %}
-                        <div class="mb-4 p-3 bg-light rounded-3 shadow-sm">
-                            <h4 class="fw-bold text-secondary">Commission Period: {{ data.start_date|date:"M d, Y" }} - {{ data.end_date|date:"M d, Y" }}</h4>
-                            <ul class="list-group list-group-flush">
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    Total Turnover:
-                                    <span class="fw-bold">₦{{ data.total_turnover|floatformat:2 }}</span>
-                                </li>
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    Total Winnings Paid:
-                                    <span class="fw-bold">₦{{ data.total_winnings|floatformat:2 }}</span>
-                                </li>
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    Gross Gaming Revenue (GGR):
-                                    <span class="fw-bold">₦{{ data.ggr|floatformat:2 }}</span>
-                                </li>
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    Commission Rate:
-                                    <span class="fw-bold">{{ data.commission_rate|floatformat:2 }}%</span>
-                                </li>
-                                <li class="list-group-item d-flex justify-content-between align-items-center bg-primary text-white rounded-bottom">
-                                    <strong>Your Commission Amount:</strong>
-                                    <strong class="fs-5">₦{{ data.commission_amount|floatformat:2 }}</strong>
-                                </li>
-                            </ul>
-                        </div>
-                        {% endfor %}
-                    {% else %}
-                        <p class="text-center text-muted">No commission data available for this report within the selected period.</p>
-                    {% endif %}
-
-                    <div class="text-center mt-4">
-                        <a href="{% url 'betting:agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
-                    </div>
-
-                </div>
+    <!-- Summary -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm text-center p-3">
+                <h6 class="text-muted">Total Paid</h6>
+                <h4 class="text-success fw-bold">₦{{ summary.total_paid|default:0|floatformat:2 }}</h4>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm text-center p-3">
+                <h6 class="text-muted">Outstanding</h6>
+                <h4 class="text-warning fw-bold">₦{{ summary.outstanding|default:0|floatformat:2 }}</h4>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm text-center p-3">
+                <h6 class="text-muted">Total GGR/NGR</h6>
+                <h4 class="text-primary fw-bold">₦{{ summary.total_ggr|default:0|floatformat:2 }}</h4>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm text-center p-3">
+                <h6 class="text-muted">Payout Ratio</h6>
+                <h4 class="text-info fw-bold">{{ summary.payout_ratio|default:0 }}%</h4>
             </div>
         </div>
     </div>
+
+    <!-- Commission Table -->
+    {% if commission_data %}
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                {% if all_users %}
+                                <th>Agent</th>
+                                {% endif %}
+                                <th>Type</th>
+                                <th>Period</th>
+                                <th>GGR / NGR</th>
+                                <th>Commission</th>
+                                <th>Status</th>
+                                <th>Paid At</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for data in commission_data %}
+                            <tr>
+                                {% if all_users %}
+                                <td>
+                                    <div>{{ data.agent.email }}</div>
+                                    <small class="text-muted">{{ data.agent.get_user_type_display }}</small>
+                                </td>
+                                {% endif %}
+                                <td>{{ data.type }}</td>
+                                <td>{{ data.period }}</td>
+                                <td>₦{{ data.ggr|floatformat:2 }}</td>
+                                <td class="fw-bold text-success">₦{{ data.commission_amount|floatformat:2 }}</td>
+                                <td>
+                                    {% if data.status == 'paid' %}
+                                        <span class="badge bg-success">Paid</span>
+                                    {% else %}
+                                        <span class="badge bg-warning text-dark">Pending</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if data.paid_at %}
+                                        {{ data.paid_at|date:"Y-m-d H:i" }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <p class="text-center text-muted">No commission data available for this report based on current filters.</p>
+    {% endif %}
+
+    <div class="text-center mt-4">
+        {% if user.is_superuser or user.user_type == 'admin' %}
+             <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Admin Dashboard</a>
+        {% elif user.user_type == 'agent' %}
+             <a href="{% url 'betting:agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
+        {% elif user.user_type == 'super_agent' %}
+             <a href="{% url 'betting:super_agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
+        {% elif user.user_type == 'master_agent' %}
+             <a href="{% url 'betting:master_agent_dashboard' %}" class="btn btn-secondary rounded-pill px-4">Back to Dashboard</a>
+        {% endif %}
+    </div>
+
 </div>
 {% endblock %}

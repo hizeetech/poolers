@@ -1,4 +1,4 @@
-{% extends 'betting/base.html' %} {% load static %} {% block title %}Agent/Cashier Dashboard - Pool Betting{% endblock %} {% block content %}
+{% extends 'betting/base.html' %} {% load static betting_extras %} {% block title %}Agent/Cashier Dashboard - Pool Betting{% endblock %} {% block content %}
 <div class="container mt-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary">
@@ -45,27 +45,71 @@
         </div>
     </div>
 
-    {% if user.user_type == 'agent' %}
     <div class="row mb-4">
         <div class="col-md-6 mb-3">
             <div class="card shadow-sm h-100 rounded-3">
                 <div class="card-body">
-                    <h5 class="card-title text-muted">Cashiers in Downline</h5>
-                    <p class="card-text fs-3 fw-bold">{{ total_downline_cashiers }}</p>
+                    <h5 class="card-title text-muted">Pending Commission</h5>
+                    <p class="card-text fs-3 fw-bold text-warning">₦{{ pending_commission|floatformat:2 }}</p>
                 </div>
             </div>
         </div>
         <div class="col-md-6 mb-3">
             <div class="card shadow-sm h-100 rounded-3">
                 <div class="card-body">
-                    <h5 class="card-title text-muted">Players in Downline</h5>
-                    <p class="card-text fs-3 fw-bold">{{ total_downline_players }}</p>
+                    <div class="d-flex justify-content-between align-items-start">
+                        <h5 class="card-title text-muted">Total Commission Paid</h5>
+                        <a href="{% url 'betting:agent_commission_report' %}" class="btn btn-sm btn-outline-primary">View Report</a>
+                    </div>
+                    <p class="card-text fs-3 fw-bold text-success">₦{{ total_commission_paid|floatformat:2 }}</p>
                 </div>
             </div>
         </div>
     </div>
 
-    <h3 class="fw-bold text-secondary mb-3">Downline Users (Directly under you)</h3>
+    {% if user.user_type == 'agent' or user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
+    <div class="row">
+        <!-- Card 1: Total Downline Users -->
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm h-100 rounded-3 border-start border-primary border-4">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">Downline Users</h6>
+                    <h2 class="card-title fw-bold text-primary">{{ total_downline_users }}</h2>
+                </div>
+            </div>
+        </div>
+        <!-- Card 2: Total Turnover -->
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm h-100 rounded-3 border-start border-success border-4">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">Total Turnover (Sales)</h6>
+                    <h2 class="card-title fw-bold text-success">₦{{ total_downline_turnover|floatformat:2 }}</h2>
+                </div>
+            </div>
+        </div>
+        <!-- Card 3: Total Winnings Paid -->
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm h-100 rounded-3 border-start border-danger border-4">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">Total Winnings</h6>
+                    <h2 class="card-title fw-bold text-danger">₦{{ total_downline_winnings|floatformat:2 }}</h2>
+                </div>
+            </div>
+        </div>
+        <!-- Card 4: GGR -->
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm h-100 rounded-3 border-start border-warning border-4">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">GGR (Profit)</h6>
+                    <h2 class="card-title fw-bold text-warning">₦{{ downline_ggr|floatformat:2 }}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if user.user_type == 'agent' or user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
+    <h3 class="fw-bold text-secondary mt-5 mb-3">Downline Users (Directly under you)</h3>
     {% if downline_users %}
     <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
         <table class="table table-hover align-middle mb-0">
@@ -93,37 +137,64 @@
     <p class="alert alert-info rounded-3 shadow-sm">No direct downline users found.</p>
     {% endif %}
 
-    <h3 class="fw-bold text-secondary mt-5 mb-3">Downline Bet Tickets</h3>
-    {% if downline_bet_tickets %}
-    <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th scope="col">Ticket ID</th>
-                    <th scope="col">User</th>
-                    <th scope="col">Stake</th>
-                    <th scope="col">Potential Winning</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Placed At</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for ticket in downline_bet_tickets %}
-                <tr>
-                    <td>{{ ticket.id|stringformat:"s"|slice:":8" }}...</td>
-                    <td>{{ ticket.user.email }}</td>
-                    <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
-                    <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
-                    <td><span class="badge bg-{{ ticket.status|lower }}">{{ ticket.status|capfirst }}</span></td>
-                    <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
+        <h3 class="fw-bold text-secondary mb-0">Downline Bet Tickets</h3>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#downlineTicketsCollapse" aria-expanded="true" aria-controls="downlineTicketsCollapse">
+            <i class="fas fa-chevron-down"></i> Toggle
+        </button>
     </div>
-    {% else %}
-    <p class="alert alert-info rounded-3 shadow-sm">No downline bet tickets found.</p>
-    {% endif %} {% if show_reports %}
+
+    <div class="collapse show" id="downlineTicketsCollapse">
+        <!-- Filter Controls -->
+        <div class="row g-3 mb-3">
+            <div class="col-md-4">
+                <input type="text" id="ticketSearchInput" class="form-control" placeholder="Search Ticket ID or User...">
+            </div>
+            <div class="col-md-3">
+                <select id="ticketStatusFilter" class="form-select">
+                    <option value="all">All Statuses</option>
+                    <option value="won">Won</option>
+                    <option value="lost">Lost</option>
+                    <option value="pending">Pending</option>
+                    <option value="running">Running</option>
+                    <option value="void">Void</option>
+                </select>
+            </div>
+        </div>
+
+        {% if downline_bet_tickets %}
+        <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col">Ticket ID</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Stake</th>
+                        <th scope="col">Potential Winning</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Placed At</th>
+                    </tr>
+                </thead>
+                <tbody id="downlineTicketsBody">
+                    {% for ticket in downline_bet_tickets %}
+                    <tr class="ticket-row" data-status="{{ ticket.status|lower }}">
+                        <td>{{ ticket.ticket_id }}</td>
+                        <td>{{ ticket.user.email }}</td>
+                        <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
+                        <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
+                        <td><span class="fw-bold {{ ticket.status|status_color_class }}">{{ ticket.status|capfirst }}</span></td>
+                        <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="alert alert-info rounded-3 shadow-sm">No downline bet tickets found.</p>
+        {% endif %} 
+    </div>
+    
+    {% if show_reports %}
     <h3 class="fw-bold text-secondary mt-5 mb-3">Reports</h3>
     <div class="row">
         <div class="col-md-6 mb-3">
@@ -131,7 +202,7 @@
                 <div class="card-body text-center">
                     <h5 class="card-title">Wallet Transaction Report</h5>
                     <p class="card-text text-muted">View all wallet credit/debit transactions.</p>
-                    <a href="{% url 'agent_wallet_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
+                    <a href="{% url 'betting:agent_wallet_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
                 </div>
             </div>
         </div>
@@ -140,7 +211,7 @@
                 <div class="card-body text-center">
                     <h5 class="card-title">Sales & Winnings Report</h5>
                     <p class="card-text text-muted">Analyze turnover, winnings, and losses.</p>
-                    <a href="{% url 'agent_sales_winnings_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
+                    <a href="{% url 'betting:agent_sales_winnings_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
                 </div>
             </div>
         </div>
@@ -149,22 +220,46 @@
                 <div class="card-body text-center">
                     <h5 class="card-title">Commission Report</h5>
                     <p class="card-text text-muted">Calculate your commission based on GGR.</p>
-                    <a href="{% url 'agent_commission_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
+                    <a href="{% url 'betting:agent_commission_report' %}" class="btn btn-outline-primary rounded-pill mt-3">View Report</a>
                 </div>
             </div>
         </div>
         <div class="col-md-6 mb-3">
             <div class="card shadow-sm h-100 rounded-3">
                 <div class="card-body text-center">
-                    <h5 class="card-title">Delete Bet Tickets</h5>
-                    <p class="card-text text-muted">Initiate deletion of bet tickets for your downlines.</p>
-                    <a href="{% url 'delete_bet_ticket' %}" class="btn btn-outline-danger rounded-pill mt-3">Delete Tickets</a>
+                    <h5 class="card-title">Void/Check Bet Tickets</h5>
+                    <p class="card-text text-muted">View and manage tickets (Void/Check Status).</p>
+                    <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-outline-danger rounded-pill mt-3">Check/Void Tickets</a>
                 </div>
             </div>
         </div>
     </div>
     {% endif %} {% else %} {# For Cashier #}
-    <h3 class="fw-bold text-secondary mt-5 mb-3">My Bet Tickets</h3>
+    <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
+        <h3 class="fw-bold text-secondary mb-0">My Bet Tickets</h3>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#myTicketsCollapse" aria-expanded="true" aria-controls="myTicketsCollapse">
+            <i class="fas fa-chevron-down"></i> Toggle
+        </button>
+    </div>
+
+    <div class="collapse show" id="myTicketsCollapse">
+        <!-- Filter Controls -->
+        <div class="row g-3 mb-3">
+            <div class="col-md-4">
+                <input type="text" id="ticketSearchInput" class="form-control" placeholder="Search Ticket ID or Status...">
+            </div>
+            <div class="col-md-3">
+                <select id="ticketStatusFilter" class="form-select">
+                    <option value="all">All Statuses</option>
+                    <option value="won">Won</option>
+                    <option value="lost">Lost</option>
+                    <option value="pending">Pending</option>
+                    <option value="running">Running</option>
+                    <option value="void">Void</option>
+                </select>
+            </div>
+        </div>
+
     {% if downline_bet_tickets %} {# This will be just the cashier's own tickets now #}
     <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
         <table class="table table-hover align-middle mb-0">
@@ -177,13 +272,13 @@
                     <th scope="col">Placed At</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="downlineTicketsBody">
                 {% for ticket in downline_bet_tickets %}
-                <tr>
-                    <td>{{ ticket.id|stringformat:"s"|slice:":8" }}...</td>
+                <tr class="ticket-row" data-status="{{ ticket.status|lower }}">
+                    <td>{{ ticket.ticket_id }}</td>
                     <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
                     <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
-                    <td><span class="badge bg-{{ ticket.status|lower }}">{{ ticket.status|capfirst }}</span></td>
+                    <td><span class="fw-bold {{ ticket.status|status_color_class }}">{{ ticket.status|capfirst }}</span></td>
                     <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
                 </tr>
                 {% endfor %}
@@ -192,7 +287,62 @@
     </div>
     {% else %}
     <p class="alert alert-info rounded-3 shadow-sm">No bet tickets found.</p>
-    {% endif %} {% endif %}
+    {% endif %}
+    </div> 
+    
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100 rounded-3">
+                 <div class="card-body text-center">
+                    <h5 class="card-title">Void/Check Bet Tickets</h5>
+                    <p class="card-text text-muted">View and manage tickets (Void/Check Status).</p>
+                    <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-outline-danger rounded-pill mt-3">Check/Void Tickets</a>
+                 </div>
+            </div>
+        </div>
+    </div>
+    
+    {% endif %}
 
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const searchInput = document.getElementById('ticketSearchInput');
+        const statusFilter = document.getElementById('ticketStatusFilter');
+        const tableBody = document.getElementById('downlineTicketsBody');
+        
+        if (!tableBody) return; // Exit if no tickets table
+        
+        const tableRows = tableBody.querySelectorAll('.ticket-row');
+
+        function filterTickets() {
+            const searchTerm = searchInput.value.toLowerCase();
+            const statusValue = statusFilter.value.toLowerCase();
+
+            tableRows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                const status = row.getAttribute('data-status');
+                
+                // Check status match
+                let matchesStatus = (statusValue === 'all');
+                if (!matchesStatus) {
+                    matchesStatus = (status === statusValue);
+                }
+                
+                // Check search term match
+                const matchesSearch = text.includes(searchTerm);
+
+                if (matchesSearch && matchesStatus) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+
+        if(searchInput) searchInput.addEventListener('keyup', filterTickets);
+        if(statusFilter) statusFilter.addEventListener('change', filterTickets);
+    });
+</script>
 {% endblock %}

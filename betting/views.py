@@ -24,6 +24,7 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog
 )
+from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from .forms import (
     UserRegistrationForm, LoginForm, PasswordChangeForm, ProfileEditForm, 
     InitiateDepositForm, WithdrawFundsForm, WalletTransferForm,
@@ -1077,10 +1078,43 @@ def change_password(request):
     return render(request, 'betting/change_password.html', {'form': form})
 
 
+@login_required
+def user_dashboard(request):
+    """
+    Unified dashboard entry point. Redirects special roles to their dashboards,
+    and renders the standard user dashboard for players.
+    """
+    user = request.user
+    
+    # Redirect special users to their specific dashboards
+    if user.is_superuser or user.user_type == 'admin':
+        return redirect('betting:admin_dashboard')
+    elif user.user_type == 'master_agent':
+        return redirect('betting:master_agent_dashboard')
+    elif user.user_type == 'super_agent':
+        return redirect('betting:super_agent_dashboard')
+    elif user.user_type == 'agent' or user.user_type == 'cashier':
+        return redirect('betting:agent_dashboard')
+        
+    # Standard User / Player Dashboard Logic
+    recent_tickets = BetTicket.objects.filter(user=user).order_by('-placed_at')[:10]
+    active_bets_count = BetTicket.objects.filter(user=user, status='pending').count()
+    
+    # Calculate Total Winnings (only WON tickets)
+    total_winnings = BetTicket.objects.filter(user=user, status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal('0.00')
+
+    context = {
+        'recent_tickets': recent_tickets,
+        'active_bets_count': active_bets_count,
+        'total_winnings': total_winnings,
+    }
+    return render(request, 'betting/user_dashboard.html', context)
+
+
 # --- Agent/Super Agent/Master Agent specific Views ---
 
 @login_required
-@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent'])
+@user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent', 'cashier'])
 def agent_dashboard(request):
     user = request.user
     today = timezone.now().date()
@@ -1101,6 +1135,9 @@ def agent_dashboard(request):
         )
     elif user.user_type == 'agent':
         downline_users_qs = User.objects.filter(agent=user)
+    elif user.user_type == 'cashier':
+        # Cashiers see their own tickets, but have no downline users
+        downline_users_qs = User.objects.none()
     else:
         downline_users_qs = User.objects.none()
 
@@ -1109,9 +1146,13 @@ def agent_dashboard(request):
     # Calculate GGR for downline (sum of GGR from their bet tickets)
     # GGR is Turnover - Winnings
     # We need to consider all bet tickets placed by downline users
-    downline_bet_tickets = BetTicket.objects.filter(
-        user__in=downline_users_qs
-    ).exclude(status='deleted')
+    if user.user_type == 'cashier':
+        # Cashier sees their own tickets
+        downline_bet_tickets = BetTicket.objects.filter(user=user).exclude(status='deleted')
+    else:
+        downline_bet_tickets = BetTicket.objects.filter(
+            user__in=downline_users_qs
+        ).exclude(status='deleted')
 
     # Aggregate total turnover and winnings for downline
     total_downline_turnover = downline_bet_tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
@@ -1119,18 +1160,18 @@ def agent_dashboard(request):
     
     downline_ggr = total_downline_turnover - total_downline_winnings
 
-    # Commission calculations (simplified example - actual logic might be complex based on rules)
-    # Assuming commission rate is stored in SystemSetting or per user type
-    commission_rate = Decimal('0.05') # Example: 5%
-    try:
-        system_setting = SystemSetting.objects.get(key='default_commission_rate') # Changed to 'key'
-        commission_rate = Decimal(system_setting.value) # Convert value to Decimal
-    except (SystemSetting.DoesNotExist, InvalidOperation):
-        logger.warning("InvalidOperation: default_commission_rate in SystemSetting is not a valid decimal or not found. Using 0.05.")
-        pass # Use default if setting not found or invalid
-    
+    # Commission calculations
+    total_commission_paid = Decimal('0.00')
+    pending_commission = Decimal('0.00')
 
-    earned_commission = downline_ggr * commission_rate
+    if user.user_type == 'agent':
+        weekly_comms = WeeklyAgentCommission.objects.filter(agent=user)
+        total_commission_paid = weekly_comms.filter(status='paid').aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
+        pending_commission = weekly_comms.filter(status='pending').aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
+    elif user.user_type in ['super_agent', 'master_agent']:
+        monthly_comms = MonthlyNetworkCommission.objects.filter(user=user)
+        total_commission_paid = monthly_comms.filter(status='paid').aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
+        pending_commission = monthly_comms.filter(status='pending').aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
 
     # Top performing users/agents (example: based on GGR)
     # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
@@ -1152,13 +1193,18 @@ def agent_dashboard(request):
 
     context = {
         'user': user,
+        'downline_users': downline_users_qs, # Pass the QuerySet
+        'downline_bet_tickets': downline_bet_tickets.order_by('-placed_at')[:50], # Pass the QuerySet, sliced
         'total_downline_users': total_downline_users,
         'total_downline_turnover': total_downline_turnover,
+        'total_downline_stake': total_downline_turnover, # Alias for total stake
         'total_downline_winnings': total_downline_winnings,
         'downline_ggr': downline_ggr,
-        'earned_commission': earned_commission,
+        'total_commission_paid': total_commission_paid,
+        'pending_commission': pending_commission,
         'top_performers': top_performers,
         'recent_downline_transactions': recent_downline_transactions,
+        'show_reports': True,
     }
     return render(request, 'betting/agent_dashboard.html', context)
 
@@ -1363,11 +1409,11 @@ def agent_wallet_report(request):
         'all_users': report_users_qs.order_by('email'), # For the filter dropdown
         'current_user_filter': user_filter,
     }
-    return render(request, 'betting/wallet_report.html', context)
+    return render(request, 'betting/reports/wallet_report.html', context)
 
 
 @login_required
-@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@user_passes_test(lambda u: u.is_superuser or u.user_type in ['admin', 'agent', 'super_agent', 'master_agent'])
 def agent_sales_winnings_report(request):
     user = request.user
     user_filter = request.GET.get('user', 'all')
@@ -1435,11 +1481,11 @@ def agent_sales_winnings_report(request):
         'start_date_filter': start_date.isoformat(),
         'end_date_filter': end_date.isoformat(),
     }
-    return render(request, 'betting/sales_winnings_report.html', context)
+    return render(request, 'betting/reports/sales_winnings_report.html', context)
 
 
 @login_required
-@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@user_passes_test(lambda u: u.is_superuser or u.user_type in ['admin', 'agent', 'super_agent', 'master_agent'])
 def agent_commission_report(request):
     user = request.user
     agent_filter_id = request.GET.get('user', 'all')
@@ -1449,77 +1495,208 @@ def agent_commission_report(request):
     end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
     start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
 
-    commission_data = []
-    agents_to_report_on = User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email')
-
-    if agent_filter_id != 'all':
-        try:
-            selected_agent = User.objects.get(id=int(agent_filter_id))
-            agents_to_report_on = User.objects.filter(pk=selected_agent.pk)
-        except (ValueError, User.DoesNotExist):
-            agents_to_report_on = User.objects.none() 
-            messages.error(request, "Selected agent not found.")
-
-    for agent_user in agents_to_report_on:
-        downline_for_commission = User.objects.none()
-        if agent_user.user_type == 'master_agent':
-            downline_for_commission = User.objects.filter(
-                Q(master_agent=agent_user) |
-                Q(super_agent__master_agent=agent_user) |
-                Q(agent__super_agent__master_agent=agent_user)
-            )
-        elif agent_user.user_type == 'super_agent':
-            downline_for_commission = User.objects.filter(
-                Q(super_agent=agent_user) |
-                Q(agent__super_agent=agent_user)
-            )
-        elif agent_user.user_type == 'agent':
-            downline_for_commission = User.objects.filter(agent=agent_user)
+    # Determine which agents/users to fetch data for
+    all_users = None
+    if user.is_superuser or user.user_type == 'admin':
+        all_users = User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email')
         
-        bets_in_period = BetTicket.objects.filter(
-            user__in=downline_for_commission,
-            placed_at__date__gte=start_date,
-            placed_at__date__lt=end_date + timedelta(days=1)
-        ).exclude(status='deleted')
+    commission_data = []
 
-        total_turnover = bets_in_period.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-        total_winnings = bets_in_period.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+    # Fetch Weekly Commissions
+    weekly_qs = WeeklyAgentCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__start_date__lte=end_date
+    ).select_related('agent', 'period')
 
-        ggr = total_turnover - total_winnings
+    if user.is_superuser or user.user_type == 'admin':
+        if agent_filter_id != 'all':
+            weekly_qs = weekly_qs.filter(agent__id=agent_filter_id)
+    else:
+        weekly_qs = weekly_qs.filter(agent=user)
 
-        commission_rate = Decimal('0.00') 
-        try:
-            if agent_user.user_type == 'master_agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='master_agent_commission_rate').value)
-            elif agent_user.user_type == 'super_agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='super_agent_commission_rate').value)
-            elif agent_user.user_type == 'agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='agent_commission_rate').value)
-        except (SystemSetting.DoesNotExist, InvalidOperation):
-            logger.warning(f"Commission rate setting not found or invalid for {agent_user.user_type}. Using 0%.")
-
-        commission = ggr * commission_rate
-
+    for wc in weekly_qs:
         commission_data.append({
-            'agent': agent_user,
-            'start_date': start_date,
-            'end_date': end_date,
-            'total_turnover': total_turnover,
-            'total_winnings': total_winnings,
-            'ggr': ggr,
-            'commission_rate': commission_rate * 100, 
-            'commission_amount': commission,
+            'agent': wc.agent,
+            'period': str(wc.period),
+            'type': 'Weekly Agent Commission',
+            'commission_amount': wc.commission_total_amount,
+            'status': wc.status,
+            'paid_at': wc.paid_at,
+            'ggr': wc.ggr
+        })
+
+    # Fetch Monthly Network Commissions
+    monthly_qs = MonthlyNetworkCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__start_date__lte=end_date
+    ).select_related('user', 'period')
+
+    if user.is_superuser or user.user_type == 'admin':
+        if agent_filter_id != 'all':
+            monthly_qs = monthly_qs.filter(user__id=agent_filter_id)
+    else:
+        monthly_qs = monthly_qs.filter(user=user)
+
+    for mc in monthly_qs:
+        commission_data.append({
+            'agent': mc.user,
+            'period': str(mc.period),
+            'type': f"Monthly {mc.role.replace('_', ' ').title()} Commission",
+            'commission_amount': mc.commission_amount,
+            'status': mc.status,
+            'paid_at': mc.paid_at,
+            'ggr': mc.ngr # Use NGR as GGR equivalent
         })
     
+    # Sort by date (descending) - tricky as period string might not sort well, but good enough
+    commission_data.sort(key=lambda x: x['period'], reverse=True)
+
+    # Calculate Summary
+    total_paid = sum(c['commission_amount'] for c in commission_data if c['status'] == 'paid')
+    outstanding = sum(c['commission_amount'] for c in commission_data if c['status'] == 'pending')
+    total_ggr = sum(c['ggr'] for c in commission_data)
+    
+    payout_ratio = Decimal(0)
+    total_comm = total_paid + outstanding
+    if total_ggr > 0:
+        payout_ratio = (total_comm / total_ggr * 100).quantize(Decimal('0.01'))
+
     context = {
-        'report_title': 'Agent/Admin Commission Report',
+        'report_title': 'Commission Report',
         'commission_data': commission_data,
-        'all_users': agents_to_report_on, # Only show agents current user can report on
+        'all_users': all_users, 
         'current_user_filter': agent_filter_id,
         'start_date_filter': start_date.isoformat(),
         'end_date_filter': end_date.isoformat(),
+        'summary': {
+            'total_paid': total_paid,
+            'outstanding': outstanding,
+            'total_ggr': total_ggr,
+            'payout_ratio': payout_ratio
+        }
     }
-    return render(request, 'betting/admin/commission_report.html', context)
+    return render(request, 'betting/reports/commission_report.html', context)
+
+
+@login_required
+@user_passes_test(is_admin)
+def admin_commission_financial_report(request):
+    """
+    Comprehensive financial report for Admin to track all commissions.
+    """
+    # Filter params
+    period_type = request.GET.get('period_type', 'all')
+    status = request.GET.get('status', 'all')
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+    user_search = request.GET.get('user_search', '')
+
+    end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
+    start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
+
+    weekly_qs = WeeklyAgentCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__end_date__lte=end_date
+    ).select_related('agent', 'period')
+    
+    monthly_qs = MonthlyNetworkCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__end_date__lte=end_date
+    ).select_related('user', 'period')
+
+    # Apply filters
+    if status != 'all':
+        weekly_qs = weekly_qs.filter(status=status)
+        monthly_qs = monthly_qs.filter(status=status)
+    if user_search:
+        weekly_qs = weekly_qs.filter(
+            Q(agent__email__icontains=user_search) | 
+            Q(agent__first_name__icontains=user_search) | 
+            Q(agent__last_name__icontains=user_search)
+        )
+        monthly_qs = monthly_qs.filter(
+            Q(user__email__icontains=user_search) | 
+            Q(user__first_name__icontains=user_search) | 
+            Q(user__last_name__icontains=user_search)
+        )
+
+    # Aggregates
+    weekly_stats = weekly_qs.aggregate(
+        total_paid=Sum('commission_total_amount', filter=Q(status='paid')),
+        total_pending=Sum('commission_total_amount', filter=Q(status='pending')),
+        total_ggr=Sum('ggr'),
+        total_stake=Sum('total_stake')
+    )
+    
+    monthly_stats = monthly_qs.aggregate(
+        total_paid=Sum('commission_amount', filter=Q(status='paid')),
+        total_pending=Sum('commission_amount', filter=Q(status='pending')),
+        total_ngr=Sum('ngr')
+    )
+    
+    def get_val(val): return val or Decimal('0.00')
+    
+    summary = {
+        'total_weekly_paid': get_val(weekly_stats['total_paid']),
+        'total_weekly_pending': get_val(weekly_stats['total_pending']),
+        'total_weekly_ggr': get_val(weekly_stats['total_ggr']),
+        'total_weekly_stake': get_val(weekly_stats['total_stake']),
+        
+        'total_monthly_paid': get_val(monthly_stats['total_paid']),
+        'total_monthly_pending': get_val(monthly_stats['total_pending']),
+        'total_monthly_ngr': get_val(monthly_stats['total_ngr']),
+        
+        'grand_total_paid': get_val(weekly_stats['total_paid']) + get_val(monthly_stats['total_paid']),
+        'grand_total_pending': get_val(weekly_stats['total_pending']) + get_val(monthly_stats['total_pending']),
+    }
+
+    # Prepare list for table
+    commission_list = []
+    if period_type in ['all', 'weekly']:
+        for item in weekly_qs:
+            commission_list.append({
+                'type': 'Weekly (Agent)',
+                'user': item.agent,
+                'period': item.period,
+                'amount': item.commission_total_amount,
+                'status': item.status,
+                'basis_amount': item.ggr, # Show GGR as basis
+                'created_at': item.created_at
+            })
+            
+    if period_type in ['all', 'monthly']:
+        for item in monthly_qs:
+            commission_list.append({
+                'type': 'Monthly (Network)',
+                'user': item.user,
+                'period': item.period,
+                'amount': item.commission_amount,
+                'status': item.status,
+                'basis_amount': item.ngr, # Show NGR as basis
+                'created_at': item.created_at
+            })
+            
+    # Sort by period start date desc
+    commission_list.sort(key=lambda x: x['period'].start_date, reverse=True)
+    
+    # Pagination
+    paginator = Paginator(commission_list, 20)
+    page_number = request.GET.get('page')
+    try:
+        page_obj = paginator.page(page_number)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+
+    context = {
+        'summary': summary,
+        'commissions': page_obj,
+        'filter_params': request.GET,
+        'start_date_filter': start_date.isoformat(),
+        'end_date_filter': end_date.isoformat(),
+    }
+    return render(request, 'betting/reports/admin_commission_financial_report.html', context)
 
 
 # --- Admin Dashboard & Management Views ---
@@ -2572,6 +2749,8 @@ def admin_sales_winnings_report(request):
 @login_required
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 def admin_commission_report(request):
+    from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
+    
     report_title = "Admin Commission Report"
     agent_filter_id = request.GET.get('user', 'all')
     start_date_str = request.GET.get('start_date')
@@ -2580,75 +2759,75 @@ def admin_commission_report(request):
     end_date = date.fromisoformat(end_date_str) if end_date_str else timezone.now().date()
     start_date = date.fromisoformat(start_date_str) if start_date_str else end_date - timedelta(days=30)
 
-    commission_data = []
-    agents_to_report_on = User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email')
+    # Fetch Commissions
+    weekly_comms = WeeklyAgentCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__end_date__lte=end_date
+    ).select_related('agent', 'period')
+    
+    monthly_comms = MonthlyNetworkCommission.objects.filter(
+        period__end_date__gte=start_date,
+        period__end_date__lte=end_date
+    ).select_related('user', 'period')
 
     if agent_filter_id != 'all':
         try:
-            selected_agent = User.objects.get(id=int(agent_filter_id))
-            agents_to_report_on = User.objects.filter(pk=selected_agent.pk)
-        except (ValueError, User.DoesNotExist):
-            agents_to_report_on = User.objects.none() 
-            messages.error(request, "Selected agent not found.")
+            user_id = int(agent_filter_id)
+            weekly_comms = weekly_comms.filter(agent__id=user_id)
+            monthly_comms = monthly_comms.filter(user__id=user_id)
+        except ValueError:
+            pass
 
-    for agent_user in agents_to_report_on:
-        downline_for_commission = User.objects.none()
-        if agent_user.user_type == 'master_agent':
-            downline_for_commission = User.objects.filter(
-                Q(master_agent=agent_user) |
-                Q(super_agent__master_agent=agent_user) |
-                Q(agent__super_agent__master_agent=agent_user)
-            )
-        elif agent_user.user_type == 'super_agent':
-            downline_for_commission = User.objects.filter(
-                Q(super_agent=agent_user) |
-                Q(agent__super_agent=agent_user)
-            )
-        elif agent_user.user_type == 'agent':
-            downline_for_commission = User.objects.filter(agent=agent_user)
-        
-        bets_in_period = BetTicket.objects.filter(
-            user__in=downline_for_commission,
-            placed_at__date__gte=start_date,
-            placed_at__date__lt=end_date + timedelta(days=1)
-        ).exclude(status='deleted')
-
-        total_turnover = bets_in_period.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-        total_winnings = bets_in_period.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
-
-        ggr = total_turnover - total_winnings
-
-        commission_rate = Decimal('0.00') 
-        try:
-            if agent_user.user_type == 'master_agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='master_agent_commission_rate').value)
-            elif agent_user.user_type == 'super_agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='super_agent_commission_rate').value)
-            elif agent_user.user_type == 'agent':
-                commission_rate = Decimal(SystemSetting.objects.get(key='agent_commission_rate').value)
-        except (SystemSetting.DoesNotExist, InvalidOperation):
-            logger.warning(f"Commission rate setting not found or invalid for {agent_user.user_type}. Using 0%.")
-
-        commission = ggr * commission_rate
-
-        commission_data.append({
-            'agent': agent_user,
-            'start_date': start_date,
-            'end_date': end_date,
-            'total_turnover': total_turnover,
-            'total_winnings': total_winnings,
-            'ggr': ggr,
-            'commission_rate': commission_rate * 100, 
-            'commission_amount': commission,
-        })
+    # Aggregate Data
+    commission_data = []
     
+    # Process Weekly
+    for wc in weekly_comms:
+        commission_data.append({
+            'agent': wc.agent,
+            'type': 'Weekly (Agent)',
+            'period': str(wc.period),
+            'ggr': wc.ggr,
+            'commission_amount': wc.commission_total_amount,
+            'status': wc.status,
+            'paid_at': wc.paid_at
+        })
+
+    # Process Monthly
+    for mc in monthly_comms:
+        commission_data.append({
+            'agent': mc.user,
+            'type': f"Monthly ({mc.role.replace('_', ' ').title()})",
+            'period': str(mc.period),
+            'ggr': mc.ngr, # Use NGR as GGR equivalent for display
+            'commission_amount': mc.commission_amount,
+            'status': mc.status,
+            'paid_at': mc.paid_at
+        })
+
+    # Summary Stats
+    total_paid = sum(c['commission_amount'] for c in commission_data if c['status'] == 'paid')
+    outstanding = sum(c['commission_amount'] for c in commission_data if c['status'] == 'pending')
+    total_ggr = sum(c['ggr'] for c in commission_data)
+    
+    payout_ratio = Decimal(0)
+    total_comm = total_paid + outstanding
+    if total_ggr > 0:
+        payout_ratio = (total_comm / total_ggr * 100).quantize(Decimal('0.01'))
+
     context = {
-        'report_title': 'Agent/Admin Commission Report',
+        'report_title': report_title,
         'commission_data': commission_data,
-        'all_users': agents_to_report_on, # Only show agents current user can report on
+        'all_users': User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).order_by('email'),
         'current_user_filter': agent_filter_id,
         'start_date_filter': start_date.isoformat(),
         'end_date_filter': end_date.isoformat(),
+        'summary': {
+            'total_paid': total_paid,
+            'outstanding': outstanding,
+            'total_ggr': total_ggr,
+            'payout_ratio': payout_ratio
+        }
     }
     return render(request, 'betting/admin/commission_report.html', context)
 

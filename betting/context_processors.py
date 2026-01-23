@@ -1,5 +1,5 @@
 # betting/context_processors.py
-from .models import Wallet
+from .models import Wallet, SiteConfiguration
 
 def wallet_balance(request):
     """
@@ -15,3 +15,6 @@ def wallet_balance(request):
         except Wallet.DoesNotExist:
             balance = None # User has no wallet yet, or an error occurred
     return {'user_wallet_balance': balance}
+
+def site_configuration(request):
+    return {'site_config': SiteConfiguration.load()}

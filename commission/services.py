@@ -5,6 +5,7 @@ from betting.models import Wallet, Transaction, BetTicket
 from django.db.models import Sum, Q
 from decimal import Decimal
 import logging
+from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +270,71 @@ def calculate_monthly_network_commission(user, period):
     return record
 
 
+class CommissionCalculationService:
+    @staticmethod
+    def calculate_weekly_commissions(period):
+        User = get_user_model()
+        agents = User.objects.filter(user_type='agent', is_active=True)
+        count = 0
+        for agent in agents:
+            try:
+                calculate_weekly_agent_commission(agent, period)
+                count += 1
+            except Exception as e:
+                logger.error(f"Failed to calculate commission for agent {agent.email}: {e}")
+        
+        # Mark period as processed only if we did something (or even if 0 agents, it is technically processed)
+        period.is_processed = True
+        period.processed_at = timezone.now()
+        period.save()
+        return count
+
+    @staticmethod
+    def calculate_monthly_commissions(period):
+        User = get_user_model()
+        # Process Super Agents first
+        super_agents = User.objects.filter(user_type='super_agent', is_active=True)
+        for sa in super_agents:
+            try:
+                calculate_monthly_network_commission(sa, period)
+            except Exception as e:
+                logger.error(f"Failed to calculate commission for super agent {sa.email}: {e}")
+        
+        # Then Master Agents (they might depend on Super Agents' data if we structured it that way, 
+        # but the current logic sums payouts which are based on WeeklyAgentCommission, so order might not matter 
+        # unless we subtract Super Agent commissions from Master Agent NGR - which we DO in line 230+)
+        # So YES, Super Agents MUST be processed before Master Agents if Master Agent NGR depends on Super Agent payouts.
+        # But wait, line 230 sums `MonthlyNetworkCommission`. So yes, Super Agents must be calculated first.
+        
+        master_agents = User.objects.filter(user_type='master_agent', is_active=True)
+        for ma in master_agents:
+            try:
+                calculate_monthly_network_commission(ma, period)
+            except Exception as e:
+                logger.error(f"Failed to calculate commission for master agent {ma.email}: {e}")
+
+        period.is_processed = True
+        period.processed_at = timezone.now()
+        period.save()
+        return True
+
+class CommissionPayoutService:
+    @staticmethod
+    def process_weekly_payouts(period):
+        commissions = WeeklyAgentCommission.objects.filter(period=period, status='unpaid')
+        count = 0
+        for comm in commissions:
+            success, msg = pay_weekly_commission(comm)
+            if success:
+                count += 1
+        return count
+
+    @staticmethod
+    def process_monthly_payouts(period):
+        commissions = MonthlyNetworkCommission.objects.filter(period=period, status='unpaid')
+        count = 0
+        for comm in commissions:
+            success, msg = pay_monthly_network_commission(comm)
+            if success:
+                count += 1
+        return count

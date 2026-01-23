@@ -8,6 +8,12 @@ from decimal import Decimal
 from django.urls import path, reverse 
 from django.shortcuts import redirect 
 
+# Celery Beat and Results imports
+from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
+from django_celery_beat.admin import PeriodicTaskAdmin, ClockedScheduleAdmin
+from django_celery_results.models import TaskResult, GroupResult
+from django_celery_results.admin import TaskResultAdmin, GroupResultAdmin
+
 # Import your views for custom admin pages
 from . import views 
 
@@ -22,7 +28,8 @@ from .forms import (
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
-    BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection
+    BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
+    SiteConfiguration
 )
 
 
@@ -269,7 +276,7 @@ class CustomUserAdmin(UserAdmin):
                 ))
             
             elif request.user.user_type == 'agent':
-                return (obj.user_type in ['cashier', 'player'] and obj.agent == request.user)
+                return (obj.user_type in ['cashier', 'player'] and obj.user_type == 'cashier' and obj.agent == request.user)
             
             return False 
         
@@ -416,3 +423,27 @@ betting_admin_site.register(BonusRule)
 betting_admin_site.register(SystemSetting)
 betting_admin_site.register(UserWithdrawal)
 betting_admin_site.register(ActivityLog)
+
+# Register Celery Beat models
+betting_admin_site.register(PeriodicTask, PeriodicTaskAdmin)
+betting_admin_site.register(IntervalSchedule)
+betting_admin_site.register(CrontabSchedule)
+betting_admin_site.register(SolarSchedule)
+betting_admin_site.register(ClockedSchedule, ClockedScheduleAdmin)
+
+# Register Celery Results models
+betting_admin_site.register(TaskResult, TaskResultAdmin)
+betting_admin_site.register(GroupResult, GroupResultAdmin)
+
+# Site Configuration Admin
+class SiteConfigurationAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        if self.model.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+betting_admin_site.register(SiteConfiguration, SiteConfigurationAdmin)
+

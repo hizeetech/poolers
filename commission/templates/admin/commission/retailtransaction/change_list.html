@@ -50,6 +50,33 @@
 <div id="content-main">
     <h1>Retail Transactions Hierarchy</h1>
     
+    <!-- Custom Filter Form -->
+    <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+        <form method="get" style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+            <div>
+                <label for="start_date" style="font-weight: bold; margin-right: 5px;">Start Date:</label>
+                <input type="date" name="start_date" id="start_date" value="{{ start_date|default:'' }}" style="padding: 5px;">
+            </div>
+            
+            <div>
+                <label for="end_date" style="font-weight: bold; margin-right: 5px;">End Date:</label>
+                <input type="date" name="end_date" id="end_date" value="{{ end_date|default:'' }}" style="padding: 5px;">
+            </div>
+            
+            <div>
+                <label for="q" style="font-weight: bold; margin-right: 5px;">User Search:</label>
+                <input type="text" name="q" id="q" value="{{ search_query|default:'' }}" placeholder="Name or Email" style="padding: 5px; width: 200px;">
+            </div>
+            
+            <div>
+                <input type="submit" value="Filter" class="default" style="padding: 5px 15px; background: #417690; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                {% if start_date or end_date or search_query %}
+                <a href="?" style="margin-left: 10px; color: #666; text-decoration: none;">Clear Filters</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
     <div class="module">
         <!-- Header Row -->
         <div class="rt-row rt-header">

@@ -1,4 +1,4 @@
-{% extends 'betting/base.html' %} {% load static %} {% block title %}Welcome to PoolBetting{% endblock %} {% block content %}
+{% extends 'betting/base.html' %} {% load static %} {% block title %}Welcome to {{ site_config.site_name|default:"PoolBetting" }}{% endblock %} {% block content %}
 <div class="container text-center py-5">
     <h1 class="display-4 fw-bold text-dark mb-4 animate__animated animate__fadeInDown">
         Place Your Bets, Win Big!

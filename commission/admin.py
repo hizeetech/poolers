@@ -20,12 +20,51 @@ class RetailTransactionAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         hierarchy_data = []
         
-        master_agents = User.objects.filter(user_type='master_agent')
+        # Filter Parameters
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        search_query = request.GET.get('q')
+        
+        # Date Filters for Tickets
+        ticket_filters = {}
+        if start_date:
+            ticket_filters['placed_at__date__gte'] = start_date
+        if end_date:
+            ticket_filters['placed_at__date__lte'] = end_date
+            
+        # User Search Filter (Find relevant Master Agents)
+        ma_queryset = User.objects.filter(user_type='master_agent')
+        
+        if search_query:
+            # Find users matching query
+            found_users = User.objects.filter(
+                models.Q(email__icontains=search_query) | 
+                models.Q(first_name__icontains=search_query) | 
+                models.Q(last_name__icontains=search_query)
+            )
+            
+            ma_ids = set()
+            for user in found_users:
+                if user.user_type == 'master_agent':
+                    ma_ids.add(user.id)
+                elif user.user_type == 'super_agent' and user.master_agent:
+                    ma_ids.add(user.master_agent.id)
+                elif user.user_type == 'agent' and user.super_agent and user.super_agent.master_agent:
+                    ma_ids.add(user.super_agent.master_agent.id)
+                elif user.user_type == 'cashier' and user.agent and user.agent.super_agent and user.agent.super_agent.master_agent:
+                    ma_ids.add(user.agent.super_agent.master_agent.id)
+            
+            ma_queryset = ma_queryset.filter(id__in=ma_ids)
+
+        master_agents = ma_queryset
         
         for ma in master_agents:
             # MA Data
             # Tickets where user__agent__super_agent__master_agent = ma
             ma_tickets = BetTicket.objects.filter(user__agent__super_agent__master_agent=ma).exclude(status__in=['cancelled', 'deleted'])
+            if ticket_filters:
+                ma_tickets = ma_tickets.filter(**ticket_filters)
+
             ma_sales = ma_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
             ma_winnings = ma_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
             ma_ggr = ma_sales - ma_winnings
@@ -41,10 +80,19 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                 'super_agents': []
             }
             
+            # Filter children only if searching? 
+            # If I searched for a specific agent, I might want to see only that agent path?
+            # For now, let's show the full tree under the matched MA. 
+            # Optimization: If search_query exists, we could prune the tree.
+            # But let's stick to filtering the ROOT nodes first as per plan.
+            
             super_agents = User.objects.filter(user_type='super_agent', master_agent=ma)
             for sa in super_agents:
                 # SA Data
                 sa_tickets = BetTicket.objects.filter(user__agent__super_agent=sa).exclude(status__in=['cancelled', 'deleted'])
+                if ticket_filters:
+                    sa_tickets = sa_tickets.filter(**ticket_filters)
+
                 sa_sales = sa_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
                 sa_winnings = sa_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
                 sa_ggr = sa_sales - sa_winnings
@@ -64,6 +112,9 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                 for ag in agents:
                     # Agent Data
                     ag_tickets = BetTicket.objects.filter(user__agent=ag).exclude(status__in=['cancelled', 'deleted'])
+                    if ticket_filters:
+                        ag_tickets = ag_tickets.filter(**ticket_filters)
+
                     ag_sales = ag_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
                     ag_winnings = ag_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
                     ag_ggr = ag_sales - ag_winnings
@@ -83,6 +134,9 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                     for ca in cashiers:
                          # Cashier Data
                         ca_tickets = BetTicket.objects.filter(user=ca).exclude(status__in=['cancelled', 'deleted'])
+                        if ticket_filters:
+                            ca_tickets = ca_tickets.filter(**ticket_filters)
+
                         ca_sales = ca_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
                         ca_winnings = ca_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
                         ca_ggr = ca_sales - ca_winnings
@@ -104,6 +158,9 @@ class RetailTransactionAdmin(admin.ModelAdmin):
         extra_context = extra_context or {}
         extra_context['hierarchy_data'] = hierarchy_data
         extra_context['title'] = "Retail Transactions"
+        extra_context['start_date'] = start_date
+        extra_context['end_date'] = end_date
+        extra_context['search_query'] = search_query
         
         return super().changelist_view(request, extra_context=extra_context)
 

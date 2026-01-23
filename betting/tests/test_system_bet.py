@@ -1,7 +1,7 @@
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from .models import BettingPeriod, Fixture, Wallet, BetTicket
+from betting.models import BettingPeriod, Fixture, Wallet, BetTicket
 import json
 from decimal import Decimal
 import datetime
@@ -153,4 +153,4 @@ class SystemBetTestCase(TestCase):
         
         tickets = BetTicket.objects.filter(user=self.user)
         self.assertEqual(tickets.count(), 1)
-        self.assertAlmostEqual(float(tickets.first().total_odd), 1.5 * 3.2, places=2)
+        self.assertAlmostEqual(float(tickets.first().total_odd, 1.5 * 3.2, places=2))

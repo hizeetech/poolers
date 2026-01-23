@@ -12,6 +12,35 @@ from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.db import transaction
 
+class SiteConfiguration(models.Model):
+    site_name = models.CharField(max_length=255, default="PoolBetting")
+    logo = models.ImageField(upload_to='site_branding/', blank=True, null=True)
+    navbar_text_type = models.CharField(
+        max_length=10, 
+        choices=[('dark', 'Light Text (for Dark Backgrounds)'), ('light', 'Dark Text (for Light Backgrounds)')],
+        default='light',
+        help_text="Choose 'Light Text' if using a dark navbar color, and vice versa."
+    )
+    navbar_gradient_start = models.CharField(max_length=50, default="#ffffff", help_text="Gradient Start Color (Left/Logo side)")
+    navbar_gradient_end = models.CharField(max_length=50, default="#f8f9fa", help_text="Gradient End Color (Right side)")
+    navbar_link_hover_color = models.CharField(max_length=50, default="#007bff", help_text="Color of nav links on hover")
+    
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super(SiteConfiguration, self).save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, created = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "Site Configuration"
+
+    class Meta:
+        verbose_name = "Site Configuration"
+        verbose_name_plural = "Site Configuration"
+
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:

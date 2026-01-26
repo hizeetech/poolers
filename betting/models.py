@@ -15,6 +15,7 @@ from django.db import transaction
 class SiteConfiguration(models.Model):
     site_name = models.CharField(max_length=255, default="PoolBetting")
     logo = models.ImageField(upload_to='site_branding/', blank=True, null=True)
+    favicon = models.ImageField(upload_to='site_branding/', blank=True, null=True, help_text="Upload a favicon (small icon) for the browser tab.")
     navbar_text_type = models.CharField(
         max_length=10, 
         choices=[('dark', 'Light Text (for Dark Backgrounds)'), ('light', 'Dark Text (for Light Backgrounds)')],

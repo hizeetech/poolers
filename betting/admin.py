@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Q
+from django.db.models import Q, IntegerField
+from django.db.models.functions import Cast
 from django.utils import timezone
 from django.db import transaction as db_transaction
 from django.contrib import messages
@@ -437,7 +438,13 @@ class FixtureAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    ordering = ('-match_date', 'match_time')
+    ordering = ('serial_int',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            serial_int=Cast('serial_number', IntegerField())
+        ).order_by('serial_int')
 
     class Media:
         js = ('js/admin_fixture_toggle.js?v=2',)

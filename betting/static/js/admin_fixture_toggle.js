@@ -115,22 +115,22 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleContainer.style.border = '1px solid #dee2e6';
         toggleContainer.style.borderRadius = '4px';
 
-        // Checkbox
-        const toggleCheckbox = document.createElement('input');
-        toggleCheckbox.type = 'checkbox';
-        toggleCheckbox.id = 'toggle-all-odds';
-        toggleCheckbox.style.marginRight = '10px';
+        // Create the Button (Same as Strategy 1)
+        const toggleButton = document.createElement('button');
+        toggleButton.type = 'button';
+        toggleButton.id = 'toggle-all-odds-btn';
+        toggleButton.className = 'btn btn-primary btn-sm'; 
+        toggleButton.style.cursor = 'pointer';
+        toggleButton.style.padding = '4px 12px';
+        toggleButton.style.fontWeight = 'bold';
+        toggleButton.style.fontSize = '12px';
+        toggleButton.style.borderRadius = '4px';
+        toggleButton.style.border = '1px solid #ccc';
+        toggleButton.style.background = '#f0f0f0';
+        toggleButton.style.color = '#333';
+        toggleButton.textContent = 'Mark All';
         
-        // Label
-        const toggleTextLabel = document.createElement('label');
-        toggleTextLabel.htmlFor = 'toggle-all-odds';
-        toggleTextLabel.textContent = 'Mark all / Unmark all Game Options';
-        toggleTextLabel.style.fontWeight = 'bold';
-        toggleTextLabel.style.display = 'inline';
-        toggleTextLabel.style.width = 'auto';
-
-        toggleContainer.appendChild(toggleCheckbox);
-        toggleContainer.appendChild(toggleTextLabel);
+        toggleContainer.appendChild(toggleButton);
 
         // Find where to insert
         let container = null;

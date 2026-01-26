@@ -35,7 +35,8 @@
                     <p class="text-center text-muted small">Powered by Paystack</p>
 
 
-                    {# Withdrawal Section #}
+                    {# Withdrawal Section - Restricted to Agents #}
+                    {% if request.user.user_type == 'master_agent' or request.user.user_type == 'super_agent' or request.user.user_type == 'agent' %}
                     <hr class="my-4">
                     <h4 class="fw-bold mb-3 text-danger">Withdraw Funds</h4>
                     <form action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
@@ -50,7 +51,7 @@
                         </div>
                         <div class="mb-3">
                             <label for="id_account_name" class="form-label">Account Name</label>
-                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., John Doe" required>
+                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.get_full_name }}" readonly required>
                         </div>
                         <div class="mb-3">
                             <label for="id_account_number" class="form-label">Account Number</label>
@@ -58,8 +59,10 @@
                         </div>
                         <button type="submit" class="btn btn-danger rounded-pill px-4 py-2 w-100">Request Withdrawal</button>
                     </form>
+                    {% endif %}
 
-                    {# Wallet Transfer Section (Conditional, e.g., for agents/cashiers) #} {% if request.user.user_type != 'player' %}
+                    {# Wallet Transfer Section (Conditional) #}
+                    {% if wallet_transfer_form %}
                     <hr class="my-4">
                     <h4 class="fw-bold mb-3 text-info">Wallet Transfer</h4>
                     <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-4">
@@ -85,6 +88,50 @@
                         </div>
                         <button type="submit" class="btn btn-info rounded-pill px-4 py-2 w-100">Perform Transfer</button>
                     </form>
+                    {% endif %}
+
+                    {# Credit Request Section #}
+                    {% if credit_request_form %}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-warning">Request Credit / Loan</h4>
+                    <form action="{% url 'betting:submit_credit_request' %}" method="post" class="mb-4">
+                        {% csrf_token %}
+                        {% for field in credit_request_form %}
+                        <div class="mb-3">
+                            <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.errors %}
+                            <div class="text-danger small">{{ field.errors|striptags }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        <button type="submit" class="btn btn-warning rounded-pill px-4 py-2 w-100 text-white">Submit Request</button>
+                    </form>
+                    <div class="text-center mb-4">
+                         <a href="{% url 'betting:manage_credit_requests' %}" class="btn btn-outline-warning rounded-pill">Manage Credit Requests</a>
+                    </div>
+                    {% endif %}
+
+                    {# Active Loans Section #}
+                    {% if active_loans %}
+                    <hr class="my-4">
+                    <h4 class="fw-bold mb-3 text-danger">Active Loans (You Owe)</h4>
+                    {% for loan in active_loans %}
+                    <div class="card border-danger mb-3">
+                        <div class="card-body text-danger">
+                            <h5 class="card-title">Loan from {{ loan.lender.email }}</h5>
+                            <p class="card-text">
+                                Outstanding Balance: <strong>₦{{ loan.outstanding_balance|floatformat:2 }}</strong><br>
+                                Date Taken: {{ loan.created_at|date:"M d, Y" }}
+                            </p>
+                            <form action="{% url 'betting:settle_loan' loan.id %}" method="post">
+                                {% csrf_token %}
+                                {{ loan_settlement_form.as_p }}
+                                <button type="submit" class="btn btn-danger btn-sm rounded-pill w-100">Settle Loan</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
                     {% endif %} {# Recent Transactions Section #}
                     <hr class="my-4">
                     <h4 class="fw-bold mb-3 text-secondary">Recent Transactions</h4>

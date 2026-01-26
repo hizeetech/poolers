@@ -1,12 +1,13 @@
 from django.db import transaction
 from django.utils import timezone
 from .models import WeeklyAgentCommission, MonthlyNetworkCommission, AgentCommissionProfile, CommissionPeriod
-from betting.models import Wallet, Transaction, BetTicket
+from betting.models import Wallet, Transaction, BetTicket, SiteConfiguration
 from django.db.models import Sum, Q
 from decimal import Decimal
 import logging
 from django.contrib.auth import get_user_model
 
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 def pay_weekly_commission(commission_record):
@@ -19,7 +20,40 @@ def pay_weekly_commission(commission_record):
          commission_record.save()
          return True, "Marked as paid (Zero amount)"
 
+    config = SiteConfiguration.load()
+    account_user = None
+
+    if config.commission_payment_source == 'account_wallet':
+        account_user = User.objects.filter(user_type='account_user').first()
+        if not account_user:
+            return False, "No Account User found to fund commission."
+        
+        # Check balance (pre-check)
+        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+        if payer_wallet.balance < commission_record.commission_total_amount:
+            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+
     with transaction.atomic():
+        # Handle Payer Deduction
+        if account_user and config.commission_payment_source == 'account_wallet':
+            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            if payer_wallet.balance < commission_record.commission_total_amount:
+                # Should be caught by pre-check, but for safety in race conditions
+                raise ValueError("Insufficient funds in Account User wallet during transaction.")
+            
+            payer_wallet.balance -= commission_record.commission_total_amount
+            payer_wallet.save()
+
+            Transaction.objects.create(
+                user=account_user,
+                transaction_type='account_user_debit',
+                amount=commission_record.commission_total_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
+            )
+
+        # Handle Payee Credit
         wallet, _ = Wallet.objects.get_or_create(user=commission_record.agent)
         # Ensure balance is Decimal (handle float default edge case)
         if isinstance(wallet.balance, float):
@@ -53,7 +87,39 @@ def pay_monthly_network_commission(commission_record):
         commission_record.save()
         return True, "Marked as paid (Zero amount)"
 
+    config = SiteConfiguration.load()
+    account_user = None
+
+    if config.commission_payment_source == 'account_wallet':
+        account_user = User.objects.filter(user_type='account_user').first()
+        if not account_user:
+            return False, "No Account User found to fund commission."
+        
+        # Check balance (pre-check)
+        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+        if payer_wallet.balance < commission_record.commission_amount:
+            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+
     with transaction.atomic():
+        # Handle Payer Deduction
+        if account_user and config.commission_payment_source == 'account_wallet':
+            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            if payer_wallet.balance < commission_record.commission_amount:
+                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
+            
+            payer_wallet.balance -= commission_record.commission_amount
+            payer_wallet.save()
+
+            Transaction.objects.create(
+                user=account_user,
+                transaction_type='account_user_debit',
+                amount=commission_record.commission_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
+            )
+
+        # Handle Payee Credit
         wallet, _ = Wallet.objects.get_or_create(user=commission_record.user)
         if isinstance(wallet.balance, float):
             wallet.balance = Decimal(str(wallet.balance))

@@ -1,0 +1,105 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+{% block title %}Manage Credit Requests{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <h2 class="mb-4">Manage Credit Requests</h2>
+
+    {# Incoming Requests #}
+    <div class="card mb-4 shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">Incoming Requests (Needs Approval)</h5>
+        </div>
+        <div class="card-body">
+            {% if received_requests %}
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Requester</th>
+                            <th>Amount</th>
+                            <th>Type</th>
+                            <th>Reason</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in received_requests %}
+                        <tr>
+                            <td>{{ req.created_at|date:"M d, Y H:i" }}</td>
+                            <td>{{ req.requester.email }} ({{ req.requester.get_user_type_display }})</td>
+                            <td>₦{{ req.amount|floatformat:2 }}</td>
+                            <td>{{ req.get_request_type_display }}</td>
+                            <td>{{ req.reason }}</td>
+                            <td>
+                                <span class="badge bg-{% if req.status == 'approved' %}success{% elif req.status == 'declined' %}danger{% else %}warning{% endif %}">
+                                    {{ req.get_status_display }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if req.status == 'pending' %}
+                                <form action="{% url 'betting:approve_credit_request' req.id %}" method="post" class="d-inline">
+                                    {% csrf_token %}
+                                    <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
+                                    <button type="submit" name="action" value="decline" class="btn btn-danger btn-sm">Decline</button>
+                                </form>
+                                {% else %}
+                                {{ req.get_status_display }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No incoming requests.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Outgoing Requests #}
+    <div class="card shadow-sm">
+        <div class="card-header bg-info text-white">
+            <h5 class="mb-0">Outgoing Requests (Sent by Me)</h5>
+        </div>
+        <div class="card-body">
+            {% if sent_requests %}
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Recipient</th>
+                            <th>Amount</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in sent_requests %}
+                        <tr>
+                            <td>{{ req.created_at|date:"M d, Y H:i" }}</td>
+                            <td>{{ req.recipient.email }}</td>
+                            <td>₦{{ req.amount|floatformat:2 }}</td>
+                            <td>{{ req.get_request_type_display }}</td>
+                            <td>
+                                <span class="badge bg-{% if req.status == 'approved' %}success{% elif req.status == 'declined' %}danger{% else %}warning{% endif %}">
+                                    {{ req.get_status_display }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No outgoing requests.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

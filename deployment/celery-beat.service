@@ -1,0 +1,14 @@
+[Unit]
+Description=Celery Beat for PoolBetting
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/poolbetting-main
+ExecStart=/root/poolbetting-main/env/bin/celery -A poolbetting beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -37,7 +37,7 @@ class SystemBetTestCase(TestCase):
             home_win_odd=1.5,
             draw_odd=3.0,
             away_win_odd=2.5,
-            status='pending'
+            status='scheduled'
         )
         self.fixture2 = Fixture.objects.create(
             betting_period=self.period,
@@ -48,7 +48,7 @@ class SystemBetTestCase(TestCase):
             home_win_odd=1.8,
             draw_odd=3.2,
             away_win_odd=2.1,
-            status='pending'
+            status='scheduled'
         )
         self.fixture3 = Fixture.objects.create(
             betting_period=self.period,
@@ -59,7 +59,7 @@ class SystemBetTestCase(TestCase):
             home_win_odd=2.0,
             draw_odd=3.1,
             away_win_odd=2.8,
-            status='pending'
+            status='scheduled'
         )
         
         self.client = Client()
@@ -87,8 +87,10 @@ class SystemBetTestCase(TestCase):
         
         response = self.client.post('/place-bet/', data)
         
-        # Check redirection (success)
-        self.assertEqual(response.status_code, 302)
+        # Check response (success JSON)
+        self.assertEqual(response.status_code, 200)
+        json_response = response.json()
+        self.assertTrue(json_response['success'], msg=json_response.get('message'))
         
         # Check Wallet Deduction
         self.wallet.refresh_from_db()
@@ -96,18 +98,17 @@ class SystemBetTestCase(TestCase):
         
         # Check Tickets Created
         tickets = BetTicket.objects.filter(user=self.user)
-        self.assertEqual(tickets.count(), 3)
+        self.assertEqual(tickets.count(), 1)
+        ticket = tickets.first()
+        self.assertEqual(ticket.bet_type, 'system')
         
-        # Verify specific tickets
-        # Combo 1: F1 (Home) & F2 (Draw) -> Odds: 1.5 * 3.2 = 4.8
-        # Combo 2: F1 (Home) & F3 (Away) -> Odds: 1.5 * 2.8 = 4.2
-        # Combo 3: F2 (Draw) & F3 (Away) -> Odds: 3.2 * 2.8 = 8.96
+        # Verify max winning
+        # Combo 1: F1 (Home) & F2 (Draw) -> Odds: 1.5 * 3.2 = 4.8. Win: 100 * 4.8 = 480
+        # Combo 2: F1 (Home) & F3 (Away) -> Odds: 1.5 * 2.8 = 4.2. Win: 100 * 4.2 = 420
+        # Combo 3: F2 (Draw) & F3 (Away) -> Odds: 3.2 * 2.8 = 8.96. Win: 100 * 8.96 = 896
+        # Total Max Winning = 1796
         
-        odds = sorted([float(t.total_odd) for t in tickets])
-        expected_odds = sorted([1.5 * 3.2, 1.5 * 2.8, 3.2 * 2.8])
-        
-        for o, e in zip(odds, expected_odds):
-            self.assertAlmostEqual(o, e, places=2)
+        self.assertAlmostEqual(float(ticket.max_winning), 1796.00, places=2)
 
     def test_single_bet_placement_with_new_logic(self):
         # Single Bet (Accumulator of 1)
@@ -123,7 +124,9 @@ class SystemBetTestCase(TestCase):
         }
         
         response = self.client.post('/place-bet/', data)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        json_response = response.json()
+        self.assertTrue(json_response['success'], msg=json_response.get('message'))
         
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, Decimal('900.00'))
@@ -146,11 +149,13 @@ class SystemBetTestCase(TestCase):
         }
         
         response = self.client.post('/place-bet/', data)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        json_response = response.json()
+        self.assertTrue(json_response['success'], msg=json_response.get('message'))
         
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, Decimal('900.00'))
         
         tickets = BetTicket.objects.filter(user=self.user)
         self.assertEqual(tickets.count(), 1)
-        self.assertAlmostEqual(float(tickets.first().total_odd, 1.5 * 3.2, places=2))
+        self.assertAlmostEqual(float(tickets.first().total_odd), 1.5 * 3.2, places=2)

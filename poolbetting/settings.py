@@ -23,18 +23,47 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
+JAZZMIN_SETTINGS = {
+    "site_title": "Pool Betting Admin",
+    "site_header": "Pool Betting",
+    "welcome_sign": "Welcome to Pool Betting Admin",
+    "copyright": "Pool Betting Ltd",
+    "search_model": "betting.User",
+    "topmenu_links": [
+        {"name": "Home",  "url": "admin:index", "permissions": ["auth.view_user"]},
+        {"name": "UIP Dashboard", "url": "uip:dashboard"},
+        {"model": "betting.User"},
+    ],
+    "show_sidebar": True,
+    "navigation_expanded": True,
+    "icons": {
+        "uip.DailyMetricSnapshot": "fas fa-chart-bar",
+        "uip.Alert": "fas fa-exclamation-triangle",
+        "uip.UIPDashboardLink": "fas fa-tachometer-alt",
+    },
+    "custom_links": {
+        "uip": [{
+            "name": "Go to Dashboard", 
+            "url": "uip:dashboard", 
+            "icon": "fas fa-external-link-alt",
+        }]
+    },
+}
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]']
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
     'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -42,8 +71,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.humanize',
     'betting',
     'commission',
+    'uip',
     'django_celery_results',
     'django_celery_beat',
 ]
@@ -56,6 +87,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'betting.middleware.ThreadLocalMiddleware',
+    'uip.middleware.UIPSecurityMiddleware',
 ]
 
 ROOT_URLCONF = 'poolbetting.urls'
@@ -63,7 +96,7 @@ ROOT_URLCONF = 'poolbetting.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'uip' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -79,6 +112,16 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'poolbetting.wsgi.application'
+ASGI_APPLICATION = 'poolbetting.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('127.0.0.1', 6379)],
+        },
+    },
+}
 
 
 # Database
@@ -86,8 +129,12 @@ WSGI_APPLICATION = 'poolbetting.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'poolbetting_db'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'hizeetech'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
 }
 
@@ -112,14 +159,27 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Celery Configuration Options
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-# CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = 'django-db'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 CELERY_CACHE_BACKEND = 'django-cache'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Lagos'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Phase 3: Financial-Grade Task Reliability
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_TRACK_STARTED = True
+
+# Phase 8: Enterprise Enhancements - Queue Segmentation
+CELERY_TASK_ROUTES = {
+    'commission.tasks.*': {'queue': 'commission_queue'},
+    'uip.tasks.aggregate_daily_metrics': {'queue': 'uip_queue'},
+    'uip.tasks.run_risk_checks': {'queue': 'risk_queue'},
+    'poolbetting.celery.debug_task': {'queue': 'celery'},
+}
 
 
 # Internationalization
@@ -225,6 +285,11 @@ LOGGING = {
         'django': {
             'handlers': ['console'],
             'level': 'INFO', # Set to INFO for Django's own logs
+            'propagate': False,
+        },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'INFO',
             'propagate': False,
         },
         'betting': { # Custom logger for your app

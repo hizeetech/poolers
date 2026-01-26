@@ -71,6 +71,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('agent', 'Agent'),
         ('super_agent', 'Super Agent'),
         ('master_agent', 'Master Agent'),
+        ('account_user', 'Account User'),
         ('admin', 'Admin'),
     )
 
@@ -91,6 +92,13 @@ class User(AbstractBaseUser, PermissionsMixin):
     agent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='agents_under')
 
     cashier_prefix = models.CharField(max_length=10, blank=True, null=True) 
+
+    # Security fields
+    failed_login_attempts = models.IntegerField(default=0)
+    last_failed_login = models.DateTimeField(null=True, blank=True)
+    is_locked = models.BooleanField(default=False)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    lock_reason = models.TextField(null=True, blank=True)
 
     date_joined = models.DateTimeField(default=timezone.now)
 
@@ -290,14 +298,14 @@ class BetTicket(models.Model):
     bet_type = models.CharField(max_length=20, choices=BET_TYPE_CHOICES, default='single')
     system_min_count = models.PositiveIntegerField(null=True, blank=True, help_text="Minimum selections required for system bet (k in k/n)")
     
-    stake_amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    stake_amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))], db_index=True)
     total_odd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     potential_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     max_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
     
-    placed_at = models.DateTimeField(auto_now_add=True)
-    last_updated = models.DateTimeField(auto_now=True)
+    placed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    last_updated = models.DateTimeField(auto_now=True, db_index=True)
     
     deleted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_tickets')
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -606,14 +614,42 @@ class UserWithdrawal(models.Model):
 class ActivityLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activity_logs')
     action = models.TextField()
+    action_type = models.CharField(max_length=50, blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    path = models.CharField(max_length=255, null=True, blank=True)
+    isp = models.CharField(max_length=255, null=True, blank=True)
+    affected_object = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
         ordering = ['-timestamp']
 
     def __str__(self):
         return f"{self.user.email} - {self.action}"
+
+class LoginAttempt(models.Model):
+    STATUS_CHOICES = (
+        ('success', 'Success'),
+        ('failed', 'Failed'),
+        ('locked', 'Account Locked'),
+        ('unlocked', 'Account Unlocked'),
+    )
+    
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='login_attempts')
+    username_attempted = models.CharField(max_length=255, null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'Login Attempt'
+        verbose_name_plural = 'Login Attempts'
+
+    def __str__(self):
+        return f"{self.username_attempted} - {self.status} - {self.timestamp}"
 
 @receiver(pre_save, sender=BetTicket)
 def refund_stake_on_void(sender, instance, **kwargs):
@@ -656,3 +692,59 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
         
         for ticket in tickets:
             ticket.check_and_update_status()
+
+class CreditRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('declined', 'Declined'),
+    )
+    REQUEST_TYPE_CHOICES = (
+        ('credit', 'Normal Credit'),
+        ('loan', 'Loan'),
+    )
+    
+    requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_credit_requests')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_credit_requests')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    reason = models.TextField()
+    request_type = models.CharField(max_length=20, choices=REQUEST_TYPE_CHOICES, default='credit')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.requester} -> {self.recipient}: {self.amount} ({self.status})"
+
+class Loan(models.Model):
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('settled', 'Settled'),
+        ('defaulted', 'Defaulted'),
+    )
+    
+    borrower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loans_borrowed')
+    lender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loans_lent')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    outstanding_balance = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    due_date = models.DateTimeField(null=True, blank=True)
+    credit_request = models.OneToOneField(CreditRequest, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan')
+    
+    def __str__(self):
+        return f"Loan: {self.borrower} owes {self.lender} {self.outstanding_balance}"
+
+class CreditLog(models.Model):
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='credit_actions_performed')
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='credit_actions_received')
+    action_type = models.CharField(max_length=50) 
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    reference_id = models.CharField(max_length=100, blank=True, null=True)
+    status = models.CharField(max_length=20, blank=True, null=True)
+    
+    def __str__(self):
+        return f"{self.timestamp} - {self.action_type}"
+

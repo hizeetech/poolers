@@ -22,7 +22,8 @@ from django.contrib.auth import authenticate, login, logout # Ensure these are i
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
-    BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog
+    BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
+    CreditRequest, Loan, CreditLog
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from .forms import (
@@ -30,7 +31,9 @@ from .forms import (
     InitiateDepositForm, WithdrawFundsForm, WalletTransferForm,
     BetTicketForm, CheckTicketStatusForm, DeclareResultForm,
     AdminUserCreationForm, AdminUserChangeForm, WithdrawalActionForm,
-    FixtureForm, BettingPeriodForm 
+    FixtureForm, BettingPeriodForm,
+    AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
+    CreditRequestForm, LoanSettlementForm
 )
 
 # Setup logger for this app
@@ -57,6 +60,9 @@ def is_cashier(user):
 def is_player(user):
     return user.is_authenticated and user.user_type == 'player'
 
+def is_account_user(user):
+    return user.is_authenticated and user.user_type == 'account_user'
+
 
 def log_admin_activity(request, action_description):
     """Logs administrative actions."""
@@ -64,9 +70,10 @@ def log_admin_activity(request, action_description):
         ActivityLog.objects.create(
             user=request.user,
             action=action_description,
+            action_type='UPDATE', # Default to UPDATE for generic admin actions
             ip_address=request.META.get('REMOTE_ADDR'),
-            session_key=request.session.session_key,
-            user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown')
+            user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown'),
+            path=request.path
         )
 
 # --- General Authentication Views ---
@@ -125,6 +132,8 @@ def user_login(request):
                     return redirect('betting:master_agent_dashboard')
                 elif user.user_type == 'super_agent':
                     return redirect('betting:super_agent_dashboard')
+                elif user.user_type == 'account_user':
+                    return redirect('betting:account_user_dashboard')
                 elif user.user_type == 'agent':
                     return redirect('betting:agent_dashboard')
                 elif user.user_type == 'cashier':
@@ -136,16 +145,8 @@ def user_login(request):
                 messages.error(request, 'An unexpected authentication error occurred. Please try again.')
         else:
             logger.debug("LoginForm is NOT valid.")
-            # Log and display field-specific errors
-            for field, errors in form.errors.items():
-                for error in errors:
-                    messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
-                    logger.debug(f"  Field '{field}': {error}")
-            # Log and display non-field errors explicitly
-            if form.non_field_errors():
-                logger.debug(f"  Non-field errors: {form.non_field_errors()}")
-                for error in form.non_field_errors():
-                    messages.error(request, f"Login Error: {error}")
+            # Errors are handled by the form instance in the template
+            pass
     else:
         logger.debug("GET request for login page.")
         form = LoginForm()
@@ -160,7 +161,6 @@ def user_logout(request):
 
 # --- Fixtures & Betting Views ---
 
-@login_required
 def fixtures_view(request, period_id=None):
     current_betting_period = None
     if period_id:
@@ -681,16 +681,36 @@ def agent_void_ticket(request, ticket_id):
 
 @login_required
 def wallet_view(request):
-    wallet = get_object_or_404(Wallet, user=request.user)
+    wallet, created = Wallet.objects.get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
+    if created:
+        logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
     transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:20] # Last 20 transactions
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
+
+    # Initialize forms based on user type
+    wallet_transfer_form = None
+    credit_request_form = None
+    
+    # Cashiers can only request credit, not transfer freely (unless logic changes)
+    # Agents/Super/Master can transfer AND request credit
+    if request.user.user_type == 'cashier':
+        credit_request_form = CreditRequestForm(user=request.user)
+    elif request.user.user_type in ['agent', 'super_agent', 'master_agent', 'account_user']:
+        wallet_transfer_form = WalletTransferForm(sender_user=request.user)
+        credit_request_form = CreditRequestForm(user=request.user)
+
+    # Active Loans
+    active_loans = Loan.objects.filter(borrower=request.user, status='active')
 
     context = {
         'wallet': wallet,
         'transactions': transactions,
         'initiate_deposit_form': InitiateDepositForm(),
-        'withdraw_funds_form': WithdrawFundsForm(instance=UserWithdrawal(user=request.user)), # Pass instance for initial validation
-        'wallet_transfer_form': WalletTransferForm(sender_user=request.user), # Pass sender_user
+        'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
+        'wallet_transfer_form': wallet_transfer_form,
+        'credit_request_form': credit_request_form,
+        'active_loans': active_loans,
+        'loan_settlement_form': LoanSettlementForm(request=request),
         'pending_withdrawals': pending_withdrawals,
         'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
     }
@@ -892,9 +912,20 @@ def verify_deposit(request):
 @login_required
 @db_transaction.atomic
 def withdraw_funds(request):
+    # Restrict withdrawal to specific roles
+    if request.user.user_type not in ['master_agent', 'super_agent', 'agent']:
+        messages.error(request, "You are not authorized to withdraw funds.")
+        return redirect('betting:wallet')
+
+    # Check for active loans
+    has_active_loans = Loan.objects.filter(borrower=request.user, status='active', outstanding_balance__gt=0).exists()
+    if has_active_loans:
+        messages.error(request, "You cannot withdraw funds while you have an active unpaid loan.")
+        return redirect('betting:wallet')
+
     if request.method == 'POST':
-        # Pass an instance for validation in the form's clean method
-        form = WithdrawFundsForm(request.POST, instance=UserWithdrawal(user=request.user))
+        # Pass user for validation in the form's clean method
+        form = WithdrawFundsForm(request.POST, user=request.user)
         if form.is_valid():
             amount = form.cleaned_data['amount']
             bank_name = form.cleaned_data['bank_name']
@@ -991,6 +1022,201 @@ def wallet_transfer(request):
             if form.non_field_errors():
                 for error in form.non_field_errors():
                     messages.error(request, f"Transfer Error: {error}")
+    return redirect('betting:wallet')
+
+@login_required
+def submit_credit_request(request):
+    if request.method == 'POST':
+        form = CreditRequestForm(request.POST, user=request.user)
+        if form.is_valid():
+            pending_exists = CreditRequest.objects.filter(requester=request.user, status='pending').exists()
+            if pending_exists:
+                 messages.warning(request, "You already have a pending credit request.")
+                 return redirect('betting:wallet')
+
+            credit_request = form.save(commit=False)
+            credit_request.requester = request.user
+            credit_request.status = 'pending'
+            credit_request.save()
+            
+            CreditLog.objects.create(
+                actor=request.user,
+                target_user=credit_request.recipient,
+                action_type='request_created',
+                amount=credit_request.amount,
+                status='pending',
+                reference_id=str(credit_request.id)
+            )
+
+            messages.success(request, "Credit request submitted successfully.")
+            return redirect('betting:wallet')
+        else:
+             for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f"{field}: {error}")
+    return redirect('betting:wallet')
+
+@login_required
+def manage_credit_requests(request):
+    received_requests = CreditRequest.objects.filter(recipient=request.user).order_by('-created_at')
+    sent_requests = CreditRequest.objects.filter(requester=request.user).order_by('-created_at')
+    
+    return render(request, 'betting/manage_credit_requests.html', {
+        'received_requests': received_requests,
+        'sent_requests': sent_requests
+    })
+
+@login_required
+@db_transaction.atomic
+def approve_credit_request(request, request_id):
+    credit_req = get_object_or_404(CreditRequest, id=request_id, recipient=request.user)
+    
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        
+        if credit_req.status != 'pending':
+            messages.error(request, "This request has already been processed.")
+            return redirect('betting:manage_credit_requests')
+            
+        if action == 'decline':
+            credit_req.status = 'declined'
+            credit_req.save()
+            CreditLog.objects.create(
+                actor=request.user,
+                target_user=credit_req.requester,
+                action_type='request_declined',
+                amount=credit_req.amount,
+                status='declined',
+                reference_id=str(credit_req.id)
+            )
+            messages.info(request, "Request declined.")
+            
+        elif action == 'approve':
+            lender_wallet = Wallet.objects.select_for_update().get(user=request.user)
+            borrower_wallet = Wallet.objects.select_for_update().get(user=credit_req.requester)
+            
+            if lender_wallet.balance < credit_req.amount:
+                messages.error(request, "Insufficient funds to approve this request.")
+                return redirect('betting:manage_credit_requests')
+                
+            lender_wallet.balance -= credit_req.amount
+            borrower_wallet.balance += credit_req.amount
+            
+            lender_wallet.save()
+            borrower_wallet.save()
+            
+            credit_req.status = 'approved'
+            credit_req.save()
+            
+            if credit_req.request_type == 'loan':
+                Loan.objects.create(
+                    borrower=credit_req.requester,
+                    lender=request.user,
+                    amount=credit_req.amount,
+                    outstanding_balance=credit_req.amount,
+                    status='active',
+                    credit_request=credit_req,
+                    due_date=timezone.now() + timedelta(days=7)
+                )
+                
+            Transaction.objects.create(
+                user=request.user,
+                transaction_type='wallet_transfer_out',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                target_user=credit_req.requester,
+                description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
+            )
+            
+            Transaction.objects.create(
+                user=credit_req.requester,
+                transaction_type='wallet_transfer_in',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=request.user,
+                description=f"Received {credit_req.request_type} from {request.user.email}"
+            )
+            
+            CreditLog.objects.create(
+                actor=request.user,
+                target_user=credit_req.requester,
+                action_type='request_approved',
+                amount=credit_req.amount,
+                status='approved',
+                reference_id=str(credit_req.id)
+            )
+            
+            messages.success(request, f"Request approved. Funds transferred.")
+            
+    return redirect('betting:manage_credit_requests')
+
+@login_required
+@db_transaction.atomic
+def settle_loan(request, loan_id):
+    loan = get_object_or_404(Loan, id=loan_id, borrower=request.user)
+    
+    if request.method == 'POST':
+        form = LoanSettlementForm(request.POST)
+        if form.is_valid():
+            method = form.cleaned_data['settlement_method']
+            
+            if method == 'wallet':
+                borrower_wallet = Wallet.objects.select_for_update().get(user=request.user)
+                lender_wallet = Wallet.objects.select_for_update().get(user=loan.lender)
+                
+                amount_to_pay = loan.outstanding_balance
+                
+                if borrower_wallet.balance < amount_to_pay:
+                    messages.error(request, "Insufficient wallet balance.")
+                    return redirect('betting:wallet')
+                
+                borrower_wallet.balance -= amount_to_pay
+                lender_wallet.balance += amount_to_pay
+                
+                borrower_wallet.save()
+                lender_wallet.save()
+                
+                loan.outstanding_balance = Decimal('0.00')
+                loan.status = 'settled'
+                loan.save()
+                
+                Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='wallet_transfer_out',
+                    amount=amount_to_pay,
+                    status='completed',
+                    is_successful=True,
+                    target_user=loan.lender,
+                    description=f"Loan repayment to {loan.lender.email}"
+                )
+                
+                Transaction.objects.create(
+                    user=loan.lender,
+                    transaction_type='wallet_transfer_in',
+                    amount=amount_to_pay,
+                    status='completed',
+                    is_successful=True,
+                    initiating_user=request.user,
+                    description=f"Loan repayment received from {request.user.email}"
+                )
+                
+                CreditLog.objects.create(
+                    actor=request.user,
+                    target_user=loan.lender,
+                    action_type='loan_settled_wallet',
+                    amount=amount_to_pay,
+                    status='settled',
+                    reference_id=str(loan.id)
+                )
+                
+                messages.success(request, "Loan settled successfully via wallet.")
+                
+            elif method == 'deposit':
+                messages.info(request, "Please deposit funds to your wallet to settle the loan.")
+                return redirect('betting:wallet')
+                
     return redirect('betting:wallet')
 
 
@@ -1093,6 +1319,8 @@ def user_dashboard(request):
         return redirect('betting:master_agent_dashboard')
     elif user.user_type == 'super_agent':
         return redirect('betting:super_agent_dashboard')
+    elif user.user_type == 'account_user':
+        return redirect('betting:account_user_dashboard')
     elif user.user_type == 'agent' or user.user_type == 'cashier':
         return redirect('betting:agent_dashboard')
         
@@ -2294,6 +2522,7 @@ def approve_reject_withdrawal(request, withdrawal_id):
                 log_admin_activity(request, f"Approved withdrawal request {withdrawal_id} for user {withdrawal_request.user.email}")
             elif action == 'reject':
                 withdrawal_request.status = 'rejected'
+                withdrawal_request._skip_signal_refund = True # Skip signal processing since we handle it manually here
                 # Refund funds to user's wallet
                 user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=withdrawal_request.user)
                 user_wallet.balance += withdrawal_request.amount
@@ -3140,3 +3369,354 @@ def api_manage_users(request):
 @csrf_exempt
 def api_system_settings(request):
     return JsonResponse({'status': 'success', 'message': 'API endpoint for system settings (placeholder).'})
+
+# --- Account User Views ---
+
+from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
+from commission.services import pay_weekly_commission, pay_monthly_network_commission
+
+@login_required
+@user_passes_test(is_account_user)
+def account_user_dashboard(request):
+    search_form = AccountUserSearchForm()
+    action_form = AccountUserWalletActionForm()
+    found_user = None
+    search_results = None
+    activity_log = []
+
+    # --- NEW: Fetch Credit/Loan Data ---
+    all_incoming_credit_requests = CreditRequest.objects.filter(
+        recipient=request.user, 
+        status='pending'
+    ).order_by('-created_at')
+    requests_paginator = Paginator(all_incoming_credit_requests, 10)
+    requests_page = request.GET.get('requests_page')
+    try:
+        incoming_credit_requests = requests_paginator.page(requests_page)
+    except PageNotAnInteger:
+        incoming_credit_requests = requests_paginator.page(1)
+    except EmptyPage:
+        incoming_credit_requests = requests_paginator.page(requests_paginator.num_pages)
+
+    all_active_loans_given = Loan.objects.filter(
+        lender=request.user, 
+        status='active'
+    ).order_by('-created_at')
+    loans_paginator = Paginator(all_active_loans_given, 10)
+    loans_page = request.GET.get('loans_page')
+    try:
+        active_loans_given = loans_paginator.page(loans_page)
+    except PageNotAnInteger:
+        active_loans_given = loans_paginator.page(1)
+    except EmptyPage:
+        active_loans_given = loans_paginator.page(loans_paginator.num_pages)
+    # -----------------------------------
+
+    recent_transactions = Transaction.objects.filter(
+        Q(initiating_user=request.user) | Q(user=request.user)
+    ).order_by('-timestamp')[:20]
+
+    # Handle View User via GET
+    if request.method == 'GET' and 'view_user_id' in request.GET:
+        try:
+            found_user = User.objects.exclude(is_superuser=True).exclude(user_type='account_user').get(id=request.GET.get('view_user_id'))
+        except (User.DoesNotExist, ValueError):
+            messages.error(request, "User not found or invalid ID.")
+
+    if request.method == 'POST':
+        if 'pay_commissions' in request.POST:
+            selected_items = request.POST.getlist('selected_commissions')
+            success_count = 0
+            error_count = 0
+            
+            for item in selected_items:
+                try:
+                    comm_type, comm_id = item.split('_')
+                    if comm_type == 'weekly':
+                        comm = WeeklyAgentCommission.objects.get(id=comm_id)
+                        success, msg = pay_weekly_commission(comm)
+                    elif comm_type == 'monthly':
+                        comm = MonthlyNetworkCommission.objects.get(id=comm_id)
+                        success, msg = pay_monthly_network_commission(comm)
+                    else:
+                        success, msg = False, "Invalid type"
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        messages.error(request, f"Error paying {item}: {msg}")
+                except Exception as e:
+                    error_count += 1
+                    messages.error(request, f"Error processing {item}: {str(e)}")
+            
+            if success_count > 0:
+                messages.success(request, f"Successfully paid {success_count} commissions.")
+            return redirect('betting:account_user_dashboard')
+
+        elif 'process_withdrawals' in request.POST:
+            selected_withdrawals = request.POST.getlist('selected_withdrawals')
+            action = request.POST.get('withdrawal_action')
+            
+            success_count = 0
+            for w_id in selected_withdrawals:
+                try:
+                    withdrawal = UserWithdrawal.objects.get(id=w_id)
+                    if withdrawal.status == 'pending':
+                        if action == 'mark_paid':
+                            withdrawal.status = 'completed'
+                            withdrawal.save()
+                            success_count += 1
+                        elif action == 'reject':
+                            withdrawal.status = 'rejected'
+                            withdrawal.save()
+                            success_count += 1
+                except UserWithdrawal.DoesNotExist:
+                    pass
+            
+            if success_count > 0:
+                messages.success(request, f"Successfully processed {success_count} withdrawals.")
+            return redirect('betting:account_user_dashboard')
+
+        elif 'search_user' in request.POST:
+            search_form = AccountUserSearchForm(request.POST)
+            if search_form.is_valid():
+                search_term = search_form.cleaned_data['search_term']
+                users = User.objects.filter(
+                    Q(email__icontains=search_term) | 
+                    Q(phone_number__icontains=search_term) |
+                    Q(first_name__icontains=search_term) |
+                    Q(last_name__icontains=search_term)
+                ).exclude(is_superuser=True).exclude(user_type='account_user')
+                
+                if search_term.isdigit():
+                     users = users | User.objects.filter(id=int(search_term))
+                
+                if users.count() == 1:
+                    found_user = users.first()
+                    messages.success(request, f"User found: {found_user.get_full_name()} ({found_user.email})")
+                elif users.count() > 1:
+                    search_results = users
+                    messages.warning(request, "Multiple users found. Please select one.")
+                else:
+                    messages.error(request, "No user found.")
+        
+        elif 'perform_action' in request.POST:
+            action_form = AccountUserWalletActionForm(request.POST)
+            target_user_id = request.POST.get('target_user_id')
+            if target_user_id:
+                target_user = get_object_or_404(User, id=target_user_id)
+                
+                if target_user.is_superuser or target_user.user_type == 'account_user':
+                    messages.error(request, "Operation not allowed on this user.")
+                    return redirect('betting:account_user_dashboard')
+
+                if action_form.is_valid():
+                    action = action_form.cleaned_data['action']
+                    amount = action_form.cleaned_data['amount']
+                    description = action_form.cleaned_data['description']
+                    
+                    try:
+                        with db_transaction.atomic():
+                            account_wallet = Wallet.objects.select_for_update().get(user=request.user)
+                            target_wallet = Wallet.objects.select_for_update().get(user=target_user)
+                            
+                            if action == 'credit':
+                                if account_wallet.balance < amount:
+                                    raise InvalidOperation("Insufficient funds in your account wallet.")
+                                
+                                account_wallet.balance -= amount
+                                target_wallet.balance += amount
+                                
+                                tx_type_account = 'account_user_debit'
+                                tx_type_target = 'account_user_credit'
+
+                            elif action == 'debit':
+                                if target_wallet.balance < amount:
+                                    raise InvalidOperation("User has insufficient funds.")
+                                
+                                target_wallet.balance -= amount
+                                account_wallet.balance += amount
+                                
+                                tx_type_account = 'account_user_credit'
+                                tx_type_target = 'account_user_debit'
+
+                            account_wallet.save()
+                            target_wallet.save()
+                            
+                            Transaction.objects.create(
+                                user=request.user,
+                                initiating_user=request.user,
+                                transaction_type=tx_type_account,
+                                amount=amount,
+                                status='completed',
+                                is_successful=True,
+                                description=f"{action.title()} for user {target_user.email}: {description}"
+                            )
+                            
+                            Transaction.objects.create(
+                                user=target_user,
+                                initiating_user=request.user,
+                                transaction_type=tx_type_target,
+                                amount=amount,
+                                status='completed',
+                                is_successful=True,
+                                description=f"{action.title()} by Account Manager: {description}"
+                            )
+                            
+                            messages.success(request, f"Successfully {action}ed {amount} for {target_user.email}.")
+                            found_user = None 
+                            
+                    except InvalidOperation as e:
+                        messages.error(request, str(e))
+                    except Exception as e:
+                        messages.error(request, f"An error occurred: {str(e)}")
+                        logger.error(f"Account User Action Error: {traceback.format_exc()}")
+            else:
+                 messages.error(request, "Target user not specified.")
+
+    # Fetch Pending Commissions
+    pending_weekly = WeeklyAgentCommission.objects.filter(status='pending').select_related('agent', 'period').order_by('period__start_date')
+    pending_monthly = MonthlyNetworkCommission.objects.filter(status='pending').select_related('user', 'period').order_by('period__start_date')
+    
+    pending_commissions = []
+    for wc in pending_weekly:
+        pending_commissions.append({
+            'id_str': f"weekly_{wc.id}",
+            'type': 'Weekly',
+            'user': wc.agent,
+            'period': wc.period,
+            'amount': wc.commission_total_amount,
+            'ggr_ngr': wc.ggr
+        })
+    
+    for mc in pending_monthly:
+        pending_commissions.append({
+            'id_str': f"monthly_{mc.id}",
+            'type': f"Monthly ({mc.role.replace('_', ' ').title()})",
+            'user': mc.user,
+            'period': mc.period,
+            'amount': mc.commission_amount,
+            'ggr_ngr': mc.ngr
+        })
+
+    # Fetch Pending Withdrawals
+    all_pending_withdrawals = UserWithdrawal.objects.filter(status='pending').select_related('user').order_by('request_time')
+    withdrawals_paginator = Paginator(all_pending_withdrawals, 10)
+    withdrawals_page = request.GET.get('withdrawals_page')
+    try:
+        pending_withdrawals = withdrawals_paginator.page(withdrawals_page)
+    except PageNotAnInteger:
+        pending_withdrawals = withdrawals_paginator.page(1)
+    except EmptyPage:
+        pending_withdrawals = withdrawals_paginator.page(withdrawals_paginator.num_pages)
+        
+    # Paginate Pending Commissions (List)
+    commissions_paginator = Paginator(pending_commissions, 10)
+    commissions_page = request.GET.get('commissions_page')
+    try:
+        pending_commissions_page = commissions_paginator.page(commissions_page)
+    except PageNotAnInteger:
+        pending_commissions_page = commissions_paginator.page(1)
+    except EmptyPage:
+        pending_commissions_page = commissions_paginator.page(commissions_paginator.num_pages)
+
+    # Construct Activity Log if user found
+    if found_user:
+        user_transactions = Transaction.objects.filter(user=found_user).order_by('-timestamp')
+        user_bets = BetTicket.objects.filter(user=found_user).order_by('-placed_at')
+        
+        for t in user_transactions:
+            activity_log.append({
+                'timestamp': t.timestamp,
+                'type': 'Transaction',
+                'description': t.description or t.get_transaction_type_display(),
+                'amount': t.amount,
+                'status': t.status,
+                'ref': t.paystack_reference or str(t.id)[:8],
+                'is_credit': t.transaction_type in ['deposit', 'bet_payout', 'commission_payout', 'wallet_transfer_in', 'bonus', 'withdrawal_refund', 'account_user_credit']
+            })
+            
+        for b in user_bets:
+             activity_log.append({
+                'timestamp': b.placed_at,
+                'type': 'Bet Placement',
+                'description': f"{b.get_bet_type_display().title()} Bet ({b.selections.count()} selections)",
+                'amount': b.stake_amount,
+                'status': b.status,
+                'ref': b.ticket_id,
+                'is_credit': False # Bets are debits (stakes)
+            })
+            
+        activity_log.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    context = {
+        'incoming_credit_requests': incoming_credit_requests, # NEW
+        'active_loans_given': active_loans_given,         # NEW
+        'pending_withdrawals': pending_withdrawals,
+        'search_form': search_form,
+        'action_form': action_form,
+        'found_user': found_user,
+        'search_results': search_results,
+        'activity_log': activity_log,
+        'recent_transactions': recent_transactions,
+        'wallet': request.user.wallet,
+        'pending_commissions': pending_commissions_page, # Paginated
+    }
+    return render(request, 'betting/account_user_dashboard.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def super_admin_fund_account_user(request):
+    if request.method == 'POST':
+        form = SuperAdminFundAccountUserForm(request.POST)
+        if form.is_valid():
+            account_user = form.cleaned_data['account_user']
+            action = form.cleaned_data['action']
+            amount = form.cleaned_data['amount']
+            description = form.cleaned_data['description']
+            
+            try:
+                with db_transaction.atomic():
+                    wallet = Wallet.objects.select_for_update().get(user=account_user)
+                    
+                    if action == 'credit':
+                        wallet.balance += amount
+                        tx_type = 'account_user_credit'
+                    else: # debit
+                        if wallet.balance < amount:
+                            raise InvalidOperation("Account User has insufficient funds.")
+                        wallet.balance -= amount
+                        tx_type = 'account_user_debit'
+                    
+                    wallet.save()
+                    
+                    Transaction.objects.create(
+                        user=account_user,
+                        initiating_user=request.user,
+                        transaction_type=tx_type,
+                        amount=amount,
+                        status='completed',
+                        is_successful=True,
+                        description=f"Super Admin Action ({action}): {description}"
+                    )
+                    
+                    messages.success(request, f"Successfully {action}ed {amount} for {account_user.email}.")
+                    return redirect('betting:super_admin_fund_account_user')
+            except InvalidOperation as e:
+                messages.error(request, str(e))
+            except Exception as e:
+                messages.error(request, f"Error: {str(e)}")
+    else:
+        form = SuperAdminFundAccountUserForm()
+    
+    recent_transactions = Transaction.objects.filter(
+        user__user_type='account_user',
+        initiating_user=request.user
+    ).order_by('-timestamp')[:20]
+
+    return render(request, 'betting/super_admin_fund_account_user.html', {
+        'form': form,
+        'recent_transactions': recent_transactions
+    })

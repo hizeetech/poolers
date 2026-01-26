@@ -1,0 +1,271 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Unified Intelligence Platform{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Unified Intelligence Platform</h1>
+        <div class="btn-group">
+            <button class="btn btn-outline-primary btn-sm">Daily</button>
+            <button class="btn btn-outline-secondary btn-sm">Weekly</button>
+            <button class="btn btn-outline-secondary btn-sm">Monthly</button>
+        </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="row">
+        <!-- GGR -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
+                                Gross Gaming Revenue (Today)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">₦{{ metrics.ggr|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-coins fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tickets Sold -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+                                Tickets Sold (Today)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.total_tickets|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-ticket-alt fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Winnings Paid -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-danger shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-danger text-uppercase mb-1">
+                                Winnings Paid (Today)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">₦{{ metrics.total_winnings|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-hand-holding-usd fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Users -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                                Active Users (Today)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.active_users|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-users fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Content Row -->
+    <div class="row">
+        <!-- Live Activity Feed -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+                    <h6 class="m-0 font-weight-bold text-primary">Live Large Bets (> ₦5,000)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Ticket ID</th>
+                                    <th>User</th>
+                                    <th>Stake</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for bet in metrics.large_bets %}
+                                <tr>
+                                    <td>{{ bet.ticket_id }}</td>
+                                    <td>{{ bet.user.email }}</td>
+                                    <td>₦{{ bet.stake_amount|intcomma }}</td>
+                                    <td>
+                                        <span class="badge bg-{% if bet.status == 'won' %}success{% elif bet.status == 'lost' %}danger{% else %}warning{% endif %}">
+                                            {{ bet.get_status_display }}
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center">No large bets today.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Channel Split -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Channel Performance</h6>
+                </div>
+                <div class="card-body">
+                    <h4 class="small font-weight-bold">Online <span class="float-right">{{ metrics.online_count }}</span></h4>
+                    <div class="progress mb-4">
+                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ metrics.online_count|add:metrics.retail_count|default:1|yesno:'0,100' }}%" aria-valuenow="{{ metrics.online_count }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <h4 class="small font-weight-bold">Retail <span class="float-right">{{ metrics.retail_count }}</span></h4>
+                    <div class="progress mb-4">
+                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ metrics.retail_count|add:metrics.online_count|default:1|yesno:'0,100' }}%" aria-valuenow="{{ metrics.retail_count }}" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <div class="text-center small">
+                        Note: Basic progress bars (JS implementation pending for dynamic %).
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Leaderboard -->
+    <div class="row">
+        <div class="col-12 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Performing Agents (Today)</h6>
+                </div>
+                <div class="card-body">
+                     <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Agent Name</th>
+                                    <th>Email</th>
+                                    <th>Tickets Sold (Downline)</th>
+                                    <th>Sales Volume (Downline)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for agent in leaderboard %}
+                                <tr>
+                                    <td>{{ forloop.counter }}</td>
+                                    <td>{{ agent.first_name }} {{ agent.last_name }}</td>
+                                    <td>{{ agent.email }}</td>
+                                    <td>{{ agent.ticket_count }}</td>
+                                    <td>₦{{ agent.daily_sales|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="5" class="text-center">No agent activity recorded today.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Real-Time Alerts Row -->
+    <div class="row">
+        <div class="col-12 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-danger">Real-Time Alerts & Activity</h6>
+                </div>
+                <div class="card-body">
+                    <div id="activity-feed" style="height: 300px; overflow-y: auto;">
+                        <p class="text-muted text-center">Waiting for real-time activity...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = protocol + '//' + window.location.host + '/ws/uip/dashboard/';
+        const socket = new WebSocket(wsUrl);
+
+        socket.onopen = function(e) {
+            console.log("UIP WebSocket connected");
+        };
+
+        socket.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            const feed = document.getElementById('activity-feed');
+            
+            // Remove 'Waiting...' placeholder if exists
+            const placeholder = feed.querySelector('.text-muted.text-center');
+            if (placeholder) {
+                placeholder.remove();
+            }
+
+            let alertHtml = '';
+            const timestamp = new Date().toLocaleTimeString();
+
+            if (data.type === 'bet_placed') {
+                alertHtml = `<div class="alert alert-info border-left-info py-2 mb-2" role="alert">
+                                <small class="text-gray-500 mr-2">${timestamp}</small>
+                                <strong>New Bet:</strong> Ticket #${data.ticket_id} placed by ${data.user} (₦${data.amount})
+                             </div>`;
+            } else if (data.type === 'alert') {
+                const alertClass = data.level === 'critical' ? 'alert-danger border-left-danger' : 'alert-warning border-left-warning';
+                alertHtml = `<div class="alert ${alertClass} py-2 mb-2" role="alert">
+                                <small class="text-gray-500 mr-2">${timestamp}</small>
+                                <strong>${data.title}:</strong> ${data.message}
+                             </div>`;
+            } else if (data.type === 'transaction') {
+                alertHtml = `<div class="alert alert-success border-left-success py-2 mb-2" role="alert">
+                                <small class="text-gray-500 mr-2">${timestamp}</small>
+                                <strong>Transaction:</strong> ${data.desc} by ${data.user} (₦${data.amount})
+                             </div>`;
+            }
+
+            if (alertHtml) {
+                feed.insertAdjacentHTML('afterbegin', alertHtml);
+                // Limit to 50 items
+                if (feed.children.length > 50) {
+                    feed.lastElementChild.remove();
+                }
+            }
+        };
+
+        socket.onclose = function(e) {
+            console.error("UIP WebSocket closed unexpectedly");
+        };
+    });
+</script>
+{% endblock %}

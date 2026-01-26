@@ -114,7 +114,8 @@ class UserRegistrationForm(forms.ModelForm):
 
             if commit:
                 user.save()
-                Wallet.objects.create(user=user, balance=Decimal('0.00')) 
+                # Wallet is created by post_save signal in signals.py
+                Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
 
                 if user.user_type == 'agent':
                     # Use self.request if available, otherwise fallback to the passed request
@@ -137,7 +138,8 @@ class UserRegistrationForm(forms.ModelForm):
                                 is_superuser=False,
                                 cashier_prefix=cashier_prefix_for_cashier 
                             )
-                            Wallet.objects.create(user=cashier_user, balance=Decimal('0.00')) 
+                            # Wallet is created by post_save signal
+                            Wallet.objects.get_or_create(user=cashier_user, defaults={'balance': Decimal('0.00')})
                             if current_request_for_messages: # Use current_request_for_messages here
                                 messages.info(current_request_for_messages, f"Cashier account created: {cashier_email}")
                         else:
@@ -648,6 +650,13 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             user.user_type = user_type
         
         # Set hierarchy fields
+        if user.user_type == 'agent' and not user.cashier_prefix:
+            while True:
+                random_xxxx = ''.join(random.choices(string.digits, k=4))
+                if not CustomUser.objects.filter(cashier_prefix=random_xxxx).exists():
+                    user.cashier_prefix = random_xxxx
+                    break
+
         if user.user_type == 'master_agent':
             user.master_agent = None
             user.super_agent = None
@@ -683,9 +692,35 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             if self.cleaned_data.get('user_permissions'):
                 user.user_permissions.set(self.cleaned_data['user_permissions'])
                 
-            # Initialize wallet for new user
-            if not Wallet.objects.filter(user=user).exists():
-                Wallet.objects.create(user=user, balance=Decimal('0.00'))
+            # Initialize wallet for new user (Signal handles it, but get_or_create is safe)
+            Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+
+            # Auto-create cashiers for Agent
+            if user.user_type == 'agent':
+                current_request_for_messages = self.request
+                for i in range(1, 3):
+                    base_cashier_email = f"{user.cashier_prefix}-CSH-{i:02d}"
+                    cashier_email = f"{base_cashier_email}@cashier.com"
+                    cashier_prefix_for_cashier = f"{user.cashier_prefix}-{i:02d}"
+                    
+                    if not CustomUser.objects.filter(email=cashier_email).exists():
+                        cashier_user = CustomUser.objects.create_user(
+                            email=cashier_email,
+                            password=self.cleaned_data["password"],
+                            first_name=f"Cashier {i} ({user.first_name})",
+                            last_name=f"{user.last_name}",
+                            user_type='cashier',
+                            agent=user,
+                            master_agent=user.master_agent,
+                            super_agent=user.super_agent,
+                            is_active=True,
+                            is_staff=True,
+                            is_superuser=False,
+                            cashier_prefix=cashier_prefix_for_cashier
+                        )
+                        # Wallet handled by signal
+                        if current_request_for_messages:
+                            messages.info(current_request_for_messages, f"Cashier account created: {cashier_email}")
 
         return user
 

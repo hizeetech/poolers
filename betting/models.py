@@ -682,12 +682,7 @@ def refund_stake_on_void(sender, instance, **kwargs):
 @receiver(post_save, sender=Result)
 def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     if not created:
-        # Find all selections for this fixture
-        # We use select_related to minimize queries if needed, but for now iterate
-        # Use filter on BetTicket to avoid potential N+1 or inefficient reverse lookups if possible, 
-        # but instance.selections.all() is fine.
-        
-        # Get unique tickets that contain selections for this fixture
+
         tickets = BetTicket.objects.filter(selections__fixture=instance).distinct()
         
         for ticket in tickets:

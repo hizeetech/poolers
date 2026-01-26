@@ -440,7 +440,7 @@ class FixtureAdmin(admin.ModelAdmin):
     ordering = ('-match_date', 'match_time')
 
     class Media:
-        js = ('js/admin_fixture_toggle.js',)
+        js = ('js/admin_fixture_toggle.js?v=2',)
 
     fieldsets = (
         (None, {

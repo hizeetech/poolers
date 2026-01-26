@@ -5,7 +5,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField
+from django.db.models.functions import Cast
 from django.db import transaction as db_transaction
 from django.utils import timezone
 from datetime import timedelta, date
@@ -165,7 +166,9 @@ def fixtures_view(request, period_id=None):
     current_betting_period = None
     if period_id:
         current_betting_period = get_object_or_404(BettingPeriod, id=period_id)
-        fixtures = Fixture.objects.filter(betting_period=current_betting_period).order_by('match_time')
+        fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
+            serial_int=Cast('serial_number', IntegerField())
+        ).order_by('serial_int')
     else:
         # Get the latest open betting period
         current_betting_period = BettingPeriod.objects.filter(
@@ -188,7 +191,9 @@ def fixtures_view(request, period_id=None):
             ).order_by('-start_date').first()
 
         if current_betting_period:
-            fixtures = Fixture.objects.filter(betting_period=current_betting_period).order_by('match_time')
+            fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
+                serial_int=Cast('serial_number', IntegerField())
+            ).order_by('serial_int')
         else:
             fixtures = Fixture.objects.none() # No active period, no fixtures
 

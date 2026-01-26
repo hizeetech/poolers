@@ -74,11 +74,15 @@
             color: #ffffff !important;
         }
         
+        /* Standard Bootstrap behavior for navbar-light (Dark Text) */
         .navbar-light .navbar-nav .nav-link {
-            color: #ffffff !important;
+            color: rgba(0, 0, 0, 0.7) !important;
         }
         .navbar-light .navbar-brand {
-            color: #ffffff !important;
+            color: #000000 !important;
+        }
+        .navbar-light .nav-link:hover {
+             color: {{ site_config.navbar_link_hover_color|default:'#007bff' }} !important;
         }
         
         .btn-outline-light {

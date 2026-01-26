@@ -29,68 +29,97 @@
             <h3 class="mb-3 text-secondary">{{ current_betting_period.name }} Fixtures</h3>
             {% if fixtures %} {% for fixture in fixtures %}
             <div class="card mb-3 shadow-sm rounded-3">
-                <div class="card-body">
-                    <h5 class="card-title text-primary">
-                        {% if fixture.serial_number %}<span class="badge bg-secondary me-2">#{{ fixture.serial_number }}</span>{% endif %}
-                        {{ fixture.home_team }} vs {{ fixture.away_team }}
-                    </h5>
-                    <p class="card-text text-muted">
-                        {{ fixture.match_date|date:"D, M d" }} {{ fixture.match_time|time:"H:i" }}
-                    </p>
-                    <div class="d-flex flex-wrap gap-2" id="fixture-{{ fixture.id }}-buttons">
+                <div class="card-body d-flex flex-column flex-md-row justify-content-between align-items-md-center">
+                    <div class="mb-3 mb-md-0">
+                        <h5 class="card-title text-primary mb-1">
+                            <span class="badge bg-secondary me-2">#{{ forloop.counter }}</span>
+                            {{ fixture.home_team }} vs {{ fixture.away_team }}
+                        </h5>
+                        <p class="card-text text-muted mb-0">
+                            {{ fixture.match_date|date:"D, M d" }} {{ fixture.match_time|time:"H:i" }}
+                        </p>
+                    </div>
+                    
+                    <div class="d-flex flex-wrap gap-2 justify-content-md-end" id="fixture-{{ fixture.id }}-buttons" style="max-width: 100%;">
+                        {% if fixture.home_win_odd %}
                         <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="home_win" data-odd="{{ fixture.home_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} Win ({{ fixture.home_win_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         H: {{ fixture.home_win_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.draw_odd %}
                         <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="draw" data-odd="{{ fixture.draw_odd|floatformat:2 }}" data-selection-text="Draw ({{ fixture.draw_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         D: {{ fixture.draw_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.away_win_odd %}
                         <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="away_win" data-odd="{{ fixture.away_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.away_team }} Win ({{ fixture.away_win_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         A: {{ fixture.away_win_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
                         <!-- Additional Bet Types -->
+                        {% if fixture.home_dnb_odd %}
                         <button class="btn btn-outline-info btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="home_dnb" data-odd="{{ fixture.home_dnb_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} DNB ({{ fixture.home_dnb_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         H DNB: {{ fixture.home_dnb_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.away_dnb_odd %}
                         <button class="btn btn-outline-info btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="away_dnb" data-odd="{{ fixture.away_dnb_odd|floatformat:2 }}" data-selection-text="{{ fixture.away_team }} DNB ({{ fixture.away_dnb_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         A DNB: {{ fixture.away_dnb_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.over_1_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_1_5" data-odd="{{ fixture.over_1_5_odd|floatformat:2 }}" data-selection-text="Over 1.5 Goals ({{ fixture.over_1_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         O 1.5: {{ fixture.over_1_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.under_1_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_1_5" data-odd="{{ fixture.under_1_5_odd|floatformat:2 }}" data-selection-text="Under 1.5 Goals ({{ fixture.under_1_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         U 1.5: {{ fixture.under_1_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.over_2_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_2_5" data-odd="{{ fixture.over_2_5_odd|floatformat:2 }}" data-selection-text="Over 2.5 Goals ({{ fixture.over_2_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         O 2.5: {{ fixture.over_2_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.under_2_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_2_5" data-odd="{{ fixture.under_2_5_odd|floatformat:2 }}" data-selection-text="Under 2.5 Goals ({{ fixture.under_2_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         U 2.5: {{ fixture.under_2_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.over_3_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="over_3_5" data-odd="{{ fixture.over_3_5_odd|floatformat:2 }}" data-selection-text="Over 3.5 Goals ({{ fixture.over_3_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         O 3.5: {{ fixture.over_3_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.under_3_5_odd %}
                         <button class="btn btn-outline-secondary btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="under_3_5" data-odd="{{ fixture.under_3_5_odd|floatformat:2 }}" data-selection-text="Under 3.5 Goals ({{ fixture.under_3_5_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         U 3.5: {{ fixture.under_3_5_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.btts_yes_odd %}
                         <button class="btn btn-outline-success btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="btts_yes" data-odd="{{ fixture.btts_yes_odd|floatformat:2 }}" data-selection-text="BTTS Yes ({{ fixture.btts_yes_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         BTTS Y: {{ fixture.btts_yes_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
+                        {% if fixture.btts_no_odd %}
                         <button class="btn btn-outline-danger btn-sm px-3 rounded-pill bet-selection-btn" data-fixture-id="{{ fixture.id }}" data-bet-type="btts_no" data-odd="{{ fixture.btts_no_odd|floatformat:2 }}" data-selection-text="BTTS No ({{ fixture.btts_no_odd|floatformat:2 }})"
                             data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
                                         BTTS N: {{ fixture.btts_no_odd|floatformat:2 }}
                                     </button>
+                        {% endif %}
                     </div>
                 </div>
             </div>

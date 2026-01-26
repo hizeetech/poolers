@@ -352,19 +352,120 @@ class BettingPeriodForm(forms.ModelForm):
 
 # --- Fixture Form (Admin) ---
 class FixtureForm(forms.ModelForm):
+    # Activeness Checkboxes for Game Options
+    active_home_win_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_draw_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_away_win_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    
+    active_over_1_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_under_1_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    
+    active_over_2_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_under_2_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    
+    active_over_3_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_under_3_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    
+    active_btts_yes_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_btts_no_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    
+    active_home_dnb_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_away_dnb_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+
+    class Media:
+        js = ('js/admin_fixture_toggle.js',)
+
     class Meta:
         model = Fixture
-        fields = ['betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'home_win_odd', 'draw_odd', 'away_win_odd']
+        fields = [
+            'betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'serial_number', 'status', 'is_active',
+            'home_win_odd', 'draw_odd', 'away_win_odd',
+            'over_1_5_odd', 'under_1_5_odd',
+            'over_2_5_odd', 'under_2_5_odd',
+            'over_3_5_odd', 'under_3_5_odd',
+            'btts_yes_odd', 'btts_no_odd',
+            'home_dnb_odd', 'away_dnb_odd'
+        ]
         widgets = {
             'betting_period': forms.Select(attrs={'class': 'form-control'}),
             'match_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
             'match_time': forms.TimeInput(attrs={'type': 'time', 'class': 'form-control'}),
             'home_team': forms.TextInput(attrs={'class': 'form-control'}),
             'away_team': forms.TextInput(attrs={'class': 'form-control'}),
-            'home_win_odd': forms.NumberInput(attrs={'class': 'form-control'}),
-            'draw_odd': forms.NumberInput(attrs={'class': 'form-control'}),
-            'away_win_odd': forms.NumberInput(attrs={'class': 'form-control'}),
+            'serial_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'status': forms.Select(attrs={'class': 'form-control'}),
+            'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            
+            'home_win_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'draw_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'away_win_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            
+            'over_1_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'under_1_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            
+            'over_2_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'under_2_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            
+            'over_3_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'under_3_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            
+            'btts_yes_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'btts_no_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            
+            'home_dnb_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'away_dnb_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            odds_fields = [
+                'home_win_odd', 'draw_odd', 'away_win_odd',
+                'over_1_5_odd', 'under_1_5_odd',
+                'over_2_5_odd', 'under_2_5_odd',
+                'over_3_5_odd', 'under_3_5_odd',
+                'btts_yes_odd', 'btts_no_odd',
+                'home_dnb_odd', 'away_dnb_odd'
+            ]
+            for field in odds_fields:
+                active_field = f"active_{field}"
+                if getattr(self.instance, field) is None:
+                    self.fields[active_field].initial = False
+                else:
+                    self.fields[active_field].initial = True
+
+        self.order_fields([
+            'betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'serial_number', 'status', 'is_active',
+            'active_home_win_odd', 'home_win_odd',
+            'active_draw_odd', 'draw_odd',
+            'active_away_win_odd', 'away_win_odd',
+            'active_over_1_5_odd', 'over_1_5_odd',
+            'active_under_1_5_odd', 'under_1_5_odd',
+            'active_over_2_5_odd', 'over_2_5_odd',
+            'active_under_2_5_odd', 'under_2_5_odd',
+            'active_over_3_5_odd', 'over_3_5_odd',
+            'active_under_3_5_odd', 'under_3_5_odd',
+            'active_btts_yes_odd', 'btts_yes_odd',
+            'active_btts_no_odd', 'btts_no_odd',
+            'active_home_dnb_odd', 'home_dnb_odd',
+            'active_away_dnb_odd', 'away_dnb_odd',
+        ])
+
+    def clean(self):
+        cleaned_data = super().clean()
+        odds_fields = [
+            'home_win_odd', 'draw_odd', 'away_win_odd',
+            'over_1_5_odd', 'under_1_5_odd',
+            'over_2_5_odd', 'under_2_5_odd',
+            'over_3_5_odd', 'under_3_5_odd',
+            'btts_yes_odd', 'btts_no_odd',
+            'home_dnb_odd', 'away_dnb_odd'
+        ]
+        for field in odds_fields:
+            active_field = f"active_{field}"
+            if not cleaned_data.get(active_field):
+                cleaned_data[field] = None
+        return cleaned_data
 
 
 # --- Declare Result Form (Admin) ---

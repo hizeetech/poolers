@@ -23,7 +23,8 @@ from .forms import (
     UserCreationForm, 
     UserChangeForm, 
     WithdrawalActionForm, 
-    DeclareResultForm # Removed AdminUserEditForm as it's consolidated
+    DeclareResultForm,
+    FixtureForm
 )
 
 from .models import (
@@ -431,11 +432,38 @@ class BettingPeriodAdmin(admin.ModelAdmin):
 
 # --- Fixture Admin ---
 class FixtureAdmin(admin.ModelAdmin):
+    form = FixtureForm
     list_display = ('home_team', 'away_team', 'match_date', 'match_time', 'betting_period', 'serial_number', 'status', 'is_active')
     list_editable = ('is_active',)
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
     ordering = ('-match_date', 'match_time')
+
+    class Media:
+        js = ('js/admin_fixture_toggle.js',)
+
+    fieldsets = (
+        (None, {
+            'fields': ('betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'serial_number', 'status', 'is_active')
+        }),
+        ('Odds', {
+            'fields': (
+                ('active_home_win_odd', 'home_win_odd'),
+                ('active_draw_odd', 'draw_odd'),
+                ('active_away_win_odd', 'away_win_odd'),
+                ('active_over_1_5_odd', 'over_1_5_odd'),
+                ('active_under_1_5_odd', 'under_1_5_odd'),
+                ('active_over_2_5_odd', 'over_2_5_odd'),
+                ('active_under_2_5_odd', 'under_2_5_odd'),
+                ('active_over_3_5_odd', 'over_3_5_odd'),
+                ('active_under_3_5_odd', 'under_3_5_odd'),
+                ('active_btts_yes_odd', 'btts_yes_odd'),
+                ('active_btts_no_odd', 'btts_no_odd'),
+                ('active_home_dnb_odd', 'home_dnb_odd'),
+                ('active_away_dnb_odd', 'away_dnb_odd'),
+            )
+        }),
+    )
 
 # --- Result Admin ---
 class ResultAdmin(admin.ModelAdmin):
@@ -539,6 +567,14 @@ betting_admin_site.register(GroupResult, GroupResultAdmin)
 
 # Site Configuration Admin
 class SiteConfigurationAdmin(admin.ModelAdmin):
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Set input_type to 'color' to render the native color picker
+        form.base_fields['navbar_gradient_start'].widget.input_type = 'color'
+        form.base_fields['navbar_gradient_end'].widget.input_type = 'color'
+        form.base_fields['navbar_link_hover_color'].widget.input_type = 'color'
+        return form
+
     def has_add_permission(self, request):
         if self.model.objects.exists():
             return False

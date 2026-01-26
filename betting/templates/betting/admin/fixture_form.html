@@ -3,6 +3,7 @@
     <h2 class="h3 mb-4 text-dark fw-semibold">{% if form.instance.pk %}Edit Fixture{% else %}Add New Fixture{% endif %}</h2>
 
     <form method="post" action="{% if form.instance.pk %}{% url 'betting_admin:edit_fixture' fixture_id=form.instance.pk %}{% else %}{% url 'betting_admin:add_fixture' %}{% endif %}" class="p-4 bg-light rounded-lg shadow-sm">
+        {{ form.media }}
         {% csrf_token %} {% if form.errors %}
         <div class="alert alert-danger" role="alert">
             Please correct the following errors:

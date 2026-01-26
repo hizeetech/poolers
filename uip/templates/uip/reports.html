@@ -1,0 +1,89 @@
+{% extends 'betting/base.html' %}
+
+{% block title %}Automated Reporting{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Automated Reporting Center</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <div class="row">
+        <!-- Financial Reports -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 bg-primary text-white">
+                    <h6 class="m-0 font-weight-bold">Financial Reports</h6>
+                </div>
+                <div class="card-body">
+                    <p>Export daily financial metrics including Turnover, GGR, and Net Profit.</p>
+                    <form method="get" action="{% url 'uip:export_financials' %}">
+                        <div class="form-group mb-3">
+                            <label>Date Range</label>
+                            <div class="input-group">
+                                <input type="date" name="start_date" class="form-control" required>
+                                <span class="input-group-text">to</span>
+                                <input type="date" name="end_date" class="form-control" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block w-100">
+                            <i class="fas fa-download fa-sm text-white-50 mr-2"></i> Download CSV
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent Performance -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 bg-success text-white">
+                    <h6 class="m-0 font-weight-bold">Agent Performance</h6>
+                </div>
+                <div class="card-body">
+                    <p>Detailed breakdown of agent sales, ticket counts, and payouts.</p>
+                    <form method="get" action="{% url 'uip:export_agents' %}">
+                        <div class="form-group mb-3">
+                            <label>Date Range</label>
+                            <div class="input-group">
+                                <input type="date" name="start_date" class="form-control" required>
+                                <span class="input-group-text">to</span>
+                                <input type="date" name="end_date" class="form-control" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-success btn-block w-100">
+                            <i class="fas fa-download fa-sm text-white-50 mr-2"></i> Download CSV
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit Logs -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 bg-warning text-white">
+                    <h6 class="m-0 font-weight-bold">Audit & Compliance Logs</h6>
+                </div>
+                <div class="card-body">
+                    <p>Full export of system activity logs for compliance auditing.</p>
+                    <form method="get" action="{% url 'uip:export_audit' %}">
+                        <div class="form-group mb-3">
+                            <label>Date Range</label>
+                            <div class="input-group">
+                                <input type="date" name="start_date" class="form-control" required>
+                                <span class="input-group-text">to</span>
+                                <input type="date" name="end_date" class="form-control" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-warning btn-block w-100">
+                            <i class="fas fa-file-csv fa-sm text-white-50 mr-2"></i> Download CSV
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

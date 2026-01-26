@@ -1,0 +1,14 @@
+[Unit]
+Description=Celery Worker for PoolBetting
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/poolbetting-main
+ExecStart=/root/poolbetting-main/env/bin/celery -A poolbetting worker -l INFO -Q celery,commission_queue,uip_queue,risk_queue
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

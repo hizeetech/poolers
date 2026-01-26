@@ -1,0 +1,181 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Risk & Fraud Monitoring{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Risk & Fraud Monitoring</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Alert Cards -->
+    <div class="row">
+        <!-- Suspicious IPs -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-danger shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-danger text-uppercase mb-1">
+                                Suspicious IPs (Multi-User)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.suspicious_ips.count }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-network-wired fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bonus Abusers -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                                Potential Bonus Abuse</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.bonus_abusers.count }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-gift fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Large Bets -->
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-info shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
+                                Recent Large Bets</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.large_bets.count }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-money-bill-wave fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Suspicious IPs Table -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 bg-danger text-white">
+                    <h6 class="m-0 font-weight-bold">Suspicious IP Addresses (Multiple Accounts)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>IP Address</th>
+                                    <th>Distinct Users</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for ip in metrics.suspicious_ips %}
+                                <tr>
+                                    <td>{{ ip.ip_address }}</td>
+                                    <td>{{ ip.user_count }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="2" class="text-center">No suspicious IPs detected this week.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- High Winners Table -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Winners (This Week)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                         <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>User Email</th>
+                                    <th>Total Won</th>
+                                    <th>Wins</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for winner in metrics.high_winners %}
+                                <tr>
+                                    <td>{{ winner.user__email }}</td>
+                                    <td>₦{{ winner.total_won|intcomma }}</td>
+                                    <td>{{ winner.win_count }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="3" class="text-center">No major winners this week.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <!-- Large Bets Table -->
+        <div class="col-lg-12 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Recent Large Bets (> ₦10,000)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Ticket ID</th>
+                                    <th>User</th>
+                                    <th>Stake</th>
+                                    <th>Max Winning</th>
+                                    <th>Placed At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for bet in metrics.large_bets %}
+                                <tr>
+                                    <td>{{ bet.ticket_id }}</td>
+                                    <td>{{ bet.user.email }}</td>
+                                    <td>₦{{ bet.stake_amount|intcomma }}</td>
+                                    <td>₦{{ bet.max_winning|intcomma }}</td>
+                                    <td>{{ bet.placed_at }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="5" class="text-center">No large bets recorded recently.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

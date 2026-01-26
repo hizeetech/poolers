@@ -7,8 +7,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@shared_task(name='commission.tasks.process_commissions')
-def process_commissions(payout=False):
+@shared_task(
+    name='commission.tasks.process_commissions',
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=5, # Exponential backoff starting at 5s
+    max_retries=5,
+    retry_kwargs={'max_retries': 5}
+)
+def process_commissions(self, payout=False):
     """
     Process agent commissions (calculation and optional payout).
     This task can be scheduled to run periodically (e.g., every Monday).

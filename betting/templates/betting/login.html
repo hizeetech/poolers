@@ -6,15 +6,7 @@
                 <div class="card-body p-4 p-md-5">
                     <h2 class="card-title text-center mb-4 fw-bold text-dark">Login to Your Account</h2>
 
-                    {# Display Django messages #} {% if messages %}
-                    <ul class="messages list-unstyled px-0 mx-0">
-                        {% for message in messages %}
-                        <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
-                            {{ message }}
-                        </li>
-                        {% endfor %}
-                    </ul>
-                    {% endif %} {# Form starts here #}
+                    {# Form starts here #}
                     <form method="post" action="{% url 'betting:login' %}" class="needs-validation" novalidate>
                         {% csrf_token %}
                         <div class="mb-3">

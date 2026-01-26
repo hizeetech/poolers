@@ -1,0 +1,12 @@
+{% extends 'betting/base.html' %}
+
+{% block title %}Server Error{% endblock %}
+
+{% block content %}
+<div class="container py-5 text-center">
+    <h1 class="display-1 fw-bold text-muted">500</h1>
+    <h2 class="mb-4">Server Error</h2>
+    <p class="lead mb-4">Something went wrong on our end. We are working to fix it. Please try again later.</p>
+    <a href="{% url 'betting:frontpage' %}" class="btn btn-primary rounded-pill px-4">Go to Homepage</a>
+</div>
+{% endblock %}

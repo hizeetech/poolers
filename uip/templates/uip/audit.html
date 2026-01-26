@@ -1,0 +1,113 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Audit & Compliance Logs{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Audit & Compliance Logs</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Filters -->
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">Filter Logs</h6>
+        </div>
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label">User Email</label>
+                    <input type="text" name="email" class="form-control" placeholder="Search by email..." value="{{ request.GET.email }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Action Type</label>
+                    <select name="action_type" class="form-select form-control">
+                        <option value="">All Actions</option>
+                        <option value="LOGIN" {% if request.GET.action_type == 'LOGIN' %}selected{% endif %}>Login</option>
+                        <option value="CREATE" {% if request.GET.action_type == 'CREATE' %}selected{% endif %}>Create</option>
+                        <option value="UPDATE" {% if request.GET.action_type == 'UPDATE' %}selected{% endif %}>Update</option>
+                        <option value="DELETE" {% if request.GET.action_type == 'DELETE' %}selected{% endif %}>Delete</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Date</label>
+                    <input type="date" name="date" class="form-control" value="{{ request.GET.date }}">
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Logs Table -->
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">System Activity</h6>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover" width="100%" cellspacing="0">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>User</th>
+                            <th>Action Type</th>
+                            <th>Description</th>
+                            <th>IP Address</th>
+                            <th>Affected Object</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                            <td>
+                                {% if log.user %}
+                                    <span class="badge bg-secondary">{{ log.user.user_type|upper }}</span> {{ log.user.email }}
+                                {% else %}
+                                    <span class="text-muted">System/Anonymous</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if log.action_type == 'DELETE' or log.action_type == 'critical' %}
+                                    <span class="badge badge-danger bg-danger">{{ log.action_type }}</span>
+                                {% elif log.action_type == 'UPDATE' %}
+                                    <span class="badge badge-warning bg-warning">{{ log.action_type }}</span>
+                                {% else %}
+                                    <span class="badge badge-info bg-info">{{ log.action_type }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ log.action }}</td>
+                            <td>{{ log.ip_address }}</td>
+                            <td>{{ log.affected_object|default:"-" }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center">No audit logs found matching criteria.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Pagination -->
+            {% if logs.has_other_pages %}
+            <nav aria-label="Page navigation">
+                <ul class="pagination justify-content-center">
+                    {% if logs.has_previous %}
+                    <li class="page-item"><a class="page-link" href="?page={{ logs.previous_page_number }}{% if request.GET.email %}&email={{ request.GET.email }}{% endif %}{% if request.GET.action_type %}&action_type={{ request.GET.action_type }}{% endif %}">Previous</a></li>
+                    {% endif %}
+                    <li class="page-item disabled"><span class="page-link">Page {{ logs.number }} of {{ logs.paginator.num_pages }}</span></li>
+                    {% if logs.has_next %}
+                    <li class="page-item"><a class="page-link" href="?page={{ logs.next_page_number }}{% if request.GET.email %}&email={{ request.GET.email }}{% endif %}{% if request.GET.action_type %}&action_type={{ request.GET.action_type }}{% endif %}">Next</a></li>
+                    {% endif %}
+                </ul>
+            </nav>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

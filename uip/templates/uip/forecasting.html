@@ -1,0 +1,134 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Forecasting & Projections{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Forecasting & Projections</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Trend Overview -->
+    <div class="row">
+        <div class="col-xl-6 col-md-12 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
+                                Projected Turnover Trend (Next 7 Days)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ forecast.trend }}</div>
+                            <small class="text-muted">Slope Factor: {{ forecast.slope }}</small>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-chart-line fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-xl-6 col-md-12 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+                                Peak Betting Hour (Last 7 Days)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">
+                                {% if peak_periods %}
+                                    {{ peak_periods.0.hour }}:00 - {{ peak_periods.0.hour|add:"1" }}:00
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </div>
+                            <small class="text-muted">
+                                {% if peak_periods %}
+                                Volume: ₦{{ peak_periods.0.volume|intcomma }}
+                                {% endif %}
+                            </small>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-clock fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Turnover Prediction Table -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Turnover Prediction (Next 7 Days)</h6>
+                </div>
+                <div class="card-body">
+                    {% if forecast.prediction_type == 'Insufficient Data' %}
+                        <div class="alert alert-warning">
+                            Not enough historical data to generate predictions. The system requires at least 2 days of aggregated daily metrics.
+                        </div>
+                    {% else %}
+                        <div class="table-responsive">
+                            <table class="table table-bordered" width="100%" cellspacing="0">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Predicted Turnover</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for day in forecast.next_7_days %}
+                                    <tr>
+                                        <td>{{ day.date|date:"D, M d" }}</td>
+                                        <td>₦{{ day.predicted_turnover|intcomma }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Peak Periods Table -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Peak Betting Hours (Volume Analysis)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                         <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Hour of Day</th>
+                                    <th>Ticket Volume</th>
+                                    <th>Tickets Count</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for period in peak_periods %}
+                                <tr>
+                                    <td>{{ period.hour }}:00 - {{ period.hour|add:"1" }}:00</td>
+                                    <td>₦{{ period.volume|intcomma }}</td>
+                                    <td>{{ period.count|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="3" class="text-center">No recent betting activity to analyze.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

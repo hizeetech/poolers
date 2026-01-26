@@ -15,8 +15,16 @@ urlpatterns = [
     # IMPORTANT: Add the 'namespace' argument here for your betting app.
     path('', include(('betting.urls', 'betting'), namespace='betting')),
     path('commission/', include('commission.urls')),
+    path('uip/', include('uip.urls')),
 ]
 
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+    # Enable error page preview in DEBUG mode
+    from django.views.defaults import page_not_found, server_error
+    urlpatterns += [
+        path('404/', lambda request: page_not_found(request, Exception("Test 404"))),
+        path('500/', server_error),
+    ]

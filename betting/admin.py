@@ -29,7 +29,7 @@ from .forms import (
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
-    SiteConfiguration
+    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog
 )
 
 
@@ -86,6 +86,16 @@ class BettingAdminSite(admin.AdminSite):
 betting_admin_site = BettingAdminSite(name='betting_admin')
 
 
+class LoginAttemptAdmin(admin.ModelAdmin):
+    list_display = ('username_attempted', 'status', 'ip_address', 'timestamp', 'user')
+    list_filter = ('status', 'timestamp')
+    search_fields = ('username_attempted', 'ip_address', 'user__email')
+    readonly_fields = ('timestamp',)
+
+    def has_add_permission(self, request):
+        return False
+
+
 # --- Custom User Admin ---
 class CustomUserAdmin(UserAdmin):
     # Use our custom forms for creation and editing in the Django admin
@@ -94,11 +104,13 @@ class CustomUserAdmin(UserAdmin):
 
     list_display = (
         'email', 'first_name', 'last_name', 'user_type', 'is_staff', 'is_active',
+        'is_locked', 'failed_login_attempts',
         'get_phone_number', 'get_shop_address', 'get_master_agent', 'get_super_agent', 'agent',
         'cashier_prefix'
     )
     list_filter = (
-        'user_type', 'is_staff', 'is_active', 'is_superuser', 'master_agent', 'super_agent', 'agent'
+        'user_type', 'is_active', 'is_staff', 'is_locked', 
+        'date_joined', 'last_login'
     )
     search_fields = (
         'email', 'first_name', 'last_name', 'phone_number'
@@ -107,24 +119,47 @@ class CustomUserAdmin(UserAdmin):
         'email',
     )
     
-    # Custom fieldsets for displaying fields in the change form
+    actions = ['unlock_accounts']
+
+    def unlock_accounts(self, request, queryset):
+        updated_count = queryset.update(
+            is_locked=False,
+            failed_login_attempts=0,
+            last_failed_login=None,
+            locked_at=None,
+            lock_reason=None
+        )
+        
+        # Log the unlock action for each user
+        for user in queryset:
+            LoginAttempt.objects.create(
+                user=user,
+                username_attempted=user.email,
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                status='unlocked'
+            )
+            
+        self.message_user(request, f"{updated_count} account(s) successfully unlocked.")
+    unlock_accounts.short_description = "Unlock selected accounts"
+
     fieldsets = (
-        (None, {'fields': ('email', 'password')}), # email is the USERNAME_FIELD
+        (None, {'fields': ('email', 'password')}), 
         ('Personal info', {'fields': ('first_name', 'last_name', 'phone_number', 'shop_address')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions', 'user_type')}),
         ('Hierarchy', {'fields': ('master_agent', 'super_agent', 'agent', 'cashier_prefix')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
+        ('Security & Locking', {'fields': ('is_locked', 'failed_login_attempts', 'last_failed_login', 'locked_at', 'lock_reason')}),
     )
 
-    # Custom fieldsets for the add form
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
             'fields': (
-                'email', 'password', 'password2', # password2 is part of UserCreationForm
+                'email', 'password', 'password2', 
                 'first_name', 'last_name', 'phone_number', 'shop_address',
-                'user_type', 'is_active', 'is_staff', 'is_superuser', # Default user permissions
-                'groups', 'user_permissions', # For managing groups and permissions during creation
+                'user_type', 'is_active', 'is_staff', 'is_superuser', 
+                'groups', 'user_permissions', 
                 'master_agent', 'super_agent', 'agent', 'cashier_prefix'
             ),
         }),
@@ -411,18 +446,85 @@ class ResultAdmin(admin.ModelAdmin):
     ordering = ('-match_date', 'match_time')
 
 
+# --- Wallet Admin ---
+class WalletAdmin(admin.ModelAdmin):
+    list_display = ('user', 'balance', 'last_updated')
+    search_fields = ('user__username', 'user__email')
+    list_select_related = ('user',)
+    readonly_fields = ('last_updated',)
+
+# --- Transaction Admin ---
+class TransactionAdmin(admin.ModelAdmin):
+    list_display = ('timestamp', 'user', 'transaction_type', 'amount', 'status', 'is_successful')
+    list_filter = ('transaction_type', 'status', 'is_successful', 'timestamp')
+    search_fields = ('user__username', 'user__email', 'paystack_reference', 'description', 'id')
+    readonly_fields = ('timestamp',)
+    date_hierarchy = 'timestamp'
+    list_select_related = ('user',)
+
+# --- UserWithdrawal Admin ---
+class UserWithdrawalAdmin(admin.ModelAdmin):
+    list_display = ('user', 'amount', 'bank_name', 'account_number', 'account_name', 'status', 'request_time')
+    list_editable = ('status',)
+    list_filter = ('status', 'request_time', 'bank_name')
+    search_fields = ('user__username', 'user__email', 'account_number', 'account_name')
+    readonly_fields = ('request_time', 'approved_rejected_time')
+    date_hierarchy = 'request_time'
+    list_select_related = ('user',)
+
 # Register your models with the CUSTOM admin site
 betting_admin_site.register(User, CustomUserAdmin)
-betting_admin_site.register(Wallet)
-betting_admin_site.register(Transaction)
+betting_admin_site.register(Wallet, WalletAdmin)
+betting_admin_site.register(Transaction, TransactionAdmin)
 betting_admin_site.register(BettingPeriod, BettingPeriodAdmin)
 betting_admin_site.register(Fixture, FixtureAdmin)
 betting_admin_site.register(Result, ResultAdmin)
 betting_admin_site.register(BetTicket, BetTicketAdmin)
 betting_admin_site.register(BonusRule)
 betting_admin_site.register(SystemSetting)
-betting_admin_site.register(UserWithdrawal)
-betting_admin_site.register(ActivityLog)
+betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
+# Activity Log Admin
+class ActivityLogAdmin(admin.ModelAdmin):
+    list_display = ('timestamp', 'user', 'action_type_badge', 'affected_object', 'ip_address', 'isp', 'mac_address_display')
+    list_filter = ('action_type', 'timestamp', 'user')
+    search_fields = ('user__username', 'user__email', 'ip_address', 'isp', 'action', 'affected_object')
+    readonly_fields = [field.name for field in ActivityLog._meta.fields]
+    list_per_page = 50
+    date_hierarchy = 'timestamp'
+    list_select_related = ('user',)
+    
+    def has_add_permission(self, request):
+        return False
+        
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def action_type_badge(self, obj):
+        from django.utils.html import format_html
+        colors = {
+            'CREATE': 'green',
+            'UPDATE': 'orange',
+            'DELETE': 'red',
+            'LOGIN': 'blue',
+            'LOGOUT': 'gray',
+            'BET_PLACED': 'purple',
+            'PAYOUT': 'gold',
+        }
+        color = colors.get(obj.action_type, 'black')
+        return format_html(
+            '<span style="color: white; background-color: {}; padding: 3px 10px; border-radius: 5px; font-weight: bold;">{}</span>',
+            color,
+            obj.get_action_type_display()
+        )
+    action_type_badge.short_description = 'Action'
+
+    def mac_address_display(self, obj):
+        if obj.mac_address:
+            return obj.mac_address
+        return "Unavailable (External Network)"
+    mac_address_display.short_description = "MAC Address"
+
+betting_admin_site.register(ActivityLog, ActivityLogAdmin)
 
 # Register Celery Beat models
 betting_admin_site.register(PeriodicTask, PeriodicTaskAdmin)
@@ -447,3 +549,32 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
 
 betting_admin_site.register(SiteConfiguration, SiteConfigurationAdmin)
 
+# --- Credit & Loan Admin ---
+
+@admin.register(CreditRequest)
+class CreditRequestAdmin(admin.ModelAdmin):
+    list_display = ('requester', 'recipient', 'amount', 'request_type', 'status', 'created_at')
+    list_filter = ('status', 'request_type', 'created_at')
+    search_fields = ('requester__email', 'recipient__email', 'reason')
+    readonly_fields = ('created_at', 'updated_at')
+
+@admin.register(Loan)
+class LoanAdmin(admin.ModelAdmin):
+    list_display = ('borrower', 'lender', 'amount', 'outstanding_balance', 'status', 'created_at', 'due_date')
+    list_filter = ('status', 'created_at')
+    search_fields = ('borrower__email', 'lender__email')
+    readonly_fields = ('created_at',)
+
+class CreditLogAdmin(admin.ModelAdmin):
+    list_display = ('actor', 'target_user', 'action_type', 'amount', 'status', 'timestamp')
+    list_filter = ('action_type', 'status', 'timestamp')
+    search_fields = ('actor__email', 'target_user__email', 'reference_id')
+    readonly_fields = ('timestamp',)
+
+# Register these with custom admin site as well if needed
+betting_admin_site.register(CreditRequest, CreditRequestAdmin)
+betting_admin_site.register(Loan, LoanAdmin)
+betting_admin_site.register(CreditLog, CreditLogAdmin)
+
+
+betting_admin_site.register(LoginAttempt, LoginAttemptAdmin)

@@ -25,6 +25,10 @@ urlpatterns = [
     path('deposit/verify/', views.verify_deposit, name='verify_deposit'),
     path('withdraw/', views.withdraw_funds, name='withdraw_funds'),
     path('wallet-transfer/', views.wallet_transfer, name='wallet_transfer'),
+    path('credit-request/submit/', views.submit_credit_request, name='submit_credit_request'),
+    path('credit-request/manage/', views.manage_credit_requests, name='manage_credit_requests'),
+    path('credit-request/approve/<int:request_id>/', views.approve_credit_request, name='approve_credit_request'),
+    path('loan/settle/<int:loan_id>/', views.settle_loan, name='settle_loan'),
 
     # User Profile & Dashboard
     path('dashboard/', views.user_dashboard, name='user_dashboard'),
@@ -71,6 +75,10 @@ urlpatterns = [
     path('admin_ticket_details/<uuid:ticket_id>/', views.admin_ticket_details, name='admin_ticket_details'),
     path('admin_void_ticket_single/<uuid:ticket_id>/', views.admin_void_ticket_single, name='admin_void_ticket_single'),
     path('admin_settle_won_ticket_single/<uuid:ticket_id>/', views.admin_settle_won_ticket_single, name='admin_settle_won_ticket_single'),
+
+    # Account User URLs
+    path('account-user/dashboard/', views.account_user_dashboard, name='account_user_dashboard'),
+    path('super-admin/fund-account-user/', views.super_admin_fund_account_user, name='super_admin_fund_account_user'),
 
     # API endpoints
     path('api/betting-periods/', views.api_betting_periods, name='api_betting_periods'),

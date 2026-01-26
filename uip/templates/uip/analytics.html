@@ -1,0 +1,150 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Agent & User Analytics{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Agent & User Analytics</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Key Metrics Row -->
+    <div class="row">
+        <!-- New Users (Month) -->
+        <div class="col-xl-4 col-md-6 mb-4">
+            <div class="card border-left-info shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
+                                New Users (This Month)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.new_users_month|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-user-plus fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Users (Month) -->
+        <div class="col-xl-4 col-md-6 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+                                Active Users (This Month)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ metrics.active_users_month|intcomma }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-users fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Total Agents (Placeholder for now if not in metrics) -->
+        <div class="col-xl-4 col-md-6 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                                Top Performing Agent (Week)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">
+                                {% if metrics.top_agents_week %}
+                                    {{ metrics.top_agents_week.0.email }}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-trophy fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Top Agents Table -->
+        <div class="col-lg-8 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Agents (Weekly Performance)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" id="dataTable" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Agent Email</th>
+                                    <th>Sales Volume</th>
+                                    <th>Tickets Sold</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for agent in metrics.top_agents_week %}
+                                <tr>
+                                    <td>{{ agent.email }}</td>
+                                    <td>₦{{ agent.weekly_sales|intcomma }}</td>
+                                    <td>{{ agent.weekly_tickets|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="3" class="text-center">No agent activity recorded this week.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ticket Status Distribution -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Ticket Status (Month)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                         <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Count</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in metrics.ticket_status_dist %}
+                                <tr>
+                                    <td>
+                                        <span class="badge badge-{% if item.status == 'won' %}success{% elif item.status == 'lost' %}danger{% elif item.status == 'pending' %}warning{% else %}secondary{% endif %}">
+                                            {{ item.status|title }}
+                                        </span>
+                                    </td>
+                                    <td>{{ item.count|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="2" class="text-center">No tickets found.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

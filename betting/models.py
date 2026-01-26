@@ -678,15 +678,15 @@ def refund_stake_on_void(sender, instance, **kwargs):
         except BetTicket.DoesNotExist:
             pass
 
-# @receiver(post_save, sender=Fixture)
-# @receiver(post_save, sender=Result)
-# def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
-#     if not created:
+@receiver(post_save, sender=Fixture)
+@receiver(post_save, sender=Result)
+def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
+    if not created:
 
-#         tickets = BetTicket.objects.filter(selections__fixture=instance).distinct()
+        tickets = BetTicket.objects.filter(selections__fixture=instance).distinct()
         
-#         for ticket in tickets:
-#             ticket.check_and_update_status()
+        for ticket in tickets:
+            ticket.check_and_update_status()
 
 class CreditRequest(models.Model):
     STATUS_CHOICES = (

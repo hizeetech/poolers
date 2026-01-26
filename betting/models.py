@@ -250,19 +250,19 @@ class Fixture(models.Model):
     is_active = models.BooleanField(default=True)
 
     # Odds Fields
-    home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    draw_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    away_win_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    over_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    under_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    over_2_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    under_2_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    over_3_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    under_3_5_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    btts_yes_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    btts_no_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    home_dnb_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
-    away_dnb_odd = models.DecimalField(max_digits=5, decimal_places=2, default=1.00)
+    home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    away_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    over_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    under_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    over_2_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    under_2_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    over_3_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    under_3_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    btts_yes_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    btts_no_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    home_dnb_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    away_dnb_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
     def __str__(self):
         return f"{self.home_team} vs {self.away_team}"

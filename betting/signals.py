@@ -21,16 +21,16 @@ def fetch_and_update_isp(log_id, ip_address):
     except Exception as e:
         print(f"Failed to update ISP for log {log_id}: {e}")
 
-@receiver(post_save, sender=ActivityLog)
-def enrich_activity_log(sender, instance, created, **kwargs):
-    if created and instance.ip_address and not instance.isp:
-        # Run in a separate thread to avoid blocking the response
-        thread = threading.Thread(
-            target=fetch_and_update_isp, 
-            args=(instance.id, instance.ip_address)
-        )
-        thread.daemon = True
-        thread.start()
+# @receiver(post_save, sender=ActivityLog)
+# def enrich_activity_log(sender, instance, created, **kwargs):
+#     if created and instance.ip_address and not instance.isp:
+#         # Run in a separate thread to avoid blocking the response
+#         thread = threading.Thread(
+#             target=fetch_and_update_isp, 
+#             args=(instance.id, instance.ip_address)
+#         )
+#         thread.daemon = True
+#         thread.start()
 
 @receiver(user_logged_in)
 def log_user_login(sender, request, user, **kwargs):
@@ -61,60 +61,60 @@ def log_user_logout(sender, request, user, **kwargs):
 def should_skip_logging(sender):
     return sender == ActivityLog
 
-@receiver(post_save, sender=User)
-def log_user_changes(sender, instance, created, **kwargs):
-    user = get_current_user()
+# @receiver(post_save, sender=User)
+# def log_user_changes(sender, instance, created, **kwargs):
+#     user = get_current_user()
     
     
-    if user and not user.is_authenticated:
-        user = None
+#     if user and not user.is_authenticated:
+#         user = None
     
     
-    if not user:
-        user = instance
+#     if not user:
+#         user = instance
 
-    request = get_current_request()
-    ip = get_client_ip(request) if request else None
+#     request = get_current_request()
+#     ip = get_client_ip(request) if request else None
     
-    action_type = 'CREATE' if created else 'UPDATE'
-    action_desc = f"User {'created' if created else 'updated'}: {instance.email}"
+#     action_type = 'CREATE' if created else 'UPDATE'
+#     action_desc = f"User {'created' if created else 'updated'}: {instance.email}"
     
     
-    ActivityLog.objects.create(
-        user=user,
-        action_type=action_type,
-        action=action_desc,
-        affected_object=f"User: {instance.email}",
-        ip_address=ip,
-        user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
-        path=request.path if request else ''
-    )
+#     ActivityLog.objects.create(
+#         user=user,
+#         action_type=action_type,
+#         action=action_desc,
+#         affected_object=f"User: {instance.email}",
+#         ip_address=ip,
+#         user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
+#         path=request.path if request else ''
+#     )
 
-@receiver(post_save, sender=BetTicket)
-def log_bet_ticket(sender, instance, created, **kwargs):
-    user = get_current_user()
-    if not user and instance.user:
-        user = instance.user
+# @receiver(post_save, sender=BetTicket)
+# def log_bet_ticket(sender, instance, created, **kwargs):
+#     user = get_current_user()
+#     if not user and instance.user:
+#         user = instance.user
 
-    request = get_current_request()
-    ip = get_client_ip(request) if request else None
+#     request = get_current_request()
+#     ip = get_client_ip(request) if request else None
     
-    if created:
-        action_type = 'BET_PLACED'
-        action_desc = f"Bet placed: {instance.ticket_id} - Stake: {instance.stake_amount}"
-    else:
-        action_type = 'UPDATE'
-        action_desc = f"Bet ticket updated: {instance.ticket_id} - Status: {instance.status}"
+#     if created:
+#         action_type = 'BET_PLACED'
+#         action_desc = f"Bet placed: {instance.ticket_id} - Stake: {instance.stake_amount}"
+#     else:
+#         action_type = 'UPDATE'
+#         action_desc = f"Bet ticket updated: {instance.ticket_id} - Status: {instance.status}"
         
-    ActivityLog.objects.create(
-        user=user,
-        action_type=action_type,
-        action=action_desc,
-        affected_object=f"BetTicket: {instance.ticket_id}",
-        ip_address=ip,
-        user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
-        path=request.path if request else ''
-    )
+#     ActivityLog.objects.create(
+#         user=user,
+#         action_type=action_type,
+#         action=action_desc,
+#         affected_object=f"BetTicket: {instance.ticket_id}",
+#         ip_address=ip,
+#         user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
+#         path=request.path if request else ''
+#     )
 
 @receiver(pre_save, sender=UserWithdrawal)
 def handle_withdrawal_status_change(sender, instance, **kwargs):
@@ -169,29 +169,29 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                 if not instance.approved_rejected_by and user and user.is_authenticated:
                     instance.approved_rejected_by = user
 
-@receiver(post_save, sender=UserWithdrawal)
-def log_withdrawal(sender, instance, created, **kwargs):
-    user = get_current_user()
-    if not user and instance.user:
-        user = instance.user
+# @receiver(post_save, sender=UserWithdrawal)
+# def log_withdrawal(sender, instance, created, **kwargs):
+#     user = get_current_user()
+#     if not user and instance.user:
+#         user = instance.user
 
-    request = get_current_request()
-    ip = get_client_ip(request) if request else None
+#     request = get_current_request()
+#     ip = get_client_ip(request) if request else None
     
-    action_type = 'CREATE' if created else 'UPDATE'
-    action_desc = f"Withdrawal request {'created' if created else 'updated'}: {instance.id} - Amount: {instance.amount} - Status: {instance.status}"
+#     action_type = 'CREATE' if created else 'UPDATE'
+#     action_desc = f"Withdrawal request {'created' if created else 'updated'}: {instance.id} - Amount: {instance.amount} - Status: {instance.status}"
     
-    ActivityLog.objects.create(
-        user=user,
-        action_type=action_type,
-        action=action_desc,
-        affected_object=f"Withdrawal: {instance.id}",
-        ip_address=ip,
-        user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
-        path=request.path if request else ''
-    )
+#     ActivityLog.objects.create(
+#         user=user,
+#         action_type=action_type,
+#         action=action_desc,
+#         affected_object=f"Withdrawal: {instance.id}",
+#         ip_address=ip,
+#         user_agent=request.META.get('HTTP_USER_AGENT', '') if request else '',
+#         path=request.path if request else ''
+#     )
 
-@receiver(post_save, sender=User)
-def create_user_wallet(sender, instance, created, **kwargs):
-    if created:
-        Wallet.objects.get_or_create(user=instance)
+# @receiver(post_save, sender=User)
+# def create_user_wallet(sender, instance, created, **kwargs):
+#     if created:
+#         Wallet.objects.get_or_create(user=instance)

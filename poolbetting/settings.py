@@ -58,6 +58,14 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]', 'www.rhonextec.website', 'rhonextec.website', '172.237.102.130']
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://rhonextec.website",
+    "https://rhonextec.website",
+    "http://www.rhonextec.website",
+    "https://www.rhonextec.website",
+    "http://172.237.102.130",
+]
+
 
 # Application definition
 

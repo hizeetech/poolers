@@ -56,7 +56,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]']
+ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]', 'www.rhonextec.website', 'rhonextec.website', '172.237.102.130']
 
 
 # Application definition

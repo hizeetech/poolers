@@ -65,11 +65,11 @@ def should_skip_logging(sender):
 def log_user_changes(sender, instance, created, **kwargs):
     user = get_current_user()
     
-    # Ensure user is a valid User instance or None
+    
     if user and not user.is_authenticated:
         user = None
     
-    # Fallback: if no logged-in user (e.g., registration or system task), use the instance itself
+    
     if not user:
         user = instance
 
@@ -79,11 +79,9 @@ def log_user_changes(sender, instance, created, **kwargs):
     action_type = 'CREATE' if created else 'UPDATE'
     action_desc = f"User {'created' if created else 'updated'}: {instance.email}"
     
-    # Avoid logging if system action (no user context) unless strictly needed
-    # But for now, log everything if possible
     
     ActivityLog.objects.create(
-        user=user, # Might be None if system task
+        user=user,
         action_type=action_type,
         action=action_desc,
         affected_object=f"User: {instance.email}",

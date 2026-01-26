@@ -12,7 +12,6 @@ HIGH_EXPOSURE_THRESHOLD = 100000
 def broadcast_bet_activity(sender, instance, created, **kwargs):
     channel_layer = get_channel_layer()
     
-    # 1. Live Betting Activity Feed
     if created:
         message = {
             'type': 'bet_placed',

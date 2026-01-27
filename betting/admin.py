@@ -108,7 +108,7 @@ class CustomUserAdmin(UserAdmin):
         'email', 'first_name', 'last_name', 'user_type', 'is_staff', 'is_active',
         'is_locked', 'failed_login_attempts',
         'get_phone_number', 'get_shop_address', 'get_master_agent', 'get_super_agent', 'agent',
-        'cashier_prefix'
+        'cashier_prefix', 'date_joined', 'last_login'
     )
     list_filter = (
         'user_type', 'is_active', 'is_staff', 'is_locked', 

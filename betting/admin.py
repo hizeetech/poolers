@@ -438,13 +438,7 @@ class FixtureAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    ordering = ('-match_date', 'match_time')
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        return qs.annotate(
-            serial_int=Cast('serial_number', IntegerField())
-        ).order_by('serial_int')
+    ordering = ('serial_number',)
 
     class Media:
         js = ('js/admin_fixture_toggle.js?v=2',)

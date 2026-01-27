@@ -1,9 +1,14 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Master Agent Dashboard - Pool Betting{% endblock %} {% block content %}
 <div class="container mt-5">
     <div class="row mb-4">
-        <div class="col-12">
-            <h2 class="text-center text-primary">Master Agent Dashboard for {{ request.user.get_full_name|default:request.user.email }}</h2>
-            <p class="lead text-center text-muted">Overview of your downline performance and management tools.</p>
+        <div class="col-12 d-flex justify-content-between align-items-center">
+            <div>
+                <h2 class="text-primary mb-0">Master Agent Dashboard for {{ request.user.get_full_name|default:request.user.email }}</h2>
+                <p class="lead text-muted mb-0">Overview of your downline performance and management tools.</p>
+            </div>
+            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#registerAgentModal">
+                <i class="fas fa-user-plus me-2"></i>Register Agent
+            </button>
         </div>
     </div>
 
@@ -83,8 +88,11 @@
                         </li>
                     </ul>
                 </div>
-                <div class="card-footer bg-light border-top-0">
+                <div class="card-footer bg-light border-top-0 d-flex justify-content-between align-items-center">
                     <a href="{% url 'downline_users' %}" class="text-primary text-decoration-none">Manage Downline Users <i class="fas fa-external-link-alt"></i></a>
+                    <button type="button" class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#registerAgentModal">
+                        Register Agent
+                    </button>
                 </div>
             </div>
         </div>
@@ -122,6 +130,61 @@
         </div>
     </div>
 </div>
+
+<!-- Modal -->
+<div class="modal fade" id="registerAgentModal" tabindex="-1" aria-labelledby="registerAgentModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="registerAgentModalLabel">Register New Agent</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form method="post" action="{% url 'pending_registration:register_agent' %}">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label for="id_full_name" class="form-label">Full Name</label>
+                <input type="text" class="form-control" name="full_name" id="id_full_name" required>
+            </div>
+            <div class="mb-3">
+                <label for="id_email" class="form-label">Email</label>
+                <input type="email" class="form-control" name="email" id="id_email" required>
+            </div>
+            <div class="mb-3">
+                <label for="id_phone" class="form-label">Phone</label>
+                <input type="text" class="form-control" name="phone" id="id_phone" required>
+            </div>
+            <div class="mb-3">
+                <label for="id_state" class="form-label">State</label>
+                <input type="text" class="form-control" name="state" id="id_state">
+            </div>
+            
+            <div class="mb-3">
+                <label for="id_user_type" class="form-label">Role</label>
+                <select name="user_type" id="id_user_type" class="form-select">
+                    <option value="agent">Agent</option>
+                    {% if request.user.user_type == 'master_agent' %}
+                    <option value="super_agent">Super Agent</option>
+                    {% endif %}
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label for="id_password" class="form-label">Password</label>
+                <input type="password" class="form-control" name="password" id="id_password" required>
+            </div>
+            <div class="mb-3">
+                <label for="id_confirm_password" class="form-label">Confirm Password</label>
+                <input type="password" class="form-control" name="confirm_password" id="id_confirm_password" required>
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100">Submit for Approval</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
 
 <!-- Include Font Awesome for icons -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

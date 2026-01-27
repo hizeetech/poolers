@@ -16,6 +16,7 @@ urlpatterns = [
     path('', include(('betting.urls', 'betting'), namespace='betting')),
     path('commission/', include('commission.urls')),
     path('uip/', include('uip.urls')),
+    path('registration/', include('pending_registration.urls')),
 ]
 
 if settings.DEBUG:

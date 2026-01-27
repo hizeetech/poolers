@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'betting',
     'commission',
     'uip',
+    'pending_registration.apps.PendingRegistrationConfig',
     'django_celery_results',
     'django_celery_beat',
 ]

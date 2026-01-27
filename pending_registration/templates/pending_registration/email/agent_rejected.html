@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        .header { background-color: #F44336; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
+        .content { padding: 20px; }
+        .footer { font-size: 12px; color: #777; text-align: center; margin-top: 20px; }
+        .reason { background-color: #ffebee; padding: 15px; border-left: 4px solid #F44336; margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Registration Update</h2>
+        </div>
+        <div class="content">
+            <p>Dear {{ full_name }},</p>
+            <p>We regret to inform you that your application to become an Agent/Super Agent has been rejected.</p>
+            
+            <p><strong>Reason for rejection:</strong></p>
+            <div class="reason">
+                {{ reason }}
+            </div>
+            
+            <p>If you believe this is a mistake or have addressed the issues mentioned, please contact support or submit a new registration.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {% now "Y" %} Pool Betting Platform. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

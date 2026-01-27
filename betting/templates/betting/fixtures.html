@@ -100,6 +100,12 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body" id="ticket-content-to-print">
+                <div class="text-center mb-2">
+                    {% if site_config.logo %}
+                        <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="height: 40px;">
+                    {% endif %}
+                    <div class="fw-bold">{{ site_config.site_name }}</div>
+                </div>
                 <h6 class="text-center text-secondary mb-3">Your Bet Details</h6>
                 <p><strong>Ticket ID:</strong> <span id="modal-ticket-id"></span></p>
                 <p><strong>Stake Amount:</strong> <span id="modal-stake-amount"></span></p>
@@ -125,7 +131,9 @@
 </div>
 
 {% endblock %} {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
+    const canPlaceBet = {{ can_place_bet|yesno:'true,false' }};
     // Global array to store selected bets
     let selectedBets = [];
     const totalStakeInput = document.getElementById('total_stake_input');
@@ -524,6 +532,18 @@
 
         // Place Bet Button Click Handler
         placeBetBtn.addEventListener('click', async function() {
+            if (!canPlaceBet) {
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Not Authorized',
+                        text: 'You are not authorized to place a bet',
+                    });
+                } else {
+                    displayMessage('You are not authorized to place a bet', 'danger');
+                }
+                return;
+            }
             responseMessageDiv.classList.add('d-none'); // Hide previous messages
             responseMessageDiv.innerHTML = '';
             placeBetBtn.disabled = true; // Disable button to prevent multiple submissions
@@ -635,7 +655,19 @@
                             alert('Bet placed successfully! Ticket ID: ' + data.ticket_id);
                         }
                     } else {
-                        displayMessage('Error placing bet: ' + data.message, 'danger');
+                        if (data.message && data.message.toLowerCase().includes('not authorized')) {
+                            if (typeof Swal !== 'undefined') {
+                                Swal.fire({
+                                    icon: 'error',
+                                    title: 'Not Authorized',
+                                    text: 'You are not authorized to place a bet',
+                                });
+                            } else {
+                                displayMessage('You are not authorized to place a bet', 'danger');
+                            }
+                        } else {
+                            displayMessage('Error placing bet: ' + data.message, 'danger');
+                        }
                     }
                 } else {
                     // Response is not JSON (likely HTML error page)

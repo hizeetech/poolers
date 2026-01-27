@@ -219,6 +219,7 @@ def fixtures_view(request, period_id=None):
         'all_periods': all_periods,
         'active_periods': active_periods,
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
+        'can_place_bet': is_cashier(request.user),
     }
     return render(request, 'betting/fixtures.html', context)
 
@@ -242,6 +243,12 @@ def place_bet(request):
         if request.method == 'POST':
             # Debug logging
             logger.info(f"Place Bet Request Keys: {list(request.POST.keys())}")
+
+            if not is_cashier(request.user):
+                if request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.META.get('HTTP_ACCEPT', ''):
+                    return JsonResponse({'success': False, 'message': 'You are not authorized to place a bet'})
+                messages.error(request, 'You are not authorized to place a bet')
+                return redirect('betting:fixtures')
 
             # Check if this is the new JS-based bet placement
             if 'selections' in request.POST:

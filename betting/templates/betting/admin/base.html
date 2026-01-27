@@ -180,6 +180,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if 'pending_registration' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:pending_registration_pendingagentregistration_changelist' %}">
+                        <i class="fas fa-user-clock me-2"></i> Pending Registrations
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if 'withdrawal' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:withdraw_request_list' %}">
                         <i class="fas fa-money-check-alt me-2"></i> Withdrawal Requests
                     </a>

@@ -434,17 +434,21 @@ class BettingPeriodAdmin(admin.ModelAdmin):
 # --- Fixture Admin ---
 class FixtureAdmin(admin.ModelAdmin):
     form = FixtureForm
-    list_display = ('home_team', 'away_team', 'match_date', 'match_time', 'betting_period', 'serial_number', 'status', 'is_active')
+    list_display = ('home_team', 'away_team', 'match_date', 'match_time', 'betting_period', 'serial_number_display', 'status', 'is_active')
     list_editable = ('is_active',)
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    ordering = ('-match_date',)
-
+    
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.annotate(
             serial_int=Cast('serial_number', IntegerField())
         ).order_by('serial_int')
+
+    def serial_number_display(self, obj):
+        return obj.serial_number
+    serial_number_display.short_description = 'Serial Number'
+    serial_number_display.admin_order_field = 'serial_int'
 
     class Media:
         js = ('js/admin_fixture_toggle.js?v=2',)

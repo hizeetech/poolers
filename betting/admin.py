@@ -41,6 +41,24 @@ class BettingAdminSite(admin.AdminSite):
     site_title = "PoolBetting Admin Portal"
     index_title = "Welcome to PoolBetting Administration"
 
+    def admin_view(self, view, cacheable=False):
+        from django.shortcuts import render
+        from functools import wraps
+        
+        inner = super().admin_view(view, cacheable)
+
+        @wraps(inner)
+        def wrapper(request, *args, **kwargs):
+            if request.user.is_authenticated and request.user.is_staff:
+                # Restrict access to only 'admin' user_type or superusers
+                # Agents, Cashiers, etc. have is_staff=True but should not access the Admin Panel
+                if request.user.user_type != 'admin' and not request.user.is_superuser:
+                    return render(request, 'betting/admin/admin_unauthorized.html')
+            
+            return inner(request, *args, **kwargs)
+        
+        return wrapper
+
     def get_urls(self):
         from django.urls import path, re_path
 

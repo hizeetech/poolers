@@ -151,12 +151,12 @@
                                 {% for transaction in transactions %}
                                 <tr>
                                     <td>{{ transaction.timestamp|date:"M d, Y H:i" }}</td>
-                                    <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}">
+                                    <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}" style="color: black !important;">
                                                 {{ transaction.get_transaction_type_display }}
                                             </span></td>
                                     <td>₦{{ transaction.amount|floatformat:2 }}</td>
                                     <td>
-                                        <span class="badge bg-{{ transaction.status|lower }}">
+                                        <span class="badge bg-{{ transaction.status|lower }}" style="color: black !important;">
                                                     {{ transaction.get_status_display }}
                                                 </span>
                                     </td>

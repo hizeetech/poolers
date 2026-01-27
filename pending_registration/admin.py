@@ -12,6 +12,7 @@ from django.conf import settings
 from .models import PendingAgentRegistration
 from django.contrib.auth import get_user_model
 from betting.models import Wallet, Transaction
+from betting.admin import betting_admin_site
 
 User = get_user_model()
 
@@ -49,7 +50,7 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
         pending_reg = get_object_or_404(PendingAgentRegistration, pk=pk)
         if pending_reg.status != 'PENDING':
              messages.warning(request, "This registration is not pending.")
-             return redirect('admin:pending_registration_pendingagentregistration_changelist')
+             return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
 
         try:
             with transaction.atomic():
@@ -98,32 +99,27 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 pending_reg.save()
                 
                 # 5. Send Approval Email
-                try:
-                    login_url = request.build_absolute_uri('/login/')
-                    html_message = render_to_string('pending_registration/email/agent_approved.html', {
-                        'user': user,
-                        'cashier_email': cashier_email,
-                        'login_url': login_url
-                    })
-                    plain_message = strip_tags(html_message)
-                    
-                    send_mail(
-                        subject='Pool Betting Agent Registration Approved',
-                        message=plain_message,
-                        from_email=settings.DEFAULT_FROM_EMAIL,
-                        recipient_list=[user.email],
-                        html_message=html_message,
-                        fail_silently=True
-                    )
-                except Exception as e:
-                    messages.warning(request, f"Agent created but failed to send email: {e}")
-
-                messages.success(request, f"Agent {user.email} created successfully with cashier {cashier.email}. Email notification sent.")
+                login_url = request.build_absolute_uri('/login/')
+                html_message = render_to_string('pending_registration/email/agent_approved.html', {
+                    'user': user,
+                    'cashier_email': cashier_email,
+                    'login_url': login_url
+                })
+                send_mail(
+                    subject='Pool Betting Agent Registration Approved',
+                    message=strip_tags(html_message),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    html_message=html_message,
+                    fail_silently=True
+                )
                 
+            messages.success(request, f"Agent {user.email} approved and created successfully.")
+            
         except Exception as e:
             messages.error(request, f"Error approving agent: {e}")
             
-        return redirect('admin:pending_registration_pendingagentregistration_changelist')
+        return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
 
     def reject_agent(self, request, pk):
         pending_reg = get_object_or_404(PendingAgentRegistration, pk=pk)
@@ -136,30 +132,23 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
             pending_reg.save()
             
             # Send Rejection Email
-            try:
-                html_message = render_to_string('pending_registration/email/agent_rejected.html', {
-                    'full_name': pending_reg.full_name,
-                    'reason': reason,
-                })
-                plain_message = strip_tags(html_message)
-                
-                send_mail(
-                    subject='Pool Betting Agent Registration Rejected',
-                    message=plain_message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[pending_reg.email],
-                    html_message=html_message,
-                    fail_silently=True
-                )
-            except Exception as e:
-                messages.warning(request, f"Rejection recorded but failed to send email: {e}")
+            html_message = render_to_string('pending_registration/email/agent_rejected.html', {
+                'pending_reg': pending_reg,
+                'reason': reason
+            })
+            send_mail(
+                subject='Pool Betting Agent Registration Rejected',
+                message=strip_tags(html_message),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[pending_reg.email],
+                html_message=html_message,
+                fail_silently=True
+            )
+            
+            messages.info(request, "Agent registration rejected.")
+            return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
+            
+        return render(request, 'pending_registration/admin/reject_reason.html', {'pending_reg': pending_reg})
 
-            messages.info(request, "Registration rejected and email sent.")
-            return redirect('admin:pending_registration_pendingagentregistration_changelist')
-        
-        # Simple template for rejection reason
-        context = dict(
-           self.admin_site.each_context(request),
-           object=pending_reg,
-        )
-        return render(request, 'pending_registration/admin/reject_reason.html', context)
+# Register with the CUSTOM admin site
+betting_admin_site.register(PendingAgentRegistration, PendingAgentRegistrationAdmin)

@@ -22,6 +22,18 @@
             </div>
         </div>
 
+        {# Pending Registrations Card #}
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-info-subtle text-info-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Pending Registrations</h3>
+                    <p class="card-text fs-1 fw-bold text-info">{{ pending_registrations_count }}</p>
+                    <p class="card-text fs-6 text-muted">Agents waiting for approval</p>
+                    <a href="{% url 'betting_admin:pending_registration_pendingagentregistration_changelist' %}" class="btn btn-sm btn-outline-info mt-2">View All</a>
+                </div>
+            </div>
+        </div>
+
         {# Betting Statistics Card #}
         <div class="col">
             <div class="card h-100 border-0 shadow-sm bg-success-subtle text-success-emphasis">
@@ -61,6 +73,11 @@
                 <div class="col">
                     <a href="{% url 'betting_admin:manage_users' %}" class="btn btn-info w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
                         <i class="fas fa-users me-2"></i> Manage Users
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:pending_registration_pendingagentregistration_changelist' %}" class="btn btn-secondary w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-user-clock me-2"></i> Pending Registrations
                     </a>
                 </div>
                 <div class="col">

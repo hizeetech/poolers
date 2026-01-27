@@ -27,6 +27,7 @@ from .models import (
     CreditRequest, Loan, CreditLog
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
+from pending_registration.models import PendingAgentRegistration
 from .forms import (
     UserRegistrationForm, LoginForm, PasswordChangeForm, ProfileEditForm, 
     InitiateDepositForm, WithdrawFundsForm, WalletTransferForm,
@@ -1984,6 +1985,8 @@ def admin_dashboard(request):
     won_bets = BetTicket.objects.filter(status='won').count()
     lost_bets = BetTicket.objects.filter(status='lost').count()
     deleted_bets = BetTicket.objects.filter(status='deleted').count() # Tickets marked as deleted/voided
+    
+    pending_registrations_count = PendingAgentRegistration.objects.filter(status='PENDING').count()
 
     context = {
         'total_users': total_users,
@@ -2002,6 +2005,7 @@ def admin_dashboard(request):
         'won_bets': won_bets,
         'lost_bets': lost_bets,
         'deleted_bets': deleted_bets,
+        'pending_registrations_count': pending_registrations_count,
     }
     return render(request, 'betting/admin/dashboard.html', context)
 

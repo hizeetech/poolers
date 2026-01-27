@@ -438,7 +438,7 @@ class FixtureAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    ordering = ('serial_int',)
+    ordering = ('-match_date', 'match_time')
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)

@@ -100,6 +100,7 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                             last_name=f"for {pending_reg.full_name}",
                             user_type='cashier',
                             agent=user, 
+                            cashier_prefix=prefix,  # Set the cashier_prefix for the cashier account as well
                             is_active=True
                         )
                         cashier.password = pending_reg.password

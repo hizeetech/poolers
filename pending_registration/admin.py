@@ -13,6 +13,7 @@ from .models import PendingAgentRegistration
 from django.contrib.auth import get_user_model
 from betting.models import Wallet, Transaction
 from betting.admin import betting_admin_site
+import random
 
 User = get_user_model()
 
@@ -74,35 +75,49 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 if not Wallet.objects.filter(user=user).exists():
                     Wallet.objects.create(user=user, balance=0)
 
-                # 3. Create Cashier Account
-                email_prefix = pending_reg.email.split('@')[0]
-                cashier_email = f"cashier1_{pending_reg.email}" 
+                # 3. Generate Cashier Prefix for the Agent
+                # Ensure unique 4-digit prefix
+                while True:
+                    prefix = str(random.randint(1000, 9999))
+                    if not User.objects.filter(cashier_prefix=prefix).exists():
+                        break
                 
-                cashier = User.objects.create_user(
-                    email=cashier_email,
-                    password=None,
-                    first_name="Cashier1",
-                    last_name=f"for {pending_reg.full_name}",
-                    user_type='cashier',
-                    agent=user, 
-                    is_active=True
-                )
-                cashier.password = pending_reg.password
-                cashier.save()
-                
-                if not Wallet.objects.filter(user=cashier).exists():
-                    Wallet.objects.create(user=cashier, balance=0)
+                user.cashier_prefix = prefix
+                user.save()
 
-                # 4. Update Status
+                # 4. Create 2 Cashier Accounts
+                cashier_emails = []
+                for i in range(1, 3):
+                    cashier_email = f"{prefix}-CSH-{i:02d}@cashier.com"
+                    cashier_emails.append(cashier_email)
+                    
+                    # Check if cashier already exists (highly unlikely with unique prefix, but good for safety)
+                    if not User.objects.filter(email=cashier_email).exists():
+                        cashier = User.objects.create_user(
+                            email=cashier_email,
+                            password=None,
+                            first_name=f"Cashier {i}",
+                            last_name=f"for {pending_reg.full_name}",
+                            user_type='cashier',
+                            agent=user, 
+                            is_active=True
+                        )
+                        cashier.password = pending_reg.password
+                        cashier.save()
+                        
+                        if not Wallet.objects.filter(user=cashier).exists():
+                            Wallet.objects.create(user=cashier, balance=0)
+
+                # 5. Update Status
                 pending_reg.status = 'APPROVED'
                 pending_reg.reviewed_at = timezone.now()
                 pending_reg.save()
                 
-                # 5. Send Approval Email
+                # 6. Send Approval Email
                 login_url = request.build_absolute_uri('/login/')
                 html_message = render_to_string('pending_registration/email/agent_approved.html', {
                     'user': user,
-                    'cashier_email': cashier_email,
+                    'cashier_emails': cashier_emails,
                     'login_url': login_url
                 })
                 send_mail(

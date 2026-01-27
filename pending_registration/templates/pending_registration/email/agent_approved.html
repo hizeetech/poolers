@@ -27,9 +27,14 @@
                 <p><strong>Role:</strong> {{ user.get_user_type_display }}</p>
             </div>
 
-            <p>We have also created a Cashier account for your shop:</p>
+            <p>We have also created 2 Cashier accounts for your shop:</p>
             <div class="details">
-                <p><strong>Cashier Email:</strong> {{ cashier_email }}</p>
+                <p><strong>Cashier Emails:</strong></p>
+                <ul>
+                    {% for email in cashier_emails %}
+                    <li>{{ email }}</li>
+                    {% endfor %}
+                </ul>
                 <p><strong>Cashier Password:</strong> (Same as your password)</p>
             </div>
             

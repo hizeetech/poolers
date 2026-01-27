@@ -217,6 +217,32 @@ class CustomUserAdmin(UserAdmin):
         # Otherwise, super().save_model will call obj.save() and form.save() as needed.
         super().save_model(request, obj, form, change)
 
+        # Auto-create cashiers for Agent
+        if not change and obj.user_type == 'agent':
+            password = form.cleaned_data.get('password')
+            if password:
+                for i in range(1, 3):
+                    base_cashier_email = f"{obj.cashier_prefix}-CSH-{i:02d}"
+                    cashier_email = f"{base_cashier_email}@cashier.com"
+                    cashier_prefix_for_cashier = f"{obj.cashier_prefix}-{i:02d}"
+                    
+                    if not User.objects.filter(email=cashier_email).exists():
+                        User.objects.create_user(
+                            email=cashier_email,
+                            password=password,
+                            first_name=f"Cashier {i} ({obj.first_name})",
+                            last_name=f"{obj.last_name}",
+                            user_type='cashier',
+                            agent=obj,
+                            master_agent=obj.master_agent,
+                            super_agent=obj.super_agent,
+                            is_active=True,
+                            is_staff=True,
+                            is_superuser=False,
+                            cashier_prefix=cashier_prefix_for_cashier
+                        )
+                        messages.info(request, f"Cashier account created: {cashier_email}")
+
         # Additional safeguards/messages if needed, but primary logic is in form's clean/save
         if obj.user_type == 'admin' and not obj.is_superuser:
             messages.warning(request, f"User {obj.email} is an 'admin' type but not a superuser. Please ensure 'is_superuser' is checked.")

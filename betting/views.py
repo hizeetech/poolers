@@ -162,8 +162,14 @@ def user_logout(request):
 
 # --- Fixtures & Betting Views ---
 
-def fixtures_view(request, period_id=None):
+def _get_fixtures_data(period_id=None):
+    """
+    Helper to fetch fixtures and the current betting period.
+    Returns a tuple: (fixtures, current_betting_period)
+    """
     current_betting_period = None
+    fixtures = Fixture.objects.none()
+
     if period_id:
         current_betting_period = get_object_or_404(BettingPeriod, id=period_id)
         fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
@@ -194,12 +200,15 @@ def fixtures_view(request, period_id=None):
             fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
                 serial_int=Cast('serial_number', IntegerField())
             ).order_by('serial_int')
-        else:
-            fixtures = Fixture.objects.none() # No active period, no fixtures
 
     # Filter out fixtures that are not active or have invalid status
-    if fixtures:
+    if fixtures.exists():
         fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled'])
+        
+    return fixtures, current_betting_period
+
+def fixtures_view(request, period_id=None):
+    fixtures, current_betting_period = _get_fixtures_data(period_id)
 
     all_periods = BettingPeriod.objects.all().order_by('-start_date')
     active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
@@ -212,6 +221,18 @@ def fixtures_view(request, period_id=None):
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
     }
     return render(request, 'betting/fixtures.html', context)
+
+def fixtures_list_partial(request, period_id=None):
+    """
+    Returns only the HTML for the fixtures list, used for AJAX polling.
+    """
+    fixtures, current_betting_period = _get_fixtures_data(period_id)
+    
+    context = {
+        'fixtures': fixtures,
+        'current_betting_period': current_betting_period,
+    }
+    return render(request, 'betting/includes/fixtures_list.html', context)
 
 
 @login_required

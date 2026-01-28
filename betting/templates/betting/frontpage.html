@@ -1,4 +1,30 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Welcome to {{ site_config.site_name|default:"PoolBetting" }}{% endblock %} {% block content %}
+<style>
+    /* Landing Page Background Configuration */
+    body {
+        position: relative;
+    }
+    body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -1;
+        
+        /* Background Image Logic */
+        background-image: url('{% if site_config.landing_page_background %}{{ site_config.landing_page_background.url }}{% else %}{% static "betting/images/field.jpg" %}{% endif %}');
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        
+        /* Reduce opacity to make content pop */
+        opacity: 0.15; 
+        /* Adjust opacity as needed. 0.15 on top of the default light gray background 
+           provides a subtle texture without interfering with text readability. */
+    }
+</style>
 <div class="container text-center py-5">
     <h1 class="display-4 fw-bold text-dark mb-4 animate__animated animate__fadeInDown">
         Place Your Bets, Win Big!

@@ -26,6 +26,7 @@ class SiteConfiguration(models.Model):
     navbar_gradient_start = models.CharField(max_length=50, default="#ffffff", help_text="Gradient Start Color (Left/Logo side)")
     navbar_gradient_end = models.CharField(max_length=50, default="#f8f9fa", help_text="Gradient End Color (Right side)")
     navbar_link_hover_color = models.CharField(max_length=50, default="#007bff", help_text="Color of nav links on hover")
+    landing_page_background = models.ImageField(upload_to='site_branding/', blank=True, null=True, help_text="Background image for the landing page")
     
     def save(self, *args, **kwargs):
         self.pk = 1

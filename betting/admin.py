@@ -568,7 +568,7 @@ betting_admin_site.register(SystemSetting)
 betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
 # Activity Log Admin
 class ActivityLogAdmin(admin.ModelAdmin):
-    list_display = ('timestamp', 'user', 'action_type_badge', 'affected_object', 'ip_address', 'isp', 'mac_address_display')
+    list_display = ('timestamp', 'user', 'action_type_badge', 'affected_object', 'ip_address', 'isp')
     list_filter = ('action_type', 'timestamp', 'user')
     search_fields = ('user__username', 'user__email', 'ip_address', 'isp', 'action', 'affected_object')
     readonly_fields = [field.name for field in ActivityLog._meta.fields]
@@ -593,19 +593,14 @@ class ActivityLogAdmin(admin.ModelAdmin):
             'BET_PLACED': 'purple',
             'PAYOUT': 'gold',
         }
-        color = colors.get(obj.action_type, 'black')
+        action_type_value = obj.action_type or 'UNKNOWN'
+        color = colors.get(action_type_value, 'black')
         return format_html(
             '<span style="color: white; background-color: {}; padding: 3px 10px; border-radius: 5px; font-weight: bold;">{}</span>',
             color,
-            obj.get_action_type_display()
+            action_type_value
         )
     action_type_badge.short_description = 'Action'
-
-    def mac_address_display(self, obj):
-        if obj.mac_address:
-            return obj.mac_address
-        return "Unavailable (External Network)"
-    mac_address_display.short_description = "MAC Address"
 
 betting_admin_site.register(ActivityLog, ActivityLogAdmin)
 

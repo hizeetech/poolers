@@ -7,7 +7,8 @@ from django.db import transaction as db_transaction
 from django.contrib import messages
 from decimal import Decimal
 from django.urls import path, reverse 
-from django.shortcuts import redirect 
+from django.shortcuts import redirect, render
+from django.utils.html import format_html 
 
 # Celery Beat and Results imports
 from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
@@ -31,7 +32,7 @@ from .forms import (
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
-    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog
+    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog
 )
 
 
@@ -126,7 +127,7 @@ class CustomUserAdmin(UserAdmin):
         'email', 'first_name', 'last_name', 'user_type', 'is_staff', 'is_active',
         'is_locked', 'failed_login_attempts',
         'get_phone_number', 'get_shop_address', 'get_master_agent', 'get_super_agent', 'agent',
-        'cashier_prefix', 'date_joined', 'last_login'
+        'cashier_prefix', 'date_joined', 'updated_at', 'last_login', 'get_last_impersonated', 'impersonate_button'
     )
     list_filter = (
         'user_type', 'is_active', 'is_staff', 'is_locked', 
@@ -139,7 +140,46 @@ class CustomUserAdmin(UserAdmin):
         'email',
     )
     
-    actions = ['unlock_accounts']
+    actions = ['unlock_accounts', 'impersonate_user_action']
+
+    def impersonate_user_action(self, request, queryset):
+        # This is the bulk action
+        if queryset.count() != 1:
+            self.message_user(request, "Please select exactly one user to impersonate.", level=messages.WARNING)
+            return
+        
+        if request.POST.get('confirmed') == 'yes':
+            user = queryset.first()
+            return redirect('betting:impersonate_user', user_id=user.pk)
+        
+        context = {
+            'users': queryset,
+            'title': 'Confirm Impersonation',
+            'site_header': self.admin_site.site_header,
+            'site_title': self.admin_site.site_title,
+        }
+        return render(request, 'betting/admin/impersonate_confirmation.html', context)
+    impersonate_user_action.short_description = "Impersonate selected user"
+
+    def impersonate_button(self, obj):
+        # This is the inline button column
+        if obj.is_superuser:
+            return ""
+        url = reverse('betting:impersonate_user', args=[obj.pk])
+        msg = f"You are about to log in as {obj.email}. This action will be logged. Proceed?"
+        return format_html(
+            '<a class="button" href="{}" onclick="return confirm(\'{}\');" style="background-color: #f0ad4e; color: white; padding: 3px 8px; border-radius: 3px; text-decoration: none;">Login As User</a>', 
+            url, msg
+        )
+    impersonate_button.short_description = "Impersonate"
+    impersonate_button.allow_tags = True
+
+    def get_last_impersonated(self, obj):
+        last_log = ImpersonationLog.objects.filter(target_user=obj).order_by('-started_at').first()
+        if last_log:
+            return f"{last_log.started_at.strftime('%Y-%m-%d %H:%M')} ({last_log.admin_user.email})"
+        return "-"
+    get_last_impersonated.short_description = "Last Impersonated"
 
     def unlock_accounts(self, request, queryset):
         updated_count = queryset.update(

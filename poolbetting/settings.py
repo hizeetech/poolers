@@ -96,6 +96,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'betting.middleware.ImpersonationMiddleware',
     'betting.middleware.ThreadLocalMiddleware',
     'uip.middleware.UIPSecurityMiddleware',
 ]
@@ -115,6 +116,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'betting.context_processors.wallet_balance', # Add this line
                 'betting.context_processors.site_configuration',
+                'betting.context_processors.impersonation_context',
             ],
         },
     },

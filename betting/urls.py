@@ -98,8 +98,13 @@ urlpatterns = [
     path('api/agent-commissions/', views.api_agent_commissions, name='api_agent_commissions'),
     path('api/agent-users/', views.api_agent_users, name='api_agent_users'),
     path('api/cashier-transactions/', views.api_cashier_transactions, name='api_cashier_transactions'),
+
     path('api/bet-tickets/', views.api_bet_tickets, name='api_bet_tickets'),
     path('api/void-ticket/', views.api_void_ticket, name='api_void_ticket'),
     path('api/manage-users/', views.api_manage_users, name='api_manage_users'),
     path('api/system-settings/', views.api_system_settings, name='api_system_settings'),
+    
+    # Impersonation URLs
+    path('impersonate/<int:user_id>/', views.impersonate_user, name='impersonate_user'),
+    path('impersonate/stop/', views.stop_impersonation, name='stop_impersonation'),
 ]

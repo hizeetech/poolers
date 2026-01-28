@@ -24,7 +24,7 @@ from django.contrib.auth import authenticate, login, logout # Ensure these are i
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
-    CreditRequest, Loan, CreditLog
+    CreditRequest, Loan, CreditLog, ImpersonationLog
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -3757,3 +3757,112 @@ def super_admin_fund_account_user(request):
         'form': form,
         'recent_transactions': recent_transactions
     })
+
+
+@login_required
+def impersonate_user(request, user_id):
+    # Permission check
+    if not (request.user.is_superuser or request.user.has_perm('betting.can_impersonate_users')):
+        messages.error(request, "You do not have permission to impersonate users.")
+        # Try to redirect to betting_admin dashboard, else fallback
+        try:
+            return redirect('betting_admin:dashboard')
+        except:
+            return redirect('/')
+
+    target_user = get_object_or_404(User, pk=user_id)
+
+    # Security Checks
+    if target_user.is_superuser:
+        messages.error(request, "Cannot impersonate a superuser.")
+        return redirect(request.META.get('HTTP_REFERER', '/'))
+    
+    if request.session.get('impersonation_active'):
+        messages.error(request, "Nested impersonation is not allowed.")
+        return redirect(request.META.get('HTTP_REFERER', '/'))
+
+    # Create Log
+    log = ImpersonationLog.objects.create(
+        admin_user=request.user,
+        target_user=target_user,
+        ip_address=request.META.get('REMOTE_ADDR'),
+        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+        started_at=timezone.now()
+    )
+
+    # Capture values to persist across session flush
+    original_admin_id = request.user.pk
+    impersonation_started_at = str(timezone.now())
+    impersonated_user_id = target_user.pk
+    log_id = log.pk
+
+    # Switch User (without password)
+    # We need to set the backend manually because we are logging in without authentication
+    backend = 'django.contrib.auth.backends.ModelBackend' # Standard Django backend
+    target_user.backend = backend
+    login(request, target_user)
+
+    # RESTORE session details after login flush
+    request.session['original_admin_id'] = original_admin_id
+    request.session['impersonation_started_at'] = impersonation_started_at
+    request.session['impersonation_active'] = True
+    request.session['impersonated_user_id'] = impersonated_user_id
+    request.session['impersonation_log_id'] = log_id
+
+    messages.success(request, f"Now impersonating {target_user.email}")
+    
+    # Redirect based on user type
+    if target_user.user_type == 'account_user':
+        return redirect('betting:account_user_dashboard')
+    elif target_user.user_type == 'agent':
+        return redirect('betting:agent_dashboard')
+    elif target_user.user_type == 'master_agent':
+        return redirect('betting:master_agent_dashboard')
+    elif target_user.user_type == 'super_agent':
+        return redirect('betting:super_agent_dashboard')
+    else:
+        return redirect('betting:user_dashboard')
+
+
+@login_required
+def stop_impersonation(request):
+    if not request.session.get('impersonation_active'):
+        return redirect('/')
+
+    original_admin_id = request.session.get('original_admin_id')
+    log_id = request.session.get('impersonation_log_id')
+
+    if not original_admin_id:
+        logout(request)
+        return redirect('/admin/login/')
+
+    try:
+        original_user = User.objects.get(pk=original_admin_id)
+        # Re-login as admin
+        backend = 'django.contrib.auth.backends.ModelBackend'
+        original_user.backend = backend
+        login(request, original_user)
+        
+        # Update Log
+        if log_id:
+            try:
+                log = ImpersonationLog.objects.get(pk=log_id)
+                log.ended_at = timezone.now()
+                log.duration = log.ended_at - log.started_at
+                log.termination_reason = "Manual Exit"
+                log.save()
+            except ImpersonationLog.DoesNotExist:
+                pass
+
+        # Clear session keys
+        keys_to_pop = ['impersonation_active', 'original_admin_id', 'impersonation_started_at', 'impersonation_log_id', 'impersonated_user_id']
+        for key in keys_to_pop:
+            request.session.pop(key, None)
+
+        messages.info(request, "Impersonation ended. Welcome back.")
+        return redirect('betting_admin:dashboard')
+
+    except User.DoesNotExist:
+        logout(request)
+        return redirect('/admin/login/')
+

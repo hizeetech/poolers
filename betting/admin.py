@@ -657,6 +657,15 @@ betting_admin_site.register(GroupResult, GroupResultAdmin)
 
 # Site Configuration Admin
 class SiteConfigurationAdmin(admin.ModelAdmin):
+    fieldsets = (
+        ('General Settings', {
+            'fields': ('site_name', 'logo', 'favicon', 'landing_page_background')
+        }),
+        ('Navbar Customization', {
+            'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
+        }),
+    )
+
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
         # Set input_type to 'color' to render the native color picker

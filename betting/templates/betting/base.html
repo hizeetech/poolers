@@ -208,6 +208,22 @@
 </head>
 
 <body>
+    {% if impersonation_active or request.session.original_admin_id %}
+    <div style="background-color: #ffc107; color: #000; text-align: center; padding: 10px; position: fixed; top: 0; width: 100%; z-index: 1040; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <i class="fas fa-user-secret me-2"></i> 
+        ⚠ You are impersonating: {{ impersonation_target_email }}
+        <a href="{% url 'betting:stop_impersonation' %}" class="btn btn-danger btn-sm ms-2" style="padding: 2px 10px; font-size: 0.8rem;">Exit Impersonation</a>
+    </div>
+    <script>
+        document.body.style.paddingTop = '115px'; // Increase padding to accommodate banner
+        document.addEventListener("DOMContentLoaded", function() {
+            var navbar = document.querySelector('.navbar');
+            if(navbar) {
+                navbar.style.top = '48px'; // Push navbar down by banner height
+            }
+        });
+    </script>
+    {% endif %}
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
             <a class="navbar-brand" href="{% url 'betting:frontpage' %}">
@@ -232,6 +248,11 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{% url 'betting:check_ticket_status' %}">Check Ticket</a>
                     </li>
+                    {% if impersonation_active or request.session.original_admin_id %}
+                    <li class="nav-item">
+                        <a class="nav-link text-danger fw-bold" href="{% url 'betting:stop_impersonation' %}">Exit Impersonation</a>
+                    </li>
+                    {% endif %}
                     {% if user.is_authenticated %}
                     <li class="nav-item">
                          <span class="nav-link fw-bold" id="live-wallet-balance">Balance : 
@@ -251,6 +272,9 @@
                             <li><a class="dropdown-item" href="{% url 'uip:dashboard' %}">Intelligence Platform</a></li>
                             {% endif %}
                             <li><a class="dropdown-item" href="{% url 'betting:profile' %}">Profile</a></li>
+                            {% if impersonation_active %}
+                            <li><a class="dropdown-item text-danger" href="{% url 'betting:stop_impersonation' %}">Exit Impersonation</a></li>
+                            {% endif %}
                             
                             <li>
                                 <hr class="dropdown-divider">

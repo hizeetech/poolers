@@ -12,6 +12,7 @@ from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.db import transaction
 
+
 class SiteConfiguration(models.Model):
     site_name = models.CharField(max_length=255, default="PoolBetting")
     logo = models.ImageField(upload_to='site_branding/', blank=True, null=True)
@@ -102,6 +103,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     lock_reason = models.TextField(null=True, blank=True)
 
     date_joined = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
 
     objects = CustomUserManager()
 
@@ -113,6 +115,9 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name_plural = 'Users'
         constraints = [
             models.UniqueConstraint(fields=['cashier_prefix'], condition=~Q(cashier_prefix__isnull=True) & ~Q(cashier_prefix=''), name='unique_cashier_prefix_if_not_null_or_empty')
+        ]
+        permissions = [
+            ("can_impersonate_users", "Can impersonate users"),
         ]
 
     def __str__(self):
@@ -743,4 +748,18 @@ class CreditLog(models.Model):
     
     def __str__(self):
         return f"{self.timestamp} - {self.action_type}"
+
+class ImpersonationLog(models.Model):
+    admin_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='impersonation_logs')
+    target_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='impersonated_logs')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration = models.DurationField(null=True, blank=True)
+    reason = models.TextField(null=True, blank=True)
+    termination_reason = models.CharField(max_length=50, null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.admin_user} impersonated {self.target_user} at {self.started_at}"
 

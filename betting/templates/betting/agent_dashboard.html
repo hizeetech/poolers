@@ -25,6 +25,18 @@
     </div>
     {% endfor %} {% endif %}
 
+    {% if impersonation_active %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center rounded-3 shadow-sm" role="alert">
+        <div>
+            <i class="fas fa-user-secret me-2"></i>
+            You are impersonating: <strong>{{ impersonation_target_email }}</strong>
+        </div>
+        <a href="{% url 'betting:stop_impersonation' %}" class="btn btn-sm btn-danger">
+            Exit Impersonation
+        </a>
+    </div>
+    {% endif %}
+
     <div class="row mb-4">
         <div class="col-md-4 mb-3">
             <div class="card shadow-sm h-100 rounded-3">

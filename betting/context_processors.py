@@ -18,3 +18,11 @@ def wallet_balance(request):
 
 def site_configuration(request):
     return {'site_config': SiteConfiguration.load()}
+
+def impersonation_context(request):
+    is_impersonating = bool(request.session.get('impersonation_active'))
+    target_email = request.user.email if is_impersonating and request.user.is_authenticated else None
+    return {
+        'impersonation_active': is_impersonating,
+        'impersonation_target_email': target_email,
+    }

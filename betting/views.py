@@ -205,6 +205,14 @@ def _get_fixtures_data(period_id=None):
     # Filter out fixtures that are not active or have invalid status
     if fixtures.exists():
         fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled'])
+
+        # Filter out fixtures that have already started (Date/Time check)
+        # We compare against local time because match_date/time are typically stored as wall-clock time
+        local_now = timezone.localtime(timezone.now())
+        fixtures = fixtures.filter(
+            Q(match_date__gt=local_now.date()) | 
+            Q(match_date=local_now.date(), match_time__gt=local_now.time())
+        )
         
     return fixtures, current_betting_period
 

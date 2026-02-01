@@ -694,13 +694,20 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     phone_number = forms.CharField(max_length=20, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
     shop_address = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
 
+    can_manage_downline_wallets = forms.BooleanField(
+        required=False, 
+        initial=True,
+        label="Can Manage Downline Wallets",
+        help_text="Designates whether this agent can credit/debit downline wallets.",
+        widget=forms.CheckboxInput(attrs={'class': 'form-check-input'})
+    )
 
     class Meta: 
         model = CustomUser
         fields = (
             'email', 'password', 'password2', 
             'first_name', 'last_name', 'phone_number', 'shop_address', 'user_type',
-            'is_active', 'is_staff', 'is_superuser', 
+            'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets',
             'groups', 'user_permissions', 
             'master_agent', 'super_agent', 'agent', 'cashier_prefix'
         )
@@ -833,11 +840,32 @@ class AdminUserChangeForm(DjangoUserChangeForm):
         help_text="Leave blank to keep current password. Enter new password here."
     )
 
+    can_manage_downline_wallets = forms.BooleanField(
+        required=False, 
+        label="Can Manage Downline Wallets",
+        help_text="Designates whether this agent can credit/debit downline wallets.",
+        widget=forms.CheckboxInput(attrs={'class': 'form-check-input'})
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
+        super().__init__(*args, **kwargs)
+
     def save(self, commit=True):
         user = super().save(commit=False)
         password = self.cleaned_data.get('password')
         if password:
             user.set_password(password)
+        else:
+            # If password is not provided, restore the original password
+            # because super().save() overwrites it with the empty string from the form
+            if user.pk:
+                try:
+                    original_user = CustomUser.objects.get(pk=user.pk)
+                    user.password = original_user.password
+                except CustomUser.DoesNotExist:
+                    pass
+                    
         if commit:
             user.save()
         return user

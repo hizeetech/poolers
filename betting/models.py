@@ -106,6 +106,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     date_joined = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Permission fields
+    can_manage_downline_wallets = models.BooleanField(default=True, help_text="Designates whether this agent can credit/debit downline wallets.")
+
     objects = CustomUserManager()
 
     USERNAME_FIELD = 'email'

@@ -46,6 +46,7 @@
                             <td class="fw-bold text-success">₦{{ cashier.wallet.balance|floatformat:2 }}</td>
                             <td>{{ cashier.date_joined|date:"M d, Y" }}</td>
                             <td class="text-end">
+                                {% if request.user.can_manage_downline_wallets %}
                                 <button class="btn btn-sm btn-outline-success me-1" 
                                         data-bs-toggle="modal" 
                                         data-bs-target="#creditCashierModal"
@@ -54,6 +55,7 @@
                                         title="Credit Cashier">
                                     <i class="fas fa-wallet"></i> Credit
                                 </button>
+                                {% endif %}
                                 <button class="btn btn-sm btn-outline-primary me-1" 
                                         data-bs-toggle="modal" 
                                         data-bs-target="#editCashierModal"

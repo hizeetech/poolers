@@ -738,8 +738,12 @@ def wallet_view(request):
     if request.user.user_type == 'cashier':
         credit_request_form = CreditRequestForm(user=request.user)
     elif request.user.user_type in ['agent', 'super_agent', 'master_agent', 'account_user']:
-        wallet_transfer_form = WalletTransferForm(sender_user=request.user)
-        credit_request_form = CreditRequestForm(user=request.user)
+                # Check permission for Master/Super Agents
+                if request.user.user_type in ['master_agent', 'super_agent'] and not getattr(request.user, 'can_manage_downline_wallets', True):
+                    wallet_transfer_form = None
+                else:
+                    wallet_transfer_form = WalletTransferForm(sender_user=request.user)
+                credit_request_form = CreditRequestForm(user=request.user)
 
     # Active Loans
     active_loans = Loan.objects.filter(borrower=request.user, status='active')
@@ -1005,6 +1009,16 @@ def withdraw_funds(request):
 @login_required
 @db_transaction.atomic
 def wallet_transfer(request):
+    # Check if user has permission to manage downline wallets
+    if request.user.user_type in ['master_agent', 'super_agent'] and not getattr(request.user, 'can_manage_downline_wallets', True):
+        CreditLog.objects.create(
+            actor=request.user,
+            action_type='wallet_transfer_denied',
+            amount=Decimal('0.00')
+        )
+        messages.error(request, "You do not have permission to credit or debit downline wallets. Please contact the administrator.")
+        return redirect('betting:wallet')
+
     if request.method == 'POST':
         form = WalletTransferForm(sender_user=request.user, data=request.POST) # Pass sender_user explicitly
         if form.is_valid():
@@ -3274,6 +3288,16 @@ def agent_delete_cashier(request, cashier_id):
 @user_passes_test(is_agent)
 @db_transaction.atomic
 def agent_credit_cashier(request, cashier_id):
+    # Check if user has permission to manage downline wallets
+    if request.user.user_type in ['master_agent', 'super_agent'] and not getattr(request.user, 'can_manage_downline_wallets', True):
+        CreditLog.objects.create(
+            actor=request.user,
+            action_type='credit_cashier_denied',
+            amount=Decimal('0.00')
+        )
+        messages.error(request, "You do not have permission to credit or debit downline wallets. Please contact the administrator.")
+        return redirect('betting:agent_cashier_list')
+
     if request.method == 'POST':
         cashier = get_object_or_404(User, id=cashier_id, agent=request.user, user_type='cashier')
         amount_str = request.POST.get('amount')

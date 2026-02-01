@@ -10,7 +10,7 @@
                 <i class="fas fa-user-plus me-2"></i> Register Agent
             </button>
             {% endif %}
-            {% if user.user_type == 'agent' %}
+            {% if user.user_type == 'agent' and user.can_manage_downline_wallets %}
             <a href="{% url 'betting:wallet_transfer' %}" class="btn btn-success rounded-pill px-4 shadow-sm">
                 <i class="fas fa-exchange-alt me-2"></i> Wallet Transfer
             </a>

@@ -1010,6 +1010,19 @@ class AccountUserWalletActionForm(forms.Form):
             raise ValidationError("Amount must be greater than zero.")
         return cleaned_data
 
+class FixtureUploadForm(forms.Form):
+    betting_period = forms.ModelChoiceField(
+        queryset=BettingPeriod.objects.filter(is_active=True),
+        required=True,
+        label="Select Betting Period",
+        widget=forms.Select(attrs={'class': 'form-control'})
+    )
+    excel_file = forms.FileField(
+        label="Upload Excel File",
+        help_text="Upload .xlsx or .xls file containing fixtures. Columns: Serial, Home, Away, Draw Odd, Date, Time",
+        widget=forms.FileInput(attrs={'class': 'form-control', 'accept': '.xlsx, .xls'})
+    )
+
 class SuperAdminFundAccountUserForm(forms.Form):
     account_user = forms.ModelChoiceField(
         queryset=User.objects.filter(user_type='account_user'),

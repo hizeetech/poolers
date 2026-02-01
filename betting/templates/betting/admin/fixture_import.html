@@ -1,0 +1,66 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+
+{% block extrahead %}{{ block.super }}
+{{ form.media }}
+{% endblock %}
+
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" type="text/css" href="{% static "admin/css/forms.css" %}" />{% endblock %}
+
+{% block bodyclass %}{{ block.super }} app-{{ opts.app_label }} model-{{ opts.model_name }} change-form{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="../../..">{% trans 'Home' %}</a>
+&rsaquo; <a href="../..">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="..">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; {% trans 'Import Fixtures' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+<form action="" method="post" enctype="multipart/form-data">{% csrf_token %}
+    <div>
+    {% if form.errors %}
+        <p class="errornote">
+        {% if form.errors|length == 1 %}{% trans "Please correct the error below." %}{% else %}{% trans "Please correct the errors below." %}{% endif %}
+        </p>
+    {% endif %}
+
+    <fieldset class="module aligned">
+        <h2>Upload Excel File</h2>
+        <div class="description">
+            <p>Upload an Excel file (.xlsx, .xls) with the following columns:</p>
+            <ul>
+                <li><strong>Column A:</strong> Serial Number</li>
+                <li><strong>Column B:</strong> Home Team</li>
+                <li><strong>Column C:</strong> (Ignored)</li>
+                <li><strong>Column D:</strong> Away Team</li>
+                <li><strong>Column E:</strong> Draw Odd</li>
+                <li><strong>Column F:</strong> Match Date (dd/mm/yy)</li>
+                <li><strong>Column G:</strong> Match Time (HH:MM)</li>
+            </ul>
+            <p style="margin-top: 10px;"><a href="sample/" class="button" style="padding: 5px 10px;">Download Sample Template</a></p>
+        </div>
+        {% for field in form %}
+        <div class="form-row">
+            {{ field.errors }}
+            <div>
+                {{ field.label_tag }} {{ field }}
+                {% if field.help_text %}
+                <p class="help">{{ field.help_text|safe }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </fieldset>
+
+    <div class="submit-row">
+        <input type="submit" value="{% trans 'Upload' %}" class="default" name="_save" />
+    </div>
+
+    </div>
+</form>
+</div>
+{% endblock %}

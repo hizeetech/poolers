@@ -26,8 +26,14 @@ from .forms import (
     UserChangeForm, 
     WithdrawalActionForm, 
     DeclareResultForm,
-    FixtureForm
+    FixtureForm,
+    FixtureUploadForm
 )
+import pandas as pd
+from django.core.files.storage import FileSystemStorage
+from django.conf import settings
+import os
+from datetime import datetime, time
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
@@ -543,6 +549,169 @@ class FixtureAdmin(admin.ModelAdmin):
 
     class Media:
         js = ('js/admin_fixture_toggle.js?v=2',)
+
+    change_list_template = "betting/admin/fixture_change_list.html"
+
+    def get_urls(self):
+        urls = super().get_urls()
+        my_urls = [
+            path('import-fixtures/', self.admin_site.admin_view(self.import_fixtures), name='import_fixtures'),
+            path('import-fixtures/sample/', self.admin_site.admin_view(self.download_sample_template), name='download_sample_template'),
+        ]
+        return my_urls + urls
+
+    def download_sample_template(self, request):
+        import io
+        from django.http import HttpResponse
+        
+        # Create a DataFrame with sample data matching the required structure
+        # Columns: Serial, Home, Ignored, Away, Draw Odd, Date, Time
+        data = {
+            'Serial Number': [1, 2, 3],
+            'Home Team': ['Arsenal', 'Chelsea', 'Liverpool'],
+            'Ignored (C)': ['', '', ''],
+            'Away Team': ['Man Utd', 'Tottenham', 'Man City'],
+            'Draw Odd': [3.50, 3.20, 3.10],
+            'Match Date': ['01/02/26', '01/02/26', '01/02/26'],
+            'Match Time': ['14:00', '16:00', '18:30']
+        }
+        df = pd.DataFrame(data)
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+            
+        buffer.seek(0)
+        response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename=fixture_import_template.xlsx'
+        return response
+
+    def import_fixtures(self, request):
+        if request.method == "POST":
+            form = FixtureUploadForm(request.POST, request.FILES)
+            if form.is_valid():
+                excel_file = request.FILES["excel_file"]
+                betting_period = form.cleaned_data["betting_period"]
+                
+                try:
+                    # Read Excel: Columns A, B, D, E, F, G -> Indices 0, 1, 3, 4, 5, 6
+                    # Use dtype=str to prevent automatic date parsing by pandas/Excel engine
+                    # This ensures we get the raw text (e.g. "07/02/2026") which we can parse correctly with dayfirst=True
+                    df = pd.read_excel(excel_file, usecols=[0, 1, 3, 4, 5, 6], dtype=str)
+                    df.columns = ['serial_number', 'home_team', 'away_team', 'draw_odd', 'match_date', 'match_time']
+                    
+                    success_count = 0
+                    skip_count = 0
+                    errors = []
+                    
+                    for index, row in df.iterrows():
+                        try:
+                            # Skip empty rows
+                            if pd.isna(row['serial_number']) and pd.isna(row['home_team']):
+                                continue
+                                
+                            # Validation
+                            if pd.isna(row['serial_number']) or pd.isna(row['home_team']) or pd.isna(row['away_team']):
+                                raise ValueError("Missing required fields (Serial, Home, Away)")
+                            
+                            # Skip header rows that might be interpreted as data
+                            if str(row['serial_number']).strip().lower() in ['serial', 'serial number', 'serial_number']:
+                                continue
+
+                            serial = str(row['serial_number']).split('.')[0]
+                            home = str(row['home_team']).strip()
+                            away = str(row['away_team']).strip()
+                            
+                            # Parse Date using pandas to_datetime for robustness
+                            match_date = row['match_date']
+                            try:
+                                if pd.notna(match_date):
+                                    # If string is "2026-02-07 00:00:00" (from Excel conversion), slice it
+                                    if isinstance(match_date, str) and ' ' in match_date:
+                                        match_date = match_date.split(' ')[0]
+                                        
+                                    match_date = pd.to_datetime(match_date, dayfirst=True).date()
+                                else:
+                                    raise ValueError("Date is missing")
+                            except Exception as e:
+                                raise ValueError(f"Invalid date format: {match_date} ({str(e)})")
+                                
+                            # Parse Time
+                            match_time = row['match_time']
+                            try:
+                                if pd.notna(match_time):
+                                    # If it's already a time object (datetime.time)
+                                    if isinstance(match_time, time): # Check exact type
+                                        pass
+                                    # If it's a datetime object (pd.Timestamp or datetime.datetime)
+                                    elif hasattr(match_time, 'time'):
+                                        match_time = match_time.time()
+                                    # If it's a string, try parsing multiple formats
+                                    elif isinstance(match_time, str):
+                                        try:
+                                            match_time = datetime.strptime(match_time, '%H:%M').time()
+                                        except ValueError:
+                                            # Try with seconds
+                                            match_time = datetime.strptime(match_time, '%H:%M:%S').time()
+                                    else:
+                                        raise ValueError(f"Unknown time type: {type(match_time)}")
+                                else:
+                                    raise ValueError("Time is missing")
+                            except Exception as e:
+                                raise ValueError(f"Invalid time format: {match_time}")
+
+                            # Check duplicates (Serial + BettingPeriod)
+                            if Fixture.objects.filter(serial_number=serial, betting_period=betting_period).exists():
+                                skip_count += 1
+                                errors.append(f"Row {index + 2}: Duplicate Serial {serial}")
+                                continue
+                                
+                            # Check duplicates (Teams + Date + Time)
+                            if Fixture.objects.filter(home_team__iexact=home, away_team__iexact=away, match_date=match_date, match_time=match_time).exists():
+                                skip_count += 1
+                                errors.append(f"Row {index + 2}: Duplicate Fixture {home} vs {away}")
+                                continue
+
+                            # Create Fixture
+                            Fixture.objects.create(
+                                betting_period=betting_period,
+                                serial_number=serial,
+                                home_team=home,
+                                away_team=away,
+                                draw_odd=row['draw_odd'] if not pd.isna(row['draw_odd']) else None,
+                                match_date=match_date,
+                                match_time=match_time,
+                                status='scheduled',
+                                is_active=True
+                            )
+                            success_count += 1
+                            
+                        except Exception as e:
+                            errors.append(f"Row {index + 2}: {str(e)}")
+                            
+                    messages.success(request, f"Upload Complete: {success_count} added, {skip_count} skipped.")
+                    if errors:
+                        error_msg = " | ".join(errors[:10])
+                        if len(errors) > 10:
+                            error_msg += f" ... and {len(errors)-10} more."
+                        messages.warning(request, f"Issues encountered: {error_msg}")
+                        
+                    return redirect('..')
+                    
+                except Exception as e:
+                    messages.error(request, f"Critical Error processing file: {str(e)}")
+                    
+        else:
+            form = FixtureUploadForm()
+            
+        context = {
+            'form': form,
+            'title': 'Upload Fixtures',
+            'site_header': self.admin_site.site_header,
+            'site_title': self.admin_site.site_title,
+            'opts': self.model._meta,
+        }
+        return render(request, 'betting/admin/fixture_import.html', context)
 
     fieldsets = (
         (None, {

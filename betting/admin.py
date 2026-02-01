@@ -257,13 +257,20 @@ class CustomUserAdmin(UserAdmin):
 
     def get_form(self, request, obj=None, **kwargs):
         # Pass the request to the form for permission checks if needed in form's clean method
+        # We wrap the form class to inject the request into __init__
         if obj: # Editing an existing object
             kwargs['form'] = self.form
-            kwargs['form'].request = request # Pass request to the form instance
         else: # Adding a new object
             kwargs['form'] = self.add_form
-            kwargs['form'].request = request # Pass request to the form instance
-        return super().get_form(request, obj, **kwargs)
+            
+        FormClass = super().get_form(request, obj, **kwargs)
+        
+        class RequestForm(FormClass):
+            def __init__(self, *args, **kwargs):
+                kwargs['request'] = request
+                super().__init__(*args, **kwargs)
+                
+        return RequestForm
 
     def save_model(self, request, obj, form, change):
         action_description = f"User '{obj.email}' {'updated' if change else 'created'}."

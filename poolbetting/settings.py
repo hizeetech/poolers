@@ -196,13 +196,19 @@ CELERY_TASK_ROUTES = {
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'en-gb'
 
 TIME_ZONE = 'Africa/Lagos'
 
 USE_I18N = True
 
 USE_TZ = True
+
+# Date Format Settings
+USE_L10N = False # Disable localization to enforce the formats below
+DATE_FORMAT = 'd/m/Y'
+DATETIME_FORMAT = 'd/m/Y H:i'
+DATE_INPUT_FORMATS = ['%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d']
 
 
 # Static files (CSS, JavaScript, Images)

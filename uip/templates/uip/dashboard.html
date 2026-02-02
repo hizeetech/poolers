@@ -330,7 +330,8 @@
                         start_date: startDate,
                         end_date: endDate,
                         scope: scope,
-                        period_id: period
+                        period_id: period,
+                        _t: new Date().getTime() // Bust browser cache
                     });
 
                     fetch(`{% url 'uip:serial_analytics' %}?${params.toString()}`)

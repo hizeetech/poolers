@@ -1,4 +1,25 @@
-{% extends 'betting/base.html' %} {% load static %} {% block title %}My Wallet{% endblock %} {% block content %}
+{% extends 'betting/base.html' %} {% load static %} {% block title %}My Wallet{% endblock %} 
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+    .select2-container .select2-selection--single {
+        height: 50px !important;
+        border-radius: 50rem !important; /* rounded-pill */
+        padding: 10px 20px;
+        border: 1px solid #ced4da;
+    }
+    .select2-container--default .select2-selection--single .select2-selection__arrow {
+        height: 48px !important;
+        right: 15px !important;
+    }
+    .select2-container--default .select2-selection--single .select2-selection__rendered {
+        line-height: 28px !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
 <div class="container py-5">
     <div class="row justify-content-center">
         <div class="col-md-10 col-lg-9">
@@ -180,7 +201,41 @@
 
 {% endblock %} {% block extra_js %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
 <script>
+    $(document).ready(function() {
+        // Initialize Select2 for Recipient
+        $('#id_recipient_email').select2({
+            theme: 'default',
+            placeholder: 'Search by Name, Email, or Cashier Prefix...',
+            allowClear: true,
+            ajax: {
+                url: '{% url "betting:api_downline_search" %}',
+                dataType: 'json',
+                delay: 250,
+                data: function (params) {
+                    return {
+                        q: params.term, // search term
+                        page: params.page
+                    };
+                },
+                processResults: function (data, params) {
+                    params.page = params.page || 1;
+                    return {
+                        results: data.results,
+                        pagination: {
+                            more: data.pagination.more
+                        }
+                    };
+                },
+                cache: true
+            },
+            minimumInputLength: 0, // Allow showing results on click without typing
+        });
+    });
+
     document.getElementById('depositForm').addEventListener('submit', async function(e) {
         e.preventDefault();
 

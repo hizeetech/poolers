@@ -3,9 +3,45 @@ from django.db.models.functions import Cast
 from django.utils import timezone
 from django.core.cache import cache
 from datetime import timedelta
+import redis
 from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt, Selection
 
 class DashboardService:
+    @staticmethod
+    def get_redis_client():
+        try:
+            return redis.Redis(host='127.0.0.1', port=6379, db=0, socket_connect_timeout=1)
+        except Exception:
+            return None
+
+    @staticmethod
+    def get_data_version():
+        r = DashboardService.get_redis_client()
+        if r:
+            try:
+                v = r.get('uip_serial_freq_version')
+                if v:
+                    return int(v)
+                r.set('uip_serial_freq_version', 1)
+                return 1
+            except Exception:
+                pass
+        return cache.get_or_set('uip_serial_freq_version', 1)
+
+    @staticmethod
+    def invalidate_data_version():
+        r = DashboardService.get_redis_client()
+        if r:
+            try:
+                return r.incr('uip_serial_freq_version')
+            except Exception:
+                pass
+        try:
+            return cache.incr('uip_serial_freq_version')
+        except ValueError:
+            cache.set('uip_serial_freq_version', 1)
+            return 1
+
     @staticmethod
     def get_serial_number_frequency(start_date=None, end_date=None, scope='all', user_id=None, period_id=None):
         """
@@ -13,7 +49,7 @@ class DashboardService:
         Supports filtering by date range, scope (online/retail), specific user, and betting period.
         """
         # Create a unique cache key based on filters and data version
-        version = cache.get_or_set('uip_serial_freq_version', 1)
+        version = DashboardService.get_data_version()
         cache_key = f'uip_serial_number_frequency_{version}_{start_date}_{end_date}_{scope}_{user_id}_{period_id}'
         cached_data = cache.get(cache_key)
         if cached_data:

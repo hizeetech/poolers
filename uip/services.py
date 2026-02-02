@@ -119,10 +119,7 @@ class DashboardService:
         start_of_day = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
         # 1. Daily Stake Volume
-        tickets_today = BetTicket.objects.filter(placed_at__gte=start_of_day)
-        total_stake = tickets_today.aggregate(total=Sum('stake_amount'))['total'] or 0
-        
-        # 2. Total Tickets Sold
+        tickets_today = BetTicket.objects.filter(l_stake = tickets_today.agg# 2. Total Tickets Sold
         total_tickets = tickets_today.count()
         
         # 3. Total Winnings Paid (Approximation)
@@ -170,10 +167,11 @@ class DashboardService:
         
         top_agents = list(User.objects.filter(
             user_type='agent',
-            agents_under__bet_tickets__placed_at__gte=start_of_day
+            agents_under__bet_tickets__placed_at__gte=start_of_day,
+            agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out']
         ).annotate(
-            daily_sales=Sum('agents_under__bet_tickets__stake_amount'),
-            ticket_count=Count('agents_under__bet_tickets')
+            daily_sales=Sum('agents_under__bet_tickets__stake_amount', filter=Q(agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out'])),
+            ticket_count=Count('agents_under__bet_tickets', filter=Q(agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out']))
         ).order_by('-daily_sales')[:10])
         
         cache.set(cache_key, top_agents, 300) # Cache for 5 minutes
@@ -197,7 +195,10 @@ class DashboardService:
         start_of_month_date = today.replace(day=1)
         start_of_month = timezone.make_aware(timezone.datetime.combine(start_of_month_date, timezone.datetime.min.time()))
         
-        monthly_tickets = BetTicket.objects.filter(placed_at__gte=start_of_month)
+        monthly_tickets = BetTicket.objects.filter(
+            placed_at__gte=start_of_month,
+            status__in=['pending', 'won', 'lost', 'cashed_out']
+        )
         monthly_stake = monthly_tickets.aggregate(total=Sum('stake_amount'))['total'] or 0
         monthly_winnings = BetTicket.objects.filter(status='won', last_updated__gte=start_of_month).aggregate(total=Sum('max_winning'))['total'] or 0
         
@@ -234,17 +235,21 @@ class DashboardService:
         # 1. Agent Performance (Weekly)
         top_agents_week = list(User.objects.filter(
             user_type='agent',
-            agents_under__bet_tickets__placed_at__gte=start_of_week
+            agents_under__bet_tickets__placed_at__gte=start_of_week,
+            agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out']
         ).annotate(
-            weekly_sales=Sum('agents_under__bet_tickets__stake_amount'),
-            weekly_tickets=Count('agents_under__bet_tickets')
+            weekly_sales=Sum('agents_under__bet_tickets__stake_amount', filter=Q(agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out'])),
+            weekly_tickets=Count('agents_under__bet_tickets', filter=Q(agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out']))
         ).order_by('-weekly_sales')[:10])
         
         # 2. User Acquisition (New users this month)
         new_users_month = User.objects.filter(date_joined__gte=start_of_month).count()
         
         # 3. Active Users (Month)
-        active_users_month = BetTicket.objects.filter(placed_at__gte=start_of_month).values('user').distinct().count()
+        active_users_month = BetTicket.objects.filter(
+            placed_at__gte=start_of_month,
+            status__in=['pending', 'won', 'lost', 'cashed_out']
+        ).values('user').distinct().count()
         
         # 4. Ticket Status Distribution (Month)
         status_dist = list(BetTicket.objects.filter(placed_at__gte=start_of_month).values('status').annotate(count=Count('status')))

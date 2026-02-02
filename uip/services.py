@@ -118,8 +118,14 @@ class DashboardService:
         today = timezone.now().date()
         start_of_day = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # 1. Daily Stake Volume
-        tickets_today = BetTicket.objects.filter(l_stake = tickets_today.agg# 2. Total Tickets Sold
+        # 1. Daily Stake Volume (Exclude cancelled/deleted)
+        tickets_today = BetTicket.objects.filter(
+            placed_at__gte=start_of_day,
+            status__in=['pending', 'won', 'lost', 'cashed_out']
+        )
+        total_stake = tickets_today.aggregate(total=Sum('stake_amount'))['total'] or 0
+        
+        # 2. Total Tickets Sold
         total_tickets = tickets_today.count()
         
         # 3. Total Winnings Paid (Approximation)

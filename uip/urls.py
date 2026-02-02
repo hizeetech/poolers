@@ -11,6 +11,7 @@ urlpatterns = [
     path('forecasting/', views.uip_forecasting, name='forecasting'),
     path('reports/', views.uip_reports, name='reports'),
     path('audit/', views.uip_audit, name='audit'),
+    path('api/serial-analytics/', views.serial_number_analytics, name='serial_analytics'),
     path('export/financials/', views.export_financials, name='export_financials'),
     path('export/agents/', views.export_agents, name='export_agents'),
     path('export/audit/', views.export_audit, name='export_audit'),

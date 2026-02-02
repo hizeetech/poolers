@@ -68,8 +68,10 @@
                     <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-4">
                         {% csrf_token %}
                         <div class="mb-3">
-                            <label for="id_recipient_email" class="form-label">Recipient Email</label>
-                            <input type="email" name="recipient_identifier" id="id_recipient_email" class="form-control rounded-pill px-4 py-2" placeholder="Recipient's email" required>
+                            <label for="id_recipient_email" class="form-label">Recipient</label>
+                            <select name="recipient_identifier" id="id_recipient_email" class="form-control" required style="width: 100%;">
+                                <!-- Options loaded via AJAX -->
+                            </select>
                         </div>
                         <div class="mb-3">
                             <label for="id_transfer_amount" class="form-label">Amount (₦)</label>
@@ -236,6 +238,69 @@
             console.error('Error:', error);
             alert('An error occurred during deposit initiation: ' + error.message);
         }
+    });
+</script>
+
+<!-- Select2 Dependencies and Script -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+<script>
+    $(document).ready(function() {
+        // Initialize Select2 on the recipient field
+        $('#id_recipient_email').select2({
+            placeholder: 'Search for recipient (Name, Email, Role)...',
+            allowClear: true,
+            width: '100%',
+            ajax: {
+                url: '{% url "betting:api_downline_search" %}',
+                dataType: 'json',
+                delay: 250,
+                data: function (params) {
+                    return {
+                        q: params.term, // search term
+                        page: params.page
+                    };
+                },
+                processResults: function (data, params) {
+                    params.page = params.page || 1;
+                    return {
+                        results: data.results,
+                        pagination: {
+                            more: data.pagination.more
+                        }
+                    };
+                },
+                cache: true
+            },
+            minimumInputLength: 0,
+        });
+        
+        // Custom Styling to match rounded-pill
+        // We target the Select2 container elements rendered after initialization
+        
+        // 1. Container
+        $('.select2-container--default .select2-selection--single').css({
+            'height': '45px',
+            'border-radius': '50rem', // rounded-pill
+            'border': '1px solid #dee2e6',
+            'display': 'flex',
+            'align-items': 'center',
+            'padding-left': '20px'
+        });
+
+        // 2. Arrow
+        $('.select2-container--default .select2-selection--single .select2-selection__arrow').css({
+            'height': '43px',
+            'right': '10px'
+        });
+        
+        // 3. Rendered text
+        $('.select2-container--default .select2-selection--single .select2-selection__rendered').css({
+            'line-height': '43px',
+            'color': '#495057'
+        });
     });
 </script>
 {% endblock %}

@@ -574,7 +574,15 @@ class WalletTransferForm(forms.Form):
             # Master Agent: Super Agents or Agents (depending on hierarchy)
             # Do NOT display: Cashiers, Players
             if recipient_user.user_type in ['super_agent', 'agent']:
-                if recipient_user.master_agent == self.sender_user:
+                # Check direct relationship or indirect (via Super Agent)
+                is_direct = (recipient_user.master_agent == self.sender_user)
+                # Ensure super_agent is not None before checking its master_agent
+                is_indirect = (
+                    recipient_user.super_agent is not None and 
+                    recipient_user.super_agent.master_agent == self.sender_user
+                )
+                
+                if is_direct or is_indirect:
                     has_permission = True
         
         elif self.sender_user.user_type == 'super_agent':

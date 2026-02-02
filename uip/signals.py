@@ -71,11 +71,8 @@ def broadcast_bet_activity(sender, instance, created, **kwargs):
         # This runs for both created (new bets) and updated (status change like void/cancel)
         def send_frequency_update():
             try:
-                # Invalidate cache globally by incrementing version
-                try:
-                    cache.incr('uip_serial_freq_version')
-                except ValueError:
-                    cache.set('uip_serial_freq_version', 1)
+                # Invalidate cache globally via shared Redis version
+                DashboardService.invalidate_data_version()
                 
                 # Fetch fresh data (will use new version)
                 data = DashboardService.get_serial_number_frequency()

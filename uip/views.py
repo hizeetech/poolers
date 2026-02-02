@@ -111,12 +111,14 @@ def serial_number_analytics(request):
     end_date = request.GET.get('end_date') or None
     scope = request.GET.get('scope') or 'all'
     user_id = request.GET.get('user_id') or None
+    period_id = request.GET.get('period_id') or None
 
     data = DashboardService.get_serial_number_frequency(
         start_date=start_date,
         end_date=end_date,
         scope=scope,
-        user_id=user_id
+        user_id=user_id,
+        period_id=period_id
     )
     return JsonResponse(data)
 

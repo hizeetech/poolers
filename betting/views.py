@@ -3898,3 +3898,85 @@ def stop_impersonation(request):
         logout(request)
         return redirect('/admin/login/')
 
+@login_required
+def api_downline_search(request):
+    """
+    API endpoint for searching downline users for Wallet Transfer.
+    Filters based on logged-in user's role.
+    """
+    search_term = request.GET.get('q', '')
+    page = request.GET.get('page', 1)
+    
+    user = request.user
+    queryset = User.objects.none()
+
+    if user.user_type == 'agent':
+        # Agents see their Cashiers and Players
+        queryset = User.objects.filter(
+            Q(agent=user) & 
+            Q(user_type__in=['cashier', 'player'])
+        )
+    elif user.user_type == 'super_agent':
+        # Super Agents see their direct Agents only
+        queryset = User.objects.filter(
+            super_agent=user,
+            user_type='agent'
+        )
+    elif user.user_type == 'master_agent':
+        # Master Agents see Super Agents or Agents (depending on hierarchy)
+        # Check both direct and indirect (via Super Agent)
+        queryset = User.objects.filter(
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user)
+        ).filter(user_type__in=['super_agent', 'agent']).distinct()
+        
+    elif user.user_type == 'account_user':
+        # Account Users can see Master Agents, Super Agents, Agents, Cashiers
+        queryset = User.objects.filter(
+            user_type__in=['master_agent', 'super_agent', 'agent', 'cashier']
+        )
+    
+    # Apply search filter
+    if search_term:
+        queryset = queryset.filter(
+            Q(email__icontains=search_term) | 
+            Q(first_name__icontains=search_term) | 
+            Q(last_name__icontains=search_term) |
+            Q(cashier_prefix__icontains=search_term)
+        )
+        
+    # Ordering
+    queryset = queryset.order_by('email')
+    
+    # Pagination
+    paginator = Paginator(queryset, 20)
+    try:
+        users_page = paginator.page(page)
+    except PageNotAnInteger:
+        users_page = paginator.page(1)
+    except EmptyPage:
+        users_page = paginator.page(paginator.num_pages)
+        
+    results = []
+    for u in users_page:
+        role_label = u.get_user_type_display()
+        name_str = u.get_full_name()
+        if not name_str:
+             name_str = u.first_name if u.first_name else ""
+        
+        display_text = f"{name_str} ({role_label}) - {u.email}"
+        if u.user_type == 'cashier' and u.cashier_prefix:
+            display_text = f"{u.cashier_prefix} - {display_text}"
+            
+        results.append({
+            'id': u.id,
+            'text': display_text
+        })
+        
+    return JsonResponse({
+        'results': results,
+        'pagination': {
+            'more': users_page.has_next()
+        }
+    })
+

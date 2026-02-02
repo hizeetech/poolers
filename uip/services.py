@@ -3,9 +3,74 @@ from django.db.models.functions import Cast
 from django.utils import timezone
 from django.core.cache import cache
 from datetime import timedelta
-from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt
+from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt, Selection
 
 class DashboardService:
+    @staticmethod
+    def get_serial_number_frequency(start_date=None, end_date=None, scope='all', user_id=None, period_id=None):
+        """
+        Aggregates frequency of serial numbers 1-49 across all valid bets.
+        Supports filtering by date range, scope (online/retail), specific user, and betting period.
+        """
+        # Create a unique cache key based on filters and data version
+        version = cache.get_or_set('uip_serial_freq_version', 1)
+        cache_key = f'uip_serial_number_frequency_{version}_{start_date}_{end_date}_{scope}_{user_id}_{period_id}'
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        # Base query: Filter valid tickets
+        qs = Selection.objects.filter(
+            bet_ticket__status__in=['pending', 'won', 'lost', 'cashed_out']
+        )
+
+        # Apply Filters
+        if start_date:
+            qs = qs.filter(bet_ticket__placed_at__date__gte=start_date)
+        if end_date:
+            qs = qs.filter(bet_ticket__placed_at__date__lte=end_date)
+            
+        if scope == 'online':
+            qs = qs.filter(bet_ticket__user__user_type='player')
+        elif scope == 'retail':
+            qs = qs.filter(bet_ticket__user__user_type__in=['cashier', 'agent'])
+            
+        if user_id:
+            qs = qs.filter(bet_ticket__user_id=user_id)
+            
+        if period_id:
+            qs = qs.filter(fixture__betting_period_id=period_id)
+
+        # Aggregate
+        counts = qs.values('fixture__serial_number').annotate(
+            count=Count('id')
+        ).order_by('fixture__serial_number')
+        
+        # Convert to dictionary {serial_number: count}
+        frequency_map = {}
+        for entry in counts:
+            sn = entry['fixture__serial_number']
+            try:
+                sn_int = int(sn)
+                if 1 <= sn_int <= 49:
+                    frequency_map[sn_int] = frequency_map.get(sn_int, 0) + entry['count']
+            except (ValueError, TypeError):
+                continue
+                
+        # Prepare lists for Chart.js
+        labels = list(range(1, 50))
+        data = [frequency_map.get(i, 0) for i in labels]
+        
+        result = {
+            'labels': labels,
+            'data': data,
+            'last_updated': timezone.now().isoformat()
+        }
+        
+        # Cache for 5 mins
+        cache.set(cache_key, result, 300) 
+        return result
+
     @staticmethod
     def get_live_metrics():
         # Cache key for live metrics (short duration: 60 seconds)

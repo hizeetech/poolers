@@ -2,7 +2,8 @@ from django.shortcuts import render
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.paginator import Paginator
 from django.utils import timezone
-from betting.models import ActivityLog
+from django.http import JsonResponse
+from betting.models import ActivityLog, BettingPeriod
 from .services import DashboardService
 from .forecasting import ForecastingService
 from .reporting import ReportingService
@@ -15,9 +16,11 @@ def is_admin_or_executive(user):
 def uip_dashboard(request):
     metrics = DashboardService.get_live_metrics()
     leaderboard = DashboardService.get_agent_leaderboard()
+    betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')[:10]
     context = {
         'metrics': metrics,
         'leaderboard': leaderboard,
+        'betting_periods': betting_periods,
         'page_title': 'Unified Intelligence Platform'
     }
     return render(request, 'uip/dashboard.html', context)
@@ -97,6 +100,25 @@ def uip_audit(request):
         'page_title': 'Audit & Compliance Logs'
     }
     return render(request, 'uip/audit.html', context)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def serial_number_analytics(request):
+    """
+    API endpoint for real-time serial number frequency chart.
+    """
+    start_date = request.GET.get('start_date') or None
+    end_date = request.GET.get('end_date') or None
+    scope = request.GET.get('scope') or 'all'
+    user_id = request.GET.get('user_id') or None
+
+    data = DashboardService.get_serial_number_frequency(
+        start_date=start_date,
+        end_date=end_date,
+        scope=scope,
+        user_id=user_id
+    )
+    return JsonResponse(data)
 
 @login_required
 @user_passes_test(is_admin_or_executive)

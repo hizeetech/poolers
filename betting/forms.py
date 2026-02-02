@@ -524,19 +524,28 @@ class WalletTransferForm(forms.Form):
             
         # 1. Resolve Recipient
         recipient_user = None
-        try:
-            # Try to find by Email
-            recipient_user = User.objects.get(email__iexact=recipient_identifier)
-        except User.DoesNotExist:
+        
+        # New: Try to find by ID (from Select2)
+        if recipient_identifier.isdigit():
             try:
-                # Try to find by Phone Number
-                recipient_user = User.objects.get(phone_number=recipient_identifier)
+                recipient_user = User.objects.get(pk=int(recipient_identifier))
             except User.DoesNotExist:
-                 try:
-                    # Try to find by Cashier Prefix (Exact match for the cashier's full prefix e.g., 1234-01)
-                    recipient_user = User.objects.get(cashier_prefix=recipient_identifier)
-                 except User.DoesNotExist:
-                     pass
+                pass
+
+        if not recipient_user:
+            try:
+                # Try to find by Email
+                recipient_user = User.objects.get(email__iexact=recipient_identifier)
+            except User.DoesNotExist:
+                try:
+                    # Try to find by Phone Number
+                    recipient_user = User.objects.get(phone_number=recipient_identifier)
+                except User.DoesNotExist:
+                     try:
+                        # Try to find by Cashier Prefix (Exact match for the cashier's full prefix e.g., 1234-01)
+                        recipient_user = User.objects.get(cashier_prefix=recipient_identifier)
+                     except User.DoesNotExist:
+                         pass
 
         if not recipient_user:
             self.add_error('recipient_identifier', "Recipient not found.")
@@ -562,51 +571,32 @@ class WalletTransferForm(forms.Form):
                 has_permission = True
 
         elif self.sender_user.user_type == 'master_agent':
-            # Master Agent can credit their Super Agents, Agents, Cashiers
-            if recipient_user.user_type in ['super_agent', 'agent', 'cashier']:
-                # Verify hierarchy
-                is_downline = False
-                if recipient_user.user_type == 'super_agent' and recipient_user.master_agent == self.sender_user:
-                    is_downline = True
-                elif recipient_user.user_type == 'agent' and recipient_user.master_agent == self.sender_user: # Direct or via Super Agent
-                     is_downline = True
-                elif recipient_user.user_type == 'cashier' and recipient_user.agent.master_agent == self.sender_user:
-                     is_downline = True
-                
-                if is_downline:
+            # Master Agent: Super Agents or Agents (depending on hierarchy)
+            # Do NOT display: Cashiers, Players
+            if recipient_user.user_type in ['super_agent', 'agent']:
+                if recipient_user.master_agent == self.sender_user:
                     has_permission = True
         
         elif self.sender_user.user_type == 'super_agent':
-            # Super Agent can credit their Agents, Cashiers
-             if recipient_user.user_type in ['agent', 'cashier']:
-                # Verify hierarchy
-                is_downline = False
-                if recipient_user.user_type == 'agent' and recipient_user.super_agent == self.sender_user:
-                    is_downline = True
-                elif recipient_user.user_type == 'cashier' and recipient_user.agent.super_agent == self.sender_user:
-                    is_downline = True
-                
-                if is_downline:
+            # Super Agent: Directly mapped Agents only
+            # Do NOT display: Cashiers, Players
+             if recipient_user.user_type == 'agent':
+                if recipient_user.super_agent == self.sender_user:
                     has_permission = True
 
         elif self.sender_user.user_type == 'agent':
-            # Agent can credit their Cashiers
-             if recipient_user.user_type == 'cashier':
+            # Agent: Cashiers and Players under the agent
+             if recipient_user.user_type in ['cashier', 'player']:
                  if recipient_user.agent == self.sender_user:
                      has_permission = True
         
-        # Allow transfers to Players? (Optional - typically Agents credit Players)
-        # elif self.sender_user.user_type == 'agent':
-        #     if recipient_user and recipient_user.user_type in ['cashier', 'player']:
-        #         if recipient_user.agent == self.sender_user:
-        #             has_permission = True
-        
         if not has_permission:
-            self.add_error('recipient_identifier', "You do not have permission to transfer funds to this recipient's user type or hierarchy.")
+            self.add_error('recipient_identifier', "Selected recipient is not part of your authorized downline network.")
             return cleaned_data
 
         # Balance Check
         if amount is not None and recipient_user:
+
             if transaction_type == 'credit':
                 sender_wallet = Wallet.objects.get(user=self.sender_user)
                 if sender_wallet.balance < amount:

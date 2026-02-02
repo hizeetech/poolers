@@ -155,6 +155,52 @@
         </div>
     </div>
 
+    <!-- Serial Number Frequency Chart -->
+    <div class="row">
+        <div class="col-12 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3 d-flex flex-wrap justify-content-between align-items-center">
+                    <h6 class="m-0 font-weight-bold text-primary">Serial Number Play Frequency (1–49)</h6>
+                    
+                    <div class="d-flex align-items-center mt-2 mt-md-0 gap-2">
+                        <!-- Filters -->
+                        <div class="input-group input-group-sm" style="width: auto;">
+                            <span class="input-group-text">Date</span>
+                            <input type="date" id="chart-start-date" class="form-control form-control-sm">
+                            <span class="input-group-text">-</span>
+                            <input type="date" id="chart-end-date" class="form-control form-control-sm">
+                        </div>
+                        
+                        <select id="chart-scope" class="form-select form-select-sm" style="width: auto;">
+                            <option value="all">All Scope</option>
+                            <option value="online">Online</option>
+                            <option value="retail">Retail</option>
+                        </select>
+                        
+                        <select id="chart-period" class="form-select form-select-sm" style="width: auto;">
+                            <option value="">All Periods</option>
+                            {% for period in betting_periods %}
+                            <option value="{{ period.id }}">{{ period.name }} ({{ period.start_date|date:"d M" }})</option>
+                            {% endfor %}
+                        </select>
+                        
+                        <button id="chart-filter-apply" class="btn btn-primary btn-sm">Apply</button>
+                        
+                        <div class="ms-3 border-start ps-3">
+                            <small class="text-muted d-block" style="line-height: 1;">Live Refresh: <span id="serial-last-updated">Connecting...</span></small>
+                            <small class="text-center d-block"><i class="fas fa-circle text-muted" id="live-indicator" style="font-size: 0.7em;"></i></small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div style="height: 400px;">
+                        <canvas id="serialNumberChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Agent Leaderboard -->
     <div class="row">
         <div class="col-12 mb-4">
@@ -213,58 +259,170 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
     document.addEventListener("DOMContentLoaded", function() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = protocol + '//' + window.location.host + '/ws/uip/dashboard/';
-        const socket = new WebSocket(wsUrl);
+        // --- Chart Initialization ---
+        const ctx = document.getElementById('serialNumberChart').getContext('2d');
+        const lastUpdatedSpan = document.getElementById('serial-last-updated');
+        const liveIndicator = document.getElementById('live-indicator');
+        
+        let chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: Array.from({length: 49}, (_, i) => i + 1),
+                datasets: [{
+                    label: 'Selection Count',
+                    data: Array(49).fill(0),
+                    backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1 }
+                    },
+                    x: {
+                        title: { display: true, text: 'Serial Number' }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            title: (items) => 'Serial Number: ' + items[0].label
+                        }
+                    },
+                    legend: { display: false }
+                }
+            }
+        });
+
+        function updateChart(data) {
+            chart.data.labels = data.labels;
+            chart.data.datasets[0].data = data.data;
+            chart.update();
+            lastUpdatedSpan.textContent = new Date(data.last_updated).toLocaleTimeString();
+            
+            // Flash indicator
+            liveIndicator.classList.remove('text-muted');
+            liveIndicator.classList.add('text-success');
+            setTimeout(() => {
+                liveIndicator.classList.remove('text-success');
+                liveIndicator.classList.add('text-muted');
+            }, 1000);
+        }
+
+        function fetchChartData() {
+                    const startDate = document.getElementById('chart-start-date').value;
+                    const endDate = document.getElementById('chart-end-date').value;
+                    const scope = document.getElementById('chart-scope').value;
+                    const periodElem = document.getElementById('chart-period');
+                    const period = periodElem ? periodElem.value : '';
+
+                    const params = new URLSearchParams({
+                        start_date: startDate,
+                        end_date: endDate,
+                        scope: scope,
+                        period_id: period
+                    });
+
+                    fetch(`{% url 'uip:serial_analytics' %}?${params.toString()}`)
+                        .then(res => res.json())
+                .then(data => updateChart(data))
+                .catch(err => console.error("Fetch error:", err));
+        }
+
+        // Filter Event Listeners
+        document.getElementById('chart-filter-apply').addEventListener('click', fetchChartData);
+        
+        // Optional: Auto-refresh when changing scope (UX choice)
+        document.getElementById('chart-scope').addEventListener('change', fetchChartData);
+
+        // Initial Fetch
+        fetchChartData();
+
+
+        // --- WebSocket Connection ---
+        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const socket = new WebSocket(protocol + window.location.host + '/ws/dashboard/');
 
         socket.onopen = function(e) {
-            console.log("UIP WebSocket connected");
+            console.log('WebSocket Connected');
+            liveIndicator.classList.remove('text-muted', 'text-danger');
+            liveIndicator.classList.add('text-success');
         };
 
         socket.onmessage = function(e) {
             const data = JSON.parse(e.data);
-            const feed = document.getElementById('activity-feed');
             
-            // Remove 'Waiting...' placeholder if exists
-            const placeholder = feed.querySelector('.text-muted.text-center');
-            if (placeholder) {
-                placeholder.remove();
+            // 1. Handle Serial Frequency Update
+            if (data.type === 'serial_frequency_update') {
+                        // Check if filters are applied
+                        const periodElem = document.getElementById('chart-period');
+                        const hasFilters = document.getElementById('chart-start-date').value || 
+                                         document.getElementById('chart-end-date').value ||
+                                         document.getElementById('chart-scope').value !== 'all' ||
+                                         (periodElem && periodElem.value);
+                        
+                        if (data.stats && !hasFilters) {
+                             updateChart(data.stats);
+                } else {
+                    // Re-fetch to get filtered data or fresh data
+                    fetchChartData();
+                }
             }
 
-            let alertHtml = '';
-            const timestamp = new Date().toLocaleTimeString();
+            // 2. Handle Activity Feed Alerts
+            const feed = document.getElementById('activity-feed');
+            if (feed) {
+                // Remove 'Waiting...' placeholder if exists
+                const placeholder = feed.querySelector('.text-muted.text-center');
+                if (placeholder) {
+                    placeholder.remove();
+                }
 
-            if (data.type === 'bet_placed') {
-                alertHtml = `<div class="alert alert-info border-left-info py-2 mb-2" role="alert">
-                                <small class="text-gray-500 mr-2">${timestamp}</small>
-                                <strong>New Bet:</strong> Ticket #${data.ticket_id} placed by ${data.user} (₦${data.amount})
-                             </div>`;
-            } else if (data.type === 'alert') {
-                const alertClass = data.level === 'critical' ? 'alert-danger border-left-danger' : 'alert-warning border-left-warning';
-                alertHtml = `<div class="alert ${alertClass} py-2 mb-2" role="alert">
-                                <small class="text-gray-500 mr-2">${timestamp}</small>
-                                <strong>${data.title}:</strong> ${data.message}
-                             </div>`;
-            } else if (data.type === 'transaction') {
-                alertHtml = `<div class="alert alert-success border-left-success py-2 mb-2" role="alert">
-                                <small class="text-gray-500 mr-2">${timestamp}</small>
-                                <strong>Transaction:</strong> ${data.desc} by ${data.user} (₦${data.amount})
-                             </div>`;
-            }
+                let alertHtml = '';
+                const timestamp = new Date().toLocaleTimeString();
 
-            if (alertHtml) {
-                feed.insertAdjacentHTML('afterbegin', alertHtml);
-                // Limit to 50 items
-                if (feed.children.length > 50) {
-                    feed.lastElementChild.remove();
+                if (data.type === 'bet_placed') {
+                    alertHtml = `<div class="alert alert-info border-left-info py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">${timestamp}</small>
+                                    <strong>New Bet:</strong> Ticket #${data.ticket_id} placed by ${data.user} (₦${data.amount})
+                                 </div>`;
+                } else if (data.type === 'alert') {
+                    const alertClass = data.level === 'critical' ? 'alert-danger border-left-danger' : 'alert-warning border-left-warning';
+                    alertHtml = `<div class="alert ${alertClass} py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">${timestamp}</small>
+                                    <strong>${data.title}:</strong> ${data.message}
+                                 </div>`;
+                } else if (data.type === 'transaction') {
+                    alertHtml = `<div class="alert alert-success border-left-success py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">${timestamp}</small>
+                                    <strong>Transaction:</strong> ${data.desc} by ${data.user} (₦${data.amount})
+                                 </div>`;
+                }
+
+                if (alertHtml) {
+                    feed.insertAdjacentHTML('afterbegin', alertHtml);
+                    // Limit to 50 items
+                    if (feed.children.length > 50) {
+                        feed.lastElementChild.remove();
+                    }
                 }
             }
         };
 
         socket.onclose = function(e) {
-            console.error("UIP WebSocket closed unexpectedly");
+            console.error('Chat socket closed unexpectedly');
+            liveIndicator.classList.remove('text-success');
+            liveIndicator.classList.add('text-danger');
         };
     });
 </script>

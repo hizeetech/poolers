@@ -74,6 +74,12 @@ def broadcast_bet_activity(sender, instance, created, **kwargs):
                 # Invalidate cache globally via shared Redis version
                 DashboardService.invalidate_data_version()
                 
+                # Invalidate Leaderboard and Metrics Caches
+                cache.delete('uip_agent_leaderboard')
+                cache.delete('uip_live_metrics')
+                cache.delete('uip_financial_metrics')
+                cache.delete('uip_analytics_metrics')
+                
                 # Fetch fresh data (will use new version)
                 data = DashboardService.get_serial_number_frequency()
                 

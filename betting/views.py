@@ -2577,6 +2577,18 @@ def approve_reject_withdrawal(request, withdrawal_id):
 
             if action == 'approve':
                 withdrawal_request.status = 'approved'
+                
+                # Capture Balance Snapshot for Audit
+                try:
+                    user_wallet = Wallet.objects.get(user=withdrawal_request.user)
+                    # Since funds are deducted at request time (pending), current balance is the 'after' state relative to the request
+                    withdrawal_request.balance_after = user_wallet.balance 
+                    withdrawal_request.balance_before = user_wallet.balance + withdrawal_request.amount
+                except Wallet.DoesNotExist:
+                    pass
+
+                withdrawal_request.processed_ip = request.META.get('REMOTE_ADDR')
+                
                 messages.success(request, f"Withdrawal request {withdrawal_id} approved. Funds should be disbursed.")
                 log_admin_activity(request, f"Approved withdrawal request {withdrawal_id} for user {withdrawal_request.user.email}")
             elif action == 'reject':
@@ -3530,18 +3542,62 @@ def account_user_dashboard(request):
             success_count = 0
             for w_id in selected_withdrawals:
                 try:
-                    withdrawal = UserWithdrawal.objects.get(id=w_id)
-                    if withdrawal.status == 'pending':
-                        if action == 'mark_paid':
-                            withdrawal.status = 'completed'
-                            withdrawal.save()
-                            success_count += 1
-                        elif action == 'reject':
-                            withdrawal.status = 'rejected'
-                            withdrawal.save()
-                            success_count += 1
+                    with db_transaction.atomic():
+                        withdrawal = UserWithdrawal.objects.select_for_update().get(id=w_id)
+                        
+                        if withdrawal.status == 'pending':
+                            if action == 'mark_paid':
+                                # 1. Capture Audit Data (Balance Snapshot)
+                                try:
+                                    user_wallet = Wallet.objects.select_for_update().get(user=withdrawal.user)
+                                    withdrawal.balance_after = user_wallet.balance 
+                                    withdrawal.balance_before = user_wallet.balance + withdrawal.amount
+                                except Wallet.DoesNotExist:
+                                    pass
+
+                                withdrawal.status = 'completed'
+                                withdrawal.approved_rejected_by = request.user
+                                withdrawal.approved_rejected_time = timezone.now()
+                                withdrawal.processed_ip = request.META.get('REMOTE_ADDR')
+                                withdrawal.save()
+
+                                # 2. Credit Account User (Processor) Wallet
+                                # Assumption: Account User paid cash, system reimburses them.
+                                processor_wallet = Wallet.objects.select_for_update().get(user=request.user)
+                                
+                                # Capture Approver Balances
+                                withdrawal.approver_balance_before = processor_wallet.balance
+                                processor_wallet.balance += withdrawal.amount
+                                withdrawal.approver_balance_after = processor_wallet.balance
+                                withdrawal.save()
+
+                                processor_wallet.save()
+
+                                Transaction.objects.create(
+                                    user=request.user,
+                                    initiating_user=request.user,
+                                    transaction_type='account_user_credit',
+                                    amount=withdrawal.amount,
+                                    status='completed',
+                                    is_successful=True,
+                                    description=f"Reimbursement for processing withdrawal {withdrawal.id} for {withdrawal.user.email}",
+                                    timestamp=timezone.now()
+                                )
+
+                                success_count += 1
+
+                            elif action == 'reject':
+                                withdrawal.status = 'rejected'
+                                withdrawal.approved_rejected_by = request.user
+                                withdrawal.approved_rejected_time = timezone.now()
+                                withdrawal.processed_ip = request.META.get('REMOTE_ADDR')
+                                withdrawal.save() # Signal handles refund
+                                success_count += 1
+
                 except UserWithdrawal.DoesNotExist:
                     pass
+                except Exception as e:
+                    messages.error(request, f"Error processing withdrawal {w_id}: {e}")
             
             if success_count > 0:
                 messages.success(request, f"Successfully processed {success_count} withdrawals.")

@@ -158,6 +158,37 @@ class User(AbstractBaseUser, PermissionsMixin):
         if self.user_type != 'cashier' and self.cashier_prefix:
             self.cashier_prefix = None
 
+        # Hierarchy Role Validation
+        if self.master_agent:
+            if self.master_agent.user_type != 'master_agent':
+                 raise ValidationError({'master_agent': "Invalid role selected. Only Master Agents can be assigned to this field."})
+            if self.pk and self.master_agent.pk == self.pk:
+                 raise ValidationError({'master_agent': "You cannot assign yourself as your own Master Agent."})
+
+        if self.super_agent:
+            if self.super_agent.user_type != 'super_agent':
+                 raise ValidationError({'super_agent': "Invalid role selected. Only Super Agents can be assigned to this field."})
+            if self.pk and self.super_agent.pk == self.pk:
+                 raise ValidationError({'super_agent': "You cannot assign yourself as your own Super Agent."})
+
+        # Cross-role Integrity Check
+        if self.super_agent and self.super_agent.master_agent and self.master_agent:
+            if self.master_agent != self.super_agent.master_agent:
+                raise ValidationError({
+                    'master_agent': f"Hierarchy Mismatch: The selected Super Agent belongs to Master Agent '{self.super_agent.master_agent}', but you selected '{self.master_agent}'."
+                })
+
+        # Circular Hierarchy Check
+        if self.master_agent and self.pk:
+            upline = self.master_agent
+            visited = {self.pk}
+            while upline:
+                if upline.pk in visited:
+                    raise ValidationError({'master_agent': "Circular hierarchy assignment detected."})
+                visited.add(upline.pk)
+                upline = upline.master_agent
+                if len(visited) > 10: break
+
         super().clean()
 
 class SystemSetting(models.Model):
@@ -615,14 +646,31 @@ class UserWithdrawal(models.Model):
     bank_name = models.CharField(max_length=255)
     account_name = models.CharField(max_length=255)
     account_number = models.CharField(max_length=50)
-    request_time = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    request_time = models.DateTimeField(auto_now_add=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
     
-    approved_rejected_time = models.DateTimeField(null=True, blank=True)
+    approved_rejected_time = models.DateTimeField(null=True, blank=True, db_index=True)
     approved_rejected_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='handled_withdrawals')
+    admin_notes = models.TextField(blank=True, null=True)
+    
+    # Audit Fields
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="User balance before withdrawal deduction")
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="User balance after withdrawal deduction")
+    
+    # Approver Audit Fields (for Account Users/Admins)
+    approver_balance_before = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Approver's wallet balance before processing")
+    approver_balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Approver's wallet balance after processing")
+    
+    processed_ip = models.GenericIPAddressField(null=True, blank=True)
 
     def __str__(self):
         return f"Withdrawal {self.id} - {self.user.email} - {self.amount}"
+
+class ProcessedWithdrawal(UserWithdrawal):
+    class Meta:
+        proxy = True
+        verbose_name = "Processed Withdrawal"
+        verbose_name_plural = "Processed Withdrawals"
 
 class ActivityLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activity_logs')

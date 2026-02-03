@@ -152,9 +152,6 @@ class User(AbstractBaseUser, PermissionsMixin):
         if self.user_type == 'cashier' and not self.cashier_prefix:
             raise ValidationError({'cashier_prefix': 'Cashier must have a cashier prefix.'})
         
-        if self.cashier_prefix and self.user_type != 'cashier':
-            raise ValidationError({'user_type': 'Cashier prefix can only be set for users with user type "Cashier".'})
-
         if self.user_type != 'cashier' and self.cashier_prefix:
             self.cashier_prefix = None
 

@@ -2396,12 +2396,12 @@ def declare_result(request, fixture_id):
             # Process all bet tickets related to this fixture
             # Use select_related/prefetch_related if fetching many to reduce queries
             bets_on_this_fixture = BetTicket.objects.filter(
-                ticket_selections__fixture=fixture 
+                selections__fixture=fixture 
             ).distinct().select_for_update() 
 
             for ticket in bets_on_this_fixture:
                 # Find the specific selection for *this* fixture within *this* ticket
-                selection_for_this_fixture = ticket.ticket_selections.filter(fixture=fixture).first()
+                selection_for_this_fixture = ticket.selections.filter(fixture=fixture).first()
 
                 if not selection_for_this_fixture:
                     continue # Should not happen if query above is correct
@@ -2432,7 +2432,7 @@ def declare_result(request, fixture_id):
                     ticket_still_winning = True
                     ticket_is_cancelled = False
 
-                    for sel in ticket.ticket_selections.all():
+                    for sel in ticket.selections.all():
                         if sel.is_winning_selection is None: # Found a voided selection
                             ticket_is_cancelled = True
                             break
@@ -3999,7 +3999,7 @@ def get_ticket_details_json(request):
         return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
 
     selections_data = []
-    for sel in ticket.ticket_selections.select_related('fixture', 'fixture__period').all():
+    for sel in ticket.selections.select_related('fixture', 'fixture__betting_period').all():
         fixture = sel.fixture
         
         # Determine Odd Value
@@ -4040,9 +4040,9 @@ def get_ticket_details_json(request):
             'fixture_match_date': fixture.match_date.strftime('%Y-%m-%d'),
             'fixture_match_time': fixture.match_time.strftime('%H:%M'),
             'bet_type': sel.bet_type,
-            'bet_type_display': sel.get_bet_type_display(),
+            'bet_type_display': sel.bet_type.replace('_', ' ').title(),
             'odd': float(odd_value) if odd_value else 1.0,
-            'fixture_period_name': fixture.period.name if fixture.period else '',
+            'fixture_period_name': fixture.betting_period.name if fixture.betting_period else '',
             'is_active': is_active
         })
 

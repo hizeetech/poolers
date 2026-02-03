@@ -283,6 +283,9 @@ class Selection(models.Model):
     odd_selected = models.DecimalField(max_digits=10, decimal_places=2)
     is_winning_selection = models.BooleanField(null=True, blank=True)
 
+    def get_bet_type_display(self):
+        return self.bet_type.replace('_', ' ').title()
+
     def __str__(self):
         return f"{self.fixture} - {self.bet_type}"
 

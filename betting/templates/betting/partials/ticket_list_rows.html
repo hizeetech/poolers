@@ -29,45 +29,51 @@
     <td><span class="user-col-truncate" title="{{ t.user.email }}">{{ t.user.email }}</span></td>
     <td class="small">{{ t.placed_at|date:"y-m-d H:i" }}</td>
     <td class="text-end">
-        <!-- Rebet & Reprint (Cashier/Agent Only) -->
-        {% if request.user.user_type == 'cashier' or request.user.user_type == 'agent' %}
-        <button type="button" class="btn btn-sm btn-outline-primary me-1 rebet-btn-{{ t.ticket_id }}" onclick="rebetTicket('{{ t.ticket_id }}')" title="Rebet">
-            <i class="fas fa-redo"></i>
-        </button>
-        <button type="button" class="btn btn-sm btn-outline-secondary me-1 reprint-btn-{{ t.ticket_id }}" onclick="reprintTicket('{{ t.ticket_id }}')" title="Reprint">
-            <i class="fas fa-print"></i>
-        </button>
-        {% endif %}
+        <div class="d-flex gap-1 justify-content-end align-items-center flex-wrap">
+            <!-- Rebet & Reprint (Cashier/Agent Only) -->
+            {% if request.user.user_type == 'cashier' or request.user.user_type == 'agent' %}
+            <button type="button" class="btn btn-sm btn-outline-primary rebet-btn-{{ t.ticket_id }}" onclick="rebetTicket('{{ t.ticket_id }}')" title="Rebet">
+                <i class="fas fa-redo"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary reprint-btn-{{ t.ticket_id }}" onclick="reprintTicket('{{ t.ticket_id }}')" title="Reprint">
+                <i class="fas fa-print"></i>
+            </button>
+            {% endif %}
 
-        <!-- View Button -->
-        <form method="post" action="{% url 'betting:check_ticket_status' %}" class="d-inline">
-            {% csrf_token %}
-            <input type="hidden" name="ticket_id" value="{{ t.ticket_id }}">
-            <button type="submit" class="btn btn-sm btn-info text-white me-1">View</button>
-        </form>
+            <!-- View Button -->
+            <form method="post" action="{% url 'betting:check_ticket_status' %}" class="d-inline">
+                {% csrf_token %}
+                <input type="hidden" name="ticket_id" value="{{ t.ticket_id }}">
+                <button type="submit" class="btn btn-sm btn-info text-white" title="View">
+                    <i class="fas fa-eye"></i> <span class="d-none d-md-inline">View</span>
+                </button>
+            </form>
 
-        <!-- Void Button Logic -->
-        {% if request.user.user_type == 'agent' and t.status == 'pending' %}
-            {% if t.user.user_type == 'cashier' and t.user.agent == request.user %}
-                {% if t|is_within_void_window:void_window and not t.has_computed_results %}
-                    <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
-                       class="btn btn-sm btn-danger"
-                       onclick="return confirm('Are you sure you want to void this ticket? This action cannot be undone.');">
-                       Void
-                    </a>
+            <!-- Void Button Logic -->
+            {% if request.user.user_type == 'agent' and t.status == 'pending' %}
+                {% if t.user.user_type == 'cashier' and t.user.agent == request.user %}
+                    {% if t|is_within_void_window:void_window and not t.has_computed_results %}
+                        <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
+                           class="btn btn-sm btn-danger"
+                           onclick="return confirm('Are you sure you want to void this ticket? This action cannot be undone.');"
+                           title="Void">
+                           <i class="fas fa-ban"></i> <span class="d-none d-md-inline">Void</span>
+                        </a>
+                    {% endif %}
                 {% endif %}
             {% endif %}
-        {% endif %}
-        
-        {% if request.user.is_superuser or request.user.user_type == 'admin' %}
-            {% if t.status == 'pending' %}
-                 <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
-                       class="btn btn-sm btn-danger"
-                       onclick="return confirm('Are you sure you want to void this ticket?');">
-                       Void (Admin)
-                 </a>
+            
+            {% if request.user.is_superuser or request.user.user_type == 'admin' %}
+                {% if t.status == 'pending' %}
+                     <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
+                           class="btn btn-sm btn-danger"
+                           onclick="return confirm('Are you sure you want to void this ticket?');"
+                           title="Void (Admin)">
+                           <i class="fas fa-ban"></i>
+                     </a>
+                {% endif %}
             {% endif %}
-        {% endif %}
+        </div>
     </td>
 </tr>
 {% endfor %}

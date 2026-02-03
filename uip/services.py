@@ -108,46 +108,58 @@ class DashboardService:
         return result
 
     @staticmethod
-    def get_live_metrics():
+    def get_live_metrics(timeframe='daily'):
         # Cache key for live metrics (short duration: 60 seconds)
-        cache_key = 'uip_live_metrics'
+        cache_key = f'uip_live_metrics_{timeframe}'
         cached_data = cache.get(cache_key)
         if cached_data:
             return cached_data
 
-        today = timezone.now().date()
-        start_of_day = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now = timezone.now()
+        today = now.date()
         
-        # 1. Daily Stake Volume (Exclude cancelled/deleted)
-        tickets_today = BetTicket.objects.filter(
-            placed_at__gte=start_of_day,
+        if timeframe == 'weekly':
+            # Start of week (Monday)
+            start_date = now - timedelta(days=now.weekday())
+            start_time = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif timeframe == 'monthly':
+            # Start of month
+            start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # Daily (default)
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # 1. Stake Volume (Exclude cancelled/deleted)
+        tickets_period = BetTicket.objects.filter(
+            placed_at__gte=start_time,
             status__in=['pending', 'won', 'lost', 'cashed_out']
         )
-        total_stake = tickets_today.aggregate(total=Sum('stake_amount'))['total'] or 0
+        total_stake = tickets_period.aggregate(total=Sum('stake_amount'))['total'] or 0
         
         # 2. Total Tickets Sold
-        total_tickets = tickets_today.count()
+        total_tickets = tickets_period.count()
         
         # 3. Total Winnings Paid (Approximation)
-        won_tickets_today = BetTicket.objects.filter(status='won', last_updated__gte=start_of_day)
-        total_winnings = won_tickets_today.aggregate(total=Sum('max_winning'))['total'] or 0
+        won_tickets_period = BetTicket.objects.filter(status='won', last_updated__gte=start_time)
+        total_winnings = won_tickets_period.aggregate(total=Sum('max_winning'))['total'] or 0
         
         # 4. GGR
         ggr = total_stake - total_winnings
         
         # 5. Active Users
-        active_bettors_count = tickets_today.values('user').distinct().count()
+        active_bettors_count = tickets_period.values('user').distinct().count()
         
         # 6. Online vs Retail Split
-        retail_tickets = tickets_today.filter(user__user_type='cashier').count()
-        online_tickets = tickets_today.filter(user__user_type='player').count()
+        retail_tickets = tickets_period.filter(user__user_type='cashier').count()
+        online_tickets = tickets_period.filter(user__user_type='player').count()
         
         # 7. Recent Large Bets (Alerts)
         # Note: QuerySets are lazy, but slicing evaluates them. We need to serialize for cache.
-        large_bets = list(tickets_today.filter(stake_amount__gte=5000).order_by('-stake_amount')[:5])
+        large_bets = list(tickets_period.filter(stake_amount__gte=5000).order_by('-stake_amount')[:5])
         
         data = {
             'date': today,
+            'timeframe': timeframe,
             'total_stake': total_stake,
             'total_tickets': total_tickets,
             'total_winnings': total_winnings,
@@ -162,18 +174,25 @@ class DashboardService:
         return data
 
     @staticmethod
-    def get_agent_leaderboard():
-        cache_key = 'uip_agent_leaderboard'
+    def get_agent_leaderboard(timeframe='daily'):
+        cache_key = f'uip_agent_leaderboard_{timeframe}'
         cached_data = cache.get(cache_key)
         if cached_data:
             return cached_data
 
-        today = timezone.now().date()
-        start_of_day = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now = timezone.now()
+        
+        if timeframe == 'weekly':
+            start_date = now - timedelta(days=now.weekday())
+            start_time = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif timeframe == 'monthly':
+            start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         top_agents = list(User.objects.filter(
             user_type='agent',
-            agents_under__bet_tickets__placed_at__gte=start_of_day,
+            agents_under__bet_tickets__placed_at__gte=start_time,
             agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out']
         ).annotate(
             daily_sales=Sum('agents_under__bet_tickets__stake_amount', filter=Q(agents_under__bet_tickets__status__in=['pending', 'won', 'lost', 'cashed_out'])),

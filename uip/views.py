@@ -14,14 +14,19 @@ def is_admin_or_executive(user):
 @login_required
 @user_passes_test(is_admin_or_executive)
 def uip_dashboard(request):
-    metrics = DashboardService.get_live_metrics()
-    leaderboard = DashboardService.get_agent_leaderboard()
+    timeframe = request.GET.get('timeframe', 'daily')
+    if timeframe not in ['daily', 'weekly', 'monthly']:
+        timeframe = 'daily'
+        
+    metrics = DashboardService.get_live_metrics(timeframe=timeframe)
+    leaderboard = DashboardService.get_agent_leaderboard(timeframe=timeframe)
     betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')[:10]
     context = {
         'metrics': metrics,
         'leaderboard': leaderboard,
         'betting_periods': betting_periods,
-        'page_title': 'Unified Intelligence Platform'
+        'page_title': 'Unified Intelligence Platform',
+        'current_timeframe': timeframe
     }
     return render(request, 'uip/dashboard.html', context)
 

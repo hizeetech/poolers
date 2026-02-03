@@ -29,6 +29,16 @@
     <td><span class="user-col-truncate" title="{{ t.user.email }}">{{ t.user.email }}</span></td>
     <td class="small">{{ t.placed_at|date:"y-m-d H:i" }}</td>
     <td class="text-end">
+        <!-- Rebet & Reprint (Cashier/Agent Only) -->
+        {% if request.user.user_type == 'cashier' or request.user.user_type == 'agent' %}
+        <button type="button" class="btn btn-sm btn-outline-primary me-1 rebet-btn-{{ t.ticket_id }}" onclick="rebetTicket('{{ t.ticket_id }}')" title="Rebet">
+            <i class="fas fa-redo"></i>
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary me-1 reprint-btn-{{ t.ticket_id }}" onclick="reprintTicket('{{ t.ticket_id }}')" title="Reprint">
+            <i class="fas fa-print"></i>
+        </button>
+        {% endif %}
+
         <!-- View Button -->
         <form method="post" action="{% url 'betting:check_ticket_status' %}" class="d-inline">
             {% csrf_token %}

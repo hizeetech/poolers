@@ -720,6 +720,69 @@
 
         // Initial update when page loads
         updateBetslip();
+
+        // Check for Rebet Data
+        const rebetData = sessionStorage.getItem('rebet_data');
+        if (rebetData) {
+            try {
+                const ticket = JSON.parse(rebetData);
+                // Clear existing selections just in case
+                selectedBets = [];
+                
+                ticket.selections.forEach(sel => {
+                    if (sel.is_active) {
+                        selectedBets.push({
+                            fixture_id: sel.fixture_id,
+                            fixture_home_team: sel.fixture_home_team,
+                            fixture_away_team: sel.fixture_away_team,
+                            fixture_match_date: sel.fixture_match_date,
+                            fixture_match_time: sel.fixture_match_time,
+                            bet_type: sel.bet_type,
+                            bet_type_display: sel.bet_type_display,
+                            odd: sel.odd,
+                            fixture_period_name: sel.fixture_period_name
+                        });
+                    }
+                });
+                
+                if (selectedBets.length > 0) {
+                    updateBetslip();
+                    
+                    // Handle System Bet
+                    if (ticket.bet_type === 'system' && ticket.system_min_count) {
+                        if(systemBetCheckbox) {
+                            systemBetCheckbox.checked = true;
+                            // Manually trigger change to show/hide permutation input
+                             systemBetCheckbox.dispatchEvent(new Event('change'));
+                        }
+                        if(permutationCountInput) {
+                            permutationCountInput.value = ticket.system_min_count;
+                            permutationCountInput.dispatchEvent(new Event('input'));
+                        }
+                    }
+                    
+                    if(ticket.stake_amount) {
+                         if (ticket.bet_type === 'system' && totalStakeInput) {
+                             totalStakeInput.value = ticket.stake_amount;
+                             totalStakeInput.dispatchEvent(new Event('input'));
+                         } else if (stakeAmountInput) {
+                             stakeAmountInput.value = ticket.stake_amount;
+                             stakeAmountInput.dispatchEvent(new Event('input'));
+                         }
+                    }
+                    displayMessage('Rebet selections loaded. Please verify odds and stake before placing bet.', 'info');
+                } else {
+                    displayMessage('Rebet failed: All selected fixtures are no longer active.', 'warning');
+                }
+                
+                // Clear after using
+                sessionStorage.removeItem('rebet_data');
+                
+            } catch (e) {
+                console.error('Error processing rebet data:', e);
+                sessionStorage.removeItem('rebet_data');
+            }
+        }
     });
 
     // NOTE for Django view (views.py):

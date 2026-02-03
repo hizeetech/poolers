@@ -87,6 +87,8 @@ urlpatterns = [
     path('api/fixtures/', views.api_fixtures, name='api_fixtures'),
     path('api/place-bet/', views.api_place_bet, name='api_place_bet'),
     path('api/check-ticket-status/', views.api_check_ticket_status, name='api_check_ticket_status'),
+    path('api/get-ticket-details/', views.get_ticket_details_json, name='get_ticket_details_json'),
+    path('api/log-ticket-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
     path('api/user-wallet/', views.api_user_wallet, name='api_user_wallet'),
     path('api/deposit/initiate/', views.api_initiate_deposit, name='api_initiate_deposit'),
     path('api/deposit/verify/', views.api_verify_deposit, name='api_verify_deposit'),
@@ -99,6 +101,8 @@ urlpatterns = [
     path('api/agent-users/', views.api_agent_users, name='api_agent_users'),
     path('api/cashier-transactions/', views.api_cashier_transactions, name='api_cashier_transactions'),
     path('api/downline-search/', views.api_downline_search, name='api_downline_search'),
+    path('api/ticket-details/<str:ticket_id>/', views.get_ticket_details_json, name='get_ticket_details_json'),
+    path('api/log-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
 
     path('api/bet-tickets/', views.api_bet_tickets, name='api_bet_tickets'),
     path('api/void-ticket/', views.api_void_ticket, name='api_void_ticket'),

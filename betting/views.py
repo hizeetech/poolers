@@ -3980,3 +3980,108 @@ def api_downline_search(request):
         }
     })
 
+
+@login_required
+def get_ticket_details_json(request):
+    ticket_id = request.GET.get('ticket_id')
+    mode = request.GET.get('mode', 'rebet') # 'rebet' or 'reprint'
+
+    if not ticket_id:
+        return JsonResponse({'success': False, 'message': 'Ticket ID is required'}, status=400)
+
+    # Permission check: Cashier, Agent, Admin
+    if not (request.user.user_type in ['cashier', 'agent', 'admin'] or request.user.is_superuser):
+        return JsonResponse({'success': False, 'message': 'Unauthorized'}, status=403)
+
+    try:
+        ticket = BetTicket.objects.get(ticket_id=ticket_id)
+    except BetTicket.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+    selections_data = []
+    for sel in ticket.ticket_selections.select_related('fixture', 'fixture__period').all():
+        fixture = sel.fixture
+        
+        # Determine Odd Value
+        odd_value = sel.odd_selected # Default to stored odd for reprint
+        is_active = True
+        
+        if mode == 'rebet':
+            # Use current odd from fixture
+            current_odd = None
+            bt = sel.bet_type
+            
+            # Map bet_type to fixture field
+            if bt == 'home_win': current_odd = getattr(fixture, 'home_win_odd', None)
+            elif bt == 'draw': current_odd = getattr(fixture, 'draw_odd', None)
+            elif bt == 'away_win': current_odd = getattr(fixture, 'away_win_odd', None)
+            elif bt == 'home_dnb': current_odd = getattr(fixture, 'home_dnb_odd', None)
+            elif bt == 'away_dnb': current_odd = getattr(fixture, 'away_dnb_odd', None)
+            elif bt == 'over_1_5': current_odd = getattr(fixture, 'over_1_5_odd', None)
+            elif bt == 'under_1_5': current_odd = getattr(fixture, 'under_1_5_odd', None)
+            elif bt == 'over_2_5': current_odd = getattr(fixture, 'over_2_5_odd', None)
+            elif bt == 'under_2_5': current_odd = getattr(fixture, 'under_2_5_odd', None)
+            elif bt == 'over_3_5': current_odd = getattr(fixture, 'over_3_5_odd', None)
+            elif bt == 'under_3_5': current_odd = getattr(fixture, 'under_3_5_odd', None)
+            elif bt == 'btts_yes': current_odd = getattr(fixture, 'btts_yes_odd', None)
+            elif bt == 'btts_no': current_odd = getattr(fixture, 'btts_no_odd', None)
+            
+            if current_odd is not None:
+                odd_value = current_odd
+            
+            # Check if fixture is bettable
+            if fixture.status != 'scheduled' or not fixture.is_active:
+                is_active = False
+                
+        selections_data.append({
+            'fixture_id': fixture.id,
+            'fixture_home_team': fixture.home_team,
+            'fixture_away_team': fixture.away_team,
+            'fixture_match_date': fixture.match_date.strftime('%Y-%m-%d'),
+            'fixture_match_time': fixture.match_time.strftime('%H:%M'),
+            'bet_type': sel.bet_type,
+            'bet_type_display': sel.get_bet_type_display(),
+            'odd': float(odd_value) if odd_value else 1.0,
+            'fixture_period_name': fixture.period.name if fixture.period else '',
+            'is_active': is_active
+        })
+
+    data = {
+        'ticket_id': ticket.ticket_id,
+        'placed_at': ticket.placed_at.strftime('%Y-%m-%d %H:%M'),
+        'stake_amount': float(ticket.stake_amount),
+        'total_odd': float(ticket.total_odd),
+        'max_winning': float(ticket.max_winning),
+        'selections': selections_data,
+        'status': ticket.get_status_display(),
+        'bet_type': ticket.bet_type,
+        'system_min_count': ticket.system_min_count
+    }
+    
+    return JsonResponse({'success': True, 'ticket': data})
+
+@login_required
+def log_ticket_reprint(request):
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'message': 'Invalid method'}, status=405)
+        
+    ticket_id = request.POST.get('ticket_id')
+    if not ticket_id:
+         return JsonResponse({'success': False, 'message': 'Ticket ID required'}, status=400)
+         
+    try:
+        ticket = BetTicket.objects.get(ticket_id=ticket_id)
+        
+        # Log activity
+        ActivityLog.objects.create(
+            user=request.user,
+            action_type='REPRINT',
+            action=f"Reprinted ticket {ticket_id}",
+            affected_object=f"BetTicket: {ticket_id}",
+            ip_address=request.META.get('REMOTE_ADDR'),
+            path=request.path
+        )
+        
+        return JsonResponse({'success': True})
+    except BetTicket.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)

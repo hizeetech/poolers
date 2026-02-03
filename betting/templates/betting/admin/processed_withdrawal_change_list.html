@@ -1,0 +1,19 @@
+{% extends "admin/change_list.html" %}
+{% load humanize %}
+
+{% block result_list %}
+    {% if cl.result_count > 0 %}
+    <div style="background: #f8f9fa; padding: 15px; margin-bottom: 20px; border-left: 5px solid #28a745; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; align-items: center;">
+        <div style="font-size: 24px; margin-right: 15px; color: #28a745;">
+            <i class="fas fa-coins"></i>
+        </div>
+        <div>
+            <h5 style="margin: 0; color: #6c757d; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;">Total Withdrawals (Filtered)</h5>
+            <h2 style="margin: 5px 0 0; color: #155724; font-weight: bold;">
+                ₦{{ total_withdrawal_amount|default:"0.00"|intcomma }}
+            </h2>
+        </div>
+    </div>
+    {% endif %}
+    {{ block.super }}
+{% endblock %}

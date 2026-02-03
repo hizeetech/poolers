@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Q, IntegerField
+from django.db.models import Q, IntegerField, Sum
 from django.db.models.functions import Cast
 from django.utils import timezone
 from django.db import transaction as db_transaction
@@ -38,7 +38,8 @@ from datetime import datetime, time
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
-    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog
+    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
+    ProcessedWithdrawal
 )
 
 
@@ -260,6 +261,16 @@ class CustomUserAdmin(UserAdmin):
         return obj.super_agent
     get_super_agent.short_description = 'Super Agent'
     get_super_agent.admin_order_field = 'super_agent' 
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """
+        Filter dropdowns for hierarchy fields to show only relevant user types.
+        """
+        if db_field.name == "master_agent":
+            kwargs["queryset"] = User.objects.filter(user_type='master_agent')
+        elif db_field.name == "super_agent":
+            kwargs["queryset"] = User.objects.filter(user_type='super_agent')
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def get_form(self, request, obj=None, **kwargs):
         # Pass the request to the form for permission checks if needed in form's clean method
@@ -782,6 +793,56 @@ betting_admin_site.register(BetTicket, BetTicketAdmin)
 betting_admin_site.register(BonusRule)
 betting_admin_site.register(SystemSetting)
 betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
+
+# --- Processed Withdrawal Admin (Audit) ---
+class ProcessedWithdrawalAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'amount', 'balance_before', 'balance_after', 'approved_rejected_by', 'approver_balance_before', 'approver_balance_after', 'status_badge', 'approved_rejected_time')
+    list_filter = ('approved_rejected_time', 'approved_rejected_by', 'user')
+    search_fields = ('user__email', 'user__username', 'id', 'processed_ip')
+    readonly_fields = [field.name for field in UserWithdrawal._meta.fields] + ['balance_before', 'balance_after', 'approver_balance_before', 'approver_balance_after', 'processed_ip']
+    date_hierarchy = 'approved_rejected_time'
+    ordering = ('-approved_rejected_time',)
+    change_list_template = 'betting/admin/processed_withdrawal_change_list.html'
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(status__in=['approved', 'completed'])
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def status_badge(self, obj):
+        color = 'green' if obj.status in ['approved', 'completed'] else 'gray'
+        return format_html(
+            '<span style="color: white; background-color: {}; padding: 3px 10px; border-radius: 5px;">{}</span>',
+            color,
+            obj.get_status_display()
+        )
+    status_badge.short_description = 'Status'
+
+    def changelist_view(self, request, extra_context=None):
+        response = super().changelist_view(request, extra_context)
+        try:
+            qs = response.context_data['cl'].queryset
+        except (AttributeError, KeyError):
+            return response
+            
+        total = qs.aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+        extra_context = extra_context or {}
+        extra_context['total_withdrawal_amount'] = total
+        
+        if hasattr(response, 'context_data'):
+            response.context_data.update(extra_context)
+            
+        return response
+
+betting_admin_site.register(ProcessedWithdrawal, ProcessedWithdrawalAdmin)
 # Activity Log Admin
 class ActivityLogAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'user', 'action_type_badge', 'affected_object', 'ip_address', 'isp')

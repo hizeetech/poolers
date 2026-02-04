@@ -815,3 +815,35 @@ class ImpersonationLog(models.Model):
     def __str__(self):
         return f"{self.admin_user} impersonated {self.target_user} at {self.started_at}"
 
+
+class WebAuthnCredential(models.Model):
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='webauthn_credentials')
+    credential_id = models.BinaryField(unique=True)
+    public_key = models.BinaryField()
+    sign_count = models.IntegerField(default=0)
+    device_name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.device_name} ({self.user.email})"
+
+class BiometricAuthLog(models.Model):
+    ACTION_CHOICES = (
+        ('register', 'Registration'),
+        ('login', 'Login'),
+        ('revoke', 'Revocation'),
+    )
+    STATUS_CHOICES = (
+        ('success', 'Success'),
+        ('failed', 'Failed'),
+    )
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='biometric_logs')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_name = models.CharField(max_length=255, null=True, blank=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.action} - {self.status}"

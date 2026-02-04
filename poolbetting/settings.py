@@ -318,3 +318,6 @@ LOGGING = {
 }
 
 # ... (rest of your settings) ...
+
+WEBAUTHN_RP_ID = 'localhost'
+WEBAUTHN_RP_NAME = 'Pool Betting'

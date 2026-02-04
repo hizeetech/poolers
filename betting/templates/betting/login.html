@@ -31,6 +31,11 @@
                         <div class="d-grid gap-2 mb-3">
                             <button type="submit" class="btn btn-primary btn-lg rounded-pill shadow-sm fw-bold">Login</button>
                         </div>
+                        <div class="d-grid gap-2 mb-3">
+                            <button type="button" onclick="loginWebAuthn()" class="btn btn-outline-primary btn-lg rounded-pill shadow-sm fw-bold">
+                                <i class="fas fa-fingerprint me-2"></i> Login with Fingerprint
+                            </button>
+                        </div>
                         <p class="text-center text-muted mt-3">
                             Don't have an account? <a href="{% url 'betting:register' %}" class="text-decoration-none fw-semibold text-primary">Register Here</a>
                         </p>
@@ -40,4 +45,5 @@
         </div>
     </div>
 </div>
+<script src="{% static 'betting/js/webauthn.js' %}"></script>
 {% endblock content %}

@@ -8,6 +8,21 @@
             {# Messages are handled by base.html, no need to duplicate here unless specific styling is required #}
 
             <div class="card shadow-sm rounded-lg mb-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">Security Settings</h5>
+                </div>
+                <div class="card-body">
+                    <p>Enable biometric authentication (Fingerprint, FaceID, TouchID) for faster login.</p>
+                    <button type="button" onclick="registerWebAuthn()" class="btn btn-outline-success btn-lg w-100 rounded-pill fw-bold">
+                        <i class="fas fa-fingerprint me-2"></i> Enable Fingerprint Login
+                    </button>
+                    <p class="text-muted small mt-2 text-center">
+                        <i class="fas fa-shield-alt"></i> Biometric data is never stored on our servers.
+                    </p>
+                </div>
+            </div>
+
+            <div class="card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-primary text-white">
                     <h5 class="mb-0">Profile Information</h5>
                 </div>
@@ -115,4 +130,5 @@
         </div>
     </div>
 </div>
+<script src="{% static 'betting/js/webauthn.js' %}"></script>
 {% endblock %}

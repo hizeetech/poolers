@@ -39,7 +39,7 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
-    ProcessedWithdrawal
+    ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog
 )
 
 
@@ -949,4 +949,21 @@ betting_admin_site.register(Loan, LoanAdmin)
 betting_admin_site.register(CreditLog, CreditLogAdmin)
 
 
+
+@admin.register(WebAuthnCredential)
+class WebAuthnCredentialAdmin(admin.ModelAdmin):
+    list_display = ('user', 'device_name', 'created_at', 'last_used', 'sign_count')
+    search_fields = ('user__email', 'device_name')
+    readonly_fields = ('credential_id', 'public_key', 'created_at', 'last_used')
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user')
+@admin.register(BiometricAuthLog)
+class BiometricAuthLogAdmin(admin.ModelAdmin):
+    list_display = ('user', 'action', 'status', 'ip_address', 'device_name', 'timestamp')
+    list_filter = ('action', 'status', 'timestamp')
+    search_fields = ('user__email', 'ip_address', 'device_name')
+    readonly_fields = ('user', 'action', 'status', 'ip_address', 'device_name', 'timestamp')
+    def has_add_permission(self, request):
+        return False
 betting_admin_site.register(LoginAttempt, LoginAttemptAdmin)
+betting_admin_site.register(WebAuthnCredential, WebAuthnCredentialAdmin)

@@ -4141,3 +4141,258 @@ def log_ticket_reprint(request):
         return JsonResponse({'success': True})
     except BetTicket.DoesNotExist:
         return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+# WebAuthn Views
+
+import json
+import base64
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login
+from .webauthn_utils import WebAuthnUtils
+from .models import BiometricAuthLog
+from fido2.utils import websafe_encode, websafe_decode
+from django.core.cache import cache
+
+class BytesEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return websafe_encode(obj)
+        return super().default(obj)
+
+def _client_ip(request):
+    xff = request.META.get('HTTP_X_FORWARDED_FOR')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR') or 'unknown'
+
+def _rate_limited(key, limit=5, window=60):
+    count = cache.get(key)
+    if count is None:
+        cache.set(key, 1, window)
+        return False
+    if count >= limit:
+        return True
+    try:
+        cache.incr(key)
+    except:
+        cache.set(key, count + 1, window)
+    return False
+
+@login_required
+@require_POST
+def webauthn_register_begin(request):
+    rp_id = request.get_host().split(':')[0]
+    utils = WebAuthnUtils(rp_id=rp_id)
+    try:
+        rl_key = f"webauthn:reg:{_client_ip(request)}:{request.user.id}"
+        if _rate_limited(rl_key):
+            return JsonResponse({'status': 'error', 'message': 'Too many requests'}, status=429)
+        options, state = utils.register_begin(request.user)
+        request.session['webauthn_reg_state'] = state
+        return JsonResponse(dict(options.public_key), encoder=BytesEncoder)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+@login_required
+@require_POST
+def webauthn_register_complete(request):
+    rp_id = request.get_host().split(':')[0]
+    utils = WebAuthnUtils(rp_id=rp_id)
+    try:
+        data = json.loads(request.body)
+        state = request.session.get('webauthn_reg_state')
+        if not state:
+            return JsonResponse({'status': 'error', 'message': 'No registration state found'}, status=400)
+            
+        device_name = data.get('device_name', 'Unknown Device')
+        
+        if 'id' in data:
+            data['id'] = websafe_decode(data['id'])
+        if 'rawId' in data:
+            data['rawId'] = websafe_decode(data['rawId'])
+        if 'response' in data:
+            resp = data['response']
+            if 'clientDataJSON' in resp:
+                resp['clientDataJSON'] = websafe_decode(resp['clientDataJSON'])
+            if 'attestationObject' in resp:
+                resp['attestationObject'] = websafe_decode(resp['attestationObject'])
+                
+        utils.register_complete(state, data, request.user, device_name)
+        
+        BiometricAuthLog.objects.create(
+            user=request.user,
+            action='register',
+            status='success',
+            ip_address=request.META.get('REMOTE_ADDR'),
+            device_name=device_name
+        )
+        
+        del request.session['webauthn_reg_state']
+        return JsonResponse({'status': 'success'})
+    except Exception as e:
+        BiometricAuthLog.objects.create(
+            user=request.user,
+            action='register',
+            status='failed',
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+@require_POST
+def webauthn_login_begin(request):
+    try:
+        data = json.loads(request.body)
+        email = data.get('email') or data.get('username')
+        
+        rp_id = request.get_host().split(':')[0]
+        utils = WebAuthnUtils(rp_id=rp_id)
+        
+        user = None
+        if email:
+            rl_key = f"webauthn:auth:{_client_ip(request)}:{email}"
+            if _rate_limited(rl_key):
+                return JsonResponse({'status': 'error', 'message': 'Too many requests'}, status=429)
+                
+            try:
+                user = User.objects.get(email=email)
+            except User.DoesNotExist:
+                 return JsonResponse({'status': 'error', 'message': 'User not found'}, status=404)
+                 
+            if user.user_type not in ['cashier', 'agent', 'super_agent', 'master_agent', 'admin']:
+                 return JsonResponse({'status': 'error', 'message': 'Biometric login not enabled for this role'}, status=403)
+                 
+            request.session['webauthn_auth_user_id'] = user.id
+        else:
+            # Usernameless flow
+            pass
+
+        options, state = utils.authenticate_begin(user)
+        request.session['webauthn_auth_state'] = state
+        
+        return JsonResponse(dict(options.public_key), encoder=BytesEncoder)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+@require_POST
+def webauthn_login_complete(request):
+    rp_id = request.get_host().split(':')[0]
+    utils = WebAuthnUtils(rp_id=rp_id)
+    try:
+        data = json.loads(request.body)
+        state = request.session.get('webauthn_auth_state')
+        
+        # NOTE: In usernameless flow, user_id might be None
+        user_id = request.session.get('webauthn_auth_user_id')
+        
+        if not state:
+             return JsonResponse({'status': 'error', 'message': 'No authentication state found'}, status=400)
+             
+        user = None
+        if user_id:
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                pass
+        
+        # Decoding handled by fido2 library or manually here if needed.
+        # Note: python-fido2 server.authenticate_complete expects decoded bytes for ids
+        # But we pass the raw JSON data to utils.authenticate_complete? 
+        # Wait, utils.authenticate_complete expects 'response_data' which is usually the JSON.
+        # Let's check utils.authenticate_complete implementation again.
+        # It calls self.server.authenticate_complete(state, creds_data, response_data).
+        # Fido2Server.authenticate_complete expects response_data to be a ClientData object or dict.
+        # If it's a dict, it should be the structure returned by navigator.credentials.get() (JSONified).
+        # We don't need to manually decode here if we are passing the JSON structure that fido2 expects.
+        # However, the previous code was manually decoding. Let's keep it consistent or let utils handle it.
+        # Actually, let's look at the previous code: it was decoding 'id', 'rawId', 'clientDataJSON' etc.
+        # If we remove that, it might break if utils expects decoded data.
+        # But wait, the standard JSON from webauthn is base64url encoded.
+        # python-fido2 helpers usually handle this if you use their helpers.
+        # But let's stick to the manual decoding if that's what was working (or supposed to work).
+        
+        if 'id' in data:
+            data['id'] = websafe_decode(data['id'])
+        if 'rawId' in data:
+            data['rawId'] = websafe_decode(data['rawId'])
+        if 'response' in data:
+            resp = data['response']
+            if 'clientDataJSON' in resp:
+                resp['clientDataJSON'] = websafe_decode(resp['clientDataJSON'])
+            if 'authenticatorData' in resp:
+                resp['authenticatorData'] = websafe_decode(resp['authenticatorData'])
+            if 'signature' in resp:
+                resp['signature'] = websafe_decode(resp['signature'])
+            if 'userHandle' in resp and resp['userHandle']:
+                resp['userHandle'] = websafe_decode(resp['userHandle'])
+
+        # Now call utils.authenticate_complete which supports user=None
+        cred = utils.authenticate_complete(state, data, user)
+        
+        if cred:
+            # If user was None, get it from cred
+            if not user:
+                user = cred.user
+                
+            login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            
+            BiometricAuthLog.objects.create(
+                user=user,
+                action='login',
+                status='success',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                device_name=cred.device_name
+            )
+            
+            if 'webauthn_auth_state' in request.session:
+                del request.session['webauthn_auth_state']
+            if 'webauthn_auth_user_id' in request.session:
+                del request.session['webauthn_auth_user_id']
+                
+            # Determine redirect URL based on user type (similar to login view)
+            redirect_url = '/dashboard/'
+            if user.user_type == 'agent':
+                redirect_url = '/agent/dashboard/'
+            elif user.user_type == 'master_agent':
+                redirect_url = '/master-agent/dashboard/'
+            elif user.user_type == 'super_agent':
+                redirect_url = '/super-agent/dashboard/'
+            elif user.user_type == 'account_user':
+                redirect_url = '/account-user/dashboard/'
+            elif user.user_type == 'admin':
+                redirect_url = '/admin/'
+                
+            return JsonResponse({'status': 'success', 'redirect_url': redirect_url})
+        else:
+            raise ValueError("Authentication failed")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        # Try to log failure if we can identify the user
+        target_user = None
+        if 'user' in locals() and user:
+            target_user = user
+        elif request.session.get('webauthn_auth_user_id'):
+             try:
+                target_user = User.objects.get(id=request.session.get('webauthn_auth_user_id'))
+             except:
+                 pass
+        
+        if target_user:
+             try:
+                BiometricAuthLog.objects.create(
+                    user=target_user,
+                    action='login',
+                    status='failed',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    details=str(e)
+                )
+             except:
+                 pass
+                 
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)

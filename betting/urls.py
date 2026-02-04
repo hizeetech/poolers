@@ -98,6 +98,7 @@ urlpatterns = [
     path('api/change-password/', views.api_change_password, name='api_change_password'),
     path('api/user-transactions/', views.api_user_transactions, name='api_user_transactions'),
     path('api/agent-commissions/', views.api_agent_commissions, name='api_agent_commissions'),
+
     path('api/agent-users/', views.api_agent_users, name='api_agent_users'),
     path('api/cashier-transactions/', views.api_cashier_transactions, name='api_cashier_transactions'),
     path('api/downline-search/', views.api_downline_search, name='api_downline_search'),
@@ -112,4 +113,12 @@ urlpatterns = [
     # Impersonation URLs
     path('impersonate/<int:user_id>/', views.impersonate_user, name='impersonate_user'),
     path('impersonate/stop/', views.stop_impersonation, name='stop_impersonation'),
+]
+
+# WebAuthn URLs
+urlpatterns += [
+    path('webauthn/register/begin/', views.webauthn_register_begin, name='webauthn_register_begin'),
+    path('webauthn/register/complete/', views.webauthn_register_complete, name='webauthn_register_complete'),
+    path('webauthn/login/begin/', views.webauthn_login_begin, name='webauthn_login_begin'),
+    path('webauthn/login/complete/', views.webauthn_login_complete, name='webauthn_login_complete'),
 ]

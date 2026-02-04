@@ -31,16 +31,14 @@ class WebAuthnUtils:
                 CoseKey.parse(cbor.decode(bytes(cred.public_key)))
             ))
             
-        from fido2.webauthn import AuthenticatorSelectionCriteria, ResidentKeyRequirement
+        from fido2.webauthn import ResidentKeyRequirement
 
         registration_data, state = self.server.register_begin(
             user_entity,
             credentials=credentials,
             user_verification='preferred',
             authenticator_attachment='platform',
-            authenticator_selection=AuthenticatorSelectionCriteria(
-                resident_key=ResidentKeyRequirement.PREFERRED
-            )
+            resident_key_requirement=ResidentKeyRequirement.PREFERRED
         )
         
         return registration_data, state

@@ -591,6 +591,17 @@
                     const data = await response.json();
                     if (data.success) {
                         try {
+                            // Update live wallet balance immediately
+                            if (data.new_balance) {
+                                const walletBalanceEl = document.getElementById('live-wallet-balance');
+                                if (walletBalanceEl) {
+                                    // Preserve the text "Balance : " or similar prefix if desired, 
+                                    // but based on base.html it is "Balance : ₦..."
+                                    // We will just replace the text with the standard format.
+                                    walletBalanceEl.innerHTML = `Balance : ₦${parseFloat(data.new_balance).toFixed(2)}`;
+                                }
+                            }
+
                             displayMessage(data.message + (data.ticket_id ? ` Your ticket ID: ${data.ticket_id}` : ''), 'success');
                             
                             // Populate and show the print modal

@@ -626,6 +626,20 @@
                     <h5 class="mb-0"><i class="fas fa-wallet me-2"></i>All Wallets Management</h5>
                 </div>
                 <div class="card-body">
+                    <form method="get" class="row g-2 mb-3 align-items-center">
+                        <div class="col-auto">
+                            <input type="text" name="wallet_search" class="form-control form-control-sm" placeholder="Search User/Email" value="{{ wallet_search }}">
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Search</button>
+                        </div>
+                        {% if wallet_search %}
+                        <div class="col-auto">
+                            <a href="?" class="btn btn-outline-secondary btn-sm">Clear</a>
+                        </div>
+                        {% endif %}
+                    </form>
+
                     <div class="table-responsive">
                         <table class="table table-hover table-sm align-middle">
                             <thead class="table-light">
@@ -655,13 +669,13 @@
                          <nav aria-label="Wallets Pagination">
                             <ul class="pagination pagination-sm justify-content-center mb-0">
                                 {% if wallets_page.has_previous %}
-                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.previous_page_number }}">&laquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.previous_page_number }}&wallet_search={{ wallet_search }}">&laquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
                                 {% endif %}
                                 <li class="page-item active"><span class="page-link">{{ wallets_page.number }}</span></li>
                                 {% if wallets_page.has_next %}
-                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.next_page_number }}">&raquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.next_page_number }}&wallet_search={{ wallet_search }}">&raquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
                                 {% endif %}
@@ -682,6 +696,30 @@
                     <h5 class="mb-0"><i class="fas fa-exchange-alt me-2"></i>All Transactions Management</h5>
                 </div>
                 <div class="card-body">
+                    <form method="get" class="row g-2 mb-3 align-items-center">
+                        <div class="col-auto">
+                            <input type="text" name="txn_search" class="form-control form-control-sm" placeholder="Search ID/User" value="{{ txn_search }}">
+                        </div>
+                        <div class="col-auto">
+                            <select name="txn_type_filter" class="form-select form-select-sm">
+                                <option value="">All Types</option>
+                                <option value="deposit" {% if txn_type_filter == 'deposit' %}selected{% endif %}>Deposit</option>
+                                <option value="withdrawal" {% if txn_type_filter == 'withdrawal' %}selected{% endif %}>Withdrawal</option>
+                                <option value="bet_placed" {% if txn_type_filter == 'bet_placed' %}selected{% endif %}>Bet Placed</option>
+                                <option value="bet_won" {% if txn_type_filter == 'bet_won' %}selected{% endif %}>Bet Won</option>
+                                <option value="commission" {% if txn_type_filter == 'commission' %}selected{% endif %}>Commission</option>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-secondary btn-sm"><i class="fas fa-search"></i> Filter</button>
+                        </div>
+                        {% if txn_search or txn_type_filter %}
+                        <div class="col-auto">
+                            <a href="?" class="btn btn-outline-secondary btn-sm">Clear</a>
+                        </div>
+                        {% endif %}
+                    </form>
+
                     <div class="table-responsive">
                         <table class="table table-hover table-sm align-middle">
                             <thead class="table-light">
@@ -719,13 +757,13 @@
                          <nav aria-label="Transactions Pagination">
                             <ul class="pagination pagination-sm justify-content-center mb-0">
                                 {% if transactions_page.has_previous %}
-                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.previous_page_number }}">&laquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.previous_page_number }}&txn_search={{ txn_search }}&txn_type_filter={{ txn_type_filter }}">&laquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
                                 {% endif %}
                                 <li class="page-item active"><span class="page-link">{{ transactions_page.number }}</span></li>
                                 {% if transactions_page.has_next %}
-                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.next_page_number }}">&raquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.next_page_number }}&txn_search={{ txn_search }}&txn_type_filter={{ txn_type_filter }}">&raquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
                                 {% endif %}
@@ -746,6 +784,28 @@
                     <h5 class="mb-0"><i class="fas fa-check-circle me-2"></i>Processed Withdrawals Management</h5>
                 </div>
                 <div class="card-body">
+                    <form method="get" class="row g-2 mb-3 align-items-center">
+                        <div class="col-auto">
+                            <input type="text" name="pw_search" class="form-control form-control-sm" placeholder="Search User/Bank" value="{{ pw_search }}">
+                        </div>
+                        <div class="col-auto">
+                            <select name="pw_status_filter" class="form-select form-select-sm">
+                                <option value="">All Statuses</option>
+                                <option value="approved" {% if pw_status_filter == 'approved' %}selected{% endif %}>Approved</option>
+                                <option value="completed" {% if pw_status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                                <option value="rejected" {% if pw_status_filter == 'rejected' %}selected{% endif %}>Rejected</option>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-info btn-sm text-white"><i class="fas fa-search"></i> Filter</button>
+                        </div>
+                        {% if pw_search or pw_status_filter %}
+                        <div class="col-auto">
+                            <a href="?" class="btn btn-outline-secondary btn-sm">Clear</a>
+                        </div>
+                        {% endif %}
+                    </form>
+
                     <div class="table-responsive">
                         <table class="table table-hover table-sm align-middle">
                             <thead class="table-light">
@@ -786,13 +846,13 @@
                          <nav aria-label="Processed Withdrawals Pagination">
                             <ul class="pagination pagination-sm justify-content-center mb-0">
                                 {% if processed_withdrawals_page.has_previous %}
-                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.previous_page_number }}">&laquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.previous_page_number }}&pw_search={{ pw_search }}&pw_status_filter={{ pw_status_filter }}">&laquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
                                 {% endif %}
                                 <li class="page-item active"><span class="page-link">{{ processed_withdrawals_page.number }}</span></li>
                                 {% if processed_withdrawals_page.has_next %}
-                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.next_page_number }}">&raquo;</a></li>
+                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.next_page_number }}&pw_search={{ pw_search }}&pw_status_filter={{ pw_status_filter }}">&raquo;</a></li>
                                 {% else %}
                                 <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
                                 {% endif %}

@@ -3825,7 +3825,16 @@ def account_user_dashboard(request):
     # -----------------------------------------------
 
     # --- Wallets Management ---
+    wallet_search = request.GET.get('wallet_search', '')
     all_wallets = Wallet.objects.select_related('user').all().order_by('-balance')
+    
+    if wallet_search:
+        all_wallets = all_wallets.filter(
+            Q(user__email__icontains=wallet_search) | 
+            Q(user__first_name__icontains=wallet_search) | 
+            Q(user__last_name__icontains=wallet_search)
+        )
+
     wallets_paginator = Paginator(all_wallets, 20)
     wallets_page_num = request.GET.get('wallets_page')
     try:
@@ -3836,7 +3845,21 @@ def account_user_dashboard(request):
         wallets_page = wallets_paginator.page(wallets_paginator.num_pages)
 
     # --- Transactions Management ---
+    txn_search = request.GET.get('txn_search', '')
+    txn_type_filter = request.GET.get('txn_type_filter', '')
     all_transactions = Transaction.objects.select_related('user', 'initiating_user').all().order_by('-timestamp')
+
+    if txn_search:
+        all_transactions = all_transactions.filter(
+            Q(transaction_id__icontains=txn_search) |
+            Q(user__email__icontains=txn_search) |
+            Q(user__first_name__icontains=txn_search) |
+            Q(user__last_name__icontains=txn_search)
+        )
+    
+    if txn_type_filter:
+        all_transactions = all_transactions.filter(transaction_type=txn_type_filter)
+
     transactions_paginator = Paginator(all_transactions, 20)
     transactions_page_num = request.GET.get('transactions_page')
     try:
@@ -3847,7 +3870,22 @@ def account_user_dashboard(request):
         transactions_page = transactions_paginator.page(transactions_paginator.num_pages)
 
     # --- Processed Withdrawals Management ---
+    pw_search = request.GET.get('pw_search', '')
+    pw_status_filter = request.GET.get('pw_status_filter', '')
     all_processed_withdrawals = ProcessedWithdrawal.objects.filter(status__in=['approved', 'completed', 'rejected']).order_by('-approved_rejected_time')
+
+    if pw_search:
+        all_processed_withdrawals = all_processed_withdrawals.filter(
+            Q(user__email__icontains=pw_search) |
+            Q(user__first_name__icontains=pw_search) |
+            Q(user__last_name__icontains=pw_search) |
+            Q(bank_name__icontains=pw_search) |
+            Q(account_number__icontains=pw_search)
+        )
+    
+    if pw_status_filter:
+        all_processed_withdrawals = all_processed_withdrawals.filter(status=pw_status_filter)
+
     pw_paginator = Paginator(all_processed_withdrawals, 20)
     pw_page_num = request.GET.get('processed_withdrawals_page')
     try:
@@ -3859,8 +3897,13 @@ def account_user_dashboard(request):
 
     context = {
         'wallets_page': wallets_page,
+        'wallet_search': wallet_search,
         'transactions_page': transactions_page,
+        'txn_search': txn_search,
+        'txn_type_filter': txn_type_filter,
         'processed_withdrawals_page': processed_withdrawals_page,
+        'pw_search': pw_search,
+        'pw_status_filter': pw_status_filter,
         'tickets_page': tickets_page,
         'ticket_search_query': ticket_search_query,
         'ticket_status_filter': ticket_status_filter,

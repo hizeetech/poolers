@@ -330,10 +330,11 @@
     <div class="row mt-4">
         <div class="col-12">
             <div class="card shadow-sm">
-                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#pendingCommissionsBody" aria-expanded="true" aria-controls="pendingCommissionsBody" style="cursor: pointer;">
                      <h5 class="mb-0"><i class="fas fa-money-bill-wave me-2"></i>Pending Commission Payouts</h5>
+                     <i class="fas fa-chevron-down"></i>
                 </div>
-                <div class="card-body">
+                <div class="card-body collapse show" id="pendingCommissionsBody">
                     <form method="post">
                         {% csrf_token %}
                         <div class="mb-3">
@@ -411,10 +412,11 @@
     <div class="row mt-4">
         <div class="col-12">
             <div class="card shadow-sm">
-                <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
+                <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#pendingWithdrawalsBody" aria-expanded="true" aria-controls="pendingWithdrawalsBody" style="cursor: pointer;">
                      <h5 class="mb-0"><i class="fas fa-hand-holding-usd me-2"></i>Pending Withdrawals</h5>
+                     <i class="fas fa-chevron-down"></i>
                 </div>
-                <div class="card-body">
+                <div class="card-body collapse show" id="pendingWithdrawalsBody">
                     <form method="post">
                         {% csrf_token %}
                         <input type="hidden" name="process_withdrawals" value="1">

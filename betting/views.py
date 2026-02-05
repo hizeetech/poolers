@@ -9,7 +9,7 @@ from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, Integer
 from django.db.models.functions import Cast
 from django.db import transaction as db_transaction
 from django.utils import timezone
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 import logging
 import requests # For Paystack API calls
 import json
@@ -3775,7 +3775,57 @@ def account_user_dashboard(request):
             
         activity_log.sort(key=lambda x: x['timestamp'], reverse=True)
 
+    # --- Bet Ticket Management (Admin-like View) ---
+    ticket_search_query = request.GET.get('ticket_search', '').strip()
+    ticket_status_filter = request.GET.get('ticket_status', '').strip()
+    ticket_date_from = request.GET.get('ticket_date_from', '').strip()
+    ticket_date_to = request.GET.get('ticket_date_to', '').strip()
+
+    all_tickets = BetTicket.objects.all().select_related('user').order_by('-placed_at')
+
+    if ticket_search_query:
+        all_tickets = all_tickets.filter(
+            Q(ticket_id__icontains=ticket_search_query) |
+            Q(user__email__icontains=ticket_search_query) |
+            Q(user__first_name__icontains=ticket_search_query) |
+            Q(user__last_name__icontains=ticket_search_query)
+        )
+    
+    if ticket_status_filter:
+        all_tickets = all_tickets.filter(status=ticket_status_filter)
+
+    if ticket_date_from:
+        try:
+            date_from = datetime.strptime(ticket_date_from, '%Y-%m-%d')
+            all_tickets = all_tickets.filter(placed_at__gte=timezone.make_aware(date_from))
+        except ValueError:
+            pass 
+            
+    if ticket_date_to:
+        try:
+            date_to = datetime.strptime(ticket_date_to, '%Y-%m-%d')
+            # Add 1 day to include the end date fully (end of day)
+            date_to = date_to.replace(hour=23, minute=59, second=59)
+            all_tickets = all_tickets.filter(placed_at__lte=timezone.make_aware(date_to))
+        except ValueError:
+            pass
+
+    tickets_paginator = Paginator(all_tickets, 20) # 20 tickets per page
+    tickets_page_num = request.GET.get('tickets_page')
+    try:
+        tickets_page = tickets_paginator.page(tickets_page_num)
+    except PageNotAnInteger:
+        tickets_page = tickets_paginator.page(1)
+    except EmptyPage:
+        tickets_page = tickets_paginator.page(tickets_paginator.num_pages)
+    # -----------------------------------------------
+
     context = {
+        'tickets_page': tickets_page,
+        'ticket_search_query': ticket_search_query,
+        'ticket_status_filter': ticket_status_filter,
+        'ticket_date_from': ticket_date_from,
+        'ticket_date_to': ticket_date_to,
         'incoming_credit_requests': incoming_credit_requests, # NEW
         'active_loans_given': active_loans_given,         # NEW
         'pending_withdrawals': pending_withdrawals,

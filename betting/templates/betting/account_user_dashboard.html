@@ -618,6 +618,193 @@
         </div>
     </div>
 
+    <!-- All Wallets Management -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-wallet me-2"></i>All Wallets Management</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>User</th>
+                                    <th>Email</th>
+                                    <th>Balance</th>
+                                    <th>Last Updated</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for wallet in wallets_page %}
+                                <tr>
+                                    <td>{{ wallet.user.get_full_name }}</td>
+                                    <td>{{ wallet.user.email }}</td>
+                                    <td class="fw-bold">₦{{ wallet.balance|floatformat:2 }}</td>
+                                    <td class="small">{{ wallet.last_updated|date:"M d, Y H:i" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted">No wallets found.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if wallets_page.has_other_pages %}
+                    <div class="card-footer py-2">
+                         <nav aria-label="Wallets Pagination">
+                            <ul class="pagination pagination-sm justify-content-center mb-0">
+                                {% if wallets_page.has_previous %}
+                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.previous_page_number }}">&laquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+                                {% endif %}
+                                <li class="page-item active"><span class="page-link">{{ wallets_page.number }}</span></li>
+                                {% if wallets_page.has_next %}
+                                <li class="page-item"><a class="page-link" href="?wallets_page={{ wallets_page.next_page_number }}">&raquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- All Transactions Management -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0"><i class="fas fa-exchange-alt me-2"></i>All Transactions Management</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Type</th>
+                                    <th>User</th>
+                                    <th>Initiator</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for txn in transactions_page %}
+                                <tr>
+                                    <td class="small">{{ txn.timestamp|date:"M d, H:i" }}</td>
+                                    <td>{{ txn.get_transaction_type_display }}</td>
+                                    <td>{{ txn.user.email }}</td>
+                                    <td>{{ txn.initiating_user.email|default:"System" }}</td>
+                                    <td class="fw-bold">₦{{ txn.amount|floatformat:2 }}</td>
+                                    <td>
+                                        <span class="badge {% if txn.status == 'completed' %}bg-success{% elif txn.status == 'pending' %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                                            {{ txn.status|title }}
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="6" class="text-center text-muted">No transactions found.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if transactions_page.has_other_pages %}
+                    <div class="card-footer py-2">
+                         <nav aria-label="Transactions Pagination">
+                            <ul class="pagination pagination-sm justify-content-center mb-0">
+                                {% if transactions_page.has_previous %}
+                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.previous_page_number }}">&laquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+                                {% endif %}
+                                <li class="page-item active"><span class="page-link">{{ transactions_page.number }}</span></li>
+                                {% if transactions_page.has_next %}
+                                <li class="page-item"><a class="page-link" href="?transactions_page={{ transactions_page.next_page_number }}">&raquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Processed Withdrawals Management -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="fas fa-check-circle me-2"></i>Processed Withdrawals Management</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Processed Time</th>
+                                    <th>User</th>
+                                    <th>Amount</th>
+                                    <th>Bank Details</th>
+                                    <th>Status</th>
+                                    <th>Processor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for pw in processed_withdrawals_page %}
+                                <tr>
+                                    <td class="small">{{ pw.approved_rejected_time|date:"M d, H:i" }}</td>
+                                    <td>{{ pw.user.email }}</td>
+                                    <td class="fw-bold">₦{{ pw.amount|floatformat:2 }}</td>
+                                    <td class="small">
+                                        {{ pw.bank_name }}<br>
+                                        {{ pw.account_number }}
+                                    </td>
+                                    <td>
+                                        <span class="badge {% if pw.status == 'approved' or pw.status == 'completed' %}bg-success{% else %}bg-danger{% endif %}">
+                                            {{ pw.status|title }}
+                                        </span>
+                                    </td>
+                                    <td>{{ pw.approved_rejected_by.email|default:"-" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="6" class="text-center text-muted">No processed withdrawals found.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if processed_withdrawals_page.has_other_pages %}
+                    <div class="card-footer py-2">
+                         <nav aria-label="Processed Withdrawals Pagination">
+                            <ul class="pagination pagination-sm justify-content-center mb-0">
+                                {% if processed_withdrawals_page.has_previous %}
+                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.previous_page_number }}">&laquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+                                {% endif %}
+                                <li class="page-item active"><span class="page-link">{{ processed_withdrawals_page.number }}</span></li>
+                                {% if processed_withdrawals_page.has_next %}
+                                <li class="page-item"><a class="page-link" href="?processed_withdrawals_page={{ processed_withdrawals_page.next_page_number }}">&raquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         document.getElementById('selectAll').addEventListener('change', function() {
             const checkboxes = document.querySelectorAll('.commission-checkbox');

@@ -24,7 +24,7 @@ from django.contrib.auth import authenticate, login, logout # Ensure these are i
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
-    CreditRequest, Loan, CreditLog, ImpersonationLog
+    CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -419,10 +419,14 @@ def place_bet(request):
                         timestamp=timezone.now()
                     )
 
+                    # Refresh wallet to get the latest balance
+                    user_wallet.refresh_from_db()
+
                     return JsonResponse({
                         'success': True, 
                         'message': f'Successfully placed bet!',
-                        'ticket_id': bet_ticket.ticket_id
+                        'ticket_id': bet_ticket.ticket_id,
+                        'new_balance': str(user_wallet.balance)
                     })
 
                 except json.JSONDecodeError:
@@ -3820,7 +3824,43 @@ def account_user_dashboard(request):
         tickets_page = tickets_paginator.page(tickets_paginator.num_pages)
     # -----------------------------------------------
 
+    # --- Wallets Management ---
+    all_wallets = Wallet.objects.select_related('user').all().order_by('-balance')
+    wallets_paginator = Paginator(all_wallets, 20)
+    wallets_page_num = request.GET.get('wallets_page')
+    try:
+        wallets_page = wallets_paginator.page(wallets_page_num)
+    except PageNotAnInteger:
+        wallets_page = wallets_paginator.page(1)
+    except EmptyPage:
+        wallets_page = wallets_paginator.page(wallets_paginator.num_pages)
+
+    # --- Transactions Management ---
+    all_transactions = Transaction.objects.select_related('user', 'initiating_user').all().order_by('-timestamp')
+    transactions_paginator = Paginator(all_transactions, 20)
+    transactions_page_num = request.GET.get('transactions_page')
+    try:
+        transactions_page = transactions_paginator.page(transactions_page_num)
+    except PageNotAnInteger:
+        transactions_page = transactions_paginator.page(1)
+    except EmptyPage:
+        transactions_page = transactions_paginator.page(transactions_paginator.num_pages)
+
+    # --- Processed Withdrawals Management ---
+    all_processed_withdrawals = ProcessedWithdrawal.objects.filter(status__in=['approved', 'completed', 'rejected']).order_by('-approved_rejected_time')
+    pw_paginator = Paginator(all_processed_withdrawals, 20)
+    pw_page_num = request.GET.get('processed_withdrawals_page')
+    try:
+        processed_withdrawals_page = pw_paginator.page(pw_page_num)
+    except PageNotAnInteger:
+        processed_withdrawals_page = pw_paginator.page(1)
+    except EmptyPage:
+        processed_withdrawals_page = pw_paginator.page(pw_paginator.num_pages)
+
     context = {
+        'wallets_page': wallets_page,
+        'transactions_page': transactions_page,
+        'processed_withdrawals_page': processed_withdrawals_page,
         'tickets_page': tickets_page,
         'ticket_search_query': ticket_search_query,
         'ticket_status_filter': ticket_status_filter,

@@ -5,6 +5,7 @@ from django.core.cache import cache
 from datetime import timedelta
 import redis
 from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt, Selection
+from .models import Alert
 
 class DashboardService:
     @staticmethod
@@ -106,6 +107,57 @@ class DashboardService:
         # Cache for 5 mins
         cache.set(cache_key, result, 300) 
         return result
+
+    @staticmethod
+    def get_recent_activity(limit=50):
+        cache_key = 'uip_recent_activity'
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        activity_list = []
+
+        # 1. Recent Alerts
+        alerts = Alert.objects.order_by('-created_at')[:limit]
+        for alert in alerts:
+            activity_list.append({
+                'type': 'alert',
+                'timestamp': alert.created_at,
+                'title': alert.title,
+                'message': alert.message,
+                'level': alert.severity
+            })
+
+        # 2. Recent High Value Bets (> 5000)
+        large_bets = BetTicket.objects.filter(stake_amount__gte=5000).order_by('-placed_at')[:limit]
+        for bet in large_bets:
+            activity_list.append({
+                'type': 'bet_placed',
+                'timestamp': bet.placed_at,
+                'ticket_id': bet.ticket_id,
+                'user': bet.user.email,
+                'amount': float(bet.stake_amount)
+            })
+
+        # 3. Recent Transactions (Deposits/Withdrawals)
+        transactions = Transaction.objects.filter(amount__gte=5000).order_by('-timestamp')[:limit]
+        for tx in transactions:
+             activity_list.append({
+                'type': 'transaction',
+                'timestamp': tx.timestamp,
+                'desc': tx.get_transaction_type_display(),
+                'user': tx.user.email,
+                'amount': float(tx.amount)
+            })
+
+        # Sort combined list by timestamp desc
+        activity_list.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        # Slice to limit
+        final_list = activity_list[:limit]
+        
+        cache.set(cache_key, final_list, 10) # Cache for 10 seconds (short cache for near real-time)
+        return final_list
 
     @staticmethod
     def get_live_metrics(timeframe='daily'):

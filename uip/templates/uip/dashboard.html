@@ -251,7 +251,26 @@
                 </div>
                 <div class="card-body">
                     <div id="activity-feed" style="height: 300px; overflow-y: auto;">
-                        <p class="text-muted text-center">Waiting for real-time activity...</p>
+                        {% for activity in recent_activity %}
+                            {% if activity.type == 'bet_placed' %}
+                                <div class="alert alert-info border-left-info py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">{{ activity.timestamp|date:"H:i:s" }}</small>
+                                    <strong>New Bet:</strong> Ticket #{{ activity.ticket_id }} placed by {{ activity.user }} (₦{{ activity.amount|floatformat:2 }})
+                                </div>
+                            {% elif activity.type == 'alert' %}
+                                <div class="alert {% if activity.level == 'critical' %}alert-danger border-left-danger{% else %}alert-warning border-left-warning{% endif %} py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">{{ activity.timestamp|date:"H:i:s" }}</small>
+                                    <strong>{{ activity.title }}:</strong> {{ activity.message }}
+                                </div>
+                            {% elif activity.type == 'transaction' %}
+                                <div class="alert alert-success border-left-success py-2 mb-2" role="alert">
+                                    <small class="text-gray-500 mr-2">{{ activity.timestamp|date:"H:i:s" }}</small>
+                                    <strong>Transaction:</strong> {{ activity.desc }} by {{ activity.user }} (₦{{ activity.amount|floatformat:2 }})
+                                </div>
+                            {% endif %}
+                        {% empty %}
+                            <p class="text-muted text-center">Waiting for real-time activity...</p>
+                        {% endfor %}
                     </div>
                 </div>
             </div>

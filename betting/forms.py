@@ -1008,6 +1008,22 @@ class AccountUserWalletActionForm(forms.Form):
             raise ValidationError("Amount must be greater than zero.")
         return cleaned_data
 
+class AdminManualWalletForm(forms.Form):
+    ACTION_CHOICES = (
+        ('credit', 'Credit User'),
+        ('debit', 'Debit User'),
+    )
+    action = forms.ChoiceField(choices=ACTION_CHOICES, widget=forms.RadioSelect(attrs={'class': 'form-check-input'}))
+    amount = forms.DecimalField(max_digits=12, decimal_places=2, min_value=0.01, widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    description = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}), required=False)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        amount = cleaned_data.get('amount')
+        if amount and amount <= 0:
+            raise ValidationError("Amount must be greater than zero.")
+        return cleaned_data
+
 class FixtureUploadForm(forms.Form):
     betting_period = forms.ModelChoiceField(
         queryset=BettingPeriod.objects.filter(is_active=True),

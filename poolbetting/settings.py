@@ -42,6 +42,12 @@ JAZZMIN_SETTINGS = {
         "uip.UIPDashboardLink": "fas fa-tachometer-alt",
     },
     "custom_links": {
+        "betting": [{
+            "name": "Manual Credit/Debit", 
+            "url": "betting_admin:admin_manual_wallet_manager", 
+            "icon": "fas fa-wallet",
+            "permissions": ["auth.view_user"]
+        }],
         "uip": [{
             "name": "Go to Dashboard", 
             "url": "uip:dashboard", 

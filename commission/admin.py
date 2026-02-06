@@ -153,20 +153,20 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                     sa_node['agents'].append(ag_node)
                 
                 ma_node['super_agents'].append(sa_node)
-                
-                hierarchy_data.append(ma_node)
-                
-            context = {
-                **betting_admin_site.each_context(request),
-                'title': "Retail Transactions",
-                'hierarchy_data': hierarchy_data,
-                'start_date': start_date,
-                'end_date': end_date,
-                'search_query': search_query,
-                'opts': self.model._meta,
-            }
             
-            return render(request, self.change_list_template, context)
+            hierarchy_data.append(ma_node)
+            
+        context = {
+            **betting_admin_site.each_context(request),
+            'title': "Retail Transactions",
+            'hierarchy_data': hierarchy_data,
+            'start_date': start_date,
+            'end_date': end_date,
+            'search_query': search_query,
+            'opts': self.model._meta,
+        }
+        
+        return render(request, self.change_list_template, context)
 
 
 class HybridCommissionRuleInline(admin.TabularInline):

@@ -4352,8 +4352,7 @@ def admin_manual_wallet_manager(request):
                     Q(email__icontains=search_term) | 
                     Q(phone_number__icontains=search_term) |
                     Q(first_name__icontains=search_term) |
-                    Q(last_name__icontains=search_term) |
-                    Q(username__icontains=search_term)
+                    Q(last_name__icontains=search_term)
                 ).exclude(is_superuser=True)
                 
                 if search_term.isdigit():

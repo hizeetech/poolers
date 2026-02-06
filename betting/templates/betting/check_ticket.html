@@ -261,7 +261,7 @@
                             <span>Date:</span>
                             <span id="modal-placed-at"></span>
                         </div>
-                        <div class="d-flex justify-content-between" id="modal-status-container" style="display:none;">
+                        <div class="d-none justify-content-between" id="modal-status-container">
                             <span>Status:</span>
                             <span class="fw-bold text-danger" id="modal-status"></span>
                         </div>
@@ -392,12 +392,20 @@
                     // Add Watermark
                     let watermark = document.getElementById('reprint-watermark');
                     let watermarkText = 'COPY - NOT ORIGINAL';
+                    
+                    const statusContainer = document.getElementById('modal-status-container');
+                    const statusText = document.getElementById('modal-status');
+                    
+                    // Reset first
+                    statusContainer.classList.remove('d-flex');
+                    statusContainer.classList.add('d-none');
+                    statusText.textContent = '';
+
                     if (['cancelled', 'deleted', 'voided'].includes(ticket.status_code)) {
                         watermarkText = ticket.status.toUpperCase();
-                        document.getElementById('modal-status').textContent = ticket.status.toUpperCase();
-                        document.getElementById('modal-status-container').style.display = 'flex';
-                    } else {
-                        document.getElementById('modal-status-container').style.display = 'none';
+                        statusText.textContent = ticket.status.toUpperCase();
+                        statusContainer.classList.remove('d-none');
+                        statusContainer.classList.add('d-flex');
                     }
 
                     if (!watermark) {

@@ -13,7 +13,7 @@ from .services import (
     pay_weekly_commission, pay_monthly_network_commission
 )
 from betting.models import User, BetTicket
-from django.db.models import Sum
+from django.db.models import Sum, Q
 
 class RetailTransactionAdmin(admin.ModelAdmin):
     change_list_template = 'admin/commission/retailtransaction/change_list.html'
@@ -39,9 +39,9 @@ class RetailTransactionAdmin(admin.ModelAdmin):
         if search_query:
             # Find users matching query
             found_users = User.objects.filter(
-                models.Q(email__icontains=search_query) | 
-                models.Q(first_name__icontains=search_query) | 
-                models.Q(last_name__icontains=search_query)
+                Q(email__icontains=search_query) | 
+                Q(first_name__icontains=search_query) | 
+                Q(last_name__icontains=search_query)
             )
             
             ma_ids = set()
@@ -60,9 +60,15 @@ class RetailTransactionAdmin(admin.ModelAdmin):
         master_agents = ma_queryset
         
         for ma in master_agents:
-            # MA Data
-            # Tickets where user__agent__super_agent__master_agent = ma
-            ma_tickets = BetTicket.objects.filter(user__agent__super_agent__master_agent=ma).exclude(status__in=['cancelled', 'deleted'])
+            # MA Data - Robust Calculation
+            # Include tickets from MA, direct children, and nested children
+            ma_tickets = BetTicket.objects.filter(
+                Q(user=ma) |
+                Q(user__master_agent=ma) |
+                Q(user__super_agent__master_agent=ma) |
+                Q(user__agent__super_agent__master_agent=ma)
+            ).exclude(status__in=['cancelled', 'deleted'])
+            
             if ticket_filters:
                 ma_tickets = ma_tickets.filter(**ticket_filters)
 
@@ -78,19 +84,21 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                 'sales': ma_sales,
                 'winnings': ma_winnings,
                 'ggr': ma_ggr,
-                'super_agents': []
+                'super_agents': [],
+                'direct_agents': [], # Handle Agents directly under MA
+                'direct_cashiers': [] # Handle Cashiers directly under MA
             }
             
-            # Filter children only if searching? 
-            # If I searched for a specific agent, I might want to see only that agent path?
-            # For now, let's show the full tree under the matched MA. 
-            # Optimization: If search_query exists, we could prune the tree.
-            # But let's stick to filtering the ROOT nodes first as per plan.
-            
+            # 1. Get Super Agents
             super_agents = User.objects.filter(user_type='super_agent', master_agent=ma)
             for sa in super_agents:
                 # SA Data
-                sa_tickets = BetTicket.objects.filter(user__agent__super_agent=sa).exclude(status__in=['cancelled', 'deleted'])
+                sa_tickets = BetTicket.objects.filter(
+                    Q(user=sa) |
+                    Q(user__super_agent=sa) |
+                    Q(user__agent__super_agent=sa)
+                ).exclude(status__in=['cancelled', 'deleted'])
+                
                 if ticket_filters:
                     sa_tickets = sa_tickets.filter(**ticket_filters)
 
@@ -106,13 +114,18 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                     'sales': sa_sales,
                     'winnings': sa_winnings,
                     'ggr': sa_ggr,
-                    'agents': []
+                    'agents': [],
+                    'direct_cashiers': [] # Handle Cashiers directly under SA
                 }
                 
                 agents = User.objects.filter(user_type='agent', super_agent=sa)
                 for ag in agents:
                     # Agent Data
-                    ag_tickets = BetTicket.objects.filter(user__agent=ag).exclude(status__in=['cancelled', 'deleted'])
+                    ag_tickets = BetTicket.objects.filter(
+                        Q(user=ag) |
+                        Q(user__agent=ag)
+                    ).exclude(status__in=['cancelled', 'deleted'])
+                    
                     if ticket_filters:
                         ag_tickets = ag_tickets.filter(**ticket_filters)
 
@@ -152,7 +165,85 @@ class RetailTransactionAdmin(admin.ModelAdmin):
                     
                     sa_node['agents'].append(ag_node)
                 
+                # Check for Cashiers directly under SA (skip Agent)
+                direct_cashiers_sa = User.objects.filter(user_type='cashier', super_agent=sa, agent__isnull=True)
+                for ca in direct_cashiers_sa:
+                    ca_tickets = BetTicket.objects.filter(user=ca).exclude(status__in=['cancelled', 'deleted'])
+                    if ticket_filters:
+                        ca_tickets = ca_tickets.filter(**ticket_filters)
+                    ca_sales = ca_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
+                    ca_winnings = ca_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
+                    ca_ggr = ca_sales - ca_winnings
+                    ca_node = {
+                        'user': ca,
+                        'sales': ca_sales,
+                        'winnings': ca_winnings,
+                        'ggr': ca_ggr
+                    }
+                    sa_node['direct_cashiers'].append(ca_node)
+
                 ma_node['super_agents'].append(sa_node)
+
+            # 2. Check for Agents directly under MA (skip SA)
+            direct_agents = User.objects.filter(user_type='agent', master_agent=ma, super_agent__isnull=True)
+            for ag in direct_agents:
+                # Agent Data
+                ag_tickets = BetTicket.objects.filter(
+                    Q(user=ag) |
+                    Q(user__agent=ag)
+                ).exclude(status__in=['cancelled', 'deleted'])
+                
+                if ticket_filters:
+                    ag_tickets = ag_tickets.filter(**ticket_filters)
+
+                ag_sales = ag_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
+                ag_winnings = ag_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
+                ag_ggr = ag_sales - ag_winnings
+                ag_plan = getattr(ag.commission_profile, 'plan', None) if hasattr(ag, 'commission_profile') else None
+
+                ag_node = {
+                    'user': ag,
+                    'plan': ag_plan,
+                    'sales': ag_sales,
+                    'winnings': ag_winnings,
+                    'ggr': ag_ggr,
+                    'cashiers': []
+                }
+                
+                cashiers = User.objects.filter(user_type='cashier', agent=ag)
+                for ca in cashiers:
+                    ca_tickets = BetTicket.objects.filter(user=ca).exclude(status__in=['cancelled', 'deleted'])
+                    if ticket_filters:
+                        ca_tickets = ca_tickets.filter(**ticket_filters)
+                    ca_sales = ca_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
+                    ca_winnings = ca_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
+                    ca_ggr = ca_sales - ca_winnings
+                    ca_node = {
+                        'user': ca,
+                        'sales': ca_sales,
+                        'winnings': ca_winnings,
+                        'ggr': ca_ggr
+                    }
+                    ag_node['cashiers'].append(ca_node)
+                
+                ma_node['direct_agents'].append(ag_node)
+            
+            # 3. Check for Cashiers directly under MA (skip SA & Agent)
+            direct_cashiers_ma = User.objects.filter(user_type='cashier', master_agent=ma, super_agent__isnull=True, agent__isnull=True)
+            for ca in direct_cashiers_ma:
+                ca_tickets = BetTicket.objects.filter(user=ca).exclude(status__in=['cancelled', 'deleted'])
+                if ticket_filters:
+                    ca_tickets = ca_tickets.filter(**ticket_filters)
+                ca_sales = ca_tickets.aggregate(s=Sum('stake_amount'))['s'] or 0
+                ca_winnings = ca_tickets.filter(status='won').aggregate(s=Sum('max_winning'))['s'] or 0
+                ca_ggr = ca_sales - ca_winnings
+                ca_node = {
+                    'user': ca,
+                    'sales': ca_sales,
+                    'winnings': ca_winnings,
+                    'ggr': ca_ggr
+                }
+                ma_node['direct_cashiers'].append(ca_node)
             
             hierarchy_data.append(ma_node)
             

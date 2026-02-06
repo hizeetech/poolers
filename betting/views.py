@@ -70,7 +70,7 @@ def is_account_user(user):
 
 def log_admin_activity(request, action_description, action_type='UPDATE', affected_object=None):
     """Logs administrative actions."""
-    if request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == 'admin'):
+    if request.user.is_authenticated and (request.user.is_superuser or request.user.user_type in ['admin', 'account_user']):
         ActivityLog.objects.create(
             user=request.user,
             action=action_description,

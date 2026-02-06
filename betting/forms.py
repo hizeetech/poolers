@@ -646,7 +646,7 @@ class CheckTicketStatusForm(forms.Form):
     def clean_ticket_id(self):
         ticket_id = self.cleaned_data['ticket_id']
         try:
-            ticket = BetTicket.objects.get(ticket_id=ticket_id)
+            ticket = BetTicket.objects.prefetch_related('selections__fixture').get(ticket_id=ticket_id)
         except BetTicket.DoesNotExist:
             raise forms.ValidationError("Bet Ticket not found.")
         

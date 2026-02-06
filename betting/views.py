@@ -66,16 +66,17 @@ def is_account_user(user):
     return user.is_authenticated and user.user_type == 'account_user'
 
 
-def log_admin_activity(request, action_description):
+def log_admin_activity(request, action_description, action_type='UPDATE', affected_object=None):
     """Logs administrative actions."""
     if request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == 'admin'):
         ActivityLog.objects.create(
             user=request.user,
             action=action_description,
-            action_type='UPDATE', # Default to UPDATE for generic admin actions
+            action_type=action_type, # Default to UPDATE for generic admin actions
             ip_address=request.META.get('REMOTE_ADDR'),
             user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown'),
-            path=request.path
+            path=request.path,
+            affected_object=affected_object
         )
 
 # --- General Authentication Views ---
@@ -4407,7 +4408,12 @@ def admin_manual_wallet_manager(request):
                                 description=f"Admin Manual {action.title()}: {description}"
                             )
                             
-                            log_admin_activity(request, f"Manual {action} of {amount} for {target_user.email}. Reason: {description}")
+                            log_admin_activity(
+                                request, 
+                                f"Manual {action} of {amount} for {target_user.email}. Reason: {description}",
+                                action_type=f"MANUAL_{action.upper()}",
+                                affected_object=target_user.email
+                            )
                             messages.success(request, f"Successfully {action}ed ₦{amount} for {target_user.email}.")
                             return redirect('betting_admin:admin_manual_wallet_manager')
                             

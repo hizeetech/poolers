@@ -3622,9 +3622,17 @@ def account_user_dashboard(request):
                 ).exclude(is_superuser=True).exclude(user_type='account_user')
                 
                 if search_term.isdigit():
-                     users = users | User.objects.filter(id=int(search_term))
+                     # Prioritize exact ID match if search term is a digit (likely from autocomplete)
+                     exact_match = User.objects.filter(id=int(search_term)).exclude(is_superuser=True).first()
+                     if exact_match:
+                         found_user = exact_match
+                         users = User.objects.filter(pk=exact_match.pk)
+                     else:
+                         users = users | User.objects.filter(id=int(search_term))
                 
-                if users.count() == 1:
+                if found_user:
+                     pass # Already found via exact ID match
+                elif users.count() == 1:
                     found_user = users.first()
                     messages.success(request, f"User found: {found_user.get_full_name()} ({found_user.email})")
                 elif users.count() > 1:
@@ -4414,9 +4422,17 @@ def admin_manual_wallet_manager(request):
                 ).exclude(is_superuser=True)
                 
                 if search_term.isdigit():
-                     users = users | User.objects.filter(id=int(search_term))
+                     # Prioritize exact ID match if search term is a digit (likely from autocomplete)
+                     exact_match = User.objects.filter(id=int(search_term)).exclude(is_superuser=True).first()
+                     if exact_match:
+                         found_user = exact_match
+                         users = User.objects.filter(pk=exact_match.pk)
+                     else:
+                         users = users | User.objects.filter(id=int(search_term)).exclude(is_superuser=True)
                 
-                if users.count() == 1:
+                if found_user:
+                     pass # Already found via exact ID match
+                elif users.count() == 1:
                     found_user = users.first()
                     messages.success(request, f"User found: {found_user.get_full_name()} ({found_user.email})")
                 elif users.count() > 1:

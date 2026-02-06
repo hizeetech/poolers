@@ -40,3 +40,14 @@ def get_ip_details(ip_address):
     except Exception as e:
         logger.error(f"Error fetching IP details for {ip_address}: {e}")
         return None
+
+def get_client_ip(request):
+    """
+    Retrieves the client IP address from the request, handling proxies.
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0].strip()
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip

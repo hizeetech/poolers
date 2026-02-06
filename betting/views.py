@@ -56,6 +56,8 @@ def is_super_agent(user):
 def is_agent(user):
     return user.is_authenticated and user.user_type == 'agent'
 
+from .utils import get_client_ip
+
 def is_cashier(user):
     return user.is_authenticated and user.user_type == 'cashier'
 
@@ -73,7 +75,7 @@ def log_admin_activity(request, action_description, action_type='UPDATE', affect
             user=request.user,
             action=action_description,
             action_type=action_type, # Default to UPDATE for generic admin actions
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_client_ip(request),
             user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown'),
             path=request.path,
             affected_object=affected_object
@@ -4169,6 +4171,61 @@ def api_downline_search(request):
             'more': users_page.has_next()
         }
     })
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def api_admin_user_search(request):
+    """
+    API endpoint for Admin to search ANY user (excluding superusers).
+    Used for Manual Wallet Manager autocomplete.
+    """
+    search_term = request.GET.get('q', '')
+    page = request.GET.get('page', 1)
+    
+    # Start with all users except superusers
+    queryset = User.objects.exclude(is_superuser=True)
+    
+    # Apply search filter
+    if search_term:
+        queryset = queryset.filter(
+            Q(email__icontains=search_term) |
+            Q(phone_number__icontains=search_term) |
+            Q(first_name__icontains=search_term) |
+            Q(last_name__icontains=search_term)
+        )
+        if search_term.isdigit():
+             queryset = queryset | User.objects.filter(id=int(search_term)).exclude(is_superuser=True)
+    
+    # Pagination
+    paginator = Paginator(queryset.order_by('email'), 20)
+    
+    try:
+        users_page = paginator.page(page)
+    except PageNotAnInteger:
+        users_page = paginator.page(1)
+    except EmptyPage:
+        users_page = paginator.page(paginator.num_pages)
+
+    results = []
+    for u in users_page:
+        text = f"{u.get_full_name()} ({u.email})"
+        if u.phone_number:
+            text += f" - {u.phone_number}"
+        text += f" [{u.get_user_type_display()}]"
+            
+        results.append({
+            'id': u.id,
+            'text': text
+        })
+
+    return JsonResponse({
+        'results': results,
+        'pagination': {
+            'more': users_page.has_next()
+        }
+    })
+
 
 
 @login_required

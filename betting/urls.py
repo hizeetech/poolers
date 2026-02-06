@@ -102,6 +102,7 @@ urlpatterns = [
     path('api/agent-users/', views.api_agent_users, name='api_agent_users'),
     path('api/cashier-transactions/', views.api_cashier_transactions, name='api_cashier_transactions'),
     path('api/downline-search/', views.api_downline_search, name='api_downline_search'),
+    path('api/admin-user-search/', views.api_admin_user_search, name='api_admin_user_search'),
     path('api/ticket-details/<str:ticket_id>/', views.get_ticket_details_json, name='get_ticket_details_json'),
     path('api/log-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
 

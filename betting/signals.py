@@ -4,8 +4,8 @@ from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
 from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal
-from .middleware import get_current_user, get_client_ip, get_current_request
-from .utils import get_ip_details
+from .middleware import get_current_user, get_current_request
+from .utils import get_ip_details, get_client_ip
 import threading
 
 def fetch_and_update_isp(log_id, ip_address):

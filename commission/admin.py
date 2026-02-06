@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.shortcuts import render
 from django.utils import timezone
 from django.contrib import messages
 from betting.admin import betting_admin_site

@@ -5,11 +5,12 @@ from django.db import transaction
 from django.utils import timezone
 from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal
 from .middleware import get_current_user, get_current_request
-from .utils import get_ip_details, get_client_ip
+from .utils import get_ip_details, get_client_ip, log_debug
 import threading
 
 def fetch_and_update_isp(log_id, ip_address):
     try:
+        log_debug(f"Thread started for log {log_id}, IP: {ip_address}")
         data = get_ip_details(ip_address)
         if data and data.get('connection') and data['connection'].get('isp'):
             # Re-fetch to avoid race conditions or stale data
@@ -18,12 +19,17 @@ def fetch_and_update_isp(log_id, ip_address):
             # Optional: Add country/city if needed, but user asked for ISP
             # log.location = f"{data.get('city')}, {data.get('country')}"
             log.save(update_fields=['isp'])
+            log_debug(f"Updated ISP for log {log_id}: {log.isp}")
+        else:
+            log_debug(f"No ISP data found for log {log_id}")
     except Exception as e:
+        log_debug(f"Failed to update ISP for log {log_id}: {e}")
         print(f"Failed to update ISP for log {log_id}: {e}")
 
 @receiver(post_save, sender=ActivityLog)
 def enrich_activity_log(sender, instance, created, **kwargs):
     if created and instance.ip_address and not instance.isp:
+        log_debug(f"Enriching ActivityLog {instance.id} with IP {instance.ip_address}")
         # Run in a separate thread to avoid blocking the response
         thread = threading.Thread(
             target=fetch_and_update_isp, 

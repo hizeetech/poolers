@@ -81,7 +81,12 @@
                         {% if selection.is_winning_selection == True %}
                         <span class="badge bg-success">Yes</span> {% elif selection.is_winning_selection == False %}
                         <span class="badge bg-danger">No</span> {% else %}
-                        <span class="badge bg-secondary">N/A (Void)</span> {% endif %}
+                            {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' %}
+                            <span class="badge bg-secondary">Void</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Pending</span>
+                            {% endif %}
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}

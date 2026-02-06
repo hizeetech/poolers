@@ -121,10 +121,12 @@
                                     <span class="badge bg-success ms-2">WIN</span> 
                                 {% elif selection.is_winning_selection is False %}
                                     <span class="badge bg-danger ms-2">LOSE</span> 
-                                {% elif selection.is_winning_selection is None %}
-                                    <span class="badge bg-secondary ms-2">VOID</span> 
                                 {% else %}
-                                    <span class="badge bg-warning text-dark ms-2">PENDING</span> 
+                                    {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' %}
+                                        <span class="badge bg-secondary ms-2">VOID</span>
+                                    {% else %}
+                                        <span class="badge bg-warning text-dark ms-2">PENDING</span> 
+                                    {% endif %}
                                 {% endif %}
                             </span>
                         </li>

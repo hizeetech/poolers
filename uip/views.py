@@ -20,10 +20,12 @@ def uip_dashboard(request):
         
     metrics = DashboardService.get_live_metrics(timeframe=timeframe)
     leaderboard = DashboardService.get_agent_leaderboard(timeframe=timeframe)
+    recent_activity = DashboardService.get_recent_activity()
     betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')[:10]
     context = {
         'metrics': metrics,
         'leaderboard': leaderboard,
+        'recent_activity': recent_activity,
         'betting_periods': betting_periods,
         'page_title': 'Unified Intelligence Platform',
         'current_timeframe': timeframe

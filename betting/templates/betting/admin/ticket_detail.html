@@ -78,7 +78,9 @@
                         {% if selection.fixture.result %} {{ selection.fixture.get_result_display }} ({{ selection.fixture.home_score }}-{{ selection.fixture.away_score }}) {% else %} N/A {% endif %}
                     </td>
                     <td class="py-3 px-4">
-                        {% if selection.is_winning_selection == True %}
+                        {% if bet_ticket.status == 'cancelled' or bet_ticket.status == 'deleted' %}
+                        <span class="badge bg-secondary">Void</span>
+                        {% elif selection.is_winning_selection == True %}
                         <span class="badge bg-success">Yes</span> {% elif selection.is_winning_selection == False %}
                         <span class="badge bg-danger">No</span> {% else %}
                             {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' %}

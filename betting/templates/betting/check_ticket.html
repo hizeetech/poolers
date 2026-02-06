@@ -117,7 +117,9 @@
                             <strong>{{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}</strong>
                             <span>
                                 Pick: {{ selection.get_bet_type_display }} (Odd: {{ selection.odd_selected|floatformat:2 }})
-                                {% if selection.is_winning_selection is True %}
+                                {% if ticket.status == 'cancelled' or ticket.status == 'deleted' %}
+                                    <span class="badge bg-secondary ms-2">VOID</span>
+                                {% elif selection.is_winning_selection is True %}
                                     <span class="badge bg-success ms-2">WIN</span> 
                                 {% elif selection.is_winning_selection is False %}
                                     <span class="badge bg-danger ms-2">LOSE</span> 

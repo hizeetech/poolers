@@ -132,8 +132,55 @@
                             </div>
                         </details>
                         {% endfor %}
+
+                        <!-- Direct Cashiers under Super Agent -->
+                        {% for ca in sa.direct_cashiers %}
+                        <div class="rt-row">
+                            <div class="rt-cell rt-name">{{ ca.user.get_full_name|default:ca.user.email }} (Cashier - Direct)</div>
+                            <div class="rt-cell">-</div>
+                            <div class="rt-cell">{{ ca.sales|floatformat:2 }}</div>
+                            <div class="rt-cell">{{ ca.winnings|floatformat:2 }}</div>
+                            <div class="rt-cell">{{ ca.ggr|floatformat:2 }}</div>
+                        </div>
+                        {% endfor %}
                     </div>
                 </details>
+                {% endfor %}
+
+                <!-- Direct Agents under Master Agent -->
+                {% for ag in ma.direct_agents %}
+                <details>
+                    <summary class="rt-row">
+                        <div class="rt-cell rt-name">{{ ag.user.get_full_name|default:ag.user.email }} (Agent - Direct)</div>
+                        <div class="rt-cell">{{ ag.plan|default:"-" }}</div>
+                        <div class="rt-cell">{{ ag.sales|floatformat:2 }}</div>
+                        <div class="rt-cell">{{ ag.winnings|floatformat:2 }}</div>
+                        <div class="rt-cell">{{ ag.ggr|floatformat:2 }}</div>
+                    </summary>
+                    
+                    <div class="rt-details">
+                        {% for ca in ag.cashiers %}
+                        <div class="rt-row">
+                            <div class="rt-cell rt-name">{{ ca.user.get_full_name|default:ca.user.email }} (Cashier)</div>
+                            <div class="rt-cell">-</div>
+                            <div class="rt-cell">{{ ca.sales|floatformat:2 }}</div>
+                            <div class="rt-cell">{{ ca.winnings|floatformat:2 }}</div>
+                            <div class="rt-cell">{{ ca.ggr|floatformat:2 }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endfor %}
+
+                <!-- Direct Cashiers under Master Agent -->
+                {% for ca in ma.direct_cashiers %}
+                <div class="rt-row">
+                    <div class="rt-cell rt-name">{{ ca.user.get_full_name|default:ca.user.email }} (Cashier - Direct)</div>
+                    <div class="rt-cell">-</div>
+                    <div class="rt-cell">{{ ca.sales|floatformat:2 }}</div>
+                    <div class="rt-cell">{{ ca.winnings|floatformat:2 }}</div>
+                    <div class="rt-cell">{{ ca.ggr|floatformat:2 }}</div>
+                </div>
                 {% endfor %}
             </div>
         </details>

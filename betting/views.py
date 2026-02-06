@@ -4509,10 +4509,10 @@ def admin_manual_wallet_manager(request):
             else:
                  messages.error(request, "Target user not specified.")
 
-    # Get recent manual transactions
+    # Get recent manual transactions (Admin and Account User)
     recent_transactions = Transaction.objects.filter(
-        transaction_type__in=['manual_credit', 'manual_debit']
-    ).order_by('-timestamp')[:20]
+        transaction_type__in=['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
+    ).select_related('user', 'initiating_user').order_by('-timestamp')[:20]
 
     context = {
         'search_form': search_form,

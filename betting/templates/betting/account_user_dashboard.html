@@ -274,7 +274,12 @@ $(document).ready(function() {
                     {% endif %}
                 </div>
             </div>
+        </div>
+    </div>
 
+    <!-- Recent Activity Section (Full Width) -->
+    <div class="row mb-4">
+        <div class="col-12">
             <div class="card shadow-sm">
                 <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="fas fa-history me-2"></i>Recent Activity</h5>
@@ -285,7 +290,9 @@ $(document).ready(function() {
                             <thead class="table-light">
                                 <tr>
                                     <th>Type</th>
+                                    <th>Action Type</th>
                                     <th>User</th>
+                                    <th>Description / Reason</th>
                                     <th>Amount</th>
                                     <th>Date</th>
                                 </tr>
@@ -303,18 +310,22 @@ $(document).ready(function() {
                                         {% endif %}
                                     </td>
                                     <td>
+                                        <span class="badge bg-info text-dark">{{ tx.transaction_type|upper }}</span>
+                                    </td>
+                                    <td>
                                         {% if tx.user == request.user %}
                                             <span class="text-muted">Self</span>
                                         {% else %}
-                                            {{ tx.user.email|truncatechars:15 }}
+                                            {{ tx.user.email }}
                                         {% endif %}
                                     </td>
+                                    <td>{{ tx.description|default:"-" }}</td>
                                     <td class="fw-bold">₦{{ tx.amount|floatformat:2 }}</td>
                                     <td class="small text-muted">{{ tx.timestamp|date:"M d, H:i" }}</td>
                                 </tr>
                                 {% empty %}
                                 <tr>
-                                    <td colspan="4" class="text-center py-4 text-muted">No recent transactions found.</td>
+                                    <td colspan="6" class="text-center py-4 text-muted">No recent transactions found.</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

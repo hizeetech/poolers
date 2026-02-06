@@ -551,6 +551,8 @@ class FixtureAdmin(admin.ModelAdmin):
     
     def get_queryset(self, request):
         qs = super().get_queryset(request)
+        # Only show fixtures from active betting periods
+        qs = qs.filter(betting_period__is_active=True)
         return qs.annotate(
             serial_int=Cast('serial_number', IntegerField())
         ).order_by('serial_int')
@@ -755,7 +757,12 @@ class ResultAdmin(admin.ModelAdmin):
     list_editable = ('home_score', 'away_score', 'status')
     list_filter = ('status', 'match_date', 'betting_period')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    ordering = ('-match_date', 'match_time')
+    
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            serial_int=Cast('serial_number', IntegerField())
+        ).order_by('serial_int')
 
 
 # --- Wallet Admin ---

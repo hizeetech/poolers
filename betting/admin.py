@@ -847,10 +847,10 @@ class ProcessedWithdrawalAdmin(admin.ModelAdmin):
 betting_admin_site.register(ProcessedWithdrawal, ProcessedWithdrawalAdmin)
 # Activity Log Admin
 class ActivityLogAdmin(admin.ModelAdmin):
-    list_display = ('timestamp', 'user', 'action_type_badge', 'affected_object', 'ip_address', 'isp')
+    list_display = ('timestamp', 'user', 'action_type_badge', 'amount_display', 'affected_object', 'ip_address', 'isp')
     list_filter = ('action_type', 'timestamp', 'user')
     search_fields = ('user__username', 'user__email', 'ip_address', 'isp', 'action', 'affected_object')
-    readonly_fields = [field.name for field in ActivityLog._meta.fields]
+    readonly_fields = [field.name for field in ActivityLog._meta.fields] + ['amount_display']
     list_per_page = 50
     date_hierarchy = 'timestamp'
     list_select_related = ('user',)
@@ -860,6 +860,44 @@ class ActivityLogAdmin(admin.ModelAdmin):
         
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
+
+    def amount_display(self, obj):
+        """Extracts and displays amount from action description or affected object."""
+        import re
+        
+        # Strategy 1: Regex search in action description
+        # Looks for patterns like "Amount: 100", "Stake: 50", "Credit of 500"
+        amount_patterns = [
+            r'Amount:\s*([\d\.,]+)',
+            r'Stake:\s*([\d\.,]+)',
+            r'Credit\s*of\s*([\d\.,]+)',
+            r'Debit\s*of\s*([\d\.,]+)',
+            r'Transfer\s*([\d\.,]+)',
+        ]
+        
+        for pattern in amount_patterns:
+            match = re.search(pattern, obj.action, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        # Strategy 2: Try to find related transaction via affected_object string
+        # If affected_object is "Transaction: <uuid>"
+        if obj.affected_object and "Transaction" in obj.affected_object:
+            try:
+                # Extract UUID if present (simple split or regex)
+                # Assuming format "Transaction: <uuid>"
+                parts = obj.affected_object.split(':')
+                if len(parts) > 1:
+                    tx_id = parts[1].strip()
+                    from .models import Transaction
+                    tx = Transaction.objects.filter(id=tx_id).first()
+                    if tx:
+                        return f"{tx.amount} ({tx.get_transaction_type_display()})"
+            except Exception:
+                pass
+                
+        return "-"
+    amount_display.short_description = "Amount"
 
     def action_type_badge(self, obj):
         from django.utils.html import format_html

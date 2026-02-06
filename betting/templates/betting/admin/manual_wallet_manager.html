@@ -138,7 +138,9 @@ $(document).ready(function() {
         </div>
 
         <!-- Recent Transactions Column -->
-        <div class="col-md-6">
+    </div>
+    <div class="row">
+        <div class="col-12">
             <div class="card shadow-sm h-100">
                 <div class="card-header bg-dark text-white">
                     <h5 class="mb-0"><i class="fas fa-history me-2"></i>Recent Manual Actions</h5>
@@ -150,7 +152,9 @@ $(document).ready(function() {
                                 <tr>
                                     <th>Time</th>
                                     <th>User</th>
-                                    <th>Type</th>
+                                    <th>Processor</th>
+                                    <th>Action Type</th>
+                                    <th>Description / Reason</th>
                                     <th>Amount</th>
                                 </tr>
                             </thead>
@@ -159,21 +163,31 @@ $(document).ready(function() {
                                 <tr>
                                     <td><small>{{ txn.timestamp|date:"M d, H:i" }}</small></td>
                                     <td>
-                                        <div class="fw-bold small">{{ txn.user.get_full_name|default:txn.user.email|truncatechars:15 }}</div>
-                                        <div class="text-muted small" style="font-size: 0.75rem;">{{ txn.user.email|truncatechars:15 }}</div>
+                                        <div class="fw-bold small">{{ txn.user.get_full_name|default:txn.user.email }}</div>
+                                        <div class="text-muted small" style="font-size: 0.75rem;">{{ txn.user.email }}</div>
                                     </td>
                                     <td>
-                                        {% if txn.transaction_type == 'manual_credit' %}
-                                        <span class="badge bg-success">Credit</span>
+                                        {% if txn.initiating_user %}
+                                            <span class="badge bg-secondary">{{ txn.initiating_user.user_type|upper }}</span> {{ txn.initiating_user.email }}
                                         {% else %}
-                                        <span class="badge bg-danger">Debit</span>
+                                            <span class="text-muted">System/Unknown</span>
                                         {% endif %}
                                     </td>
+                                    <td>
+                                        {% if txn.transaction_type == 'manual_credit' or txn.transaction_type == 'account_user_credit' %}
+                                        <span class="badge bg-success">Credit</span>
+                                        {% elif txn.transaction_type == 'manual_debit' or txn.transaction_type == 'account_user_debit' %}
+                                        <span class="badge bg-danger">Debit</span>
+                                        {% else %}
+                                        <span class="badge bg-secondary">{{ txn.transaction_type|title }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ txn.description|default:"-" }}</td>
                                     <td class="fw-bold">₦{{ txn.amount|floatformat:2 }}</td>
                                 </tr>
                                 {% empty %}
                                 <tr>
-                                    <td colspan="4" class="text-center text-muted py-4">No recent manual transactions.</td>
+                                    <td colspan="6" class="text-center text-muted py-4">No recent manual transactions.</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

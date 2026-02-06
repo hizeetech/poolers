@@ -3704,6 +3704,14 @@ def account_user_dashboard(request):
                                 description=f"{action.title()} by Account Manager: {description}"
                             )
                             
+                            # Log to Admin Activity Log
+                            log_admin_activity(
+                                request, 
+                                f"Account User Manual {action} of {amount} for {target_user.email}. Reason: {description}",
+                                action_type=f"MANUAL_{action.upper()}",
+                                affected_object=target_user.email
+                            )
+
                             messages.success(request, f"Successfully {action}ed {amount} for {target_user.email}.")
                             found_user = None 
                             
@@ -4182,7 +4190,7 @@ def api_downline_search(request):
 
 
 @login_required
-@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@user_passes_test(lambda u: u.is_superuser or u.user_type in ['admin', 'account_user'])
 def api_admin_user_search(request):
     """
     API endpoint for Admin to search ANY user (excluding superusers).
@@ -4193,6 +4201,10 @@ def api_admin_user_search(request):
     
     # Start with all users except superusers
     queryset = User.objects.exclude(is_superuser=True)
+    
+    # If account_user, exclude other account_users to match dashboard logic
+    if request.user.user_type == 'account_user':
+        queryset = queryset.exclude(user_type='account_user')
     
     # Apply search filter
     if search_term:

@@ -4235,14 +4235,19 @@ def get_ticket_details_json(request):
             'is_active': is_active
         })
 
+    is_voided = ticket.status in ['cancelled', 'deleted', 'voided']
+
     data = {
         'ticket_id': ticket.ticket_id,
         'placed_at': ticket.placed_at.strftime('%Y-%m-%d %H:%M'),
-        'stake_amount': float(ticket.stake_amount),
-        'total_odd': float(ticket.total_odd),
-        'max_winning': float(ticket.max_winning),
+        'stake_amount': 0.0 if is_voided else float(ticket.stake_amount),
+        'total_odd': 0.0 if is_voided else float(ticket.total_odd),
+        'max_winning': 0.0 if is_voided else float(ticket.max_winning),
+        'potential_winning': 0.0 if is_voided else float(ticket.potential_winning),
+        'bonus': 0.0 if is_voided else float(ticket.bonus) if hasattr(ticket, 'bonus') else 0.0,
         'selections': selections_data,
         'status': ticket.get_status_display(),
+        'status_code': ticket.status,
         'bet_type': ticket.bet_type,
         'system_min_count': ticket.system_min_count
     }

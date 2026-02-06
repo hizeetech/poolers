@@ -261,6 +261,10 @@
                             <span>Date:</span>
                             <span id="modal-placed-at"></span>
                         </div>
+                        <div class="d-flex justify-content-between" id="modal-status-container" style="display:none;">
+                            <span>Status:</span>
+                            <span class="fw-bold text-danger" id="modal-status"></span>
+                        </div>
                     </div>
 
                     <h6 class="text-secondary mb-2">Selections:</h6>
@@ -387,13 +391,23 @@
 
                     // Add Watermark
                     let watermark = document.getElementById('reprint-watermark');
+                    let watermarkText = 'COPY - NOT ORIGINAL';
+                    if (['cancelled', 'deleted', 'voided'].includes(ticket.status_code)) {
+                        watermarkText = ticket.status.toUpperCase();
+                        document.getElementById('modal-status').textContent = ticket.status.toUpperCase();
+                        document.getElementById('modal-status-container').style.display = 'flex';
+                    } else {
+                        document.getElementById('modal-status-container').style.display = 'none';
+                    }
+
                     if (!watermark) {
                         watermark = document.createElement('div');
                         watermark.id = 'reprint-watermark';
                         watermark.className = 'watermark';
-                        watermark.textContent = 'COPY - NOT ORIGINAL';
+                        watermark.textContent = watermarkText;
                         document.querySelector('#printTicketModal .modal-body').appendChild(watermark);
                     } else {
+                        watermark.textContent = watermarkText;
                         watermark.style.display = 'block';
                     }
 

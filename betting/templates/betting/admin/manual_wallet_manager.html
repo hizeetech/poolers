@@ -1,0 +1,157 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Manual Wallet Manager - Admin{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="h3 text-dark fw-semibold">Manual Wallet Manager</h2>
+        <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-secondary rounded-pill px-4 py-2 shadow-sm">
+            <i class="fas fa-arrow-left me-2"></i> Back to Dashboard
+        </a>
+    </div>
+
+    <div class="row">
+        <!-- Search and Action Column -->
+        <div class="col-md-6">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-search me-2"></i>Find User</h5>
+                </div>
+                <div class="card-body">
+                    <form method="post" class="mb-4">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            {{ search_form.search_term.label_tag }}
+                            {{ search_form.search_term }}
+                        </div>
+                        <button type="submit" name="search_user" class="btn btn-primary w-100 rounded-pill">
+                            <i class="fas fa-search me-2"></i> Search
+                        </button>
+                    </form>
+
+                    {% if search_results %}
+                    <div class="list-group mb-3">
+                        {% for user in search_results %}
+                        <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-1">{{ user.get_full_name }}</h6>
+                                <small class="text-muted">{{ user.email }} | {{ user.get_user_type_display }}</small>
+                            </div>
+                            <form method="post" class="d-inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="search_user" value="1">
+                                <input type="hidden" name="search_term" value="{{ user.id }}">
+                                <button type="submit" class="btn btn-sm btn-outline-primary rounded-pill">Select</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    {% if found_user %}
+                    <div class="alert alert-info border-info shadow-sm">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h5 class="alert-heading"><i class="fas fa-user-check me-2"></i>User Selected</h5>
+                                <p class="mb-1"><strong>Name:</strong> {{ found_user.get_full_name }}</p>
+                                <p class="mb-1"><strong>Email:</strong> {{ found_user.email }}</p>
+                                <p class="mb-1"><strong>Type:</strong> {{ found_user.get_user_type_display }}</p>
+                                <p class="mb-0"><strong>Current Balance:</strong> ₦{{ found_user.wallet.balance|floatformat:2 }}</p>
+                            </div>
+                        </div>
+                        <hr>
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="target_user_id" value="{{ found_user.id }}">
+                            
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Action</label>
+                                <div class="d-flex gap-3">
+                                    {% for radio in action_form.action %}
+                                    <div class="form-check">
+                                        {{ radio.tag }}
+                                        <label class="form-check-label" for="{{ radio.id_for_label }}">
+                                            {{ radio.choice_label }}
+                                        </label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                {{ action_form.amount.label_tag }}
+                                <div class="input-group">
+                                    <span class="input-group-text">₦</span>
+                                    {{ action_form.amount }}
+                                </div>
+                                {% if action_form.amount.errors %}
+                                <div class="text-danger small mt-1">{{ action_form.amount.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+
+                            <div class="mb-3">
+                                {{ action_form.description.label_tag }}
+                                {{ action_form.description }}
+                                <div class="form-text">Provide a reason for this manual adjustment.</div>
+                            </div>
+
+                            <button type="submit" name="perform_action" class="btn btn-success w-100 rounded-pill py-2 fw-bold">
+                                <i class="fas fa-check-circle me-2"></i> Execute Transaction
+                            </button>
+                        </form>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Transactions Column -->
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0"><i class="fas fa-history me-2"></i>Recent Manual Actions</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Time</th>
+                                    <th>User</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for txn in recent_transactions %}
+                                <tr>
+                                    <td><small>{{ txn.timestamp|date:"M d, H:i" }}</small></td>
+                                    <td>
+                                        <div class="fw-bold small">{{ txn.user.get_full_name|default:txn.user.email|truncatechars:15 }}</div>
+                                        <div class="text-muted small" style="font-size: 0.75rem;">{{ txn.user.email|truncatechars:15 }}</div>
+                                    </td>
+                                    <td>
+                                        {% if txn.transaction_type == 'manual_credit' %}
+                                        <span class="badge bg-success">Credit</span>
+                                        {% else %}
+                                        <span class="badge bg-danger">Debit</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="fw-bold">₦{{ txn.amount|floatformat:2 }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">No recent manual transactions.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -35,7 +35,7 @@ from .forms import (
     AdminUserCreationForm, AdminUserChangeForm, WithdrawalActionForm,
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
-    CreditRequestForm, LoanSettlementForm
+    CreditRequestForm, LoanSettlementForm, AdminManualWalletForm
 )
 
 # Setup logger for this app
@@ -4333,6 +4333,105 @@ def webauthn_register_begin(request):
         return JsonResponse(dict(options.public_key), encoder=BytesEncoder)
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_manual_wallet_manager(request):
+    search_form = AccountUserSearchForm()
+    action_form = AdminManualWalletForm()
+    found_user = None
+    search_results = None
+
+    if request.method == 'POST':
+        if 'search_user' in request.POST:
+            search_form = AccountUserSearchForm(request.POST)
+            if search_form.is_valid():
+                search_term = search_form.cleaned_data['search_term']
+                # Search for any user except superuser
+                users = User.objects.filter(
+                    Q(email__icontains=search_term) | 
+                    Q(phone_number__icontains=search_term) |
+                    Q(first_name__icontains=search_term) |
+                    Q(last_name__icontains=search_term) |
+                    Q(username__icontains=search_term)
+                ).exclude(is_superuser=True)
+                
+                if search_term.isdigit():
+                     users = users | User.objects.filter(id=int(search_term))
+                
+                if users.count() == 1:
+                    found_user = users.first()
+                    messages.success(request, f"User found: {found_user.get_full_name()} ({found_user.email})")
+                elif users.count() > 1:
+                    search_results = users
+                    messages.warning(request, "Multiple users found. Please select one.")
+                else:
+                    messages.error(request, "No user found.")
+
+        elif 'perform_action' in request.POST:
+            action_form = AdminManualWalletForm(request.POST)
+            target_user_id = request.POST.get('target_user_id')
+            if target_user_id:
+                target_user = get_object_or_404(User, id=target_user_id)
+                
+                if target_user.is_superuser:
+                    messages.error(request, "Operation not allowed on superusers.")
+                    return redirect('betting_admin:admin_manual_wallet_manager')
+
+                if action_form.is_valid():
+                    action = action_form.cleaned_data['action']
+                    amount = action_form.cleaned_data['amount']
+                    description = action_form.cleaned_data['description']
+                    
+                    try:
+                        with db_transaction.atomic():
+                            target_wallet = Wallet.objects.select_for_update().get(user=target_user)
+                            
+                            if action == 'credit':
+                                target_wallet.balance += amount
+                                tx_type = 'manual_credit'
+                            elif action == 'debit':
+                                if target_wallet.balance < amount:
+                                    raise InvalidOperation("User has insufficient funds.")
+                                target_wallet.balance -= amount
+                                tx_type = 'manual_debit'
+
+                            target_wallet.save()
+                            
+                            Transaction.objects.create(
+                                user=target_user,
+                                initiating_user=request.user,
+                                transaction_type=tx_type,
+                                amount=amount,
+                                status='completed',
+                                is_successful=True,
+                                description=f"Admin Manual {action.title()}: {description}"
+                            )
+                            
+                            log_admin_activity(request, f"Manual {action} of {amount} for {target_user.email}. Reason: {description}")
+                            messages.success(request, f"Successfully {action}ed ₦{amount} for {target_user.email}.")
+                            return redirect('betting_admin:admin_manual_wallet_manager')
+                            
+                    except InvalidOperation as e:
+                        messages.error(request, str(e))
+                    except Exception as e:
+                        messages.error(request, f"An error occurred: {str(e)}")
+            else:
+                 messages.error(request, "Target user not specified.")
+
+    # Get recent manual transactions
+    recent_transactions = Transaction.objects.filter(
+        transaction_type__in=['manual_credit', 'manual_debit']
+    ).order_by('-timestamp')[:20]
+
+    context = {
+        'search_form': search_form,
+        'action_form': action_form,
+        'found_user': found_user,
+        'search_results': search_results,
+        'recent_transactions': recent_transactions,
+    }
+    return render(request, 'betting/admin/manual_wallet_manager.html', context)
 
 @login_required
 @require_POST

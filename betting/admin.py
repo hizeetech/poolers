@@ -97,6 +97,8 @@ class BettingAdminSite(admin.AdminSite):
             path('agent-payouts/', self.admin_view(views.manage_agent_payouts), name='manage_agent_payouts'),
             path('agent-payouts/settle/<int:payout_id>/', self.admin_view(views.mark_payout_settled), name='mark_payout_settled'),
 
+            path('manual-wallet/', self.admin_view(views.admin_manual_wallet_manager), name='admin_manual_wallet_manager'),
+
             path('reports/ticket/', self.admin_view(views.admin_ticket_report), name='admin_ticket_report'), 
             path('reports/ticket/<uuid:ticket_id>/', self.admin_view(views.admin_ticket_details), name='admin_ticket_details'), 
             path('reports/ticket/void/<uuid:ticket_id>/', self.admin_view(views.admin_void_ticket_single), name='admin_void_ticket_single'), 

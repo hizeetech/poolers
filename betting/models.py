@@ -902,36 +902,23 @@ def refund_stake_on_void(sender, instance, **kwargs):
         except BetTicket.DoesNotExist:
             pass
 
-def process_ticket_updates_thread(fixture_id):
-    """
-    Helper function to run ticket updates in a separate thread.
-    """
-    try:
-        # Re-fetch objects to ensure thread safety
-        fixture = Fixture.objects.get(id=fixture_id)
-        tickets = BetTicket.objects.filter(selections__fixture=fixture).distinct()
-        
-        for ticket in tickets:
-            try:
-                ticket.recalculate_ticket()
-                ticket.check_and_update_status()
-            except Exception as e:
-                print(f"Thread: Error updating ticket {ticket.id}: {e}")
-                
-    except Exception as e:
-        print(f"Thread: Critical error in process_ticket_updates_thread: {e}")
-
 @receiver(post_save, sender=Fixture)
 @receiver(post_save, sender=Result)
 def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     if not created:
         try:
-            # Run in a separate thread to prevent blocking the save response (fix for "rolling" issue)
-            t = threading.Thread(target=process_ticket_updates_thread, args=(instance.id,))
-            t.daemon = True
-            t.start()
+            # Import task locally to avoid circular import
+            from .tasks import recalculate_tickets_for_fixture
+            
+            # Offload heavy ticket recalculation to Celery
+            # This returns immediately, preventing admin save timeouts
+            recalculate_tickets_for_fixture.delay(instance.id)
+            
         except Exception as e:
-            print(f"Error initiating ticket update thread for fixture {instance.id}: {e}")
+            # Log the error but don't stop the save
+            print(f"Error initiating ticket update task for fixture {instance.id}: {e}")
+            import traceback
+            traceback.print_exc()
 
 class CreditRequest(models.Model):
     STATUS_CHOICES = (

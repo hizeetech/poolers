@@ -36,3 +36,36 @@ def update_started_fixtures_status():
         logger.info(f"Updated {updated_count} fixtures to 'live' status and deactivated them.")
     else:
         logger.debug("No started fixtures found to update.")
+
+@shared_task
+def recalculate_tickets_for_fixture(fixture_id):
+    """
+    Background task to recalculate all tickets associated with a changed fixture.
+    This prevents timeouts when saving results in the admin.
+    """
+    from .models import BetTicket  # Local import to avoid circular dependency
+    try:
+        # Get fixture - if it doesn't exist anymore, just return
+        try:
+            fixture = Fixture.objects.get(id=fixture_id)
+        except Fixture.DoesNotExist:
+            logger.warning(f"Fixture {fixture_id} not found during ticket recalculation task.")
+            return
+
+        tickets = BetTicket.objects.filter(selections__fixture=fixture).distinct()
+        count = tickets.count()
+        logger.info(f"Starting recalculation for {count} tickets for fixture {fixture}")
+
+        for ticket in tickets:
+            try:
+                # First, recalculate odds and potential winnings to handle void events
+                ticket.recalculate_ticket()
+                # Then, check if the ticket status should change (Won/Lost)
+                ticket.check_and_update_status()
+            except Exception as e:
+                logger.error(f"Error updating ticket {ticket.id}: {e}")
+        
+        logger.info(f"Completed recalculation for {count} tickets for fixture {fixture}")
+        
+    except Exception as e:
+        logger.error(f"Critical error in recalculate_tickets_for_fixture: {e}")

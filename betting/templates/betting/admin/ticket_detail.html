@@ -83,7 +83,7 @@
                         {% elif selection.is_winning_selection == True %}
                         <span class="badge bg-success">Yes</span> {% elif selection.is_winning_selection == False %}
                         <span class="badge bg-danger">No</span> {% else %}
-                            {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' %}
+                            {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' or selection.fixture.status == 'abandoned' or selection.fixture.status == 'no_result' %}
                             <span class="badge bg-secondary">Void</span>
                             {% else %}
                             <span class="badge bg-warning text-dark">Pending</span>

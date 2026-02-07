@@ -15,7 +15,9 @@
         </span>
     </td>
     <td>₦{{ t.stake_amount|floatformat:0 }}</td>
+    <td>{{ t.total_odd|floatformat:2 }}</td>
     <td>₦{{ t.potential_winning|floatformat:0 }}</td>
+    <td>₦{{ t.max_winning|sub:t.potential_winning|floatformat:0 }}</td>
     <td>₦{{ t.get_min_potential_winning|floatformat:0 }}</td>
     <td>₦{{ t.max_winning|floatformat:0 }}</td>
     <td>

@@ -11,6 +11,7 @@ from django.db.models import Q
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.db import transaction
+import threading
 
 
 class SiteConfiguration(models.Model):
@@ -274,9 +275,11 @@ class Fixture(models.Model):
         ('postponed', 'Postponed'),
         ('cancelled', 'Cancelled'),
         ('settled', 'Settled'),
+        ('abandoned', 'Abandoned'),
+        ('no_result', 'No Result'),
     )
     betting_period = models.ForeignKey(BettingPeriod, on_delete=models.CASCADE, related_name='fixtures')
-    serial_number = models.CharField(max_length=50)
+    serial_number = models.PositiveIntegerField()
     home_team = models.CharField(max_length=255)
     away_team = models.CharField(max_length=255)
     match_date = models.DateField()
@@ -416,6 +419,136 @@ class BetTicket(models.Model):
                 
         return (stake_per_line * min_line_odd).quantize(Decimal('0.01'))
 
+    def recalculate_ticket(self):
+        """
+        Recalculates ticket odds, winnings, and bonus based on valid (non-postponed) events.
+        """
+        from itertools import combinations
+        from django.apps import apps
+        BonusRule = apps.get_model('betting', 'BonusRule')
+        SystemSetting = apps.get_model('betting', 'SystemSetting')
+        ActivityLog = apps.get_model('betting', 'ActivityLog')
+        
+        # Define void statuses
+        void_statuses = ['postponed', 'cancelled', 'abandoned', 'no_result']
+        
+        # 1. Identify valid selections
+        all_selections = list(self.selections.select_related('fixture').all())
+        valid_selections = []
+        void_selections = []
+        
+        for selection in all_selections:
+            if selection.fixture.status in void_statuses:
+                void_selections.append(selection)
+            else:
+                valid_selections.append(selection)
+                
+        num_void = len(void_selections)
+        num_valid = len(valid_selections)
+        
+        # If all void, ticket is cancelled
+        if num_valid == 0:
+            if self.status != 'cancelled':
+                old_status = self.status
+                self.status = 'cancelled'
+                self.potential_winning = self.stake_amount 
+                self.max_winning = self.stake_amount
+                self.total_odd = Decimal('1.00')
+                self.save(update_fields=['status', 'potential_winning', 'max_winning', 'total_odd'])
+                
+                # Log cancellation
+                ActivityLog.objects.create(
+                    user=self.user,
+                    action_type='UPDATE',
+                    action=f"Ticket {self.ticket_id} cancelled (All events void)",
+                    affected_object=f"BetTicket: {self.ticket_id}"
+                )
+            return
+
+        # Capture old values for logging
+        old_potential = self.potential_winning
+        old_max = self.max_winning
+
+        # 2. Recalculate based on Ticket Type
+        if self.bet_type == 'system' and self.system_min_count:
+            # System Bet: Void selections are treated as 1.00 odd but remain in the combination
+            k = self.system_min_count
+            lines = list(combinations(all_selections, k))
+            num_lines = len(lines)
+            
+            if num_lines > 0:
+                stake_per_line = self.stake_amount / Decimal(num_lines)
+                max_winning = Decimal('0.00')
+                
+                for line in lines:
+                    line_odd = Decimal('1.00')
+                    for sel in line:
+                        if sel.fixture.status in void_statuses:
+                            line_odd *= Decimal('1.00')
+                        else:
+                            line_odd *= sel.odd_selected
+                    max_winning += (stake_per_line * line_odd)
+                
+                self.potential_winning = max_winning.quantize(Decimal('0.01'))
+                self.total_odd = Decimal('0.00') # Not applicable for system
+            else:
+                self.potential_winning = Decimal('0.00')
+
+        else: # Single or Multiple
+            new_total_odd = Decimal('1.00')
+            for sel in all_selections:
+                if sel.fixture.status in void_statuses:
+                    new_total_odd *= Decimal('1.00')
+                else:
+                    new_total_odd *= sel.odd_selected
+            
+            self.total_odd = new_total_odd.quantize(Decimal('0.01'))
+            self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
+
+        # 3. Bonus Calculation
+        # Rule: If > 3 postponed events, Bonus = 0
+        bonus_amount = Decimal('0.00')
+        
+        if self.bet_type != 'system':
+             if num_void > 3:
+                 bonus_amount = Decimal('0.00')
+             else:
+                rules = BonusRule.objects.all().order_by('-min_selections')
+                applicable_rule = None
+                odds = [s.odd_selected for s in valid_selections]
+                
+                for rule in rules:
+                    qualifying_count = sum(1 for odd in odds if odd >= rule.min_odd_per_selection)
+                    if qualifying_count >= rule.min_selections:
+                        applicable_rule = rule
+                        break
+                
+                if applicable_rule:
+                    bonus_amount = (self.potential_winning * applicable_rule.bonus_percentage).quantize(Decimal('0.01'))
+        
+        # 4. Finalize Max Winning
+        self.max_winning = self.potential_winning + bonus_amount
+        
+        # Check Global Max Winning Limit
+        max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
+        if max_winning_setting and max_winning_setting.value:
+            try:
+                limit = Decimal(max_winning_setting.value)
+                self.max_winning = min(self.max_winning, limit)
+            except:
+                pass
+        
+        self.save()
+        
+        # Log if values changed
+        if old_potential != self.potential_winning or old_max != self.max_winning:
+            ActivityLog.objects.create(
+                user=self.user,
+                action_type='RECALCULATION',
+                action=f"Ticket {self.ticket_id} recalculated. Void: {num_void}. Potential: {old_potential}->{self.potential_winning}. Max: {old_max}->{self.max_winning}",
+                affected_object=f"BetTicket: {self.ticket_id}"
+            )
+
     def has_computed_results(self):
         return self.selections.filter(fixture__status__in=['finished', 'settled']).exists()
 
@@ -427,25 +560,22 @@ class BetTicket(models.Model):
             for selection in self.selections.all():
                 fixture = selection.fixture
                 
-                # Check for cancelled fixture
-                if fixture.status == 'cancelled':
-                    self.status = 'cancelled'
-                    self.save()
-                    return # Exit immediately
+                # Treat cancelled, postponed, abandoned, no_result as void (finalized)
+                void_statuses = ['cancelled', 'postponed', 'abandoned', 'no_result']
+                
+                if fixture.status in void_statuses:
+                    # Mark as void (None)
+                    selection.is_winning_selection = None
+                    selection.save()
+                    continue # It is considered "settled" for the purpose of ticket resolution
 
-                if fixture.status != 'settled':
+                if fixture.status not in ['settled', 'finished']:
                     all_fixtures_settled = False
                 
                 # Determine winning status if scores are available
                 is_winning_selection = False
                 total_goals = (fixture.home_score + fixture.away_score) if (fixture.home_score is not None and fixture.away_score is not None) else None
 
-                # Logic to determine if selection is winning...
-                # Note: This logic assumes scores are final if we are checking. 
-                # Ideally we only check if fixture.status is 'settled' or 'finished'.
-                # But to be 'instant', we might check even if 'live' or just 'finished' before 'settled'.
-                # For safety, let's rely on scores being present.
-                
                 # Only update selection status if the fixture is finished or settled
                 if fixture.status in ['finished', 'settled'] and fixture.home_score is not None and fixture.away_score is not None:
                      if selection.bet_type == 'home_win':
@@ -555,8 +685,44 @@ class BetTicket(models.Model):
 
                 if ticket_won:
                     self.status = 'won'
-                    self.potential_winning = (self.stake_amount * total_odd_settled).quantize(Decimal('0.01'))
-                    self.max_winning = self.potential_winning
+                    
+                    # Update totals based on settled results (handling DNB/Voids)
+                    self.total_odd = total_odd_settled.quantize(Decimal('0.01'))
+                    self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
+                    
+                    # Re-calculate bonus based on final settled results
+                    from django.apps import apps
+                    BonusRule = apps.get_model('betting', 'BonusRule')
+                    SystemSetting = apps.get_model('betting', 'SystemSetting')
+                    
+                    void_count = 0
+                    winning_odds = []
+                    
+                    for selection in self.selections.all():
+                        if selection.is_winning_selection is None:
+                            void_count += 1
+                        elif selection.is_winning_selection is True:
+                            winning_odds.append(selection.odd_selected)
+                            
+                    bonus_amount = Decimal('0.00')
+                    if void_count <= 3:
+                        rules = BonusRule.objects.all().order_by('-min_selections')
+                        for rule in rules:
+                            qualifying_count = sum(1 for odd in winning_odds if odd >= rule.min_odd_per_selection)
+                            if qualifying_count >= rule.min_selections:
+                                bonus_amount = (self.potential_winning * rule.bonus_percentage).quantize(Decimal('0.01'))
+                                break
+                                
+                    self.max_winning = self.potential_winning + bonus_amount
+                    
+                    # Global Max Winning Limit
+                    max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
+                    if max_winning_setting and max_winning_setting.value:
+                        try:
+                            limit = Decimal(max_winning_setting.value)
+                            self.max_winning = min(self.max_winning, limit)
+                        except:
+                            pass
                 else:
                     self.status = 'lost'
                     self.potential_winning = Decimal('0.00')
@@ -736,15 +902,36 @@ def refund_stake_on_void(sender, instance, **kwargs):
         except BetTicket.DoesNotExist:
             pass
 
+def process_ticket_updates_thread(fixture_id):
+    """
+    Helper function to run ticket updates in a separate thread.
+    """
+    try:
+        # Re-fetch objects to ensure thread safety
+        fixture = Fixture.objects.get(id=fixture_id)
+        tickets = BetTicket.objects.filter(selections__fixture=fixture).distinct()
+        
+        for ticket in tickets:
+            try:
+                ticket.recalculate_ticket()
+                ticket.check_and_update_status()
+            except Exception as e:
+                print(f"Thread: Error updating ticket {ticket.id}: {e}")
+                
+    except Exception as e:
+        print(f"Thread: Critical error in process_ticket_updates_thread: {e}")
+
 @receiver(post_save, sender=Fixture)
 @receiver(post_save, sender=Result)
 def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     if not created:
-
-        tickets = BetTicket.objects.filter(selections__fixture=instance).distinct()
-        
-        for ticket in tickets:
-            ticket.check_and_update_status()
+        try:
+            # Run in a separate thread to prevent blocking the save response (fix for "rolling" issue)
+            t = threading.Thread(target=process_ticket_updates_thread, args=(instance.id,))
+            t.daemon = True
+            t.start()
+        except Exception as e:
+            print(f"Error initiating ticket update thread for fixture {instance.id}: {e}")
 
 class CreditRequest(models.Model):
     STATUS_CHOICES = (

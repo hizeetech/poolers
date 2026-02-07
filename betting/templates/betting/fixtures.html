@@ -134,6 +134,7 @@
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
     const canPlaceBet = {{ can_place_bet|yesno:'true,false' }};
+    const bonusRules = {{ bonus_rules_json|safe }}; // Injected from backend
     // Global array to store selected bets
     let selectedBets = [];
     const totalStakeInput = document.getElementById('total_stake_input');
@@ -367,12 +368,27 @@
     function calculateBonusAndMaxWinning(potential, isSystemBet, minWin) {
         let bonus = 0;
         
-        if (!isSystemBet) {
-            if (selectedBets.length >= 5) {
-                bonus = potential * 0.10; 
-            } else if (selectedBets.length >= 3) {
-                bonus = potential * 0.05; 
-            }
+        if (!isSystemBet && typeof bonusRules !== 'undefined' && bonusRules.length > 0) {
+             // Iterate through rules to find the best match (highest bonus)
+             // Rules are sorted by min_selections ASC from backend. 
+             // We want the rule with the highest min_selections that fits.
+             
+             // Extract odds from selectedBets for validation
+             const odds = selectedBets.map(bet => parseFloat(bet.odd) || 0);
+             
+             for (let i = bonusRules.length - 1; i >= 0; i--) {
+                 const rule = bonusRules[i];
+                 
+                 // Check how many selections meet the min_odd requirement
+                 const qualifyingCount = odds.reduce((count, odd) => {
+                     return (odd >= rule.min_odd) ? count + 1 : count;
+                 }, 0);
+                 
+                 if (qualifyingCount >= rule.min_selections) {
+                     bonus = potential * rule.bonus_percentage;
+                     break; // Stop at the highest applicable rule
+                 }
+             }
         }
 
         bonusAmountSpan.textContent = `₦${bonus.toFixed(2)}`;

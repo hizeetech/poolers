@@ -207,23 +207,70 @@ def _get_fixtures_data(period_id=None):
 
     # Filter out fixtures that are not active or have invalid status
     if fixtures.exists():
-        fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled'])
+        fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled', 'postponed'])
 
         # Filter out fixtures that have already started (Date/Time check)
-        # We compare against local time because match_date/time are typically stored as wall-clock time
-        local_now = timezone.localtime(timezone.now())
-        fixtures = fixtures.filter(
-            Q(match_date__gt=local_now.date()) | 
-            Q(match_date=local_now.date(), match_time__gt=local_now.time())
-        )
+    # We compare against local time because match_date/time are typically stored as wall-clock time
+    local_now = timezone.localtime(timezone.now())
+    fixtures = fixtures.filter(
+       Q(match_date__gt=local_now.date()) | 
+       Q(match_date=local_now.date(), match_time__gt=local_now.time())
+    )
         
     return fixtures, current_betting_period
+
+def calculate_bonus_amount(potential_winning, selections, is_system_bet=False):
+    """
+    Calculates bonus based on active BonusRules.
+    selections: list of dicts with 'odd' key or objects with 'odd_selected' attribute.
+    """
+    if is_system_bet:
+        return Decimal('0.00')
+
+    # Fetch active rules sorted by min_selections desc (highest requirement first)
+    rules = BonusRule.objects.all().order_by('-min_selections')
+    
+    applicable_rule = None
+    
+    # Extract odds list
+    odds = []
+    for s in selections:
+        if isinstance(s, dict):
+            odds.append(s.get('odd', Decimal('0.00')))
+        elif hasattr(s, 'odd_selected'):
+             odds.append(s.odd_selected)
+        else:
+            # Fallback
+            odds.append(Decimal('0.00'))
+
+    for rule in rules:
+        # Check if enough selections meet the min_odd criteria
+        qualifying_count = sum(1 for odd in odds if odd >= rule.min_odd_per_selection)
+        
+        if qualifying_count >= rule.min_selections:
+            applicable_rule = rule
+            break
+    
+    if applicable_rule:
+        return (potential_winning * applicable_rule.bonus_percentage).quantize(Decimal('0.01'))
+    
+    return Decimal('0.00')
 
 def fixtures_view(request, period_id=None):
     fixtures, current_betting_period = _get_fixtures_data(period_id)
 
     all_periods = BettingPeriod.objects.all().order_by('-start_date')
     active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
+
+    # Serialize Bonus Rules for Frontend
+    bonus_rules = BonusRule.objects.all().order_by('min_selections')
+    bonus_rules_data = []
+    for rule in bonus_rules:
+        bonus_rules_data.append({
+            'min_selections': rule.min_selections,
+            'bonus_percentage': float(rule.bonus_percentage),
+            'min_odd': float(rule.min_odd_per_selection)
+        })
 
     context = {
         'fixtures': fixtures,
@@ -232,6 +279,7 @@ def fixtures_view(request, period_id=None):
         'active_periods': active_periods,
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
         'can_place_bet': is_cashier(request.user),
+        'bonus_rules_json': json.dumps(bonus_rules_data),
     }
     return render(request, 'betting/fixtures.html', context)
 
@@ -293,6 +341,12 @@ def place_bet(request):
                         # Validate fixture status
                         if fixture.status != 'scheduled': # Assuming 'scheduled' is the status for open matches
                             return JsonResponse({'success': False, 'message': f'Betting closed for {fixture.home_team} vs {fixture.away_team}'})
+                        
+                        # Validate match time (Strict Date/Time Enforcement)
+                        local_now = timezone.localtime(timezone.now())
+                        if fixture.match_date < local_now.date() or (fixture.match_date == local_now.date() and fixture.match_time <= local_now.time()):
+                             return JsonResponse({'success': False, 'message': f'Betting closed for {fixture.home_team} vs {fixture.away_team} (Match Started)'})
+
                         if not fixture.betting_period.is_active:
                                 return JsonResponse({'success': False, 'message': f'Betting period closed for {fixture.home_team} vs {fixture.away_team}'})
                         
@@ -387,7 +441,10 @@ def place_bet(request):
                         for sel in valid_selections:
                             total_ticket_odd *= sel['odd']
                         potential_win = (stake_amount_per_line * total_ticket_odd).quantize(Decimal('0.01'))
-                        max_winning = potential_win
+                        
+                        # Calculate Bonus
+                        bonus_amount = calculate_bonus_amount(potential_win, valid_selections, is_system_bet=False)
+                        max_winning = potential_win + bonus_amount
 
                     # Create Single BetTicket
                     bet_ticket = BetTicket.objects.create(
@@ -458,6 +515,12 @@ def place_bet(request):
                     # Ensure the betting period is active
                     if not fixture.betting_period.is_active or fixture.betting_period.end_date < timezone.now().date():
                         messages.error(request, 'The betting period for this fixture is closed.')
+                        return redirect('betting:fixtures')
+
+                    # Validate match time (Strict Date/Time Enforcement)
+                    local_now = timezone.localtime(timezone.now())
+                    if fixture.match_date < local_now.date() or (fixture.match_date == local_now.date() and fixture.match_time <= local_now.time()):
+                        messages.error(request, 'Betting is closed for this fixture (Match Started).')
                         return redirect('betting:fixtures')
 
                     # Get the correct odd based on selected_outcome

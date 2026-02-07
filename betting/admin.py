@@ -760,6 +760,8 @@ class ResultAdmin(admin.ModelAdmin):
     
     def get_queryset(self, request):
         qs = super().get_queryset(request)
+        # Only show fixtures from active betting periods, similar to FixtureAdmin
+        qs = qs.filter(betting_period__is_active=True)
         return qs.order_by('serial_number')
 
     def serial_number_display(self, obj):

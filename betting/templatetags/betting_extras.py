@@ -32,3 +32,10 @@ def status_color_class(status):
     elif status == 'deleted':
         return 'text-dark'
     return 'text-body'
+
+@register.filter
+def sub(value, arg):
+    try:
+        return float(value) - float(arg)
+    except (ValueError, TypeError):
+        return 0.0

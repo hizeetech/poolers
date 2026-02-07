@@ -124,7 +124,7 @@
                                 {% elif selection.is_winning_selection is False %}
                                     <span class="badge bg-danger ms-2">LOSE</span> 
                                 {% else %}
-                                    {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' %}
+                                    {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' or selection.fixture.status == 'abandoned' or selection.fixture.status == 'no_result' %}
                                         <span class="badge bg-secondary ms-2">VOID</span>
                                     {% else %}
                                         <span class="badge bg-warning text-dark ms-2">PENDING</span> 
@@ -213,9 +213,11 @@
                                         <th>Sel.</th>
                                         <th>Status</th>
                                         <th>Stake</th>
+                                        <th>Odds</th>
                                         <th>Pot. Win</th>
-                                        <th>Min Win</th>
-                                        <th>Max Win</th>
+                                        <th>Bonus</th>
+                                        <th>Min Pot. Win</th>
+                                        <th>Max Pot. Win</th>
                                         <th>Won Amt</th>
                                         <th>Settled At</th>
                                         <th>User</th>

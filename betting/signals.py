@@ -3,7 +3,7 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
-from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal
+from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture
 from .middleware import get_current_user, get_current_request
 from .utils import get_ip_details, get_client_ip, log_debug
 import threading
@@ -201,3 +201,5 @@ def log_withdrawal(sender, instance, created, **kwargs):
 def create_user_wallet(sender, instance, created, **kwargs):
     if created:
         Wallet.objects.get_or_create(user=instance)
+
+

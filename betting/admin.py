@@ -753,21 +753,19 @@ class FixtureAdmin(admin.ModelAdmin):
 
 # --- Result Admin ---
 class ResultAdmin(admin.ModelAdmin):
-    list_display = ('serial_number_display', 'home_team', 'away_team', 'match_date', 'home_score', 'away_score', 'status')
+    list_display = ('serial_number_display', 'home_team', 'away_team', 'match_date', 'match_time', 'home_score', 'away_score', 'status')
     list_editable = ('home_score', 'away_score', 'status')
     list_filter = ('status', 'match_date', 'betting_period')
     search_fields = ('home_team', 'away_team', 'serial_number')
     
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.annotate(
-            serial_int=Cast('serial_number', IntegerField())
-        ).order_by('serial_int')
+        return qs.order_by('serial_number')
 
     def serial_number_display(self, obj):
         return obj.serial_number
     serial_number_display.short_description = 'Serial Number'
-    serial_number_display.admin_order_field = 'serial_int'
+    serial_number_display.admin_order_field = 'serial_number'
 
 
 # --- Wallet Admin ---

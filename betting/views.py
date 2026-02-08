@@ -20,6 +20,9 @@ import uuid # For UUIDField
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.urls import reverse # Import reverse for dynamic URL lookup
 from django.contrib.auth import authenticate, login, logout # Ensure these are imported
+from django_ratelimit.decorators import ratelimit
+from django.core.cache import cache
+import hashlib
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
@@ -107,6 +110,7 @@ def register_user(request):
     return render(request, 'betting/register.html', {'form': form})
 
 
+@ratelimit(key='ip', rate='5/m', method='POST', block=True)
 def user_login(request):
     logger.debug("Entering user_login view.")
     if request.method == 'POST':
@@ -297,6 +301,7 @@ def fixtures_list_partial(request, period_id=None):
 
 
 @login_required
+@ratelimit(key='user', rate='10/m', method='POST', block=True)
 @db_transaction.atomic
 def place_bet(request):
     try:
@@ -324,6 +329,24 @@ def place_bet(request):
 
                     if not selections_data:
                         return JsonResponse({'success': False, 'message': 'No bets selected.'})
+
+                    # --- IDEMPOTENCY CHECK ---
+                    # Create a unique hash for this bet request to prevent double submission
+                    try:
+                        # Ensure stable sorting for JSON hash
+                        idempotency_payload = f"bet-{request.user.id}-{json.dumps(selections_data, sort_keys=True)}-{stake_amount_str}-{is_system_bet}-{permutation_count}"
+                        idempotency_key = hashlib.sha256(idempotency_payload.encode('utf-8')).hexdigest()
+                        
+                        if cache.get(idempotency_key):
+                            logger.warning(f"Duplicate bet placement blocked for user {request.user.id}")
+                            return JsonResponse({'success': False, 'message': 'Duplicate bet detected. Please wait a moment.'})
+                        
+                        # Lock for 30 seconds
+                        cache.set(idempotency_key, True, timeout=30)
+                    except Exception as e:
+                        logger.error(f"Idempotency check error: {e}")
+                        # Continue if check fails, don't block user
+                    # -------------------------
 
                     # Basic Validation of selections
                     valid_selections = []

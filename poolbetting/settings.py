@@ -92,6 +92,7 @@ INSTALLED_APPS = [
     'pending_registration.apps.PendingRegistrationConfig',
     'django_celery_results',
     'django_celery_beat',
+    'axes',
 ]
 
 MIDDLEWARE = [
@@ -102,9 +103,18 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'csp.middleware.CSPMiddleware',
+    'axes.middleware.AxesMiddleware',
     'betting.middleware.ImpersonationMiddleware',
     'betting.middleware.ThreadLocalMiddleware',
     'uip.middleware.UIPSecurityMiddleware',
+]
+
+AUTHENTICATION_BACKENDS = [
+    # AxesStandaloneBackend should be the first backend
+    'axes.backends.AxesStandaloneBackend',
+    # Django ModelBackend is the default authentication backend
+    'django.contrib.auth.backends.ModelBackend',
 ]
 
 ROOT_URLCONF = 'poolbetting.urls'
@@ -273,7 +283,8 @@ FLUTTERWAVE_ENCRYPTION_KEY = os.getenv('FLUTTERWAVE_ENCRYPTION_KEY')
 
 
 
-# ... (rest of your settings) ...
+# Rest of settings continued
+
 
 LOGGING = {
     'version': 1,
@@ -323,7 +334,66 @@ LOGGING = {
     },
 }
 
-# ... (rest of your settings) ...
+# Rest of settings continued
+
 
 WEBAUTHN_RP_ID = 'localhost'
 WEBAUTHN_RP_NAME = 'Pool Betting'
+
+# --- SECURITY HARDENING CONFIGURATION ---
+
+# 1. SSL/HTTPS Security
+# Ensure these are True in Production (Env var control recommended)
+SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False') == 'True'
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'False') == 'True'
+CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'False') == 'True'
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', 31536000)) # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_BROWSER_XSS_FILTER = True
+
+# 2. Content Security Policy (CSP)
+# Start with a permissive policy and tighten it. 
+# Report-only mode is useful for testing: CSP_REPORT_ONLY = True
+CSP_DEFAULT_SRC = ("'self'",)
+CSP_SCRIPT_SRC = (
+    "'self'", 
+    "'unsafe-inline'", # Required for some inline JS, try to remove later
+    "'unsafe-eval'",   # Often needed for Select2 or some heavy JS libs, try to remove
+    "https://cdnjs.cloudflare.com", 
+    "https://code.jquery.com",
+    "https://cdn.jsdelivr.net",
+    "https://kit.fontawesome.com",
+    "https://js.paystack.co",
+    "https://checkout.flutterwave.com"
+)
+CSP_STYLE_SRC = (
+    "'self'", 
+    "'unsafe-inline'", 
+    "https://cdnjs.cloudflare.com",
+    "https://fonts.googleapis.com",
+    "https://cdn.jsdelivr.net"
+)
+CSP_FONT_SRC = (
+    "'self'", 
+    "https://fonts.gstatic.com", 
+    "https://cdnjs.cloudflare.com",
+    "data:"
+)
+CSP_IMG_SRC = ("'self'", "data:", "https://*") # Allow images from anywhere for now (e.g. user uploads, external logos)
+CSP_CONNECT_SRC = (
+    "'self'", 
+    "ws://localhost:8000", 
+    "wss://rhonextec.website", 
+    "https://rhonextec.website"
+)
+
+# 3. Axes (Brute Force Protection)
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = 1 # 1 hour
+AXES_RESET_ON_SUCCESS = True
+AXES_LOCKOUT_TEMPLATE = 'betting/lockout.html' # You need to create this template
+
+# 4. Rate Limiting Defaults (django-ratelimit)
+# No global setting, applied per-view decorators.

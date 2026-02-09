@@ -333,6 +333,7 @@ def place_bet(request):
 
                     # --- IDEMPOTENCY CHECK ---
                     # Create a unique hash for this bet request to prevent double submission
+                    idempotency_key = None
                     try:
                         # Ensure stable sorting for JSON hash
                         idempotency_payload = f"bet-{request.user.id}-{json.dumps(selections_data, sort_keys=True)}-{stake_amount_str}-{is_system_bet}-{permutation_count}"
@@ -346,8 +347,15 @@ def place_bet(request):
                         cache.set(idempotency_key, True, timeout=30)
                     except Exception as e:
                         logger.error(f"Idempotency check error: {e}")
+                        idempotency_key = None # Ensure it's None if check failed
                         # Continue if check fails, don't block user
                     # -------------------------
+
+                    # Helper to clear lock on failure
+                    def fail_response(message):
+                        if idempotency_key:
+                            cache.delete(idempotency_key)
+                        return JsonResponse({'success': False, 'message': message})
 
                     # Basic Validation of selections
                     valid_selections = []
@@ -355,29 +363,29 @@ def place_bet(request):
                         # Support both camelCase (legacy/API) and snake_case (frontend) keys
                         fixture_id = sel.get('fixtureId') or sel.get('fixture_id')
                         if not fixture_id:
-                            return JsonResponse({'success': False, 'message': 'Missing fixture ID.'})
+                            return fail_response('Missing fixture ID.')
 
                         try:
                             fixture = Fixture.objects.get(id=fixture_id)
                         except Fixture.DoesNotExist:
-                            return JsonResponse({'success': False, 'message': 'Fixture not found.'})
+                            return fail_response('Fixture not found.')
 
                         # Validate fixture status
                         if fixture.status != 'scheduled': # Assuming 'scheduled' is the status for open matches
-                            return JsonResponse({'success': False, 'message': f'Betting closed for {fixture.home_team} vs {fixture.away_team}'})
+                            return fail_response(f'Betting closed for {fixture.home_team} vs {fixture.away_team}')
                         
                         # Validate match time (Strict Date/Time Enforcement)
                         local_now = timezone.localtime(timezone.now())
                         if fixture.match_date < local_now.date() or (fixture.match_date == local_now.date() and fixture.match_time <= local_now.time()):
-                             return JsonResponse({'success': False, 'message': f'Betting closed for {fixture.home_team} vs {fixture.away_team} (Match Started)'})
+                             return fail_response(f'Betting closed for {fixture.home_team} vs {fixture.away_team} (Match Started)')
 
                         if not fixture.betting_period.is_active:
-                                return JsonResponse({'success': False, 'message': f'Betting period closed for {fixture.home_team} vs {fixture.away_team}'})
+                                return fail_response(f'Betting period closed for {fixture.home_team} vs {fixture.away_team}')
                         
                         # Validate odds and outcome
                         outcome = sel.get('outcome') or sel.get('bet_type')
                         if not outcome:
-                            return JsonResponse({'success': False, 'message': 'Missing bet outcome.'})
+                            return fail_response('Missing bet outcome.')
 
                         # Normalize outcome keys (frontend vs backend mismatch)
                         outcome_map = {
@@ -407,7 +415,7 @@ def place_bet(request):
                         elif outcome == 'btts_yes': odd = fixture.btts_yes_odd
                         elif outcome == 'btts_no': odd = fixture.btts_no_odd
                         else:
-                            return JsonResponse({'success': False, 'message': f'Invalid outcome for {fixture.home_team} vs {fixture.away_team}'})
+                            return fail_response(f'Invalid outcome for {fixture.home_team} vs {fixture.away_team}')
 
                         valid_selections.append({
                             'fixture': fixture,
@@ -420,11 +428,11 @@ def place_bet(request):
                     if config:
                         num_selections = len(valid_selections)
                         if num_selections == 1 and not config.allow_single_bet:
-                            return JsonResponse({'success': False, 'message': 'Single bets are currently disabled. Please add more selections.'})
+                            return fail_response('Single bets are currently disabled. Please add more selections.')
                         elif num_selections == 2 and not config.allow_double_bet:
-                            return JsonResponse({'success': False, 'message': 'Double bets are currently disabled. Please add more selections.'})
+                            return fail_response('Double bets are currently disabled. Please add more selections.')
                         elif num_selections >= 3 and not config.allow_multiple_bet:
-                            return JsonResponse({'success': False, 'message': 'Multiple bets are currently disabled.'})
+                            return fail_response('Multiple bets are currently disabled.')
                     # ---------------------------------
 
                     # Calculate Total Stake and Combinations
@@ -432,7 +440,7 @@ def place_bet(request):
                     if is_system_bet and len(valid_selections) >= 3:
                         # System Bet Logic
                         if permutation_count < 2 or permutation_count > len(valid_selections):
-                                return JsonResponse({'success': False, 'message': 'Invalid permutation count.'})
+                                return fail_response('Invalid permutation count.')
                         
                         combinations = list(itertools.combinations(valid_selections, permutation_count))
                         num_lines = len(combinations)
@@ -452,10 +460,10 @@ def place_bet(request):
                     try:
                         user_wallet = Wallet.objects.select_for_update().get(user=request.user)
                     except Wallet.DoesNotExist:
-                        return JsonResponse({'success': False, 'message': 'User wallet not found.'})
+                        return fail_response('User wallet not found.')
 
                     if user_wallet.balance < total_stake:
-                        return JsonResponse({'success': False, 'message': f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}'})
+                        return fail_response(f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}')
 
                     # Deduct Balance
                     user_wallet.balance -= total_stake
@@ -530,6 +538,8 @@ def place_bet(request):
                 except Exception as e:
                     logger.error(f"Error placing bet: {e}")
                     traceback.print_exc()
+                    if idempotency_key:
+                        cache.delete(idempotency_key)
                     return JsonResponse({'success': False, 'message': f'An error occurred: {str(e)}'})
 
             # Fallback to old single bet form logic

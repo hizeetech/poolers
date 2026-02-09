@@ -29,6 +29,24 @@ class SiteConfiguration(models.Model):
     navbar_link_hover_color = models.CharField(max_length=50, default="#007bff", help_text="Color of nav links on hover")
     landing_page_background = models.ImageField(upload_to='site_branding/', blank=True, null=True, help_text="Background image for the landing page")
     
+    # Commission Settings
+    account_user_commission_authority = models.BooleanField(
+        default=False, 
+        help_text='Enable or disable Account User commission authority.'
+    )
+    
+    PAYMENT_SOURCE_CHOICES = [
+        ('system', 'System Default (Super Admin Wallet)'), 
+        ('account_wallet', 'Account User Wallet'), 
+        ('manual', 'Manual Selection Per Payout')
+    ]
+    commission_payment_source = models.CharField(
+        max_length=20, 
+        choices=PAYMENT_SOURCE_CHOICES, 
+        default='system', 
+        help_text='Select the funding source for commission payments.'
+    )
+    
     def save(self, *args, **kwargs):
         self.pk = 1
         super(SiteConfiguration, self).save(*args, **kwargs)

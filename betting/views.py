@@ -27,7 +27,8 @@ import hashlib
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
-    CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal
+    CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
+    SiteConfiguration
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration

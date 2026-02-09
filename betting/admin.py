@@ -950,6 +950,9 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('General Settings', {
             'fields': ('site_name', 'logo', 'favicon', 'landing_page_background')
         }),
+        ('Commission Settings', {
+            'fields': ('commission_payment_source', 'account_user_commission_authority')
+        }),
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
         }),

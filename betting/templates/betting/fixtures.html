@@ -135,6 +135,12 @@
 <script>
     const canPlaceBet = {{ can_place_bet|yesno:'true,false' }};
     const bonusRules = {{ bonus_rules_json|safe }}; // Injected from backend
+    
+    // Bet Permission Settings
+    const allowSingleBet = {{ site_config.allow_single_bet|yesno:'true,false' }};
+    const allowDoubleBet = {{ site_config.allow_double_bet|yesno:'true,false' }};
+    const allowMultipleBet = {{ site_config.allow_multiple_bet|yesno:'true,false' }};
+    
     // Global array to store selected bets
     let selectedBets = [];
     const totalStakeInput = document.getElementById('total_stake_input');
@@ -574,6 +580,47 @@
                 placeBetBtn.disabled = false;
                 return;
             }
+
+            // Bet Permission Validation
+            const numSelections = selectedBets.length;
+            if (numSelections === 1 && !allowSingleBet) {
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Single Bet Disabled',
+                        text: 'Single bets are currently disabled. Please add more selections.',
+                    });
+                } else {
+                    displayMessage('Single bets are currently disabled. Please add more selections.', 'warning');
+                }
+                placeBetBtn.disabled = false;
+                return;
+            } else if (numSelections === 2 && !allowDoubleBet) {
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Double Bet Disabled',
+                        text: 'Double bets are currently disabled. Please add more selections.',
+                    });
+                } else {
+                    displayMessage('Double bets are currently disabled. Please add more selections.', 'warning');
+                }
+                placeBetBtn.disabled = false;
+                return;
+            } else if (numSelections >= 3 && !allowMultipleBet) {
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Multiple Bet Disabled',
+                        text: 'Multiple bets are currently disabled.',
+                    });
+                } else {
+                    displayMessage('Multiple bets are currently disabled.', 'warning');
+                }
+                placeBetBtn.disabled = false;
+                return;
+            }
+
             if (!totalStake || parseFloat(totalStake) <= 0) {
                 displayMessage('Error: Please enter a valid stake amount.', 'danger');
                 placeBetBtn.disabled = false;

@@ -414,6 +414,18 @@ def place_bet(request):
                             'odd': odd
                         })
 
+                    # --- Bet Permission Validation ---
+                    config = SiteConfiguration.objects.first()
+                    if config:
+                        num_selections = len(valid_selections)
+                        if num_selections == 1 and not config.allow_single_bet:
+                            return JsonResponse({'success': False, 'message': 'Single bets are currently disabled. Please add more selections.'})
+                        elif num_selections == 2 and not config.allow_double_bet:
+                            return JsonResponse({'success': False, 'message': 'Double bets are currently disabled. Please add more selections.'})
+                        elif num_selections >= 3 and not config.allow_multiple_bet:
+                            return JsonResponse({'success': False, 'message': 'Multiple bets are currently disabled.'})
+                    # ---------------------------------
+
                     # Calculate Total Stake and Combinations
                     
                     if is_system_bet and len(valid_selections) >= 3:

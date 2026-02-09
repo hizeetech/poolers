@@ -46,6 +46,20 @@ class SiteConfiguration(models.Model):
         default='system', 
         help_text='Select the funding source for commission payments.'
     )
+
+    # Bet Permission Settings
+    allow_single_bet = models.BooleanField(
+        default=True,
+        help_text='Allow users to place single bets (1 selection).'
+    )
+    allow_double_bet = models.BooleanField(
+        default=True,
+        help_text='Allow users to place double bets (2 selections).'
+    )
+    allow_multiple_bet = models.BooleanField(
+        default=True,
+        help_text='Allow users to place multiple bets (3 or more selections).'
+    )
     
     def save(self, *args, **kwargs):
         self.pk = 1

@@ -953,6 +953,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('Commission Settings', {
             'fields': ('commission_payment_source', 'account_user_commission_authority')
         }),
+        ('Bet Permission Settings', {
+            'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),
+            'description': 'Configure which types of bets are allowed based on the number of selections.'
+        }),
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
         }),

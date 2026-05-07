@@ -121,7 +121,7 @@
                         </div>
                         <div class="mb-3">
                             <label for="id_account_name" class="form-label">Account Name</label>
-                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.get_full_name }}" readonly required>
+                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.withdrawal_account_name }}" readonly required>
                         </div>
                         <div class="mb-3">
                             <label for="id_account_number" class="form-label">Account Number</label>

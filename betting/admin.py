@@ -222,7 +222,7 @@ class CustomUserAdmin(UserAdmin):
 
     fieldsets = (
         (None, {'fields': ('email', 'username', 'password')}),
-        ('Personal info', {'fields': ('first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address')}),
+        ('Personal info', {'fields': ('first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 'groups', 'user_permissions', 'user_type')}),
         ('Hierarchy', {'fields': ('master_agent', 'super_agent', 'agent', 'cashier_prefix')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
@@ -235,7 +235,7 @@ class CustomUserAdmin(UserAdmin):
             'classes': ('wide',),
             'fields': (
                 'email', 'username', 'password', 'password2',
-                'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address',
+                'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name',
                 'user_type', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 
                 'groups', 'user_permissions', 
                 'master_agent', 'super_agent', 'agent', 'cashier_prefix'

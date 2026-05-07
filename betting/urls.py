@@ -120,6 +120,7 @@ urlpatterns = [
     # Impersonation URLs
     path('impersonate/<int:user_id>/', views.impersonate_user, name='impersonate_user'),
     path('impersonate/stop/', views.stop_impersonation, name='stop_impersonation'),
+    path('notifications/downline/mark-read/', views.mark_downline_activity_notifications_read, name='mark_downline_activity_notifications_read'),
 ]
 
 # WebAuthn URLs

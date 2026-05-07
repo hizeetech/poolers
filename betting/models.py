@@ -227,6 +227,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     shop_address = models.CharField(max_length=255, blank=True, null=True)
+    bank_account_name = models.CharField(max_length=100, blank=True, default="")
+    downline_activity_last_seen_at = models.DateTimeField(null=True, blank=True)
     
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='player')
     
@@ -286,6 +288,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     def wallet(self):
         wallet, created = Wallet.objects.get_or_create(user=self)
         return wallet
+
+    @property
+    def withdrawal_account_name(self):
+        return (self.bank_account_name or '').strip() or self.get_full_name()
 
     @property
     def withdrawal_pin_is_set(self):

@@ -4176,6 +4176,19 @@ def api_manage_users(request):
 def api_system_settings(request):
     return JsonResponse({'status': 'success', 'message': 'API endpoint for system settings (placeholder).'})
 
+
+@login_required
+def mark_downline_activity_notifications_read(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
+
+    if request.user.user_type not in ['agent', 'super_agent', 'master_agent']:
+        return JsonResponse({'status': 'error', 'message': 'Not allowed.'}, status=403)
+
+    request.user.downline_activity_last_seen_at = timezone.now()
+    request.user.save(update_fields=['downline_activity_last_seen_at'])
+    return JsonResponse({'status': 'success'})
+
 # --- Account User Views ---
 
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission

@@ -135,6 +135,7 @@ TEMPLATES = [
                 'betting.context_processors.wallet_balance', # Add this line
                 'betting.context_processors.site_configuration',
                 'betting.context_processors.impersonation_context',
+                'betting.context_processors.agent_downline_activity_notifications',
             ],
         },
     },

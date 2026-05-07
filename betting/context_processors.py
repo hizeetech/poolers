@@ -1,5 +1,8 @@
 # betting/context_processors.py
-from .models import Wallet, SiteConfiguration, FooterBadge, FooterPage
+from datetime import timedelta
+from django.utils import timezone
+from django.db.models import Q
+from .models import Wallet, SiteConfiguration, FooterBadge, FooterPage, ActivityLog, User
 
 def wallet_balance(request):
     """
@@ -38,4 +41,45 @@ def impersonation_context(request):
     return {
         'impersonation_active': is_impersonating,
         'impersonation_target_email': target_email,
+    }
+
+def agent_downline_activity_notifications(request):
+    if not request.user.is_authenticated:
+        return {}
+
+    if request.user.user_type not in ['agent', 'super_agent', 'master_agent']:
+        return {}
+
+    user = request.user
+
+    if user.user_type == 'agent':
+        downline_qs = User.objects.filter(agent=user, user_type='cashier')
+    elif user.user_type == 'super_agent':
+        downline_qs = User.objects.filter(Q(agent__super_agent=user) | Q(super_agent=user), user_type__in=['agent', 'cashier'])
+    else:
+        downline_qs = User.objects.filter(
+            Q(agent__super_agent__master_agent=user) | Q(super_agent__master_agent=user) | Q(master_agent=user),
+            user_type__in=['super_agent', 'agent', 'cashier']
+        )
+
+    since = timezone.now() - timedelta(days=7)
+    base_qs = ActivityLog.objects.filter(
+        user__in=downline_qs,
+        action_type__in=['LOGIN', 'LOGOUT'],
+        timestamp__gte=since,
+    ).select_related('user').order_by('-timestamp')
+
+    last_seen = user.downline_activity_last_seen_at
+    if last_seen:
+        unread_count = base_qs.filter(timestamp__gt=last_seen).count()
+    else:
+        unread_count = base_qs.count()
+
+    recent = list(base_qs[:10])
+
+    return {
+        'show_agent_notifications': True,
+        'agent_notifications_unread_count': unread_count,
+        'agent_notifications_recent': recent,
+        'agent_notifications_last_seen_at': last_seen,
     }

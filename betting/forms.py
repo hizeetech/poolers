@@ -443,8 +443,13 @@ class WithdrawFundsForm(forms.Form):
         self.user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
         if self.user:
-            self.fields['account_name'].initial = self.user.get_full_name()
+            self.fields['account_name'].initial = self.user.withdrawal_account_name
             self.fields['account_name'].widget.attrs['readonly'] = True
+
+    def clean_account_name(self):
+        if self.user:
+            return self.user.withdrawal_account_name
+        return (self.cleaned_data.get('account_name') or '').strip()
 
     def clean_amount(self):
         amount = self.cleaned_data['amount']

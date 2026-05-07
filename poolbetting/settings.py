@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -78,6 +78,7 @@ CSRF_TRUSTED_ORIGINS = [
 INSTALLED_APPS = [
     'daphne',
     'channels',
+    'django_ckeditor_5',
     'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -113,6 +114,7 @@ MIDDLEWARE = [
 AUTHENTICATION_BACKENDS = [
     # AxesStandaloneBackend should be the first backend
     'axes.backends.AxesStandaloneBackend',
+    'betting.backends.EmailOrUsernameBackend',
     # Django ModelBackend is the default authentication backend
     'django.contrib.auth.backends.ModelBackend',
 ]
@@ -206,6 +208,28 @@ CELERY_TASK_ROUTES = {
     'uip.tasks.aggregate_daily_metrics': {'queue': 'uip_queue'},
     'uip.tasks.run_risk_checks': {'queue': 'risk_queue'},
     'poolbetting.celery.debug_task': {'queue': 'celery'},
+}
+
+CKEDITOR_5_UPLOAD_PATH = "ckeditor5/"
+
+CKEDITOR_5_CONFIGS = {
+    "default": {
+        "toolbar": [
+            "heading",
+            "|",
+            "bold",
+            "italic",
+            "link",
+            "bulletedList",
+            "numberedList",
+            "blockQuote",
+            "insertTable",
+            "mediaEmbed",
+            "|",
+            "undo",
+            "redo",
+        ],
+    }
 }
 
 

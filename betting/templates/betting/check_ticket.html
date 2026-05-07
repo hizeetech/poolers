@@ -1,5 +1,6 @@
 {% extends 'betting/base.html' %} {% load static %} {% load betting_extras %} {% block title %}Check Bet Ticket Status{% endblock %} 
 {% block content %}
+<div class="app-page">
 <style>
     .table-custom-compact th, .table-custom-compact td {
         font-size: 0.85rem;
@@ -22,8 +23,8 @@
 <div class="container py-5">
     <div class="row justify-content-center">
         <div class="col-md-8 col-lg-6">
-            <div class="card shadow-sm rounded-lg">
-                <div class="card-header bg-primary text-white text-center">
+            <div class="card app-glass-card shadow-sm rounded-lg">
+                <div class="card-header bg-primary text-center">
                     <h2 class="mb-0">Check Bet Ticket Status</h2>
                 </div>
                 <div class="card-body">
@@ -148,7 +149,7 @@
     <div class="container-fluid px-2 pb-5">
         <div class="row justify-content-center mt-5">
             <div class="col-12">
-                <div class="card shadow-sm rounded-lg">
+                <div class="card app-glass-card shadow-sm rounded-lg">
                     <div class="card-header bg-dark text-white py-2">
                         <h3 class="mb-0 h6">
                             {% if request.user.user_type == 'player' or request.user.user_type == 'cashier' %}
@@ -196,7 +197,7 @@
                             </div>
                             <div class="col-md-2 col-12">
                                 <div class="d-grid gap-1">
-                                    <button type="submit" class="btn btn-primary btn-sm fw-bold">Filter</button>
+                                    <button type="submit" class="btn btn-green-theme btn-sm fw-bold">Filter</button>
                                     <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-outline-secondary btn-sm">Clear</a>
                                 </div>
                             </div>
@@ -250,7 +251,7 @@
                          {% if site_config.logo %}
                             <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="max-height: 60px; max-width: 100%; object-fit: contain;" class="mb-2">
                          {% endif %}
-                         <h4 class="fw-bold mb-0">{{ site_config.site_name }}</h4>
+                         {# <h4 class="fw-bold mb-0">{{ site_config.site_name }}</h4> #}
                          <small class="text-muted">Reprinted Copy</small>
                     </div>
                     
@@ -339,7 +340,7 @@
                     sessionStorage.setItem('rebet_data', JSON.stringify(data.ticket));
                     window.location.href = "{% url 'betting:fixtures' %}";
                 } else {
-                    alert('Error: ' + data.message);
+                    Swal.fire({ icon: 'error', title: 'Error', text: data.message || 'Unable to rebet ticket.' });
                     if(btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-redo me-1"></i> Rebet';
@@ -348,7 +349,7 @@
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('Failed to load ticket details.');
+                Swal.fire({ icon: 'error', title: 'Error', text: 'Failed to load ticket details.' });
                 if(btn) {
                     btn.disabled = false;
                     btn.innerHTML = '<i class="fas fa-redo me-1"></i> Rebet';
@@ -468,7 +469,7 @@
                     };
 
                 } else {
-                    alert('Error: ' + data.message);
+                    Swal.fire({ icon: 'error', title: 'Error', text: data.message || 'Unable to reprint ticket.' });
                 }
             })
             .catch(error => {
@@ -518,4 +519,5 @@
         }, 5000);
     });
 </script>
+</div>
 {% endblock %}

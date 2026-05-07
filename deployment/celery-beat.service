@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=/root/poolbetting-main
-ExecStart=/root/poolbetting-main/env/bin/celery -A poolbetting beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
+User=rhonextecpool
+Group=rhonextecpool
+WorkingDirectory=/home/rhonextecpool/rhonextecpool-dir/site
+ExecStart=/home/rhonextecpool/rhonextecpool-dir/site/env/bin/celery -A poolbetting beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
 Restart=always
 
 [Install]

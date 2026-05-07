@@ -1,9 +1,20 @@
 {% extends 'betting/base.html' %} {% load static betting_extras %} {% block title %}Agent/Cashier Dashboard - Pool Betting{% endblock %} {% block content %}
-<div class="container mt-5">
+<div class="app-page">
+<div class="container py-5 position-relative">
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
         <h2 class="fw-bold text-primary mb-0">
             {% if user.user_type == 'agent' %} Agent Dashboard {% elif user.user_type == 'cashier' %} Cashier Dashboard {% else %} Dashboard {% endif %}
         </h2>
+        <div class="d-flex flex-column align-items-end gap-1">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Dashboard scope">
+                <a class="btn btn-outline-secondary {% if metrics_scope == 'week' %}active{% endif %}" href="?scope=week">Weekly</a>
+                <a class="btn btn-outline-secondary {% if metrics_scope == 'month' %}active{% endif %}" href="?scope=month">Monthly</a>
+                <a class="btn btn-outline-secondary {% if metrics_scope == 'all' %}active{% endif %}" href="?scope=all">All Time</a>
+            </div>
+            <div class="text-muted small">
+                {{ metrics_label }}{% if metrics_start and metrics_end %}: {{ metrics_start }} - {{ metrics_end }}{% endif %}
+            </div>
+        </div>
         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
             {% if user.user_type == 'agent' or user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
             <button type="button" class="btn btn-primary rounded-pill px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#registerAgentModal">
@@ -17,13 +28,6 @@
             {% endif %}
         </div>
     </div>
-
-    {% if messages %} {% for message in messages %}
-    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    </div>
-    {% endfor %} {% endif %}
 
     {% if impersonation_active %}
     <div class="alert alert-warning d-flex justify-content-between align-items-center rounded-3 shadow-sm" role="alert">
@@ -39,7 +43,7 @@
 
     <div class="row mb-4">
         <div class="col-md-4 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">My Wallet Balance</h5>
                     <p class="card-text fs-3 fw-bold text-success">₦{{ user.wallet.balance|floatformat:2 }}</p>
@@ -47,7 +51,7 @@
             </div>
         </div>
         <div class="col-md-4 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Total Downline Stake</h5>
                     <p class="card-text fs-3 fw-bold text-info">₦{{ total_downline_stake|floatformat:2 }}</p>
@@ -55,7 +59,7 @@
             </div>
         </div>
         <div class="col-md-4 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Total Downline Winnings</h5>
                     <p class="card-text fs-3 fw-bold text-warning">₦{{ total_downline_winnings|floatformat:2 }}</p>
@@ -66,7 +70,7 @@
 
     <div class="row mb-4">
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Pending Commission</h5>
                     <p class="card-text fs-3 fw-bold text-warning">₦{{ pending_commission|floatformat:2 }}</p>
@@ -74,7 +78,7 @@
             </div>
         </div>
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start">
                         <h5 class="card-title text-muted">Total Commission Paid</h5>
@@ -90,7 +94,7 @@
     <div class="row">
         <!-- Card 1: Total Downline Users -->
         <div class="col-md-3 mb-3">
-            <div class="card shadow-sm h-100 rounded-3 border-start border-primary border-4">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-primary border-4">
                 <div class="card-body">
                     <h6 class="card-subtitle mb-2 text-muted">Downline Users</h6>
                     <div class="d-flex justify-content-between align-items-center">
@@ -104,7 +108,7 @@
         </div>
         <!-- Card 2: Total Turnover -->
         <div class="col-md-3 mb-3">
-            <div class="card shadow-sm h-100 rounded-3 border-start border-success border-4">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-success border-4">
                 <div class="card-body">
                     <h6 class="card-subtitle mb-2 text-muted">Total Turnover (Sales)</h6>
                     <h2 class="card-title fw-bold text-success">₦{{ total_downline_turnover|floatformat:2 }}</h2>
@@ -113,7 +117,7 @@
         </div>
         <!-- Card 3: Total Winnings Paid -->
         <div class="col-md-3 mb-3">
-            <div class="card shadow-sm h-100 rounded-3 border-start border-danger border-4">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-danger border-4">
                 <div class="card-body">
                     <h6 class="card-subtitle mb-2 text-muted">Total Winnings</h6>
                     <h2 class="card-title fw-bold text-danger">₦{{ total_downline_winnings|floatformat:2 }}</h2>
@@ -122,7 +126,7 @@
         </div>
         <!-- Card 4: GGR -->
         <div class="col-md-3 mb-3">
-            <div class="card shadow-sm h-100 rounded-3 border-start border-warning border-4">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-warning border-4">
                 <div class="card-body">
                     <h6 class="card-subtitle mb-2 text-muted">GGR (Profit)</h6>
                     <h2 class="card-title fw-bold text-warning">₦{{ downline_ggr|floatformat:2 }}</h2>
@@ -140,7 +144,7 @@
         </button>
     </div>
     {% if downline_users %}
-    <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
+    <div class="table-responsive app-glass-card rounded-3 shadow-sm p-3">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
@@ -192,7 +196,7 @@
         </div>
 
         {% if downline_bet_tickets %}
-        <div class="table-responsive bg-white rounded-3 shadow-sm p-3">
+        <div class="table-responsive app-glass-card rounded-3 shadow-sm p-3">
             <table class="table table-hover align-middle mb-0">
                 <thead class="table-light">
                     <tr>
@@ -227,7 +231,7 @@
     <h3 class="fw-bold text-secondary mt-5 mb-3">Reports</h3>
     <div class="row">
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body text-center">
                     <h5 class="card-title">Wallet Transaction Report</h5>
                     <p class="card-text text-muted">View all wallet credit/debit transactions.</p>
@@ -236,7 +240,7 @@
             </div>
         </div>
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body text-center">
                     <h5 class="card-title">Sales & Winnings Report</h5>
                     <p class="card-text text-muted">Analyze turnover, winnings, and losses.</p>
@@ -245,7 +249,7 @@
             </div>
         </div>
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body text-center">
                     <h5 class="card-title">Commission Report</h5>
                     <p class="card-text text-muted">Calculate your commission based on GGR.</p>
@@ -254,7 +258,7 @@
             </div>
         </div>
         <div class="col-md-6 mb-3">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body text-center">
                     <h5 class="card-title">Void/Check Bet Tickets</h5>
                     <p class="card-text text-muted">View and manage tickets (Void/Check Status).</p>
@@ -321,7 +325,7 @@
     
     <div class="row mt-4">
         <div class="col-md-6">
-            <div class="card shadow-sm h-100 rounded-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
                  <div class="card-body text-center">
                     <h5 class="card-title">Void/Check Bet Tickets</h5>
                     <p class="card-text text-muted">View and manage tickets (Void/Check Status).</p>

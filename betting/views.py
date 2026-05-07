@@ -1,6 +1,9 @@
 import itertools
 import os
 import traceback
+import secrets
+import smtplib
+from django.core.mail import send_mail
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
@@ -28,7 +31,7 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
-    SiteConfiguration
+    SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -39,7 +42,8 @@ from .forms import (
     AdminUserCreationForm, AdminUserChangeForm, WithdrawalActionForm,
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
-    CreditRequestForm, LoanSettlementForm, AdminManualWalletForm
+    CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
+    ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm
 )
 
 # Setup logger for this app
@@ -88,7 +92,11 @@ def log_admin_activity(request, action_description, action_type='UPDATE', affect
 # --- General Authentication Views ---
 
 def frontpage(request):
-    return render(request, 'betting/frontpage.html')
+    carousel_images = CarouselImage.objects.filter(is_active=True)
+    context = {
+        'carousel_images': carousel_images,
+    }
+    return render(request, 'betting/frontpage.html', context)
 
 def register_user(request):
     if request.method == 'POST':
@@ -115,16 +123,7 @@ def register_user(request):
 def user_login(request):
     logger.debug("Entering user_login view.")
     if request.method == 'POST':
-        post_data = request.POST.copy()
-        # Map 'email' to 'username' for AuthenticationForm compatibility
-        if 'email' in post_data:
-            post_data['username'] = post_data['email']
-        
-        # Pass request to the form
-        form = LoginForm(request=request, data=post_data) 
-        
-        logger.debug(f"LoginForm initialized. Is POST request: {request.method == 'POST'}")
-        logger.debug(f"POST data: {post_data}")
+        form = LoginForm(request=request, data=request.POST)
         
         if form.is_valid():
             logger.debug("LoginForm is valid.")
@@ -161,6 +160,125 @@ def user_login(request):
         logger.debug("GET request for login page.")
         form = LoginForm()
     return render(request, 'betting/login.html', {'form': form})
+
+
+def forgot_password(request):
+    if request.method == 'POST':
+        form = ForgotPasswordForm(request.POST)
+        if form.is_valid():
+            email = form.cleaned_data['email']
+            user = User.objects.filter(email__iexact=email).first()
+            
+            if not user:
+                # Return JSON for SweetAlert in the template
+                return JsonResponse({'status': 'error', 'message': 'Email not found in our database.'})
+            
+            # Create Reset Request
+            token = secrets.token_urlsafe(32)
+            expires_at = timezone.now() + timedelta(hours=2)
+            
+            reset_request = PasswordResetRequest.objects.create(
+                email=email,
+                token=token,
+                user=user,
+                expires_at=expires_at,
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', 'Unknown')
+            )
+            
+            # Send Email
+            reset_url = request.build_absolute_uri(
+                reverse('betting:reset_password', kwargs={'token': token})
+            )
+            
+            subject = "Password Reset Request - StakeNaija"
+            message = f"Hello {user.first_name},\n\nYou requested to reset your password. Click the link below to set a new password:\n\n{reset_url}\n\nThis link expires in 2 hours.\n\nIf you didn't request this, please ignore this email."
+            
+            try:
+                from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER or f"no-reply@{request.get_host().split(':')[0]}"
+
+                use_console_backend = settings.DEBUG and (
+                    not getattr(settings, 'EMAIL_HOST', None)
+                    or not getattr(settings, 'EMAIL_HOST_USER', None)
+                    or not getattr(settings, 'EMAIL_HOST_PASSWORD', None)
+                    or not from_email
+                )
+
+                if use_console_backend:
+                    from django.core.mail import get_connection
+                    connection = get_connection('django.core.mail.backends.console.EmailBackend')
+                else:
+                    from django.core.mail import get_connection
+                    connection = get_connection()
+
+                send_mail(
+                    subject,
+                    message,
+                    from_email,
+                    [email],
+                    fail_silently=False,
+                    connection=connection,
+                )
+                reset_request.email_sent = True
+                reset_request.sent_at = timezone.now()
+                reset_request.send_error = None
+                reset_request.save(update_fields=['email_sent', 'sent_at', 'send_error'])
+                return JsonResponse({'status': 'success', 'message': 'A reset link has been sent to your email.'})
+            except smtplib.SMTPAuthenticationError as e:
+                logger.exception(f"Email sending failed: {str(e)}")
+                reset_request.email_sent = False
+                reset_request.send_error = str(e)
+                reset_request.save(update_fields=['email_sent', 'send_error'])
+
+                if settings.DEBUG:
+                    from django.core.mail import get_connection
+                    connection = get_connection('django.core.mail.backends.console.EmailBackend')
+                    send_mail(
+                        subject,
+                        message,
+                        settings.DEFAULT_FROM_EMAIL or f"no-reply@{request.get_host().split(':')[0]}",
+                        [email],
+                        fail_silently=True,
+                        connection=connection,
+                    )
+                    return JsonResponse({'status': 'success', 'message': 'Email delivery is not configured on this server. A reset link was generated (check server console output).'})
+
+                return JsonResponse({'status': 'error', 'message': 'Failed to send reset email. Please try again later.'})
+            except Exception as e:
+                logger.exception(f"Email sending failed: {str(e)}")
+                reset_request.email_sent = False
+                reset_request.send_error = str(e)
+                reset_request.save(update_fields=['email_sent', 'send_error'])
+                return JsonResponse({'status': 'error', 'message': 'Failed to send reset email. Please try again later.'})
+    else:
+        form = ForgotPasswordForm()
+    return render(request, 'betting/forgot_password.html', {'form': form})
+
+
+def reset_password(request, token):
+    reset_request = get_object_or_404(PasswordResetRequest, token=token)
+    
+    if not reset_request.is_valid():
+        messages.error(request, "This reset link has expired or already been used.")
+        return redirect('betting:forgot_password')
+        
+    if request.method == 'POST':
+        form = ResetPasswordForm(request.POST)
+        if form.is_valid():
+            user = reset_request.user
+            user.set_password(form.cleaned_data['password'])
+            user.save()
+            
+            # Mark request as used
+            reset_request.is_used = True
+            reset_request.save()
+            
+            messages.success(request, "Password reset successful! You can now login with your new password.")
+            return redirect('betting:login')
+    else:
+        form = ResetPasswordForm()
+        
+    return render(request, 'betting/reset_password.html', {'form': form, 'token': token})
 
 
 @login_required
@@ -845,6 +963,12 @@ def wallet_view(request):
     transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:20] # Last 20 transactions
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
 
+    if request.user.maybe_auto_unlock_withdrawal():
+        request.user.save(update_fields=['withdrawal_locked', 'withdrawal_attempts', 'withdrawal_locked_at'])
+    if request.user.withdrawal_locked and not request.user.withdrawal_locked_at:
+        request.user.withdrawal_locked_at = timezone.now()
+        request.user.save(update_fields=['withdrawal_locked_at'])
+
     # Initialize forms based on user type
     wallet_transfer_form = None
     credit_request_form = None
@@ -863,6 +987,7 @@ def wallet_view(request):
 
     # Active Loans
     active_loans = Loan.objects.filter(borrower=request.user, status='active')
+    withdrawal_lock_expires_at = request.user.get_withdrawal_lock_expires_at()
 
     context = {
         'wallet': wallet,
@@ -874,6 +999,10 @@ def wallet_view(request):
         'active_loans': active_loans,
         'loan_settlement_form': LoanSettlementForm(request=request),
         'pending_withdrawals': pending_withdrawals,
+        'withdrawal_pin_is_set': request.user.withdrawal_pin_is_set,
+        'withdrawal_locked': request.user.withdrawal_locked,
+        'withdrawal_attempts': request.user.withdrawal_attempts,
+        'withdrawal_lock_expires_at': withdrawal_lock_expires_at,
         'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
     }
     return render(request, 'betting/wallet.html', context)
@@ -887,6 +1016,7 @@ def initiate_deposit(request):
             try:
                 data = json.loads(request.body)
                 amount = float(data.get('amount', 0))
+                gateway = data.get('gateway', 'paystack') # Default to paystack
                 
                 if amount <= 0:
                      return JsonResponse({'status': 'error', 'message': 'Invalid amount.'}, status=400)
@@ -899,26 +1029,60 @@ def initiate_deposit(request):
                     transaction_type='deposit',
                     amount=amount,
                     status='pending',
-                    description='Pending online deposit via Paystack',
-                    paystack_reference=reference, # Store the reference
+                    description=f'Pending online deposit via {gateway.capitalize()}',
+                    payment_gateway=gateway,
+                    external_reference=reference, # Use external_reference for all gateways
                     timestamp=timezone.now()
                 )
                 
-                # Return data for frontend to initialize Paystack Popup
-                return JsonResponse({
-                    'status': 'success',
-                    'email': request.user.email,
-                    'amount': int(amount * 100), # Amount in kobo
-                    'reference': reference
-                })
+                # Logic for different gateways
+                if gateway == 'paystack':
+                    return JsonResponse({
+                        'status': 'success',
+                        'gateway': 'paystack',
+                        'email': request.user.email,
+                        'amount': int(amount * 100), # Amount in kobo
+                        'reference': reference,
+                        'public_key': settings.PAYSTACK_PUBLIC_KEY
+                    })
+                elif gateway == 'monnify':
+                    # Monnify initialization requires an access token
+                    auth_url = f"{os.getenv('MONNIFY_BASE_URL')}/api/v1/auth/login"
+                    auth_headers = {
+                        "Authorization": f"Basic {os.getenv('MONNIFY_API_KEY')}:{os.getenv('MONNIFY_SECRET_KEY')}"
+                    }
+                    # We'll just return the keys for frontend SDK if possible, or handle server-side
+                    # For simplicity in this example, we return data for the frontend Monnify SDK
+                    return JsonResponse({
+                        'status': 'success',
+                        'gateway': 'monnify',
+                        'email': request.user.email,
+                        'amount': float(amount),
+                        'reference': reference,
+                        'apiKey': os.getenv('MONNIFY_API_KEY'),
+                        'contractCode': os.getenv('MONNIFY_CONTRACT_CODE')
+                    })
+                elif gateway == 'kora':
+                    return JsonResponse({
+                        'status': 'success',
+                        'gateway': 'kora',
+                        'email': request.user.email,
+                        'amount': float(amount),
+                        'reference': reference,
+                        'publicKey': os.getenv('KORA_PUBLIC_KEY')
+                    })
+                else:
+                    return JsonResponse({'status': 'error', 'message': 'Unsupported gateway.'}, status=400)
+
             except Exception as e:
+                logger.error(f"Error in initiate_deposit API: {str(e)}")
                 return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
+        # Handle Form Request (Traditional Redirect)
+        gateway = request.POST.get('gateway', 'paystack')
         form = InitiateDepositForm(request.POST)
         if form.is_valid():
             amount = form.cleaned_data['amount']
-            
-            # Generate a unique reference
             reference = str(uuid.uuid4())
 
             # Create a pending transaction record
@@ -927,69 +1091,262 @@ def initiate_deposit(request):
                 transaction_type='deposit',
                 amount=amount,
                 status='pending',
-                description='Pending online deposit via Paystack',
-                paystack_reference=reference, # Store the reference
+                description=f'Pending online deposit via {gateway.capitalize()}',
+                payment_gateway=gateway,
+                external_reference=reference,
                 timestamp=timezone.now()
             )
 
-            # Paystack API call to initiate payment
-            paystack_secret_key = settings.PAYSTACK_SECRET_KEY
-            url = "https://api.paystack.co/transaction/initialize"
-            headers = {
-                "Authorization": f"Bearer {paystack_secret_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "email": request.user.email,
-                "amount": int(amount * 100), # Amount in kobo
-                "reference": reference,
-                "callback_url": request.build_absolute_uri(reverse('betting:verify_deposit')),
-                "metadata": {
-                    "user_id": str(request.user.id),
-                    "user_email": request.user.email,
+            if gateway == 'paystack':
+                paystack_secret_key = settings.PAYSTACK_SECRET_KEY
+                url = "https://api.paystack.co/transaction/initialize"
+                headers = {
+                    "Authorization": f"Bearer {paystack_secret_key}",
+                    "Content-Type": "application/json"
                 }
-            }
-            try:
-                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-                response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
-                response_data = response.json()
+                payload = {
+                    "email": request.user.email,
+                    "amount": int(amount * 100),
+                    "reference": reference,
+                    "callback_url": request.build_absolute_uri(reverse('betting:verify_deposit')),
+                    "metadata": {
+                        "user_id": str(request.user.id),
+                        "user_email": request.user.email,
+                        "gateway": "paystack"
+                    }
+                }
+                try:
+                    response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+                    response.raise_for_status()
+                    response_data = response.json()
+                    if response_data['status']:
+                        return redirect(response_data['data']['authorization_url'])
+                    else:
+                        messages.error(request, f"Paystack initialization failed: {response_data['message']}")
+                except Exception as e:
+                    messages.error(request, f"Error initiating Paystack payment: {e}")
+            
+            elif gateway == 'monnify':
+                # Monnify Server-side initialization
+                auth_url = f"{os.getenv('MONNIFY_BASE_URL')}/api/v1/auth/login"
+                api_key = os.getenv('MONNIFY_API_KEY')
+                secret_key = os.getenv('MONNIFY_SECRET_KEY')
+                import base64
+                auth_str = base64.b64encode(f"{api_key}:{secret_key}".encode()).decode()
+                
+                try:
+                    auth_response = requests.post(auth_url, headers={"Authorization": f"Basic {auth_str}"}, timeout=10)
+                    auth_data = auth_response.json()
+                    if auth_data['requestSuccessful']:
+                        token = auth_data['responseBody']['accessToken']
+                        init_url = f"{os.getenv('MONNIFY_BASE_URL')}/api/v1/merchant/transactions/init-transaction"
+                        init_payload = {
+                            "amount": float(amount),
+                            "customerName": f"{request.user.first_name} {request.user.last_name}",
+                            "customerEmail": request.user.email,
+                            "paymentReference": reference,
+                            "paymentDescription": "Wallet Deposit",
+                            "currencyCode": "NGN",
+                            "contractCode": os.getenv('MONNIFY_CONTRACT_CODE'),
+                            "redirectUrl": request.build_absolute_uri(reverse('betting:verify_monnify_deposit')),
+                            "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"]
+                        }
+                        init_response = requests.post(init_url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, data=json.dumps(init_payload), timeout=10)
+                        init_data = init_response.json()
+                        if init_data['requestSuccessful']:
+                            return redirect(init_data['responseBody']['checkoutUrl'])
+                        else:
+                            messages.error(request, f"Monnify initialization failed: {init_data['responseMessage']}")
+                    else:
+                        messages.error(request, "Monnify authentication failed.")
+                except Exception as e:
+                    messages.error(request, f"Error initiating Monnify payment: {e}")
 
-                if response_data['status']:
-                    messages.info(request, "Redirecting to Paystack for payment.")
-                    return redirect(response_data['data']['authorization_url'])
-                else:
-                    messages.error(request, f"Paystack initialization failed: {response_data['message']}")
-                    # Update transaction status to failed
-                    Transaction.objects.filter(paystack_reference=reference).update(
-                        status='failed',
-                        description=f"Paystack initialization failed: {response_data['message']}"
-                    )
-            except requests.exceptions.Timeout:
-                messages.error(request, "Paystack request timed out. Please try again.")
-                Transaction.objects.filter(paystack_reference=reference).update(
-                    status='failed',
-                    description="Paystack request timed out."
-                )
-            except requests.exceptions.RequestException as e:
-                messages.error(request, f"Error communicating with Paystack: {e}")
-                Transaction.objects.filter(paystack_reference=reference).update(
-                    status='failed',
-                    description=f"Error communicating with Paystack: {e}"
-                )
-            except json.JSONDecodeError:
-                messages.error(request, "Invalid response from Paystack.")
-                Transaction.objects.filter(paystack_reference=reference).update(
-                    status='failed',
-                    description="Invalid JSON response from Paystack."
-                )
+            elif gateway == 'kora':
+                # Kora Server-side initialization
+                url = f"{os.getenv('KORA_BASE_URL')}/charges/initialize"
+                headers = {
+                    "Authorization": f"Bearer {os.getenv('KORA_SECRET_KEY')}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "amount": float(amount),
+                    "currency": "NGN",
+                    "reference": reference,
+                    "notification_url": request.build_absolute_uri(reverse('betting:verify_kora_deposit')),
+                    "redirect_url": request.build_absolute_uri(reverse('betting:verify_kora_deposit')),
+                    "customer": {
+                        "name": f"{request.user.first_name} {request.user.last_name}",
+                        "email": request.user.email
+                    }
+                }
+                try:
+                    response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+                    response.raise_for_status()
+                    response_data = response.json()
+                    if response_data['status']:
+                        return redirect(response_data['data']['checkout_url'])
+                    else:
+                        messages.error(request, f"Kora initialization failed: {response_data['message']}")
+                except Exception as e:
+                    messages.error(request, f"Error initiating Kora payment: {e}")
+
+            # If we reach here, something failed
+            Transaction.objects.filter(external_reference=reference).update(status='failed')
         else:
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
-            if form.non_field_errors():
-                for error in form.non_field_errors():
-                    messages.error(request, f"Deposit Error: {error}")
-    return redirect('betting:wallet') # Redirect back to wallet on error or GET request
+    return redirect('betting:wallet')
+
+@login_required
+@db_transaction.atomic
+def verify_monnify_deposit(request):
+    reference = request.GET.get('paymentReference')
+    if not reference:
+        messages.error(request, "Monnify reference not found.")
+        return redirect('betting:wallet')
+
+    # Use select_for_update() on Transaction to prevent race conditions
+    transaction_record = get_object_or_404(
+        Transaction.objects.select_for_update(), 
+        external_reference=reference, 
+        user=request.user
+    )
+    
+    if transaction_record.status == 'completed':
+        messages.success(request, "This deposit has already been successfully verified.")
+        return redirect('betting:wallet')
+    
+    if transaction_record.status == 'failed':
+        messages.error(request, "This deposit previously failed.")
+        return redirect('betting:wallet')
+
+    # Monnify API verification
+    api_key = os.getenv('MONNIFY_API_KEY')
+    secret_key = os.getenv('MONNIFY_SECRET_KEY')
+    base_url = os.getenv('MONNIFY_BASE_URL')
+    
+    import base64
+    auth_str = base64.b64encode(f"{api_key}:{secret_key}".encode()).decode()
+    
+    try:
+        # 1. Get Access Token
+        auth_url = f"{base_url}/api/v1/auth/login"
+        auth_response = requests.post(auth_url, headers={"Authorization": f"Basic {auth_str}"}, timeout=10)
+        auth_data = auth_response.json()
+        
+        if auth_data.get('requestSuccessful'):
+            token = auth_data['responseBody']['accessToken']
+            
+            # 2. Verify Transaction
+            verify_url = f"{base_url}/api/v1/merchant/transactions/query?paymentReference={reference}"
+            verify_response = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            verify_data = verify_response.json()
+            
+            if verify_data.get('requestSuccessful') and verify_data['responseBody']['paymentStatus'] == 'PAID':
+                amount_verified = Decimal(str(verify_data['responseBody']['amountPaid']))
+                
+                # Check if amount matches to prevent tampering
+                if amount_verified != transaction_record.amount:
+                    transaction_record.status = 'failed'
+                    transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
+                    transaction_record.save()
+                    messages.error(request, "Deposit verification failed: Amount mismatch.")
+                    return redirect('betting:wallet')
+
+                # Update wallet balance
+                user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+                user_wallet.balance += amount_verified
+                user_wallet.save()
+
+                # Update transaction record
+                transaction_record.status = 'completed'
+                transaction_record.is_successful = True
+                transaction_record.description = "Online deposit via Monnify successful."
+                transaction_record.timestamp = timezone.now()
+                transaction_record.save()
+
+                messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+            else:
+                msg = verify_data.get('responseMessage', 'Payment not successful')
+                messages.error(request, f"Monnify verification failed: {msg}")
+        else:
+            messages.error(request, "Monnify authentication failed during verification.")
+            
+    except Exception as e:
+        logger.error(f"Monnify verification error: {str(e)}")
+        messages.error(request, f"Error verifying Monnify payment: {str(e)}")
+
+    return redirect('betting:wallet')
+
+@login_required
+@db_transaction.atomic
+def verify_kora_deposit(request):
+    reference = request.GET.get('reference')
+    if not reference:
+        messages.error(request, "Kora reference not found.")
+        return redirect('betting:wallet')
+
+    # Use select_for_update() on Transaction to prevent race conditions
+    transaction_record = get_object_or_404(
+        Transaction.objects.select_for_update(), 
+        external_reference=reference, 
+        user=request.user
+    )
+    
+    if transaction_record.status == 'completed':
+        messages.success(request, "This deposit has already been successfully verified.")
+        return redirect('betting:wallet')
+    
+    if transaction_record.status == 'failed':
+        messages.error(request, "This deposit previously failed.")
+        return redirect('betting:wallet')
+
+    # Kora API verification
+    secret_key = os.getenv('KORA_SECRET_KEY')
+    base_url = os.getenv('KORA_BASE_URL')
+    
+    try:
+        verify_url = f"{base_url}/charges/{reference}"
+        headers = {"Authorization": f"Bearer {secret_key}"}
+        
+        response = requests.get(verify_url, headers=headers, timeout=10)
+        response_data = response.json()
+        
+        if response_data.get('status') and response_data['data']['status'] == 'success':
+            amount_verified = Decimal(str(response_data['data']['amount']))
+            
+            # Check if amount matches to prevent tampering
+            if amount_verified != transaction_record.amount:
+                transaction_record.status = 'failed'
+                transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
+                transaction_record.save()
+                messages.error(request, "Deposit verification failed: Amount mismatch.")
+                return redirect('betting:wallet')
+
+            # Update wallet balance
+            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+            user_wallet.balance += amount_verified
+            user_wallet.save()
+
+            # Update transaction record
+            transaction_record.status = 'completed'
+            transaction_record.is_successful = True
+            transaction_record.description = "Online deposit via Kora successful."
+            transaction_record.timestamp = timezone.now()
+            transaction_record.save()
+
+            messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+        else:
+            msg = response_data.get('message', 'Payment not successful')
+            messages.error(request, f"Kora verification failed: {msg}")
+            
+    except Exception as e:
+        logger.error(f"Kora verification error: {str(e)}")
+        messages.error(request, f"Error verifying Kora payment: {str(e)}")
+
+    return redirect('betting:wallet')
 
 
 @login_required
@@ -1000,7 +1357,12 @@ def verify_deposit(request):
         messages.error(request, "Payment reference not found.")
         return redirect('betting:wallet')
 
-    transaction_record = get_object_or_404(Transaction, paystack_reference=reference, user=request.user)
+    # Use select_for_update() on Transaction to prevent race conditions
+    transaction_record = get_object_or_404(
+        Transaction.objects.select_for_update(), 
+        external_reference=reference, 
+        user=request.user
+    )
 
     if transaction_record.status == 'completed':
         messages.success(request, "This deposit has already been successfully verified.")
@@ -1074,20 +1436,64 @@ def verify_deposit(request):
 @login_required
 @db_transaction.atomic
 def withdraw_funds(request):
+    expects_json = request.headers.get('Content-Type', '').startswith('application/json')
     # Restrict withdrawal to specific roles
     if request.user.user_type not in ['master_agent', 'super_agent', 'agent']:
+        if expects_json:
+            return JsonResponse({'status': 'error', 'message': 'You are not authorized to withdraw funds.'}, status=403)
         messages.error(request, "You are not authorized to withdraw funds.")
         return redirect('betting:wallet')
+
+    user = User.objects.select_for_update().get(pk=request.user.pk)
+    if user.maybe_auto_unlock_withdrawal():
+        user.save(update_fields=['withdrawal_locked', 'withdrawal_attempts', 'withdrawal_locked_at'])
+    if user.withdrawal_locked and not user.withdrawal_locked_at:
+        user.withdrawal_locked_at = timezone.now()
+        user.save(update_fields=['withdrawal_locked_at'])
+
+    if user.withdrawal_locked:
+        expires_at = user.get_withdrawal_lock_expires_at()
+        retry_at = expires_at.isoformat() if expires_at else None
+        if expects_json:
+            return JsonResponse({'status': 'locked', 'message': 'Withdrawal access has been disabled. Retry after 24 hours or contact administrator.', 'retry_at': retry_at}, status=423)
+        if expires_at:
+            messages.error(request, f"Withdrawal access has been disabled. Retry after {expires_at.strftime('%Y-%m-%d %H:%M')} or contact administrator.")
+        else:
+            messages.error(request, "Withdrawal access has been disabled. Retry after 24 hours or contact administrator.")
+        return redirect('betting:wallet')
+
+    if not user.withdrawal_pin_is_set:
+        if expects_json:
+            return JsonResponse({'status': 'no_pin', 'message': 'Please create your Withdrawal PIN first.', 'redirect_url': reverse('betting:profile')}, status=400)
+        messages.warning(request, "Please create your Withdrawal PIN first.")
+        return redirect('betting:profile')
 
     # Check for active loans
     has_active_loans = Loan.objects.filter(borrower=request.user, status='active', outstanding_balance__gt=0).exists()
     if has_active_loans:
+        if expects_json:
+            return JsonResponse({'status': 'error', 'message': 'You cannot withdraw funds while you have an active unpaid loan.'}, status=400)
         messages.error(request, "You cannot withdraw funds while you have an active unpaid loan.")
         return redirect('betting:wallet')
 
     if request.method == 'POST':
-        # Pass user for validation in the form's clean method
-        form = WithdrawFundsForm(request.POST, user=request.user)
+        if request.headers.get('Content-Type', '').startswith('application/json'):
+            try:
+                payload = json.loads(request.body or '{}')
+            except Exception:
+                payload = {}
+            form = WithdrawFundsForm(payload, user=user)
+            expects_json = True
+        else:
+            form = WithdrawFundsForm(request.POST, user=user)
+            expects_json = False
+
+        if not _is_withdrawal_pin_verified_recent(request):
+            if expects_json:
+                return JsonResponse({'status': 'error', 'message': 'Withdrawal PIN verification required.'}, status=400)
+            messages.error(request, "Withdrawal PIN verification required.")
+            return redirect('betting:wallet')
+
         if form.is_valid():
             amount = form.cleaned_data['amount']
             bank_name = form.cleaned_data['bank_name']
@@ -1096,10 +1502,11 @@ def withdraw_funds(request):
             user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
 
             if user_wallet.balance < amount:
+                if expects_json:
+                    return JsonResponse({'status': 'error', 'message': 'Insufficient balance for withdrawal.'}, status=400)
                 messages.error(request, 'Insufficient balance for withdrawal.')
                 return redirect('betting:wallet')
 
-            # Deduct funds immediately (or hold them) and create withdrawal request
             user_wallet.balance -= amount
             user_wallet.save()
 
@@ -1111,8 +1518,16 @@ def withdraw_funds(request):
                 account_number=account_number,
                 status='pending' # Set to pending for admin approval
             )
+            _clear_withdrawal_pin_verified(request)
+            if expects_json:
+                return JsonResponse({'status': 'success', 'message': 'Withdrawal request submitted successfully.'})
             messages.success(request, 'Withdrawal request submitted successfully. It will be reviewed by an admin.')
         else:
+            if expects_json:
+                msg = "Invalid withdrawal request."
+                if form.non_field_errors():
+                    msg = " ".join([str(e) for e in form.non_field_errors()])
+                return JsonResponse({'status': 'error', 'message': msg}, status=400)
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
@@ -1120,6 +1535,96 @@ def withdraw_funds(request):
                 for error in form.non_field_errors():
                     messages.error(request, f"Withdrawal Error: {error}")
     return redirect('betting:wallet')
+
+
+def _set_withdrawal_pin_verified(request):
+    request.session['withdrawal_pin_verified_at'] = timezone.now().timestamp()
+
+
+def _clear_withdrawal_pin_verified(request):
+    if 'withdrawal_pin_verified_at' in request.session:
+        del request.session['withdrawal_pin_verified_at']
+
+
+def _is_withdrawal_pin_verified_recent(request, max_age_seconds=300):
+    ts = request.session.get('withdrawal_pin_verified_at')
+    if not ts:
+        return False
+    try:
+        ts_val = float(ts)
+    except (TypeError, ValueError):
+        return False
+    return (timezone.now().timestamp() - ts_val) <= max_age_seconds
+
+
+@login_required
+@db_transaction.atomic
+def verify_withdrawal_pin(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
+
+    if request.headers.get('Content-Type', '').startswith('application/json'):
+        try:
+            payload = json.loads(request.body or '{}')
+        except Exception:
+            payload = {}
+        raw_pin = (payload.get('pin') or '').strip()
+    else:
+        raw_pin = (request.POST.get('pin') or '').strip()
+
+    user = User.objects.select_for_update().get(pk=request.user.pk)
+
+    if user.user_type not in ['master_agent', 'super_agent', 'agent']:
+        return JsonResponse({'status': 'error', 'message': 'You are not authorized to withdraw funds.'}, status=403)
+
+    if user.maybe_auto_unlock_withdrawal():
+        user.save(update_fields=['withdrawal_locked', 'withdrawal_attempts', 'withdrawal_locked_at'])
+
+    if user.withdrawal_locked:
+        expires_at = user.get_withdrawal_lock_expires_at()
+        retry_at = expires_at.isoformat() if expires_at else None
+        return JsonResponse(
+            {
+                'status': 'locked',
+                'message': 'Withdrawal access has been disabled. Retry after 24 hours or contact administrator.',
+                'retry_at': retry_at
+            },
+            status=423
+        )
+
+    if not user.withdrawal_pin_is_set:
+        return JsonResponse({'status': 'no_pin', 'message': 'Please create your Withdrawal PIN first.', 'redirect_url': reverse('betting:profile')}, status=400)
+
+    if not raw_pin:
+        return JsonResponse({'status': 'error', 'message': 'Withdrawal PIN is required.'}, status=400)
+
+    if user.check_withdrawal_pin(raw_pin):
+        user.withdrawal_attempts = 0
+        user.withdrawal_locked = False
+        user.withdrawal_locked_at = None
+        user.save(update_fields=['withdrawal_attempts', 'withdrawal_locked', 'withdrawal_locked_at'])
+        _set_withdrawal_pin_verified(request)
+        return JsonResponse({'status': 'success', 'message': 'PIN verified.'})
+
+    user.withdrawal_attempts = (user.withdrawal_attempts or 0) + 1
+    remaining = max(0, 3 - int(user.withdrawal_attempts))
+    if user.withdrawal_attempts >= 3:
+        user.withdrawal_locked = True
+        user.withdrawal_locked_at = timezone.now()
+    user.save(update_fields=['withdrawal_attempts', 'withdrawal_locked', 'withdrawal_locked_at'])
+
+    if user.withdrawal_locked:
+        expires_at = user.get_withdrawal_lock_expires_at()
+        retry_at = expires_at.isoformat() if expires_at else None
+        return JsonResponse(
+            {
+                'status': 'locked',
+                'message': 'Withdrawal access has been disabled. Retry after 24 hours or contact administrator.',
+                'retry_at': retry_at
+            },
+            status=423
+        )
+    return JsonResponse({'status': 'error', 'message': 'Invalid withdrawal PIN.', 'attempts_remaining': remaining}, status=400)
 
 
 @login_required
@@ -1396,6 +1901,11 @@ def settle_loan(request, loan_id):
 
 @login_required
 def profile_view(request):
+    if request.user.maybe_auto_unlock_withdrawal():
+        request.user.save(update_fields=['withdrawal_locked', 'withdrawal_attempts', 'withdrawal_locked_at'])
+    if request.user.withdrawal_locked and not request.user.withdrawal_locked_at:
+        request.user.withdrawal_locked_at = timezone.now()
+        request.user.save(update_fields=['withdrawal_locked_at'])
     user_wallet = get_object_or_404(Wallet, user=request.user)
     transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:10] # Last 10 transactions
 
@@ -1415,6 +1925,8 @@ def profile_view(request):
     if request.method == 'POST':
         profile_form = ProfileEditForm(request.POST, instance=request.user)
         password_form = PasswordChangeForm(request.user, request.POST)
+        pin_create_form = WithdrawalPinCreateForm(request.POST)
+        pin_reset_form = WithdrawalPinResetForm(request.POST, user=request.user)
         
         if 'profile_submit' in request.POST:
             if profile_form.is_valid():
@@ -1441,13 +1953,45 @@ def profile_view(request):
                 if password_form.non_field_errors():
                     for error in password_form.non_field_errors():
                         messages.error(request, f"Password Error: {error}")
+        elif 'withdrawal_pin_create_submit' in request.POST:
+            if request.user.withdrawal_pin_is_set:
+                messages.warning(request, "Withdrawal PIN is already set. Use Reset Withdrawal PIN instead.")
+                return redirect('betting:profile')
+            if pin_create_form.is_valid():
+                request.user.set_withdrawal_pin(pin_create_form.cleaned_data['pin'])
+                request.user.withdrawal_attempts = 0
+                request.user.withdrawal_locked = False
+                request.user.withdrawal_locked_at = None
+                request.user.save(update_fields=['withdrawal_pin', 'withdrawal_attempts', 'withdrawal_locked', 'withdrawal_locked_at'])
+                messages.success(request, "Withdrawal PIN created successfully.")
+                return redirect('betting:profile')
+            else:
+                for error in pin_create_form.non_field_errors():
+                    messages.error(request, error)
+        elif 'withdrawal_pin_reset_submit' in request.POST:
+            if pin_reset_form.is_valid():
+                request.user.set_withdrawal_pin(pin_reset_form.cleaned_data['new_pin'])
+                request.user.withdrawal_attempts = 0
+                request.user.withdrawal_locked = False
+                request.user.withdrawal_locked_at = None
+                request.user.save(update_fields=['withdrawal_pin', 'withdrawal_attempts', 'withdrawal_locked', 'withdrawal_locked_at'])
+                messages.success(request, "Withdrawal PIN updated successfully.")
+                return redirect('betting:profile')
+            else:
+                for error in pin_reset_form.non_field_errors():
+                    messages.error(request, error)
     else:
         profile_form = ProfileEditForm(instance=request.user)
         password_form = PasswordChangeForm(request.user)
+        pin_create_form = WithdrawalPinCreateForm()
+        pin_reset_form = WithdrawalPinResetForm(user=request.user)
 
     context = {
         'profile_form': profile_form,
         'password_form': password_form,
+        'pin_create_form': pin_create_form,
+        'pin_reset_form': pin_reset_form,
+        'withdrawal_lock_expires_at': request.user.get_withdrawal_lock_expires_at(),
         'wallet': user_wallet,
         'transactions': transactions,
         'total_deposits': total_deposits,       # Add to context
@@ -1547,16 +2091,72 @@ def agent_dashboard(request):
     # GGR is Turnover - Winnings
     # We need to consider all bet tickets placed by downline users
     if user.user_type == 'cashier':
-        # Cashier sees their own tickets
-        downline_bet_tickets = BetTicket.objects.filter(user=user).exclude(status='deleted')
+        downline_bet_tickets = BetTicket.objects.filter(user=user).exclude(status__in=['deleted', 'cancelled'])
     else:
         downline_bet_tickets = BetTicket.objects.filter(
             user__in=downline_users_qs
-        ).exclude(status='deleted')
+        ).exclude(status__in=['deleted', 'cancelled'])
+
+    scope = request.GET.get('scope', 'all')
+    if scope == 'week':
+        try:
+            from commission.models import CommissionPeriod
+        except Exception:
+            CommissionPeriod = None
+
+        period = None
+        if CommissionPeriod is not None:
+            period = (
+                CommissionPeriod.objects.filter(
+                    period_type='weekly',
+                    start_date__lte=today,
+                    end_date__gte=today,
+                )
+                .order_by('-start_date')
+                .first()
+            )
+
+        metrics_start = period.start_date if period else start_of_week
+        metrics_end = period.end_date if period else today
+        downline_bet_tickets = downline_bet_tickets.filter(
+            placed_at__date__gte=metrics_start,
+            placed_at__date__lte=metrics_end,
+        )
+        metrics_label = 'Weekly'
+    elif scope == 'month':
+        try:
+            from commission.models import CommissionPeriod
+        except Exception:
+            CommissionPeriod = None
+
+        period = None
+        if CommissionPeriod is not None:
+            period = (
+                CommissionPeriod.objects.filter(
+                    period_type='monthly',
+                    start_date__lte=today,
+                    end_date__gte=today,
+                )
+                .order_by('-start_date')
+                .first()
+            )
+
+        metrics_start = period.start_date if period else start_of_month
+        metrics_end = period.end_date if period else today
+        downline_bet_tickets = downline_bet_tickets.filter(
+            placed_at__date__gte=metrics_start,
+            placed_at__date__lte=metrics_end,
+        )
+        metrics_label = 'Monthly'
+    else:
+        scope = 'all'
+        metrics_label = 'All Time'
+        metrics_start = None
+        metrics_end = None
 
     # Aggregate total turnover and winnings for downline
     total_downline_turnover = downline_bet_tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-    total_downline_winnings = downline_bet_tickets.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+    total_downline_winnings = downline_bet_tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal('0.00')
     
     downline_ggr = total_downline_turnover - total_downline_winnings
 
@@ -1600,6 +2200,10 @@ def agent_dashboard(request):
         'total_downline_stake': total_downline_turnover, # Alias for total stake
         'total_downline_winnings': total_downline_winnings,
         'downline_ggr': downline_ggr,
+        'metrics_scope': scope,
+        'metrics_label': metrics_label,
+        'metrics_start': metrics_start,
+        'metrics_end': metrics_end,
         'total_commission_paid': total_commission_paid,
         'pending_commission': pending_commission,
         'top_performers': top_performers,
@@ -1607,6 +2211,11 @@ def agent_dashboard(request):
         'show_reports': True,
     }
     return render(request, 'betting/agent_dashboard.html', context)
+
+
+def footer_page(request, slug):
+    page = get_object_or_404(FooterPage, slug=slug, is_active=True)
+    return render(request, 'betting/footer_page.html', {'page': page})
 
 
 @login_required
@@ -3836,6 +4445,38 @@ def account_user_dashboard(request):
     pending_weekly = WeeklyAgentCommission.objects.filter(status='pending').select_related('agent', 'period').order_by('period__start_date')
     pending_monthly = MonthlyNetworkCommission.objects.filter(status='pending').select_related('user', 'period').order_by('period__start_date')
     
+    try:
+        from commission.services import calculate_weekly_agent_commission_data, calculate_monthly_network_commission_data
+    except Exception:
+        calculate_weekly_agent_commission_data = None
+        calculate_monthly_network_commission_data = None
+
+    if calculate_weekly_agent_commission_data:
+        for wc in pending_weekly:
+            data = calculate_weekly_agent_commission_data(wc.agent, wc.period)
+            if not data:
+                continue
+            changed = False
+            for field, value in data.items():
+                if getattr(wc, field) != value:
+                    setattr(wc, field, value)
+                    changed = True
+            if changed:
+                wc.save(update_fields=list(data.keys()))
+
+    if calculate_monthly_network_commission_data:
+        for mc in pending_monthly:
+            data = calculate_monthly_network_commission_data(mc.user, mc.period)
+            if not data:
+                continue
+            changed = False
+            for field, value in data.items():
+                if getattr(mc, field) != value:
+                    setattr(mc, field, value)
+                    changed = True
+            if changed:
+                mc.save(update_fields=list(data.keys()))
+
     pending_commissions = []
     for wc in pending_weekly:
         pending_commissions.append({
@@ -3890,7 +4531,7 @@ def account_user_dashboard(request):
                 'description': t.description or t.get_transaction_type_display(),
                 'amount': t.amount,
                 'status': t.status,
-                'ref': t.paystack_reference or str(t.id)[:8],
+                'ref': t.external_reference or t.paystack_reference or str(t.id)[:8],
                 'is_credit': t.transaction_type in ['deposit', 'bet_payout', 'commission_payout', 'wallet_transfer_in', 'bonus', 'withdrawal_refund', 'account_user_credit']
             })
             

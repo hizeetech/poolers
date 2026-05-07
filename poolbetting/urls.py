@@ -17,6 +17,7 @@ urlpatterns = [
     path('commission/', include('commission.urls')),
     path('uip/', include('uip.urls')),
     path('registration/', include('pending_registration.urls')),
+    path("ckeditor5/", include("django_ckeditor_5.urls")),
 ]
 
 if settings.DEBUG:

@@ -4,16 +4,23 @@ from django.core.exceptions import ValidationError
 from decimal import Decimal
 import random
 import string
+import re
 from django.db import transaction as db_transaction
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.contrib import messages 
 from django.db.models import Q 
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest
+import logging
+from django.conf import settings
+from django.core.mail import send_mail, get_connection
+
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State
+from .services.usernames import create_agent_and_cashiers
 
 # Get the custom User model dynamically
 CustomUser = get_user_model()
+logger = logging.getLogger(__name__)
 
 # --- User Registration Form (for Frontend Self-Registration) ---
 class UserRegistrationForm(forms.ModelForm):
@@ -40,16 +47,20 @@ class UserRegistrationForm(forms.ModelForm):
     class Meta:
         model = CustomUser
         # Exclude hierarchy fields from frontend registration as they are set by admin
-        fields = ['first_name', 'last_name', 'email', 'phone_number', 'shop_address', 'user_type']
+        fields = ['first_name', 'last_name', 'other_name', 'email', 'state', 'phone_number', 'shop_address', 'user_type']
         labels = {
             'email': 'Email Address',
             'phone_number': 'Phone Number',
             'shop_address': 'Shop Address',
+            'other_name': 'Other Name',
+            'state': 'State',
         }
         widgets = {
             'email': forms.EmailInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your email'}),
             'first_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your first name'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your last name'}),
+            'other_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your other name'}),
+            'state': forms.Select(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2'}),
             'phone_number': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'e.g. +234XXXXXXXXXX'}),
             'shop_address': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your shop address (Optional)'}),
         }
@@ -80,82 +91,116 @@ class UserRegistrationForm(forms.ModelForm):
         user_type = cleaned_data.get('user_type')
         if user_type == 'agent' and not cleaned_data.get('phone_number'):
             self.add_error('phone_number', "Agents must provide a phone number.")
+        if user_type == 'agent':
+            if not cleaned_data.get('first_name'):
+                self.add_error('first_name', "First Name is required.")
+            if not cleaned_data.get('last_name'):
+                self.add_error('last_name', "Last Name is required.")
+            if not cleaned_data.get('other_name'):
+                self.add_error('other_name', "Other Name is required.")
+            if not cleaned_data.get('state'):
+                self.add_error('state', "State is required.")
         
         return cleaned_data
 
     def save(self, commit=True, request=None):
+        user_type = self.cleaned_data.get('user_type')
+        password = self.cleaned_data["password"]
+
+        if user_type == 'agent':
+            state = self.cleaned_data.get('state')
+            agent, cashiers, _ = create_agent_and_cashiers(
+                CustomUser,
+                email=self.cleaned_data['email'],
+                password=password,
+                first_name=self.cleaned_data.get('first_name') or "",
+                last_name=self.cleaned_data.get('last_name') or "",
+                other_name=self.cleaned_data.get('other_name') or "",
+                state=state,
+                phone_number=self.cleaned_data.get('phone_number'),
+                shop_address=self.cleaned_data.get('shop_address'),
+            )
+            Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+            for cashier in cashiers:
+                Wallet.objects.get_or_create(user=cashier, defaults={'balance': Decimal('0.00')})
+
+            cashier_usernames = [c.username for c in cashiers]
+            from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER or "no-reply@localhost"
+            subject = "Your StakeNaija Agent Account Details"
+            message = (
+                f"Hello {agent.first_name or ''},\n\n"
+                "Your registration was successful.\n\n"
+                f"Agent Username: {agent.username}\n"
+                f"Agent Email: {agent.email}\n"
+                f"Password: {password}\n\n"
+                "Cashier Usernames:\n"
+                f"- {cashier_usernames[0]}\n"
+                f"- {cashier_usernames[1]}\n\n"
+                "You can login using Email or Username.\n"
+            )
+
+            try:
+                use_console_backend = settings.DEBUG and (
+                    not getattr(settings, 'EMAIL_HOST', None)
+                    or not getattr(settings, 'EMAIL_HOST_USER', None)
+                    or not getattr(settings, 'EMAIL_HOST_PASSWORD', None)
+                    or not from_email
+                )
+                connection = get_connection('django.core.mail.backends.console.EmailBackend') if use_console_backend else get_connection()
+                send_mail(
+                    subject,
+                    message,
+                    from_email,
+                    [agent.email],
+                    fail_silently=False,
+                    connection=connection,
+                )
+            except Exception as e:
+                logger.exception(f"Agent credentials email failed: {str(e)}")
+                if settings.DEBUG:
+                    try:
+                        connection = get_connection('django.core.mail.backends.console.EmailBackend')
+                        send_mail(
+                            subject,
+                            message,
+                            from_email,
+                            [agent.email],
+                            fail_silently=True,
+                            connection=connection,
+                        )
+                    except Exception:
+                        pass
+            return agent
+
         with db_transaction.atomic():
             user = super().save(commit=False)
-            user.set_password(self.cleaned_data["password"])
-
+            user.set_password(password)
+            user.user_type = user_type or 'player'
+            user.is_staff = False
+            user.is_superuser = False
             user.master_agent = None
             user.super_agent = None
             user.agent = None
-            user.is_staff = False 
-            user.is_superuser = False 
-
-            if user.user_type in ['master_agent', 'super_agent', 'agent', 'cashier', 'admin']: 
-                user.is_staff = True
-            
-            if user.user_type == 'admin': 
-                user.is_superuser = True
-            
-            if user.user_type == 'agent' and not user.cashier_prefix:
-                while True:
-                    random_xxxx = ''.join(random.choices(string.digits, k=4))
-                    if not CustomUser.objects.filter(cashier_prefix=random_xxxx).exists():
-                        user.cashier_prefix = random_xxxx
-                        break
-            elif user.user_type not in ['cashier', 'agent']: 
-                user.cashier_prefix = None
-            
-            if user.user_type == 'player':
-                user.is_staff = False
-
             if commit:
                 user.save()
-                # Wallet is created by post_save signal in signals.py
                 Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
-
-                if user.user_type == 'agent':
-                    # Use self.request if available, otherwise fallback to the passed request
-                    current_request_for_messages = self.request or request 
-                    for i in range(1, 3): 
-                        base_cashier_email = f"{user.cashier_prefix}-CSH-{i:02d}"
-                        cashier_email = f"{base_cashier_email}@cashier.com"
-                        cashier_prefix_for_cashier = f"{user.cashier_prefix}-{i:02d}"
-
-                        if not CustomUser.objects.filter(email=cashier_email).exists():
-                            cashier_user = CustomUser.objects.create_user(
-                                email=cashier_email,
-                                password=self.cleaned_data["password"], 
-                                first_name=f"Cashier {i} ({user.first_name})",
-                                last_name=f"{user.last_name}",
-                                user_type='cashier',
-                                agent=user, 
-                                is_active=True,
-                                is_staff=True, 
-                                is_superuser=False,
-                                cashier_prefix=cashier_prefix_for_cashier 
-                            )
-                            # Wallet is created by post_save signal
-                            Wallet.objects.get_or_create(user=cashier_user, defaults={'balance': Decimal('0.00')})
-                            if current_request_for_messages: # Use current_request_for_messages here
-                                messages.info(current_request_for_messages, f"Cashier account created: {cashier_email}")
-                        else:
-                            if current_request_for_messages: # Use current_request_for_messages here
-                                messages.warning(current_request_for_messages, f"Cashier account {cashier_email} already exists. Skipping creation.")
-                
-        return user
+            return user
 
 
 # --- Login Form ---
 class LoginForm(AuthenticationForm):
-    username = forms.CharField(widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Email Address'}))
+    identifier = forms.CharField(label="Email or Username", widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Email or Username'}))
     password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Password'}))
 
+    def __init__(self, request=None, *args, **kwargs):
+        super().__init__(request=request, *args, **kwargs)
+        if 'username' in self.fields:
+            self.fields.pop('username')
+
     def clean(self):
-        username = self.cleaned_data.get('username')
+        from django.contrib.auth import authenticate
+
+        identifier = self.cleaned_data.get('identifier')
         password = self.cleaned_data.get('password')
         
         request = self.request
@@ -164,9 +209,12 @@ class LoginForm(AuthenticationForm):
 
         # Resolve User
         user = None
-        if username:
+        if identifier:
             try:
-                user = CustomUser.objects.get(email__iexact=username)
+                if "@" in identifier:
+                    user = CustomUser.objects.get(email__iexact=identifier)
+                else:
+                    user = CustomUser.objects.get(username__iexact=identifier)
             except CustomUser.DoesNotExist:
                 pass
         
@@ -174,7 +222,7 @@ class LoginForm(AuthenticationForm):
         if user and user.is_locked:
             LoginAttempt.objects.create(
                 user=user,
-                username_attempted=username,
+                username_attempted=identifier,
                 ip_address=ip,
                 user_agent=user_agent,
                 status='locked'
@@ -183,12 +231,15 @@ class LoginForm(AuthenticationForm):
                 "Your account has been locked due to multiple failed login attempts. Please contact support or administrator."
             )
 
-        # 2. Attempt Authentication via Super Class
+        # 2. Attempt Authentication
         try:
-            # super().clean() calls authenticate() internally. 
-            # If successful, self.user_cache is set.
-            # If failed, it raises ValidationError.
-            cleaned_data = super().clean()
+            authenticated_user = authenticate(request, username=identifier, identifier=identifier, password=password)
+            if not authenticated_user:
+                raise forms.ValidationError("Invalid credentials.")
+
+            self.confirm_login_allowed(authenticated_user)
+            self.user_cache = authenticated_user
+            cleaned_data = self.cleaned_data
             
             # --- SUCCESS CASE ---
             if self.user_cache:
@@ -201,7 +252,7 @@ class LoginForm(AuthenticationForm):
                 # Log Success
                 LoginAttempt.objects.create(
                     user=self.user_cache,
-                    username_attempted=username,
+                    username_attempted=identifier,
                     ip_address=ip,
                     user_agent=user_agent,
                     status='success'
@@ -229,7 +280,7 @@ class LoginForm(AuthenticationForm):
                     
                     LoginAttempt.objects.create(
                         user=user,
-                        username_attempted=username,
+                        username_attempted=identifier,
                         ip_address=ip,
                         user_agent=user_agent,
                         status='locked'
@@ -243,7 +294,7 @@ class LoginForm(AuthenticationForm):
                     user.save()
                     LoginAttempt.objects.create(
                         user=user,
-                        username_attempted=username,
+                        username_attempted=identifier,
                         ip_address=ip,
                         user_agent=user_agent,
                         status='failed'
@@ -259,7 +310,7 @@ class LoginForm(AuthenticationForm):
                 # User not found (but we log the attempt)
                 LoginAttempt.objects.create(
                     user=None,
-                    username_attempted=username,
+                    username_attempted=identifier,
                     ip_address=ip,
                     user_agent=user_agent,
                     status='failed'
@@ -288,6 +339,73 @@ class ProfileEditForm(forms.ModelForm):
             'phone_number': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
             'shop_address': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
         }
+
+class WithdrawalPinCreateForm(forms.Form):
+    pin = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-pill', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        label="Enter PIN"
+    )
+    pin_confirm = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-pill', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        label="Confirm PIN"
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        pin = (cleaned.get('pin') or '').strip()
+        pin_confirm = (cleaned.get('pin_confirm') or '').strip()
+
+        if pin != pin_confirm:
+            raise ValidationError("PINs do not match.")
+        if not re.fullmatch(r"\d{4}|\d{6}", pin or ""):
+            raise ValidationError("PIN must be 4-digit or 6-digit numeric.")
+        cleaned['pin'] = pin
+        cleaned['pin_confirm'] = pin_confirm
+        return cleaned
+
+class WithdrawalPinResetForm(forms.Form):
+    current_pin = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-pill', 'inputmode': 'numeric', 'autocomplete': 'current-password'}),
+        label="Current PIN"
+    )
+    new_pin = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-pill', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        label="New PIN"
+    )
+    new_pin_confirm = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-pill', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        label="Confirm New PIN"
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned = super().clean()
+        current_pin = (cleaned.get('current_pin') or '').strip()
+        new_pin = (cleaned.get('new_pin') or '').strip()
+        new_pin_confirm = (cleaned.get('new_pin_confirm') or '').strip()
+
+        if not self.user:
+            raise ValidationError("User context is required.")
+
+        if not self.user.withdrawal_pin_is_set:
+            raise ValidationError("Withdrawal PIN is not set.")
+
+        if not self.user.check_withdrawal_pin(current_pin):
+            raise ValidationError("Current PIN is incorrect.")
+
+        if new_pin != new_pin_confirm:
+            raise ValidationError("New PINs do not match.")
+
+        if not re.fullmatch(r"\d{4}|\d{6}", new_pin or ""):
+            raise ValidationError("PIN must be 4-digit or 6-digit numeric.")
+
+        cleaned['current_pin'] = current_pin
+        cleaned['new_pin'] = new_pin
+        cleaned['new_pin_confirm'] = new_pin_confirm
+        return cleaned
 
 
 # --- Initiate Deposit Form (for Player) ---
@@ -700,17 +818,19 @@ class AdminUserCreationForm(DjangoUserCreationForm):
         widget=forms.CheckboxInput(attrs={'class': 'form-check-input'})
     )
 
-    class Meta: 
+    class Meta:
         model = CustomUser
         fields = (
-            'email', 'password', 'password2', 
-            'first_name', 'last_name', 'phone_number', 'shop_address', 'user_type',
+            'email', 'username', 'password', 'password2',
+            'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'user_type',
             'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets',
-            'groups', 'user_permissions', 
+            'groups', 'user_permissions',
             'master_agent', 'super_agent', 'agent', 'cashier_prefix'
         )
-        widgets = { 
+        field_classes = {'username': forms.CharField}
+        widgets = {
             'email': forms.EmailInput(attrs={'class': 'form-control'}),
+            'username': forms.TextInput(attrs={'class': 'form-control'}),
             'password': forms.PasswordInput(attrs={'class': 'form-control'}),
             'password2': forms.PasswordInput(attrs={'class': 'form-control'}),
         }
@@ -718,6 +838,32 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super().__init__(*args, **kwargs)
+
+
+class ForgotPasswordForm(forms.Form):
+    email = forms.EmailField(
+        label="Email Address",
+        widget=forms.EmailInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your registered email'})
+    )
+
+class ResetPasswordForm(forms.Form):
+    password = forms.CharField(
+        label="New Password",
+        widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter new password'})
+    )
+    password_confirm = forms.CharField(
+        label="Confirm New Password",
+        widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Confirm new password'})
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        password = cleaned_data.get("password")
+        password_confirm = cleaned_data.get("password_confirm")
+
+        if password and password_confirm and password != password_confirm:
+            raise ValidationError("Passwords do not match.")
+        return cleaned_data
         
         # Remove 'password1' field if present (inherited from DjangoUserCreationForm)
         if 'password1' in self.fields:
@@ -743,6 +889,20 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             raise ValidationError("Passwords do not match.")
         return password2
 
+    def clean(self):
+        cleaned_data = super().clean()
+        user_type = cleaned_data.get('user_type')
+        if user_type == 'agent':
+            if not cleaned_data.get('first_name'):
+                self.add_error('first_name', "First Name is required.")
+            if not cleaned_data.get('last_name'):
+                self.add_error('last_name', "Last Name is required.")
+            if not cleaned_data.get('other_name'):
+                self.add_error('other_name', "Other Name is required.")
+            if not cleaned_data.get('state'):
+                self.add_error('state', "State is required.")
+        return cleaned_data
+
     def save(self, commit=True):
         # We bypass DjangoUserCreationForm.save() because it expects 'password1'
         # and instead call ModelForm.save() directly.
@@ -756,13 +916,6 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             user.user_type = user_type
         
         # Set hierarchy fields
-        if user.user_type == 'agent' and not user.cashier_prefix:
-            while True:
-                random_xxxx = ''.join(random.choices(string.digits, k=4))
-                if not CustomUser.objects.filter(cashier_prefix=random_xxxx).exists():
-                    user.cashier_prefix = random_xxxx
-                    break
-
         if user.user_type == 'master_agent':
             user.master_agent = None
             user.super_agent = None
@@ -792,41 +945,112 @@ class AdminUserCreationForm(DjangoUserCreationForm):
         user.is_superuser = user.user_type == 'admin'
 
         if commit:
+            if user.user_type == 'agent':
+                state = self.cleaned_data.get('state')
+                if not state:
+                    raise ValidationError("State is required for agent creation.")
+                from django.db import IntegrityError
+                from .services.usernames import (
+                    generate_agent_username,
+                    generate_cashier_usernames,
+                    generate_internal_email,
+                )
+
+                user.first_name = self.cleaned_data.get('first_name')
+                user.last_name = self.cleaned_data.get('last_name')
+                user.other_name = self.cleaned_data.get('other_name')
+                user.state = state
+                user.phone_number = self.cleaned_data.get('phone_number')
+                user.shop_address = self.cleaned_data.get('shop_address')
+                user.master_agent = self.cleaned_data.get('master_agent')
+                user.super_agent = self.cleaned_data.get('super_agent')
+                user.agent = None
+
+                username_value, roots, base_root = generate_agent_username(
+                    CustomUser,
+                    state.abbreviation,
+                    user.first_name or "",
+                    user.last_name or "",
+                    user.other_name or "",
+                )
+                user.username = username_value
+
+                user.is_active = self.cleaned_data.get('is_active', True)
+                user.is_staff = True
+                user.is_superuser = False
+
+                try:
+                    user.save()
+                except IntegrityError:
+                    username_value, roots, base_root = generate_agent_username(
+                        CustomUser,
+                        state.abbreviation,
+                        user.first_name or "",
+                        user.last_name or "",
+                        user.other_name or "",
+                    )
+                    user.username = username_value
+                    user.save()
+
+                if self.cleaned_data.get('groups'):
+                    user.groups.set(self.cleaned_data['groups'])
+                if self.cleaned_data.get('user_permissions'):
+                    user.user_permissions.set(self.cleaned_data['user_permissions'])
+
+                Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+
+                cashier1_username, cashier2_username, _ = generate_cashier_usernames(
+                    CustomUser,
+                    preferred_root=user.username,
+                    roots=roots,
+                    base_root=base_root,
+                )
+
+                cashier1 = CustomUser.objects.create_user(
+                    email=generate_internal_email(cashier1_username),
+                    password=self.cleaned_data.get("password"),
+                    username=cashier1_username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    other_name=user.other_name,
+                    state=user.state,
+                    user_type='cashier',
+                    agent=user,
+                    master_agent=user.master_agent,
+                    super_agent=user.super_agent,
+                    is_active=True,
+                    is_staff=True,
+                    is_superuser=False,
+                )
+                cashier2 = CustomUser.objects.create_user(
+                    email=generate_internal_email(cashier2_username),
+                    password=self.cleaned_data.get("password"),
+                    username=cashier2_username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    other_name=user.other_name,
+                    state=user.state,
+                    user_type='cashier',
+                    agent=user,
+                    master_agent=user.master_agent,
+                    super_agent=user.super_agent,
+                    is_active=True,
+                    is_staff=True,
+                    is_superuser=False,
+                )
+
+                Wallet.objects.get_or_create(user=cashier1, defaults={'balance': Decimal('0.00')})
+                Wallet.objects.get_or_create(user=cashier2, defaults={'balance': Decimal('0.00')})
+
+                return user
+
             user.save()
             if self.cleaned_data.get('groups'):
                 user.groups.set(self.cleaned_data['groups'])
             if self.cleaned_data.get('user_permissions'):
                 user.user_permissions.set(self.cleaned_data['user_permissions'])
-                
-            # Initialize wallet for new user (Signal handles it, but get_or_create is safe)
-            Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
 
-            # Auto-create cashiers for Agent
-            if user.user_type == 'agent':
-                current_request_for_messages = self.request
-                for i in range(1, 3):
-                    base_cashier_email = f"{user.cashier_prefix}-CSH-{i:02d}"
-                    cashier_email = f"{base_cashier_email}@cashier.com"
-                    cashier_prefix_for_cashier = f"{user.cashier_prefix}-{i:02d}"
-                    
-                    if not CustomUser.objects.filter(email=cashier_email).exists():
-                        cashier_user = CustomUser.objects.create_user(
-                            email=cashier_email,
-                            password=self.cleaned_data["password"],
-                            first_name=f"Cashier {i} ({user.first_name})",
-                            last_name=f"{user.last_name}",
-                            user_type='cashier',
-                            agent=user,
-                            master_agent=user.master_agent,
-                            super_agent=user.super_agent,
-                            is_active=True,
-                            is_staff=True,
-                            is_superuser=False,
-                            cashier_prefix=cashier_prefix_for_cashier
-                        )
-                        # Wallet handled by signal
-                        if current_request_for_messages:
-                            messages.info(current_request_for_messages, f"Cashier account created: {cashier_email}")
+            Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
 
         return user
 
@@ -845,9 +1069,38 @@ class AdminUserChangeForm(DjangoUserChangeForm):
         widget=forms.CheckboxInput(attrs={'class': 'form-check-input'})
     )
 
+    withdrawal_pin_new = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-md', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        required=False,
+        label="New Withdrawal PIN"
+    )
+    withdrawal_pin_confirm = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control rounded-md', 'inputmode': 'numeric', 'autocomplete': 'new-password'}),
+        required=False,
+        label="Confirm Withdrawal PIN"
+    )
+
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super().__init__(*args, **kwargs)
+
+    class Meta(DjangoUserChangeForm.Meta):
+        field_classes = {'username': forms.CharField}
+
+    def clean(self):
+        cleaned = super().clean()
+        new_pin = (cleaned.get('withdrawal_pin_new') or '').strip()
+        confirm_pin = (cleaned.get('withdrawal_pin_confirm') or '').strip()
+
+        if new_pin or confirm_pin:
+            if new_pin != confirm_pin:
+                raise ValidationError("Withdrawal PINs do not match.")
+            if not re.fullmatch(r"\d{4}|\d{6}", new_pin or ""):
+                raise ValidationError("Withdrawal PIN must be 4-digit or 6-digit numeric.")
+            cleaned['withdrawal_pin_new'] = new_pin
+            cleaned['withdrawal_pin_confirm'] = confirm_pin
+
+        return cleaned
 
     def save(self, commit=True):
         user = super().save(commit=False)
@@ -863,6 +1116,12 @@ class AdminUserChangeForm(DjangoUserChangeForm):
                     user.password = original_user.password
                 except CustomUser.DoesNotExist:
                     pass
+        new_pin = (self.cleaned_data.get('withdrawal_pin_new') or '').strip()
+        if new_pin:
+            user.set_withdrawal_pin(new_pin)
+            user.withdrawal_attempts = 0
+            user.withdrawal_locked = False
+            user.withdrawal_locked_at = None
                     
         if commit:
             user.save()

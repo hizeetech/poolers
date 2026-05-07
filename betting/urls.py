@@ -11,6 +11,8 @@ urlpatterns = [
     path('register/', views.register_user, name='register'),
     path('login/', views.user_login, name='login'),
     path('logout/', views.user_logout, name='user_logout'),
+    path('forgot-password/', views.forgot_password, name='forgot_password'),
+    path('reset-password/<str:token>/', views.reset_password, name='reset_password'),
 
     # Fixtures & Betting
     path('fixtures/', views.fixtures_view, name='fixtures'),
@@ -20,12 +22,16 @@ urlpatterns = [
     path('place-bet/', views.place_bet, name='place_bet'),
     path('check-ticket/', views.check_ticket_status, name='check_ticket_status'),
     path('agent-void-ticket/<str:ticket_id>/', views.agent_void_ticket, name='agent_void_ticket'),
+    path('page/<slug:slug>/', views.footer_page, name='footer_page'),
 
     # Wallet & Payments
     path('wallet/', views.wallet_view, name='wallet'),
     path('deposit/initiate/', views.initiate_deposit, name='initiate_deposit'),
     path('deposit/verify/', views.verify_deposit, name='verify_deposit'),
+    path('deposit/monnify/verify/', views.verify_monnify_deposit, name='verify_monnify_deposit'),
+    path('deposit/kora/verify/', views.verify_kora_deposit, name='verify_kora_deposit'),
     path('withdraw/', views.withdraw_funds, name='withdraw_funds'),
+    path('withdraw/verify-pin/', views.verify_withdrawal_pin, name='verify_withdrawal_pin'),
     path('wallet-transfer/', views.wallet_transfer, name='wallet_transfer'),
     path('credit-request/submit/', views.submit_credit_request, name='submit_credit_request'),
     path('credit-request/manage/', views.manage_credit_requests, name='manage_credit_requests'),

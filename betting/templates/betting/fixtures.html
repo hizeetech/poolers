@@ -1,7 +1,8 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Fixtures - Pool Betting{% endblock %} {% block content %}
-<div class="container mt-5">
+<div class="app-page">
+<div class="container py-5 position-relative">
     <div class="d-flex align-items-center mb-4 gap-3">
-        <h2 class="fw-bold text-primary mb-0">Fixtures</h2>
+        <h2 class="fw-bold mb-0 text-primary">Fixtures</h2>
         <div class="dropdown" style="z-index: 1030;">
             <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                 {% if current_betting_period %}{{ current_betting_period.name }}{% else %}Select Period{% endif %}
@@ -16,13 +17,6 @@
         </div>
     </div>
 
-    {% if messages %} {% for message in messages %}
-    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    </div>
-    {% endfor %} {% endif %}
-
     <div class="row">
         <div class="col-md-8">
             <div id="fixtures-container">
@@ -31,9 +25,9 @@
         </div>
 
         <div class="col-md-4">
-            <div class="card shadow-lg rounded-3 sticky-top" style="top: 20px;">
-                <div class="card-header bg-primary text-white text-center rounded-top-3">
-                    <h4 class="mb-0">Your Betslip</h4>
+            <div class="card app-glass-card shadow-lg rounded-3 sticky-top" style="top: 20px;">
+                <div class="card-header bg-primary text-center rounded-top-3">
+                    <h4 class="mb-0 text-white">Your Betslip</h4>
                 </div>
                 <div class="card-body">
                     <div id="betslip-selections" class="mb-3">
@@ -90,6 +84,7 @@
         </div>
     </div>
 </div>
+</div>
 
 <!-- Print Ticket Modal -->
 <div class="modal fade" id="printTicketModal" tabindex="-1" aria-labelledby="printTicketModalLabel" aria-hidden="true">
@@ -104,7 +99,7 @@
                     {% if site_config.logo %}
                         <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="height: 40px;">
                     {% endif %}
-                    <div class="fw-bold">{{ site_config.site_name }}</div>
+                    {# <div class="fw-bold">{{ site_config.site_name }}</div> #}
                 </div>
                 <h6 class="text-center text-secondary mb-3">Your Bet Details</h6>
                 <p><strong>Ticket ID:</strong> <span id="modal-ticket-id"></span></p>
@@ -118,7 +113,7 @@
                     <!-- Selections will be dynamically added here -->
                 </ul>
                 <div class="text-center mt-4">
-                    <p class="text-muted small">Thank you for betting with PoolBetting!</p>
+                    <p class="text-muted small">Thank you for betting with StakeNaija!</p>
                     <p class="text-muted small">Generated: <span id="modal-generation-time"></span></p>
                 </div>
             </div>

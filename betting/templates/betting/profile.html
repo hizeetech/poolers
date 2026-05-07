@@ -1,5 +1,6 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}My Profile{% endblock %} {% block content %}
-<div class="container py-5">
+<div class="app-page">
+<div class="container py-5 position-relative">
     <div class="row justify-content-center">
         <div class="col-md-10 col-lg-8">
             <h1 class="text-center text-dark fw-bold mb-4">My Profile</h1>
@@ -7,7 +8,7 @@
 
             {# Messages are handled by base.html, no need to duplicate here unless specific styling is required #}
 
-            <div class="card shadow-sm rounded-lg mb-4">
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-success text-white">
                     <h5 class="mb-0">Security Settings</h5>
                 </div>
@@ -22,7 +23,7 @@
                 </div>
             </div>
 
-            <div class="card shadow-sm rounded-lg mb-4">
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-primary text-white">
                     <h5 class="mb-0">Profile Information</h5>
                 </div>
@@ -51,7 +52,7 @@
                 </div>
             </div>
 
-            <div class="card shadow-sm rounded-lg mb-4">
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-info text-white">
                     <h5 class="mb-0">Change Password</h5>
                 </div>
@@ -83,7 +84,71 @@
                 </div>
             </div>
 
-            <div class="card shadow-sm rounded-lg mb-4">
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
+                <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Withdrawal PIN</h5>
+                    <div class="d-flex align-items-center gap-2">
+                        {% if request.user.withdrawal_locked %}
+                            <span class="badge bg-warning text-dark">Locked</span>
+                        {% endif %}
+                        {% if request.user.withdrawal_pin_is_set %}
+                            <span class="badge bg-success">Set</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Not Set</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if request.user.withdrawal_locked %}
+                        <div class="alert alert-warning mb-3">
+                            Withdrawal access has been disabled.
+                            {% if withdrawal_lock_expires_at %}
+                                Retry after {{ withdrawal_lock_expires_at|date:"M d, Y H:i" }} or contact administrator.
+                            {% else %}
+                                Retry after 24 hours or contact administrator.
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    {% if not request.user.withdrawal_pin_is_set %}
+                        <form method="post" action="{% url 'betting:profile' %}" class="needs-validation" novalidate>
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <label for="{{ pin_create_form.pin.id_for_label }}" class="form-label text-muted fw-medium">{{ pin_create_form.pin.label }}</label>
+                                {{ pin_create_form.pin }}
+                            </div>
+                            <div class="mb-3">
+                                <label for="{{ pin_create_form.pin_confirm.id_for_label }}" class="form-label text-muted fw-medium">{{ pin_create_form.pin_confirm.label }}</label>
+                                {{ pin_create_form.pin_confirm }}
+                            </div>
+                            <div class="d-grid gap-2">
+                                <button type="submit" name="withdrawal_pin_create_submit" class="btn btn-danger btn-lg rounded-pill shadow-sm fw-bold">Create Withdrawal PIN</button>
+                            </div>
+                        </form>
+                    {% else %}
+                        <form method="post" action="{% url 'betting:profile' %}" class="needs-validation" novalidate>
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <label for="{{ pin_reset_form.current_pin.id_for_label }}" class="form-label text-muted fw-medium">{{ pin_reset_form.current_pin.label }}</label>
+                                {{ pin_reset_form.current_pin }}
+                            </div>
+                            <div class="mb-3">
+                                <label for="{{ pin_reset_form.new_pin.id_for_label }}" class="form-label text-muted fw-medium">{{ pin_reset_form.new_pin.label }}</label>
+                                {{ pin_reset_form.new_pin }}
+                            </div>
+                            <div class="mb-3">
+                                <label for="{{ pin_reset_form.new_pin_confirm.id_for_label }}" class="form-label text-muted fw-medium">{{ pin_reset_form.new_pin_confirm.label }}</label>
+                                {{ pin_reset_form.new_pin_confirm }}
+                            </div>
+                            <div class="d-grid gap-2">
+                                <button type="submit" name="withdrawal_pin_reset_submit" class="btn btn-outline-danger btn-lg rounded-pill shadow-sm fw-bold">Reset Withdrawal PIN</button>
+                            </div>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">My Wallet Summary</h5>
                 </div>
@@ -129,6 +194,7 @@
 
         </div>
     </div>
+</div>
 </div>
 <script src="{% static 'betting/js/webauthn.js' %}"></script>
 {% endblock %}

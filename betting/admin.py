@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django import forms
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import Q, IntegerField, Sum
 from django.db.models.functions import Cast
@@ -9,6 +10,7 @@ from decimal import Decimal
 from django.urls import path, reverse 
 from django.shortcuts import redirect, render
 from django.utils.html import format_html 
+from django_ckeditor_5.widgets import CKEditor5Widget
 
 # Celery Beat and Results imports
 from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
@@ -39,7 +41,8 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
-    ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog
+    ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
+    PasswordResetRequest, State, FooterPage, FooterBadge
 )
 
 
@@ -133,23 +136,28 @@ class CustomUserAdmin(UserAdmin):
     form = UserChangeForm
 
     list_display = (
-        'email', 'first_name', 'last_name', 'user_type', 'is_staff', 'is_active',
+        'email', 'username', 'first_name', 'last_name', 'other_name', 'state', 'user_type', 'is_staff', 'is_active',
         'is_locked', 'failed_login_attempts',
+        'withdrawal_locked', 'withdrawal_attempts', 'withdrawal_pin_status',
         'get_phone_number', 'get_shop_address', 'get_master_agent', 'get_super_agent', 'agent',
         'cashier_prefix', 'date_joined', 'updated_at', 'last_login', 'get_last_impersonated', 'impersonate_button'
     )
     list_filter = (
         'user_type', 'is_active', 'is_staff', 'is_locked', 
-        'date_joined', 'last_login'
+        'withdrawal_locked', 'date_joined', 'last_login'
     )
     search_fields = (
-        'email', 'first_name', 'last_name', 'phone_number'
+        'email', 'username', 'first_name', 'last_name', 'other_name', 'phone_number'
     )
     ordering = (
         'email',
     )
     
-    actions = ['unlock_accounts', 'impersonate_user_action']
+    actions = ['unlock_accounts', 'impersonate_user_action', 'enable_withdrawals', 'disable_withdrawals', 'reset_withdrawal_attempts']
+
+    def withdrawal_pin_status(self, obj):
+        return "Set" if getattr(obj, 'withdrawal_pin', '') else "Not Set"
+    withdrawal_pin_status.short_description = "Withdrawal PIN"
 
     def impersonate_user_action(self, request, queryset):
         # This is the bulk action
@@ -213,20 +221,21 @@ class CustomUserAdmin(UserAdmin):
     unlock_accounts.short_description = "Unlock selected accounts"
 
     fieldsets = (
-        (None, {'fields': ('email', 'password')}), 
-        ('Personal info', {'fields': ('first_name', 'last_name', 'phone_number', 'shop_address')}),
+        (None, {'fields': ('email', 'username', 'password')}),
+        ('Personal info', {'fields': ('first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 'groups', 'user_permissions', 'user_type')}),
         ('Hierarchy', {'fields': ('master_agent', 'super_agent', 'agent', 'cashier_prefix')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
         ('Security & Locking', {'fields': ('is_locked', 'failed_login_attempts', 'last_failed_login', 'locked_at', 'lock_reason')}),
+        ('Withdrawal PIN', {'fields': ('withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts', 'withdrawal_pin_new', 'withdrawal_pin_confirm')}),
     )
 
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
             'fields': (
-                'email', 'password', 'password2', 
-                'first_name', 'last_name', 'phone_number', 'shop_address',
+                'email', 'username', 'password', 'password2',
+                'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address',
                 'user_type', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 
                 'groups', 'user_permissions', 
                 'master_agent', 'super_agent', 'agent', 'cashier_prefix'
@@ -234,7 +243,22 @@ class CustomUserAdmin(UserAdmin):
         }),
     )
     
-    readonly_fields = ('last_login', 'date_joined',) 
+    readonly_fields = ('last_login', 'date_joined', 'withdrawal_locked_at') 
+
+    def enable_withdrawals(self, request, queryset):
+        updated = queryset.update(withdrawal_locked=False, withdrawal_attempts=0, withdrawal_locked_at=None)
+        self.message_user(request, f"{updated} user(s) enabled for withdrawals.")
+    enable_withdrawals.short_description = "Enable withdrawals"
+
+    def disable_withdrawals(self, request, queryset):
+        updated = queryset.update(withdrawal_locked=True, withdrawal_locked_at=timezone.now())
+        self.message_user(request, f"{updated} user(s) disabled from withdrawals.")
+    disable_withdrawals.short_description = "Disable withdrawals"
+
+    def reset_withdrawal_attempts(self, request, queryset):
+        updated = queryset.update(withdrawal_attempts=0)
+        self.message_user(request, f"{updated} user(s) withdrawal attempts reset.")
+    reset_withdrawal_attempts.short_description = "Reset withdrawal attempts"
 
     def get_phone_number(self, obj):
         if obj.user_type == 'cashier' and obj.agent:
@@ -300,32 +324,6 @@ class CustomUserAdmin(UserAdmin):
         # Call the form's save method explicitly if you need its custom logic to run.
         # Otherwise, super().save_model will call obj.save() and form.save() as needed.
         super().save_model(request, obj, form, change)
-
-        # Auto-create cashiers for Agent
-        if not change and obj.user_type == 'agent':
-            password = form.cleaned_data.get('password')
-            if password:
-                for i in range(1, 3):
-                    base_cashier_email = f"{obj.cashier_prefix}-CSH-{i:02d}"
-                    cashier_email = f"{base_cashier_email}@cashier.com"
-                    cashier_prefix_for_cashier = f"{obj.cashier_prefix}-{i:02d}"
-                    
-                    if not User.objects.filter(email=cashier_email).exists():
-                        User.objects.create_user(
-                            email=cashier_email,
-                            password=password,
-                            first_name=f"Cashier {i} ({obj.first_name})",
-                            last_name=f"{obj.last_name}",
-                            user_type='cashier',
-                            agent=obj,
-                            master_agent=obj.master_agent,
-                            super_agent=obj.super_agent,
-                            is_active=True,
-                            is_staff=True,
-                            is_superuser=False,
-                            cashier_prefix=cashier_prefix_for_cashier
-                        )
-                        messages.info(request, f"Cashier account created: {cashier_email}")
 
         # Additional safeguards/messages if needed, but primary logic is in form's clean/save
         if obj.user_type == 'admin' and not obj.is_superuser:
@@ -781,7 +779,7 @@ class WalletAdmin(admin.ModelAdmin):
 class TransactionAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'user', 'transaction_type', 'amount', 'status', 'is_successful')
     list_filter = ('transaction_type', 'status', 'is_successful', 'timestamp')
-    search_fields = ('user__username', 'user__email', 'paystack_reference', 'description', 'id')
+    search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
     readonly_fields = ('timestamp',)
     date_hierarchy = 'timestamp'
     list_select_related = ('user',)
@@ -948,7 +946,7 @@ betting_admin_site.register(GroupResult, GroupResultAdmin)
 class SiteConfigurationAdmin(admin.ModelAdmin):
     fieldsets = (
         ('General Settings', {
-            'fields': ('site_name', 'logo', 'favicon', 'landing_page_background')
+            'fields': ('site_name', 'logo', 'favicon', 'landing_page_background', 'show_ticket_status_on_landing', 'carousel_interval')
         }),
         ('Commission Settings', {
             'fields': ('commission_payment_source', 'account_user_commission_authority')
@@ -978,7 +976,52 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+class CarouselImageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'is_active', 'order', 'created_at')
+    list_editable = ('is_active', 'order')
+    list_filter = ('is_active',)
+
+class PasswordResetRequestAdmin(admin.ModelAdmin):
+    list_display = ('email', 'user', 'created_at', 'expires_at', 'email_sent', 'is_used', 'ip_address')
+    list_filter = ('is_used', 'created_at')
+    search_fields = ('email', 'user__email', 'token')
+    readonly_fields = ('created_at', 'token', 'expires_at', 'user_agent', 'ip_address', 'email_sent', 'sent_at', 'send_error')
+
+class StateAdmin(admin.ModelAdmin):
+    list_display = ('state_name', 'abbreviation')
+    search_fields = ('state_name', 'abbreviation')
+
+betting_admin_site.register(CarouselImage, CarouselImageAdmin)
+betting_admin_site.register(PasswordResetRequest, PasswordResetRequestAdmin)
+betting_admin_site.register(State, StateAdmin)
 betting_admin_site.register(SiteConfiguration, SiteConfigurationAdmin)
+
+
+class FooterPageAdminForm(forms.ModelForm):
+    class Meta:
+        model = FooterPage
+        fields = '__all__'
+        widgets = {
+            'content': CKEditor5Widget(config_name='default'),
+        }
+
+
+class FooterPageAdmin(admin.ModelAdmin):
+    form = FooterPageAdminForm
+    list_display = ('footer_label', 'slug', 'is_active', 'show_in_footer', 'order', 'updated_at')
+    list_editable = ('is_active', 'show_in_footer', 'order')
+    search_fields = ('footer_label', 'slug', 'title')
+    prepopulated_fields = {'slug': ('footer_label',)}
+
+
+class FooterBadgeAdmin(admin.ModelAdmin):
+    list_display = ('id', 'alt_text', 'is_active', 'order', 'uploaded_at')
+    list_editable = ('is_active', 'order')
+    search_fields = ('alt_text', 'link_url')
+
+
+betting_admin_site.register(FooterPage, FooterPageAdmin)
+betting_admin_site.register(FooterBadge, FooterBadgeAdmin)
 
 # --- Credit & Loan Admin ---
 

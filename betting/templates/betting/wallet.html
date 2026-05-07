@@ -3,6 +3,45 @@
 {% block extra_css %}
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <style>
+    .wallet-page {
+        position: relative;
+        background:
+            radial-gradient(1200px 500px at 10% 10%, rgba(0, 200, 83, 0.20), transparent 60%),
+            radial-gradient(900px 450px at 90% 20%, rgba(13, 110, 253, 0.14), transparent 55%),
+            radial-gradient(800px 400px at 50% 100%, rgba(255, 193, 7, 0.14), transparent 55%),
+            linear-gradient(180deg, rgba(8, 24, 16, 0.08), rgba(240, 242, 245, 1));
+    }
+
+    .wallet-page::before,
+    .wallet-page::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+            radial-gradient(circle at 25% 30%, rgba(255, 255, 255, 0.55) 0, rgba(255, 255, 255, 0.0) 55%),
+            radial-gradient(circle at 80% 60%, rgba(255, 255, 255, 0.45) 0, rgba(255, 255, 255, 0.0) 60%);
+        opacity: 0.6;
+        filter: blur(10px);
+    }
+
+    .wallet-card {
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        backdrop-filter: blur(10px);
+    }
+
+    .wallet-title {
+        letter-spacing: 0.2px;
+    }
+
+    .wallet-balance {
+        background: linear-gradient(135deg, rgba(0, 200, 83, 0.10), rgba(13, 110, 253, 0.08));
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        border-radius: 16px;
+        padding: 18px 16px;
+    }
+
     .select2-container .select2-selection--single {
         height: 50px !important;
         border-radius: 50rem !important; /* rounded-pill */
@@ -20,26 +59,17 @@
 {% endblock %}
 
 {% block content %}
-<div class="container py-5">
+<div class="wallet-page">
+<div class="container py-5 position-relative">
     <div class="row justify-content-center">
         <div class="col-md-10 col-lg-9">
-            <div class="card shadow-lg border-0 rounded-4 mb-4">
+            <div class="card wallet-card shadow-lg border-0 rounded-4 mb-4">
                 <div class="card-body p-4 p-md-5">
-                    <h2 class="card-title text-center mb-4 fw-bold text-dark">My Wallet</h2>
+                    <h2 class="card-title text-center mb-4 fw-bold text-dark wallet-title">My Wallet</h2>
 
-                    {# Display Django messages #} {% if messages %}
-                    <ul class="messages list-unstyled px-0 mx-0">
-                        {% for message in messages %}
-                        <li class="alert alert-{{ message.tags }} rounded-3 mb-2" role="alert">
-                            {{ message }}
-                        </li>
-                        {% endfor %}
-                    </ul>
-                    {% endif %}
-
-                    <div class="text-center mb-4">
-                        <p class="lead text-muted mb-0">Current Balance:</p>
-                        <h3 class="fw-bold text-success fs-1">₦{{ wallet.balance|floatformat:2 }}</h3>
+                    <div class="text-center mb-4 wallet-balance">
+                        <p class="lead text-muted mb-1">Current Balance</p>
+                        <h3 class="fw-bold text-success fs-1 mb-0">₦{{ wallet.balance|floatformat:2 }}</h3>
                     </div>
 
                     {# Deposit Section #}
@@ -51,16 +81,35 @@
                             <label for="id_amount_deposit" class="form-label">Amount (₦)</label>
                             <input type="number" name="amount" id="id_amount_deposit" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 5000" min="100" required>
                         </div>
-                        <button type="submit" class="btn btn-success rounded-pill px-4 py-2 w-100">Initiate Deposit</button>
+                        
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-4">
+                                <button type="submit" name="gateway" value="paystack" id="paystack-button" class="btn btn-primary rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
+                                    <i class="fas fa-credit-card me-2"></i> Paystack
+                                </button>
+                            </div>
+                            <div class="col-md-4">
+                                <button type="submit" name="gateway" value="monnify" class="btn btn-dark rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
+                                    <i class="fas fa-university me-2"></i> Monnify
+                                </button>
+                            </div>
+                            <div class="col-md-4">
+                                <button type="submit" name="gateway" value="kora" class="btn btn-info rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center text-white">
+                                    <i class="fas fa-bolt me-2"></i> Kora
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <input type="hidden" name="gateway_hidden" id="gateway_hidden" value="paystack">
                     </form>
-                    <p class="text-center text-muted small">Powered by Paystack</p>
+                    <p class="text-center text-muted small">Choose your preferred payment gateway</p>
 
 
                     {# Withdrawal Section - Restricted to Agents #}
                     {% if request.user.user_type == 'master_agent' or request.user.user_type == 'super_agent' or request.user.user_type == 'agent' %}
                     <hr class="my-4">
                     <h4 class="fw-bold mb-3 text-danger">Withdraw Funds</h4>
-                    <form action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
+                    <form id="withdrawForm" action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
@@ -78,7 +127,27 @@
                             <label for="id_account_number" class="form-label">Account Number</label>
                             <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
                         </div>
-                        <button type="submit" class="btn btn-danger rounded-pill px-4 py-2 w-100">Request Withdrawal</button>
+                        {% if request.user.withdrawal_locked %}
+                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                            <div class="text-danger small mt-2 text-center">
+                                Withdrawal access has been disabled.
+                                {% if withdrawal_lock_expires_at %}
+                                    Retry after {{ withdrawal_lock_expires_at|date:"M d, Y H:i" }} or contact administrator.
+                                {% else %}
+                                    Retry after 24 hours or contact administrator.
+                                {% endif %}
+                            </div>
+                        {% elif not request.user.withdrawal_pin_is_set %}
+                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                            <div class="text-muted small mt-2 text-center">
+                                Please create your Withdrawal PIN first on your <a href="{% url 'betting:profile' %}" class="text-decoration-none">profile</a>.
+                            </div>
+                        {% else %}
+                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center gap-2">
+                                <span id="withdrawBtnText">Request Withdrawal</span>
+                                <span id="withdrawBtnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                            </button>
+                        {% endif %}
                     </form>
                     {% endif %}
 
@@ -198,6 +267,33 @@
         </div>
     </div>
 </div>
+</div>
+
+<div class="modal fade" id="withdrawalPinModal" tabindex="-1" aria-labelledby="withdrawalPinModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="withdrawalPinModalLabel">Confirm Withdrawal PIN</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2 text-muted small">Enter your Withdrawal PIN to continue.</div>
+                <div class="input-group">
+                    <input type="password" id="withdrawalPinInput" class="form-control" inputmode="numeric" autocomplete="current-password" placeholder="Enter PIN">
+                    <button class="btn btn-outline-secondary" type="button" id="toggleWithdrawalPinVisibility">Show</button>
+                </div>
+                <div class="text-danger small mt-2 d-none" id="withdrawalPinError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" id="confirmWithdrawalPinBtn" class="btn btn-danger d-flex align-items-center gap-2">
+                    <span id="confirmWithdrawalPinText">Verify & Continue</span>
+                    <span id="confirmWithdrawalPinSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 {% endblock %} {% block extra_js %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
@@ -237,61 +333,226 @@
     });
 
     document.getElementById('depositForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-
+        // e.preventDefault(); // Commented out to allow standard form submission if needed, 
+                               // but we'll use a smarter approach below.
+        
         const amount = document.getElementById('id_amount_deposit').value;
+        const gateway = e.submitter ? e.submitter.value : 'paystack';
+        
         if (!amount || parseFloat(amount) <= 0) {
-            alert('Please enter a valid amount.');
+            e.preventDefault();
+            Swal.fire({ icon: 'warning', title: 'Invalid Amount', text: 'Please enter a valid amount.' });
             return;
         }
 
-        try {
-            const response = await fetch(this.action, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}'
-                },
-                body: JSON.stringify({
-                    amount: amount
-                })
-            });
+        // Set the hidden field if we want to allow standard redirect
+        document.getElementById('gateway_hidden').value = gateway;
+        
+        // If we want to use the JS SDK for any of them, we handle it here.
+        // For Paystack, we often use the inline JS SDK.
+        if (gateway === 'paystack') {
+            e.preventDefault();
+            try {
+                const response = await fetch(this.action, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                    },
+                    body: JSON.stringify({ amount: amount, gateway: 'paystack' })
+                });
 
-            const contentType = response.headers.get("content-type");
-            if (!contentType || !contentType.includes("application/json")) {
-                throw new Error("Received non-JSON response from server");
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    const handler = PaystackPop.setup({
+                        key: data.public_key,
+                        email: data.email,
+                        amount: data.amount,
+                        ref: data.reference,
+                        callback: function(response) {
+                            window.location.href = '{% url "betting:verify_deposit" %}?reference=' + response.reference;
+                        },
+                        onClose: function() {
+                            Swal.fire({ icon: 'info', title: 'Cancelled', text: 'Transaction was not completed.' });
+                        }
+                    });
+                    handler.openIframe();
+                } else {
+                    Swal.fire({ icon: 'error', title: 'Deposit Failed', text: data.message || 'Unable to initiate deposit.' });
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                Swal.fire({ icon: 'error', title: 'Error', text: 'An error occurred. Please try again.' });
             }
+        } 
+        // For Monnify/Kora, we are currently redirecting server-side in the form handler
+        // so we don't preventDefault() if it's not Paystack.
+    });
+</script>
 
-            const data = await response.json();
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const withdrawForm = document.getElementById('withdrawForm');
+        const withdrawBtn = document.getElementById('withdrawRequestBtn');
+        if (!withdrawForm || !withdrawBtn) return;
 
-            if (data.status === 'success') {
-                if (typeof PaystackPop === 'undefined') {
-                    alert('Paystack SDK failed to load. Please check your internet connection.');
+        const csrfTokenInput = withdrawForm.querySelector('input[name=csrfmiddlewaretoken]');
+        const csrfToken = csrfTokenInput ? csrfTokenInput.value : '';
+
+        const pinModalEl = document.getElementById('withdrawalPinModal');
+        const pinModal = pinModalEl ? new bootstrap.Modal(pinModalEl) : null;
+
+        const pinInput = document.getElementById('withdrawalPinInput');
+        const pinError = document.getElementById('withdrawalPinError');
+        const togglePinBtn = document.getElementById('toggleWithdrawalPinVisibility');
+        const confirmPinBtn = document.getElementById('confirmWithdrawalPinBtn');
+        const confirmPinSpinner = document.getElementById('confirmWithdrawalPinSpinner');
+
+        const withdrawBtnSpinner = document.getElementById('withdrawBtnSpinner');
+        const withdrawBtnText = document.getElementById('withdrawBtnText');
+
+        const setConfirmLoading = (isLoading) => {
+            if (confirmPinSpinner) confirmPinSpinner.classList.toggle('d-none', !isLoading);
+            if (confirmPinBtn) confirmPinBtn.disabled = isLoading;
+        };
+
+        const setWithdrawLoading = (isLoading) => {
+            if (withdrawBtnSpinner) withdrawBtnSpinner.classList.toggle('d-none', !isLoading);
+            if (withdrawBtnText) withdrawBtnText.textContent = isLoading ? 'Processing...' : 'Request Withdrawal';
+            withdrawBtn.disabled = isLoading;
+        };
+
+        const showPinError = (text) => {
+            if (!pinError) return;
+            if (text) {
+                pinError.textContent = text;
+                pinError.classList.remove('d-none');
+            } else {
+                pinError.textContent = '';
+                pinError.classList.add('d-none');
+            }
+        };
+
+        if (togglePinBtn && pinInput) {
+            togglePinBtn.addEventListener('click', function () {
+                const isPassword = pinInput.type === 'password';
+                pinInput.type = isPassword ? 'text' : 'password';
+                togglePinBtn.textContent = isPassword ? 'Hide' : 'Show';
+            });
+        }
+
+        withdrawBtn.addEventListener('click', function () {
+            if (withdrawBtn.disabled) return;
+            if (!pinModal) return;
+            if (pinInput) pinInput.value = '';
+            showPinError('');
+            pinModal.show();
+            setTimeout(() => {
+                if (pinInput) pinInput.focus();
+            }, 250);
+        });
+
+        const submitWithdrawal = async () => {
+            setWithdrawLoading(true);
+            try {
+                const formData = new FormData(withdrawForm);
+                const payload = {
+                    amount: formData.get('amount'),
+                    bank_name: formData.get('bank_name'),
+                    account_name: formData.get('account_name'),
+                    account_number: formData.get('account_number')
+                };
+
+                const response = await fetch(withdrawForm.action, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.status === 'success') {
+                    await Swal.fire({ icon: 'success', title: 'Success', text: data.message || 'Withdrawal request submitted successfully.' });
+                    window.location.reload();
                     return;
                 }
-                const handler = PaystackPop.setup({
-                    key: '{{ paystack_public_key }}', // Replace with your public key
-                    email: data.email,
-                    amount: data.amount, // amount in kobo
-                    ref: data.reference,
-                    onClose: function() {
-                        console.log('Payment window closed.');
-                        // Optionally, redirect or show a message
-                    },
-                    callback: function(response) {
-                        const message = 'Payment complete! Reference: ' + response.reference;
-                        console.log(message);
-                        // Redirect to the verify_deposit view to complete the transaction
-                        window.location.href = "{% url 'betting:verify_deposit' %}?reference=" + response.reference;
-                    }
-                });
-                handler.openIframe();
-            } else {
-                alert('Error initiating deposit: ' + (data.message || 'Unknown error'));
+
+                await Swal.fire({ icon: 'error', title: 'Oops...', text: (data && data.message) ? data.message : 'Unable to submit withdrawal request.' });
+            } catch (e) {
+                await Swal.fire({ icon: 'error', title: 'Oops...', text: 'An error occurred. Please try again.' });
+            } finally {
+                setWithdrawLoading(false);
             }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('An error occurred during deposit initiation: ' + error.message);
+        };
+
+        if (confirmPinBtn) {
+            confirmPinBtn.addEventListener('click', async function () {
+                showPinError('');
+                const pin = (pinInput ? pinInput.value : '').trim();
+                if (!pin) {
+                    showPinError('Withdrawal PIN is required.');
+                    return;
+                }
+
+                setConfirmLoading(true);
+                try {
+                    const response = await fetch('{% url "betting:verify_withdrawal_pin" %}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': csrfToken
+                        },
+                        body: JSON.stringify({ pin })
+                    });
+
+                    const data = await response.json().catch(() => ({}));
+
+                    if (response.ok && data.status === 'success') {
+                        if (pinModal) pinModal.hide();
+                        await submitWithdrawal();
+                        return;
+                    }
+
+                    if (data.status === 'no_pin' && data.redirect_url) {
+                        if (pinModal) pinModal.hide();
+                        await Swal.fire({ icon: 'warning', title: 'Attention', text: data.message || 'Please create your Withdrawal PIN first.' });
+                        window.location.href = data.redirect_url;
+                        return;
+                    }
+
+                    if (data.status === 'locked') {
+                        if (pinModal) pinModal.hide();
+                        withdrawBtn.disabled = true;
+                        let msg = data.message || 'Withdrawal access disabled. Retry after 24 hours or contact administrator.';
+                        if (data.retry_at) {
+                            const d = new Date(data.retry_at);
+                            if (!Number.isNaN(d.getTime())) {
+                                msg = `Withdrawal access has been disabled. Retry after ${d.toLocaleString()} or contact administrator.`;
+                            }
+                        }
+                        await Swal.fire({ icon: 'error', title: 'Oops...', text: msg });
+                        return;
+                    }
+
+                    if (typeof data.attempts_remaining === 'number') {
+                        await Swal.fire({
+                            icon: 'error',
+                            title: 'Invalid PIN',
+                            text: `${data.message || 'Invalid withdrawal PIN.'} You have ${data.attempts_remaining} attempt(s) remaining.`
+                        });
+                        return;
+                    }
+
+                    await Swal.fire({ icon: 'error', title: 'Oops...', text: data.message || 'Invalid withdrawal PIN.' });
+                } catch (e) {
+                    await Swal.fire({ icon: 'error', title: 'Oops...', text: 'An error occurred. Please try again.' });
+                } finally {
+                    setConfirmLoading(false);
+                }
+            });
         }
     });
 </script>

@@ -7,15 +7,20 @@ from decimal import Decimal
 from django.core.validators import MinValueValidator
 import secrets
 import string
+import re
+import hashlib
+from datetime import timedelta
+from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.db import transaction
 import threading
+from django_ckeditor_5.fields import CKEditor5Field
 
 
 class SiteConfiguration(models.Model):
-    site_name = models.CharField(max_length=255, default="PoolBetting")
+    site_name = models.CharField(max_length=255, default="StakeNaija")
     logo = models.ImageField(upload_to='site_branding/', blank=True, null=True)
     favicon = models.ImageField(upload_to='site_branding/', blank=True, null=True, help_text="Upload a favicon (small icon) for the browser tab.")
     navbar_text_type = models.CharField(
@@ -28,6 +33,8 @@ class SiteConfiguration(models.Model):
     navbar_gradient_end = models.CharField(max_length=50, default="#f8f9fa", help_text="Gradient End Color (Right side)")
     navbar_link_hover_color = models.CharField(max_length=50, default="#007bff", help_text="Color of nav links on hover")
     landing_page_background = models.ImageField(upload_to='site_branding/', blank=True, null=True, help_text="Background image for the landing page")
+    show_ticket_status_on_landing = models.BooleanField(default=True, help_text="Show/Hide the 'Check Your Bet Ticket Status' section on the landing page.")
+    carousel_interval = models.PositiveIntegerField(default=5000, help_text="Carousel sliding interval in milliseconds (e.g., 5000 for 5 seconds).")
     
     # Commission Settings
     account_user_commission_authority = models.BooleanField(
@@ -77,6 +84,107 @@ class SiteConfiguration(models.Model):
         verbose_name = "Site Configuration"
         verbose_name_plural = "Site Configuration"
 
+class CarouselImage(models.Model):
+    image = models.ImageField(upload_to='carousel_images/')
+    title = models.CharField(max_length=255, blank=True, null=True, help_text="Optional title for the image")
+    description = models.TextField(blank=True, null=True, help_text="Optional description for the image")
+    is_active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0, help_text="Order of display")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', '-created_at']
+        verbose_name = "Carousel Image"
+        verbose_name_plural = "Carousel Images"
+
+    def __str__(self):
+        return f"Carousel Image {self.id} - {self.title or 'No Title'}"
+
+
+class FooterPage(models.Model):
+    slug = models.SlugField(unique=True)
+    footer_label = models.CharField(max_length=100)
+    title = models.CharField(max_length=255)
+    content = CKEditor5Field(blank=True, null=True, config_name='default')
+    is_active = models.BooleanField(default=True)
+    show_in_footer = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'footer_label']
+
+    def __str__(self):
+        return self.footer_label
+
+
+class FooterBadge(models.Model):
+    image = models.ImageField(upload_to='footer_badges/')
+    alt_text = models.CharField(max_length=150, blank=True, default="")
+    link_url = models.URLField(blank=True, default="")
+    content_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    is_active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def save(self, *args, **kwargs):
+        if self.image and not self.content_hash:
+            file_obj = getattr(self.image, "file", None)
+            if file_obj is not None:
+                h = hashlib.sha256()
+                try:
+                    for chunk in self.image.chunks():
+                        h.update(chunk)
+                    self.content_hash = h.hexdigest()
+                finally:
+                    try:
+                        file_obj.seek(0)
+                    except Exception:
+                        pass
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.alt_text or f"Footer Badge {self.id}"
+
+class PasswordResetRequest(models.Model):
+    email = models.EmailField()
+    token = models.CharField(max_length=100, unique=True)
+    user = models.ForeignKey('User', on_delete=models.CASCADE, null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    email_sent = models.BooleanField(default=False)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    send_error = models.TextField(null=True, blank=True)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    def is_valid(self):
+        return not self.is_used and timezone.now() < self.expires_at
+
+    def __str__(self):
+        return f"Reset for {self.email} at {self.created_at}"
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Password Reset Request"
+        verbose_name_plural = "Password Reset Requests"
+
+class State(models.Model):
+    state_name = models.CharField(max_length=100, unique=True)
+    abbreviation = models.CharField(max_length=20, unique=True)
+
+    def __str__(self):
+        return f"{self.state_name} ({self.abbreviation})"
+
+    class Meta:
+        ordering = ['state_name']
+        verbose_name = "State"
+        verbose_name_plural = "States"
+
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -112,8 +220,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
 
     email = models.EmailField(unique=True)
+    username = models.CharField(max_length=50, unique=True, blank=True, null=True)
     first_name = models.CharField(max_length=100, blank=True, null=True)
     last_name = models.CharField(max_length=100, blank=True, null=True)
+    other_name = models.CharField(max_length=100, blank=True, null=True)
+    state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     shop_address = models.CharField(max_length=255, blank=True, null=True)
     
@@ -135,6 +246,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_locked = models.BooleanField(default=False)
     locked_at = models.DateTimeField(null=True, blank=True)
     lock_reason = models.TextField(null=True, blank=True)
+
+    withdrawal_pin = models.CharField(max_length=128, blank=True, default="")
+    withdrawal_attempts = models.PositiveSmallIntegerField(default=0)
+    withdrawal_locked = models.BooleanField(default=False)
+    withdrawal_locked_at = models.DateTimeField(null=True, blank=True)
 
     date_joined = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -171,6 +287,39 @@ class User(AbstractBaseUser, PermissionsMixin):
         wallet, created = Wallet.objects.get_or_create(user=self)
         return wallet
 
+    @property
+    def withdrawal_pin_is_set(self):
+        return bool(self.withdrawal_pin)
+
+    def set_withdrawal_pin(self, raw_pin):
+        self.withdrawal_pin = make_password(raw_pin)
+
+    def check_withdrawal_pin(self, raw_pin):
+        if not self.withdrawal_pin:
+            return False
+        return check_password(raw_pin, self.withdrawal_pin)
+
+    def get_withdrawal_lock_expires_at(self, cooldown_hours=24):
+        if not self.withdrawal_locked_at:
+            return None
+        return self.withdrawal_locked_at + timedelta(hours=cooldown_hours)
+
+    def maybe_auto_unlock_withdrawal(self, now=None, cooldown_hours=24):
+        if not self.withdrawal_locked:
+            return False
+        if not self.withdrawal_locked_at:
+            return False
+        now = now or timezone.now()
+        expires_at = self.get_withdrawal_lock_expires_at(cooldown_hours=cooldown_hours)
+        if not expires_at:
+            return False
+        if now >= expires_at:
+            self.withdrawal_locked = False
+            self.withdrawal_attempts = 0
+            self.withdrawal_locked_at = None
+            return True
+        return False
+
     def clean(self):
         if self.user_type == 'admin':
             self.is_staff = True
@@ -182,11 +331,21 @@ class User(AbstractBaseUser, PermissionsMixin):
             self.is_staff = False
             self.is_superuser = False
 
-        if self.user_type == 'cashier' and not self.cashier_prefix:
-            raise ValidationError({'cashier_prefix': 'Cashier must have a cashier prefix.'})
-        
-        if self.user_type != 'cashier' and self.cashier_prefix:
-            self.cashier_prefix = None
+        if self.username is not None:
+            normalized_username = self.username.strip()
+            normalized_username = re.sub(r'[^A-Za-z0-9]', '', normalized_username)
+            self.username = normalized_username or None
+
+        if self.user_type in ['agent', 'cashier']:
+            if not self.first_name or not self.last_name or not self.other_name:
+                raise ValidationError({'first_name': 'First Name, Last Name, and Other Name are required.'})
+            if self.user_type == 'agent':
+                if not self.state:
+                    raise ValidationError({'state': 'State is required for agents.'})
+                if not self.username and self.pk:
+                    raise ValidationError({'username': 'Username is required for agents.'})
+            if self.user_type == 'cashier' and not self.username:
+                raise ValidationError({'username': 'Username is required for cashiers.'})
 
         # Hierarchy Role Validation
         if self.master_agent:
@@ -279,7 +438,9 @@ class Transaction(models.Model):
     related_bet_ticket = models.ForeignKey('BetTicket', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     related_withdrawal_request = models.ForeignKey('UserWithdrawal', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     related_payout = models.ForeignKey('AgentPayout', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    payment_gateway = models.CharField(max_length=20, choices=[('paystack', 'Paystack'), ('monnify', 'Monnify'), ('kora', 'Kora')], default='paystack')
     paystack_reference = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    external_reference = models.CharField(max_length=100, blank=True, null=True, unique=True)
 
     class Meta:
         ordering = ['-timestamp']
@@ -455,6 +616,9 @@ class BetTicket(models.Model):
         """
         Recalculates ticket odds, winnings, and bonus based on valid (non-postponed) events.
         """
+        if self.status != 'pending':
+            return
+
         from itertools import combinations
         from django.apps import apps
         BonusRule = apps.get_model('betting', 'BonusRule')

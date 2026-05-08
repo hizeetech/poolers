@@ -51,6 +51,34 @@ from .forms import (
 logger = logging.getLogger('betting') # Use the 'betting' logger defined in settings.py
 
 
+def _get_admin_notification_email():
+    return os.getenv('ADMIN_NOTIFICATION_EMAIL') or settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+
+
+def _notify_admin_deposit_success(user, transaction_record, amount, gateway):
+    admin_email = _get_admin_notification_email()
+    from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+    if not admin_email or not from_email:
+        return
+
+    identifier = user.email or user.username or f"user#{user.pk}"
+    subject = f"Deposit Successful ({gateway.capitalize()}): ₦{amount:.2f}"
+    message = (
+        f"User: {identifier}\n"
+        f"Amount: ₦{amount:.2f}\n"
+        f"Gateway: {gateway}\n"
+        f"Reference: {transaction_record.external_reference}\n"
+        f"Time: {timezone.now().strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+    )
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=from_email,
+        recipient_list=[admin_email],
+        fail_silently=True
+    )
+
+
 # --- Helper Functions for User Permissions and Logging ---
 
 def is_admin(user):
@@ -1295,6 +1323,7 @@ def verify_monnify_deposit(request):
                 transaction_record.timestamp = timezone.now()
                 transaction_record.save()
 
+                _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "monnify")
                 messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
             else:
                 msg = verify_data.get('responseMessage', 'Payment not successful')
@@ -1370,6 +1399,7 @@ def verify_kora_deposit(request):
             transaction_record.timestamp = timezone.now()
             transaction_record.save()
 
+            _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "kora")
             messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
         else:
             msg = response_data.get('message', 'Payment not successful')
@@ -1440,6 +1470,7 @@ def verify_deposit(request):
             transaction_record.timestamp = timezone.now() # Update timestamp to completion time
             transaction_record.save()
 
+            _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "paystack")
             messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
         else:
             messages.error(request, f"Payment verification failed: {response_data['data'].get('message', 'Unknown error')}")

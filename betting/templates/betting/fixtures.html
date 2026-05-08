@@ -7,7 +7,7 @@
             <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                 {% if current_betting_period %}{{ current_betting_period.name }}{% else %}Select Period{% endif %}
             </button>
-            <ul class="dropdown-menu" aria-labelledby="bettingPeriodDropdown">
+            <ul class="dropdown-menu fixture-period-menu" aria-labelledby="bettingPeriodDropdown">
                 {% for period in active_periods %}
                 <li><a class="dropdown-item" href="{% url 'betting:fixtures_with_period' period.id %}">{{ period.name }}</a></li>
                 {% empty %}

@@ -22,21 +22,11 @@
 
             <div class="details">
                 <p><strong>Login Email:</strong> <span class="mono">{{ pending_agent.email }}</span></p>
-                <p><strong>Password:</strong> <span class="mono">{{ password }}</span></p>
                 <p><strong>Role:</strong> {{ pending_agent.get_user_type_display }}</p>
                 <p><strong>Status:</strong> {{ pending_agent.status }}</p>
             </div>
 
-            <p>Once approved, you will be able to log in and start using your account. Two cashier accounts will be created for you:</p>
-            <div class="details">
-                <p><strong>Cashier Emails:</strong></p>
-                <ul>
-                    {% for email in cashier_emails %}
-                    <li class="mono">{{ email }}</li>
-                    {% endfor %}
-                </ul>
-                <p><strong>Cashier Password:</strong> <span class="mono">{{ password }}</span></p>
-            </div>
+            <p>Once approved by the administrator, your login details (including cashier accounts) will be sent to this email address.</p>
 
             <p>Login page: <a href="{{ login_url }}">{{ login_url }}</a></p>
         </div>

@@ -9,12 +9,18 @@ from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.conf import settings
+from django.utils.crypto import get_random_string
 from .models import PendingAgentRegistration
 from django.contrib.auth import get_user_model
-from betting.models import Wallet, Transaction
+from betting.models import Wallet, Transaction, State
 from betting.admin import betting_admin_site
 import random
-from betting.services.usernames import generate_cashier_email
+import re
+from betting.services.usernames import (
+    generate_agent_username,
+    generate_cashier_usernames,
+    generate_cashier_email,
+)
 
 User = get_user_model()
 
@@ -56,57 +62,104 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
 
         try:
             with transaction.atomic():
-                # 1. Create User
+                raw_password = get_random_string(12)
+                name_parts = (pending_reg.full_name or "").split()
+                first_name = name_parts[0] if name_parts else ""
+                last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+                other_name = ""
+
+                state_obj = None
+                if pending_reg.state:
+                    state_obj = State.objects.filter(state_name__iexact=pending_reg.state).first()
+                    if not state_obj:
+                        state_obj = State.objects.filter(abbreviation__iexact=pending_reg.state).first()
+
+                username = None
+                roots = []
+                base_root = ""
+                if state_obj:
+                    try:
+                        username, roots, base_root = generate_agent_username(
+                            User,
+                            state_obj.abbreviation,
+                            first_name,
+                            last_name,
+                            other_name,
+                        )
+                    except Exception:
+                        username = None
+
+                if not username:
+                    local = (pending_reg.email or "").split("@")[0]
+                    local = re.sub(r"[^A-Za-z0-9]", "", local)[:20] or "Agent"
+                    candidate = local[:1].upper() + local[1:].lower()
+                    suffix = 1
+                    while User.objects.filter(username__iexact=candidate).exists():
+                        candidate = f"{local}{suffix}"
+                        suffix += 1
+                    username = candidate
+
                 user = User.objects.create_user(
                     email=pending_reg.email,
-                    password=None, # Will set hash directly
-                    first_name=pending_reg.full_name.split()[0],
-                    last_name=" ".join(pending_reg.full_name.split()[1:]) if " " in pending_reg.full_name else "",
+                    password=raw_password,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                    other_name=other_name,
                     phone_number=pending_reg.phone,
-                    shop_address=pending_reg.state, 
+                    state=state_obj,
+                    shop_address=pending_reg.state,
                     user_type=pending_reg.user_type,
                     master_agent=pending_reg.master_agent,
                     super_agent=pending_reg.super_agent,
                     is_active=True
                 )
-                user.password = pending_reg.password # Already hashed
-                user.save()
 
                 # 2. Create Wallet (if not created by signals)
                 if not Wallet.objects.filter(user=user).exists():
                     Wallet.objects.create(user=user, balance=0)
 
-                # 3. Generate Cashier Prefix for the Agent
-                # Ensure unique 4-digit prefix
-                while True:
-                    prefix = str(random.randint(1000, 9999))
-                    if not User.objects.filter(cashier_prefix=prefix).exists():
-                        break
-                
-                user.cashier_prefix = prefix
-                user.save()
+                cashier_accounts = []
+                if user.user_type == 'agent':
+                    while True:
+                        prefix = str(random.randint(1000, 9999))
+                        if not User.objects.filter(cashier_prefix=prefix).exists():
+                            break
+                    user.cashier_prefix = prefix
+                    user.save(update_fields=["cashier_prefix"])
 
-                # 4. Create 2 Cashier Accounts
-                cashier_emails = []
-                for i in range(1, 3):
-                    cashier_email = generate_cashier_email(user.email, f"C{i}")
-                    cashier_emails.append(cashier_email)
-                    
-                    # Check if cashier already exists (highly unlikely with unique prefix, but good for safety)
-                    if not User.objects.filter(email=cashier_email).exists():
+                    cashier1_username, cashier2_username, _cashier_root = generate_cashier_usernames(
+                        User,
+                        preferred_root=user.username,
+                        roots=roots,
+                        base_root=base_root,
+                    )
+
+                    cashier_specs = [
+                        ("C1", cashier1_username, f"{prefix}-01"),
+                        ("C2", cashier2_username, f"{prefix}-02"),
+                    ]
+
+                    for code, cashier_username, cashier_prefix in cashier_specs:
+                        cashier_email = generate_cashier_email(user.email, code)
+                        if User.objects.filter(email__iexact=cashier_email).exists():
+                            continue
                         cashier = User.objects.create_user(
                             email=cashier_email,
-                            password=None,
-                            first_name=f"Cashier {i}",
-                            last_name=f"for {pending_reg.full_name}",
+                            password=raw_password,
+                            username=cashier_username,
+                            first_name=user.first_name,
+                            last_name=user.last_name,
+                            other_name=user.other_name,
+                            state=user.state,
                             user_type='cashier',
-                            agent=user, 
-                            cashier_prefix=f"{prefix}-{i:02d}",  # Set the cashier_prefix for the cashier account as well
+                            agent=user,
+                            master_agent=user.master_agent,
+                            super_agent=user.super_agent,
+                            cashier_prefix=cashier_prefix,
                             is_active=True
                         )
-                        cashier.password = pending_reg.password
-                        cashier.save()
-                        
+                        cashier_accounts.append(cashier)
                         if not Wallet.objects.filter(user=cashier).exists():
                             Wallet.objects.create(user=cashier, balance=0)
 
@@ -119,13 +172,14 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 login_url = request.build_absolute_uri('/login/')
                 html_message = render_to_string('pending_registration/email/agent_approved.html', {
                     'user': user,
-                    'cashier_emails': cashier_emails,
-                    'login_url': login_url
+                    'cashier_accounts': cashier_accounts,
+                    'login_url': login_url,
+                    'password': raw_password,
                 })
                 send_mail(
                     subject='Pool Betting Agent Registration Approved',
                     message=strip_tags(html_message),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
                     recipient_list=[user.email],
                     html_message=html_message,
                     fail_silently=True

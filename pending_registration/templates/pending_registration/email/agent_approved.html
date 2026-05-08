@@ -23,20 +23,23 @@
             
             <div class="details">
                 <p><strong>Login Email:</strong> {{ user.email }}</p>
-                <p><strong>Password:</strong> (The password you set during registration)</p>
+                <p><strong>Username:</strong> {{ user.username }}</p>
+                <p><strong>Password:</strong> {{ password }}</p>
                 <p><strong>Role:</strong> {{ user.get_user_type_display }}</p>
             </div>
 
+            {% if cashier_accounts %}
             <p>We have also created 2 Cashier accounts for your shop:</p>
             <div class="details">
-                <p><strong>Cashier Emails:</strong></p>
+                <p><strong>Cashiers:</strong></p>
                 <ul>
-                    {% for email in cashier_emails %}
-                    <li>{{ email }}</li>
+                    {% for cashier in cashier_accounts %}
+                    <li>{{ cashier.username }} — {{ cashier.email }}</li>
                     {% endfor %}
                 </ul>
-                <p><strong>Cashier Password:</strong> (Same as your password)</p>
+                <p><strong>Cashier Password:</strong> {{ password }}</p>
             </div>
+            {% endif %}
             
             <p>Please <a href="{{ login_url }}">click here to login</a>.</p>
         </div>

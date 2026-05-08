@@ -2,13 +2,8 @@ from django.shortcuts import redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.contrib.auth.hashers import make_password
-from django.conf import settings
-from django.core.mail import send_mail
-from django.template.loader import render_to_string
-from django.utils.html import strip_tags
 from django.urls import reverse
 from .forms import AgentRegistrationForm
-from betting.services.usernames import generate_cashier_email
 
 def is_agent_creator(user):
     return user.is_authenticated and user.user_type in ['master_agent', 'super_agent', 'agent']
@@ -46,28 +41,7 @@ def register_agent(request):
             
             pending_agent.save()
 
-            cashier_emails = [
-                generate_cashier_email(pending_agent.email, "C1"),
-                generate_cashier_email(pending_agent.email, "C2"),
-            ]
-
-            login_url = request.build_absolute_uri(reverse('betting:login'))
-            html_message = render_to_string('pending_registration/email/agent_submitted.html', {
-                'pending_agent': pending_agent,
-                'cashier_emails': cashier_emails,
-                'login_url': login_url,
-                'password': raw_password,
-            })
-            send_mail(
-                subject='Agent Registration Submitted',
-                message=strip_tags(html_message),
-                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                recipient_list=[pending_agent.email],
-                html_message=html_message,
-                fail_silently=True
-            )
-
-            messages.success(request, "Agent registration submitted for approval.")
+            messages.success(request, "Agent registration submitted for approval. Login details will be sent after admin approval.")
             return redirect(request.META.get('HTTP_REFERER') or fallback_url)
         else:
             for field, errors in form.errors.items():

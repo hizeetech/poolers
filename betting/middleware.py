@@ -108,3 +108,18 @@ def get_current_user():
         return getattr(request, 'user', None)
     return None
 
+
+class EnsureRemoteAddrMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if 'REMOTE_ADDR' not in request.META or not request.META.get('REMOTE_ADDR'):
+            forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            if forwarded_for:
+                request.META['REMOTE_ADDR'] = forwarded_for.split(',')[0].strip()
+            else:
+                real_ip = request.META.get('HTTP_X_REAL_IP')
+                if real_ip:
+                    request.META['REMOTE_ADDR'] = real_ip.strip()
+        return self.get_response(request)

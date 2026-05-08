@@ -112,6 +112,8 @@ class AgentProvisioningTests(TestCase):
         self.assertEqual(len(cashiers), 2)
         self.assertTrue(cashiers[0].username.endswith("C1"))
         self.assertTrue(cashiers[1].username.endswith("C2"))
+        self.assertEqual(cashiers[0].email, "C1agent@example.com")
+        self.assertEqual(cashiers[1].email, "C2agent@example.com")
         self.assertEqual(cashiers[0].agent_id, agent.id)
         self.assertEqual(cashiers[1].agent_id, agent.id)
         self.assertIn(cashier_root, cashiers[0].username)

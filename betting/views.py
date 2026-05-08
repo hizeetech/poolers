@@ -1,5 +1,6 @@
 import itertools
 import os
+import re
 import traceback
 import secrets
 import smtplib
@@ -794,7 +795,7 @@ def place_bet(request):
 
 def check_ticket_status(request):
     ticket = None
-    tickets = []
+    tickets = BetTicket.objects.none()
     # Default 60 mins if not set
     void_window_str = SystemSetting.get_setting('ticket_cancellation_window_minutes', '60')
     try:
@@ -849,7 +850,23 @@ def check_ticket_status(request):
     settled_date_to = request.GET.get('settled_date_to')
 
     if ticket_id_query:
-        tickets = tickets.filter(ticket_id__icontains=ticket_id_query)
+        ticket_id_query = (ticket_id_query or '').strip().upper()
+        if request.user.is_authenticated:
+            tickets = tickets.filter(ticket_id__icontains=ticket_id_query)
+        else:
+            if re.fullmatch(r"[A-Z0-9]{6,8}", ticket_id_query or ""):
+                tickets = BetTicket.objects.filter(ticket_id__iexact=ticket_id_query).order_by('-placed_at')
+                ticket = tickets.first()
+                if not ticket:
+                    messages.error(request, "Ticket not found.")
+            else:
+                messages.error(request, "Please enter a valid Ticket ID.")
+            status_query = None
+            bet_type_query = None
+            date_from = None
+            date_to = None
+            settled_date_from = None
+            settled_date_to = None
     
     if status_query and status_query != 'all':
         tickets = tickets.filter(status=status_query)

@@ -958,7 +958,7 @@ class ResetPasswordForm(forms.Form):
                 from .services.usernames import (
                     generate_agent_username,
                     generate_cashier_usernames,
-                    generate_internal_email,
+                    generate_cashier_email,
                 )
 
                 user.first_name = self.cleaned_data.get('first_name')
@@ -1012,7 +1012,7 @@ class ResetPasswordForm(forms.Form):
                 )
 
                 cashier1 = CustomUser.objects.create_user(
-                    email=generate_internal_email(cashier1_username),
+                    email=generate_cashier_email(user.email, "C1"),
                     password=self.cleaned_data.get("password"),
                     username=cashier1_username,
                     first_name=user.first_name,
@@ -1028,7 +1028,7 @@ class ResetPasswordForm(forms.Form):
                     is_superuser=False,
                 )
                 cashier2 = CustomUser.objects.create_user(
-                    email=generate_internal_email(cashier2_username),
+                    email=generate_cashier_email(user.email, "C2"),
                     password=self.cleaned_data.get("password"),
                     username=cashier2_username,
                     first_name=user.first_name,

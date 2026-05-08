@@ -1063,6 +1063,8 @@ def initiate_deposit(request):
                         'contractCode': os.getenv('MONNIFY_CONTRACT_CODE')
                     })
                 elif gateway == 'kora':
+                    if not os.getenv('KORA_PUBLIC_KEY'):
+                        return JsonResponse({'status': 'error', 'message': 'Kora is not configured (missing KORA_PUBLIC_KEY).'}, status=500)
                     return JsonResponse({
                         'status': 'success',
                         'gateway': 'kora',
@@ -1164,9 +1166,14 @@ def initiate_deposit(request):
 
             elif gateway == 'kora':
                 # Kora Server-side initialization
-                url = f"{os.getenv('KORA_BASE_URL')}/charges/initialize"
+                base_url = os.getenv('KORA_BASE_URL') or "https://api.korahq.com"
+                secret_key = os.getenv('KORA_SECRET_KEY')
+                if not secret_key:
+                    messages.error(request, "Kora is not configured (missing KORA_SECRET_KEY).")
+                    return redirect('betting:wallet')
+                url = f"{base_url.rstrip('/')}/charges/initialize"
                 headers = {
-                    "Authorization": f"Bearer {os.getenv('KORA_SECRET_KEY')}",
+                    "Authorization": f"Bearer {secret_key}",
                     "Content-Type": "application/json"
                 }
                 payload = {
@@ -1305,10 +1312,13 @@ def verify_kora_deposit(request):
 
     # Kora API verification
     secret_key = os.getenv('KORA_SECRET_KEY')
-    base_url = os.getenv('KORA_BASE_URL')
+    base_url = os.getenv('KORA_BASE_URL') or "https://api.korahq.com"
+    if not secret_key:
+        messages.error(request, "Kora is not configured (missing KORA_SECRET_KEY).")
+        return redirect('betting:wallet')
     
     try:
-        verify_url = f"{base_url}/charges/{reference}"
+        verify_url = f"{base_url.rstrip('/')}/charges/{reference}"
         headers = {"Authorization": f"Bearer {secret_key}"}
         
         response = requests.get(verify_url, headers=headers, timeout=10)

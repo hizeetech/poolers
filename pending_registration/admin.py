@@ -14,6 +14,7 @@ from django.contrib.auth import get_user_model
 from betting.models import Wallet, Transaction
 from betting.admin import betting_admin_site
 import random
+from betting.services.usernames import generate_cashier_email
 
 User = get_user_model()
 
@@ -88,7 +89,7 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 # 4. Create 2 Cashier Accounts
                 cashier_emails = []
                 for i in range(1, 3):
-                    cashier_email = f"{prefix}-CSH-{i:02d}@cashier.com"
+                    cashier_email = generate_cashier_email(user.email, f"C{i}")
                     cashier_emails.append(cashier_email)
                     
                     # Check if cashier already exists (highly unlikely with unique prefix, but good for safety)

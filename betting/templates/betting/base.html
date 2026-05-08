@@ -37,7 +37,8 @@
             {% endif %}
 
             --wallet-highlight: #00E676;
-            --dropdown-bg: {% if site_config.navbar_text_type == 'dark' %}#132C46{% else %}#FFFFFF{% endif %};
+            --dropdown-bg: {% if site_config.navbar_text_type == 'dark' or site_config.navbar_gradient_start == "#ffffff" or site_config.navbar_gradient_start == "#fff" %}#132C46{% else %}#FFFFFF{% endif %};
+            --dropdown-text: {% if site_config.navbar_text_type == 'dark' or site_config.navbar_gradient_start == "#ffffff" or site_config.navbar_gradient_start == "#fff" %}#FFFFFF{% else %}#212529{% endif %};
         }
 
         body {
@@ -96,11 +97,11 @@
         }
 
         .dropdown-item {
-            color: var(--navbar-text) !important;
+            color: var(--dropdown-text) !important;
         }
 
         .dropdown-item:hover, .dropdown-item:focus {
-            background-color: rgba(255, 255, 255, 0.05);
+            background-color: {% if site_config.navbar_text_type == 'dark' or site_config.navbar_gradient_start == "#ffffff" or site_config.navbar_gradient_start == "#fff" %}rgba(255, 255, 255, 0.08){% else %}rgba(0, 0, 0, 0.04){% endif %};
             color: var(--hover-accent) !important;
         }
 

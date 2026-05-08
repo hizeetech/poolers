@@ -1063,15 +1063,16 @@ def initiate_deposit(request):
                         'contractCode': os.getenv('MONNIFY_CONTRACT_CODE')
                     })
                 elif gateway == 'kora':
-                    if not os.getenv('KORA_PUBLIC_KEY'):
-                        return JsonResponse({'status': 'error', 'message': 'Kora is not configured (missing KORA_PUBLIC_KEY).'}, status=500)
+                    public_key = os.getenv('KORA_PUBLIC_KEY') or os.getenv('KORAPAY_PUBLIC_KEY')
+                    if not public_key:
+                        return JsonResponse({'status': 'error', 'message': 'Kora is not configured (missing public key).'}, status=500)
                     return JsonResponse({
                         'status': 'success',
                         'gateway': 'kora',
                         'email': request.user.email,
                         'amount': float(amount),
                         'reference': reference,
-                        'publicKey': os.getenv('KORA_PUBLIC_KEY')
+                        'publicKey': public_key
                     })
                 else:
                     return JsonResponse({'status': 'error', 'message': 'Unsupported gateway.'}, status=400)
@@ -1166,8 +1167,11 @@ def initiate_deposit(request):
 
             elif gateway == 'kora':
                 # Kora Server-side initialization
-                base_url = os.getenv('KORA_BASE_URL') or "https://api.korahq.com"
-                secret_key = os.getenv('KORA_SECRET_KEY')
+                base_url = os.getenv('KORA_BASE_URL') or os.getenv('KORAPAY_BASE_URL') or "https://api.korapay.com/merchant/api/v1"
+                if base_url.rstrip('/').endswith('/merchant/api'):
+                    base_url = f"{base_url.rstrip('/')}/v1"
+
+                secret_key = os.getenv('KORA_SECRET_KEY') or os.getenv('KORAPAY_SECRET_KEY')
                 if not secret_key:
                     messages.error(request, "Kora is not configured (missing KORA_SECRET_KEY).")
                     return redirect('betting:wallet')
@@ -1311,8 +1315,10 @@ def verify_kora_deposit(request):
         return redirect('betting:wallet')
 
     # Kora API verification
-    secret_key = os.getenv('KORA_SECRET_KEY')
-    base_url = os.getenv('KORA_BASE_URL') or "https://api.korahq.com"
+    secret_key = os.getenv('KORA_SECRET_KEY') or os.getenv('KORAPAY_SECRET_KEY')
+    base_url = os.getenv('KORA_BASE_URL') or os.getenv('KORAPAY_BASE_URL') or "https://api.korapay.com/merchant/api/v1"
+    if base_url.rstrip('/').endswith('/merchant/api'):
+        base_url = f"{base_url.rstrip('/')}/v1"
     if not secret_key:
         messages.error(request, "Kora is not configured (missing KORA_SECRET_KEY).")
         return redirect('betting:wallet')

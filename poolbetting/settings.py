@@ -62,14 +62,14 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]', 'www.rhonextec.website', 'rhonextec.website', '172.237.102.130']
+ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]', 'www.shop.stakenaija.ng', 'shop.stakenaija.ng', '172.236.9.63']
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://rhonextec.website",
-    "https://rhonextec.website",
-    "http://www.rhonextec.website",
-    "https://www.rhonextec.website",
-    "http://172.237.102.130",
+    "http://shop.stakenaija.ng",
+    "https://shop.stakenaija.ng",
+    "http://www.shop.stakenaija.ng",
+    "https://www.shop.stakenaija.ng",
+    "http://172.236.9.63",
 ]
 
 
@@ -411,8 +411,8 @@ CSP_IMG_SRC = ("'self'", "data:", "https://*") # Allow images from anywhere for 
 CSP_CONNECT_SRC = (
     "'self'", 
     "ws://localhost:8000", 
-    "wss://rhonextec.website", 
-    "https://rhonextec.website"
+    "wss://shop.stakenaija.ng", 
+    "https://shop.stakenaija.ng"
 )
 
 # 3. Axes (Brute Force Protection)

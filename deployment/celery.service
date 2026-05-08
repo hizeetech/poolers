@@ -4,11 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=rhonextecpool
-Group=rhonextecpool
-WorkingDirectory=/home/rhonextecpool/rhonextecpool-dir/site
-ExecStart=/home/rhonextecpool/rhonextecpool-dir/site/env/bin/celery -A poolbetting worker -l INFO -Q celery,commission_queue,uip_queue,risk_queue
+User=stakenaija
+Group=www-data
+WorkingDirectory=/var/www/shop
+ExecStart=/var/www/shop/env/bin/celery -A poolbetting worker -l INFO -Q celery,commission_queue,uip_queue,risk_queue
 Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

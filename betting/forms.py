@@ -799,6 +799,181 @@ class AdminUserCreationForm(DjangoUserCreationForm):
         self.request = kwargs.pop('request', None)
         super().__init__(*args, **kwargs)
 
+        if 'password1' in self.fields:
+            del self.fields['password1']
+
+    def clean_password2(self):
+        password = self.cleaned_data.get("password")
+        password2 = self.cleaned_data.get("password2")
+        if password and password2 and password != password2:
+            raise ValidationError("Passwords do not match.")
+        return password2
+
+    def clean(self):
+        cleaned_data = super().clean()
+        user_type = cleaned_data.get('user_type')
+
+        if user_type == 'super_agent':
+            if not cleaned_data.get('master_agent'):
+                self.add_error('master_agent', "Master Agent is required for Super Agent creation.")
+
+        if user_type == 'agent':
+            if not cleaned_data.get('first_name'):
+                self.add_error('first_name', "First Name is required.")
+            if not cleaned_data.get('last_name'):
+                self.add_error('last_name', "Last Name is required.")
+            if not cleaned_data.get('other_name'):
+                self.add_error('other_name', "Other Name is required.")
+            if not cleaned_data.get('state'):
+                self.add_error('state', "State is required.")
+
+        if user_type == 'cashier':
+            if not cleaned_data.get('agent'):
+                self.add_error('agent', "Agent is required for Cashier creation.")
+            if not cleaned_data.get('cashier_prefix'):
+                self.add_error('cashier_prefix', "Cashier Prefix is required for Cashier creation.")
+
+        return cleaned_data
+
+    def save(self, commit=True):
+        user = forms.ModelForm.save(self, commit=False)
+        user.set_password(self.cleaned_data["password"])
+
+        user_type = self.cleaned_data.get('user_type')
+        if user_type:
+            user.user_type = user_type
+
+        if user.user_type == 'master_agent':
+            user.master_agent = None
+            user.super_agent = None
+            user.agent = None
+        elif user.user_type == 'super_agent':
+            user.master_agent = self.cleaned_data.get('master_agent')
+            user.super_agent = None
+            user.agent = None
+        elif user.user_type == 'agent':
+            user.master_agent = self.cleaned_data.get('master_agent')
+            user.super_agent = self.cleaned_data.get('super_agent')
+            user.agent = None
+        elif user.user_type == 'cashier':
+            user.master_agent = self.cleaned_data.get('master_agent')
+            user.super_agent = self.cleaned_data.get('super_agent')
+            user.agent = self.cleaned_data.get('agent')
+            user.cashier_prefix = self.cleaned_data.get('cashier_prefix')
+        else:
+            user.master_agent = None
+            user.super_agent = None
+            user.agent = None
+            user.cashier_prefix = None
+
+        user.is_staff = user.user_type in ['admin', 'master_agent', 'super_agent', 'agent', 'cashier', 'account_user']
+        user.is_superuser = user.user_type == 'admin'
+
+        if commit:
+            if user.user_type == 'agent':
+                state = self.cleaned_data.get('state')
+                if not state:
+                    raise ValidationError("State is required for agent creation.")
+                from django.db import IntegrityError
+                from .services.usernames import (
+                    generate_agent_username,
+                    generate_cashier_usernames,
+                    generate_cashier_email,
+                )
+
+                user.first_name = self.cleaned_data.get('first_name')
+                user.last_name = self.cleaned_data.get('last_name')
+                user.other_name = self.cleaned_data.get('other_name')
+                user.state = state
+                user.phone_number = self.cleaned_data.get('phone_number')
+                user.shop_address = self.cleaned_data.get('shop_address')
+                user.master_agent = self.cleaned_data.get('master_agent')
+                user.super_agent = self.cleaned_data.get('super_agent')
+                user.agent = None
+
+                username_value, roots, base_root = generate_agent_username(
+                    CustomUser,
+                    state.abbreviation,
+                    user.first_name or "",
+                    user.last_name or "",
+                    user.other_name or "",
+                )
+                user.username = username_value
+
+                user.is_active = self.cleaned_data.get('is_active', True)
+                user.is_staff = True
+                user.is_superuser = False
+
+                try:
+                    user.save()
+                except IntegrityError:
+                    username_value, roots, base_root = generate_agent_username(
+                        CustomUser,
+                        state.abbreviation,
+                        user.first_name or "",
+                        user.last_name or "",
+                        user.other_name or "",
+                    )
+                    user.username = username_value
+                    user.save()
+
+                Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+
+                cashier1_username, cashier2_username, _cashier_root = generate_cashier_usernames(
+                    CustomUser,
+                    preferred_root=user.username,
+                    roots=roots,
+                    base_root=base_root,
+                )
+
+                cashier1 = CustomUser.objects.create_user(
+                    email=generate_cashier_email(user.email, "C1"),
+                    password=self.cleaned_data.get("password"),
+                    username=cashier1_username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    other_name=user.other_name,
+                    state=user.state,
+                    user_type='cashier',
+                    agent=user,
+                    master_agent=user.master_agent,
+                    super_agent=user.super_agent,
+                    is_active=True,
+                    is_staff=True,
+                    is_superuser=False,
+                )
+                cashier2 = CustomUser.objects.create_user(
+                    email=generate_cashier_email(user.email, "C2"),
+                    password=self.cleaned_data.get("password"),
+                    username=cashier2_username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    other_name=user.other_name,
+                    state=user.state,
+                    user_type='cashier',
+                    agent=user,
+                    master_agent=user.master_agent,
+                    super_agent=user.super_agent,
+                    is_active=True,
+                    is_staff=True,
+                    is_superuser=False,
+                )
+
+                Wallet.objects.get_or_create(user=cashier1, defaults={'balance': Decimal('0.00')})
+                Wallet.objects.get_or_create(user=cashier2, defaults={'balance': Decimal('0.00')})
+
+                return user
+
+            user.save()
+            if self.cleaned_data.get('groups'):
+                user.groups.set(self.cleaned_data['groups'])
+            if self.cleaned_data.get('user_permissions'):
+                user.user_permissions.set(self.cleaned_data['user_permissions'])
+
+            Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+
+        return user
+
 
 class ForgotPasswordForm(forms.Form):
     email = forms.EmailField(

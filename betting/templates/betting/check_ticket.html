@@ -248,47 +248,59 @@
                 </div>
                 <div class="modal-body p-4" id="ticket-content-to-print">
                     <div class="text-center mb-3">
-                         {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="max-height: 60px; max-width: 100%; object-fit: contain;" class="mb-2">
-                         {% endif %}
-                         {# <h4 class="fw-bold mb-0">{{ site_config.site_name }}</h4> #}
-                         <small class="text-muted">Reprinted Copy</small>
+                        {% if site_config.logo %}
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="max-height: 65px; max-width: 100%; object-fit: contain;" class="mb-1">
+                        {% else %}
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="max-height: 65px; max-width: 100%; object-fit: contain;" class="mb-1">
+                        {% endif %}
+                        <div class="fw-bold" style="font-size: 1.35rem; letter-spacing: 0.5px;">{{ site_config.site_name|default:"StakeNaija" }}</div>
+                        <small class="text-muted d-block">Reprinted Copy</small>
                     </div>
                     
-                    <div class="border-bottom pb-2 mb-3">
-                        <div class="d-flex justify-content-between">
-                            <span>Ticket ID:</span>
-                            <span class="fw-bold" id="modal-ticket-id"></span>
-                        </div>
-                        <div class="d-flex justify-content-between">
-                            <span>Date:</span>
-                            <span id="modal-placed-at"></span>
-                        </div>
-                        <div class="d-none justify-content-between" id="modal-status-container">
-                            <span>Status:</span>
-                            <span class="fw-bold text-danger" id="modal-status"></span>
-                        </div>
-                    </div>
+                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
+                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-ticket-id"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-placed-at"></td>
+                            </tr>
+                            <tr class="d-none" id="modal-status-container">
+                                <td style="border: 1px solid #000; font-weight: 700;">STATUS</td>
+                                <td style="border: 1px solid #000;" class="text-end fw-bold text-danger" id="modal-status"></td>
+                            </tr>
+                        </tbody>
+                    </table>
 
-                    <h6 class="text-secondary mb-2">Selections:</h6>
-                    <ul id="modal-selections-list" class="list-group list-group-flush mb-3 small">
-                        <!-- Selections -->
-                    </ul>
+                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #000;">MATCH</th>
+                                <th style="border: 1px solid #000;">PICK</th>
+                                <th style="border: 1px solid #000;" class="text-end">ODDS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modal-selections-list"></tbody>
+                    </table>
 
-                    <div class="border-top pt-2">
-                        <div class="d-flex justify-content-between">
-                            <span>Stake:</span>
-                            <span class="fw-bold" id="modal-stake-amount"></span>
-                        </div>
-                        <div class="d-flex justify-content-between">
-                            <span>Total Odds:</span>
-                            <span class="fw-bold" id="modal-total-odds"></span>
-                        </div>
-                        <div class="d-flex justify-content-between text-success">
-                            <span>Max Win:</span>
-                            <span class="fw-bold" id="modal-max-winning"></span>
-                        </div>
-                    </div>
+                    <table class="table table-sm mb-0" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">STAKE</td>
+                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-stake-amount"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">ODDS</td>
+                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-total-odds"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL WIN</td>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end" id="modal-max-winning"></td>
+                            </tr>
+                        </tbody>
+                    </table>
                     
                     <div class="text-center mt-4">
                         <small class="text-muted d-block">Generated: <span id="modal-generation-time"></span></small>
@@ -380,16 +392,17 @@
                     const list = document.getElementById('modal-selections-list');
                     list.innerHTML = '';
                     ticket.selections.forEach(sel => {
-                        const li = document.createElement('li');
-                        li.className = 'list-group-item px-0 py-1 d-flex justify-content-between align-items-center';
-                        li.innerHTML = `
-                            <div>
-                                <span class="d-block fw-bold text-dark">${sel.fixture_home_team} vs ${sel.fixture_away_team}</span>
-                                <span class="text-muted small">${sel.bet_type_display}</span>
-                            </div>
-                            <span class="badge bg-light text-dark border">${sel.odd.toFixed(2)}</span>
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td style="border: 1px solid #000;">
+                                <div class="fw-bold text-dark">${sel.fixture_home_team} vs ${sel.fixture_away_team}</div>
+                            </td>
+                            <td style="border: 1px solid #000;">
+                                <div class="text-muted small">${sel.bet_type_display}</div>
+                            </td>
+                            <td style="border: 1px solid #000;" class="text-end fw-bold">${sel.odd.toFixed(2)}</td>
                         `;
-                        list.appendChild(li);
+                        list.appendChild(tr);
                     });
 
                     // Add Watermark
@@ -400,7 +413,6 @@
                     const statusText = document.getElementById('modal-status');
                     
                     // Reset first
-                    statusContainer.classList.remove('d-flex');
                     statusContainer.classList.add('d-none');
                     statusText.textContent = '';
 
@@ -408,7 +420,6 @@
                         watermarkText = ticket.status.toUpperCase();
                         statusText.textContent = ticket.status.toUpperCase();
                         statusContainer.classList.remove('d-none');
-                        statusContainer.classList.add('d-flex');
                     }
 
                     if (!watermark) {
@@ -437,23 +448,15 @@
                         printWindow.document.write('<style>');
                         printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 5px; color: #000; position: relative; }');
                         printWindow.document.write('.watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 2rem; color: rgba(0, 0, 0, 0.2); border: 2px dashed #000; padding: 1rem; z-index: 100; opacity: 0.5; pointer-events: none; }');
+                        printWindow.document.write('img { max-width: 100%; height: auto; }');
+                        printWindow.document.write('table { width: 100%; border-collapse: collapse; }');
+                        printWindow.document.write('th, td { border: 1px solid #000; padding: 3px 4px; font-size: 12px; line-height: 1.2; vertical-align: top; }');
+                        printWindow.document.write('th { font-weight: 800; text-transform: uppercase; }');
                         printWindow.document.write('.text-center { text-align: center; }');
-                        printWindow.document.write('.fw-bold { font-weight: bold; }');
-                        printWindow.document.write('.d-flex { display: flex; }');
-                        printWindow.document.write('.justify-content-between { justify-content: space-between; }');
-                        printWindow.document.write('.border-bottom { border-bottom: 1px dashed #000; }');
-                        printWindow.document.write('.border-top { border-top: 1px dashed #000; }');
-                        printWindow.document.write('.mb-3 { margin-bottom: 10px; }');
-                        printWindow.document.write('.mb-2 { margin-bottom: 5px; }');
-                        printWindow.document.write('.mt-4 { margin-top: 15px; }');
-                        printWindow.document.write('.pt-2 { padding-top: 5px; }');
-                        printWindow.document.write('.pb-2 { padding-bottom: 5px; }');
-                        printWindow.document.write('.list-group-flush { list-style: none; padding: 0; margin: 0; }');
-                        printWindow.document.write('.list-group-item { padding: 5px 0; border-bottom: 1px dotted #ccc; }');
-                        printWindow.document.write('.badge { border: 1px solid #000; padding: 1px 3px; border-radius: 3px; font-size: 0.8em; }');
-                        printWindow.document.write('.text-muted { color: #666; font-size: 0.85em; }');
-                        printWindow.document.write('.small { font-size: 0.85em; }');
-                        printWindow.document.write('h4, h5, h6 { margin: 5px 0; }');
+                        printWindow.document.write('.text-end { text-align: right; }');
+                        printWindow.document.write('.fw-bold { font-weight: 800; }');
+                        printWindow.document.write('.text-muted { color: #444; }');
+                        printWindow.document.write('.small { font-size: 10px; }');
                         printWindow.document.write('</style>');
                         printWindow.document.write('</head><body>');
                         printWindow.document.write(printContent);

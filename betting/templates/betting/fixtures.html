@@ -95,26 +95,76 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body" id="ticket-content-to-print">
-                <div class="text-center mb-2">
-                    {% if site_config.logo %}
-                        <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="height: 40px;">
-                    {% endif %}
-                    {# <div class="fw-bold">{{ site_config.site_name }}</div> #}
-                </div>
-                <h6 class="text-center text-secondary mb-3">Your Bet Details</h6>
-                <p><strong>Ticket ID:</strong> <span id="modal-ticket-id"></span></p>
-                <p><strong>Stake Amount:</strong> <span id="modal-stake-amount"></span></p>
-                <p><strong>Total Odds:</strong> <span id="modal-total-odds"></span></p>
-                <p><strong>Potential Winning:</strong> <span id="modal-potential-winning"></span></p>
-                <p><strong>Bonus:</strong> <span id="modal-bonus-amount"></span></p>
-                <p><strong>Max Winning:</strong> <span id="modal-max-winning"></span></p>
-                <h6 class="mt-4 text-secondary">Selections:</h6>
-                <ul id="modal-selections-list" class="list-group list-group-flush">
-                    <!-- Selections will be dynamically added here -->
-                </ul>
-                <div class="text-center mt-4">
-                    <p class="text-muted small">Thank you for betting with StakeNaija!</p>
-                    <p class="text-muted small">Generated: <span id="modal-generation-time"></span></p>
+                <div class="ticket-print">
+                    <div class="text-center mb-2">
+                        {% if site_config.logo %}
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo mb-1" style="max-height: 65px; max-width: 100%; object-fit: contain;">
+                        {% else %}
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo mb-1" style="max-height: 65px; max-width: 100%; object-fit: contain;">
+                        {% endif %}
+                        <div class="fw-bold" style="font-size: 1.35rem; letter-spacing: 0.5px;">{{ site_config.site_name|default:"StakeNaija" }}</div>
+                    </div>
+
+                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">CLIENT</td>
+                                <td style="border: 1px solid #000;" class="text-end">{{ request.user.username|default:request.user.email }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-ticket-id"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-generation-time"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BET TYPE</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-bet-type"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #000;">MATCH</th>
+                                <th style="border: 1px solid #000;">PICK</th>
+                                <th style="border: 1px solid #000;" class="text-end">ODDS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modal-selections-list"></tbody>
+                    </table>
+
+                    <table class="table table-sm mb-0" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">STAKE</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-stake-amount"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">ODDS</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-total-odds"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">POT. WIN</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-potential-winning"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BONUS</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-bonus-amount"></td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL WIN</td>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end" id="modal-max-winning"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="text-center mt-2">
+                        <div class="text-muted small">Thank you for betting with {{ site_config.site_name|default:"StakeNaija" }}!</div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -690,22 +740,32 @@
                             const modalSelectionsList = document.getElementById('modal-selections-list');
                             if (modalSelectionsList) {
                                 modalSelectionsList.innerHTML = '';
+                                const betTypeEl = document.getElementById('modal-bet-type');
+                                if (betTypeEl) betTypeEl.textContent = isSystemBet ? 'SYSTEM' : 'ACCUMULATOR';
                                 selectedBets.forEach(bet => {
-                                    const li = document.createElement('li');
-                                    li.classList.add('list-group-item', 'd-flex', 'flex-column');
-                                    li.innerHTML = `
-                                        <span class="fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</span>
-                                        <small class="text-muted">${bet.fixture_match_date} ${bet.fixture_match_time} - ${bet.bet_type_display} @ ${parseFloat(bet.odd).toFixed(2)}</small>
-                                        <small class="text-muted">Period: ${bet.fixture_period_name}</small>
+                                    const tr = document.createElement('tr');
+                                    tr.innerHTML = `
+                                        <td style="border: 1px solid #000;">
+                                            <div class="fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</div>
+                                            <div class="text-muted small">${bet.fixture_match_date} ${bet.fixture_match_time}</div>
+                                        </td>
+                                        <td style="border: 1px solid #000;">
+                                            <div class="fw-bold">${bet.bet_type_display}</div>
+                                            <div class="text-muted small">Period: ${bet.fixture_period_name}</div>
+                                        </td>
+                                        <td style="border: 1px solid #000;" class="text-end fw-bold">${parseFloat(bet.odd).toFixed(2)}</td>
                                     `;
-                                    modalSelectionsList.appendChild(li);
+                                    modalSelectionsList.appendChild(tr);
                                 });
                                 
                                 if(isSystemBet) {
-                                    const li = document.createElement('li');
-                                    li.classList.add('list-group-item', 'bg-light', 'text-center', 'fw-bold');
-                                    li.textContent = `System Bet: ${permutationCount} of ${selectedBets.length} (${numberOfLinesSpan ? numberOfLinesSpan.textContent : 'N/A'} lines)`;
-                                    modalSelectionsList.prepend(li);
+                                    const tr = document.createElement('tr');
+                                    tr.innerHTML = `
+                                        <td style="border: 1px solid #000; font-weight: 700;" colspan="3" class="text-center">
+                                            System Bet: ${permutationCount} of ${selectedBets.length} (${numberOfLinesSpan ? numberOfLinesSpan.textContent : 'N/A'} lines)
+                                        </td>
+                                    `;
+                                    modalSelectionsList.prepend(tr);
                                 }
                             }
                             
@@ -762,18 +822,22 @@
             // Create a new window or iframe to control printing scope
             const printWindow = window.open('', '', 'height=600,width=400'); // Narrower window for preview
             printWindow.document.write('<html><head><title>Print Ticket</title>');
+            printWindow.document.write('<base href="' + window.location.origin + '/">');
             
             // Custom CSS for Thermal Printer (58mm/80mm)
             printWindow.document.write('<style>');
-            printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 5px; color: #000; }');
-            printWindow.document.write('h6 { font-size: 16px; text-align: center; margin: 10px 0; font-weight: bold; text-transform: uppercase; }');
-            printWindow.document.write('p { font-size: 12px; margin: 2px 0; line-height: 1.2; }');
-            printWindow.document.write('ul { list-style: none; padding: 0; margin: 10px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }');
-            printWindow.document.write('li { padding: 5px 0; border-bottom: 1px dotted #ccc; }');
-            printWindow.document.write('li:last-child { border-bottom: none; }');
+            printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 6px; color: #000; }');
+            printWindow.document.write('img { max-width: 100%; height: auto; }');
+            printWindow.document.write('table { width: 100%; border-collapse: collapse; }');
+            printWindow.document.write('th, td { border: 1px solid #000; padding: 3px 4px; font-size: 12px; line-height: 1.2; vertical-align: top; }');
+            printWindow.document.write('th { font-weight: 800; text-transform: uppercase; }');
             printWindow.document.write('.text-center { text-align: center; }');
-            printWindow.document.write('.text-muted { font-size: 10px; }');
-            printWindow.document.write('strong { font-weight: bold; }');
+            printWindow.document.write('.text-end { text-align: right; }');
+            printWindow.document.write('.fw-bold { font-weight: 800; }');
+            printWindow.document.write('.small { font-size: 10px; }');
+            printWindow.document.write('.text-muted { color: #444; }');
+            printWindow.document.write('.mb-2 { margin-bottom: 6px; }');
+            printWindow.document.write('.mt-2 { margin-top: 6px; }');
             printWindow.document.write('</style>');
             
             printWindow.document.write('</head><body>');

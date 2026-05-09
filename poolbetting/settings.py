@@ -25,9 +25,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 JAZZMIN_SETTINGS = {
     "site_title": "Pool Betting Admin",
-    "site_header": "Pool Betting",
-    "welcome_sign": "Welcome to Pool Betting Admin",
-    "copyright": "Pool Betting Ltd",
+    "site_header": "StakeNaija Betting Platform",
+    "welcome_sign": "Welcome to StakeNaija Betting Platform Admin",
+    "copyright": "StakeNaija Betting Platform Ltd",
     "search_model": "betting.User",
     "topmenu_links": [
         {"name": "Home",  "url": "admin:index", "permissions": ["auth.view_user"]},

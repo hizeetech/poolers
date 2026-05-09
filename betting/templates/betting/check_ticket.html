@@ -249,11 +249,10 @@
                 <div class="modal-body p-4" id="ticket-content-to-print">
                     <div class="text-center mb-3">
                         {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="max-height: 65px; max-width: 100%; object-fit: contain;" class="mb-1">
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="width: 75%; max-width: 75%; height: auto; object-fit: contain;" class="mb-1">
                         {% else %}
-                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="max-height: 65px; max-width: 100%; object-fit: contain;" class="mb-1">
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="width: 75%; max-width: 75%; height: auto; object-fit: contain;" class="mb-1">
                         {% endif %}
-                        <div class="fw-bold" style="font-size: 1.35rem; letter-spacing: 0.5px;">{{ site_config.site_name|default:"StakeNaija" }}</div>
                         <small class="text-muted d-block">Reprinted Copy</small>
                     </div>
                     

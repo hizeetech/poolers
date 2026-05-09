@@ -1,71 +1,31 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Fixtures - Pool Betting{% endblock %} {% block content %}
 <div class="app-page">
-<style>
-    .app-page {
-        overflow-x: hidden;
-        overflow-y: visible;
-    }
-    .fixtures-toolbar {
-        position: sticky;
-        top: 90px;
-        z-index: 1010;
-        background: rgba(255, 255, 255, 0.88);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        border-radius: 12px;
-        padding: 10px 12px;
-        margin-bottom: 12px;
-    }
-    @media (min-width: 768px) {
-        .fixtures-main {
-            padding-right: 460px;
-        }
-        .betslip-card {
-            position: fixed;
-            top: 110px;
-            right: 12px;
-            width: min(420px, calc((100vw - 48px) / 3));
-            z-index: 1020;
-        }
-        @supports (right: max(0px, 0px)) {
-            .betslip-card {
-                right: max(12px, calc((100vw - 1200px) / 2 + 12px));
-            }
-        }
-        .betslip-card .card-body {
-            max-height: calc(100vh - 180px);
-            overflow: auto;
-        }
-    }
-</style>
 <div class="container py-5 position-relative">
-    <div class="fixtures-toolbar">
-        <div class="d-flex align-items-center gap-3">
-            <h2 class="fw-bold mb-0 text-primary">Fixtures</h2>
-            <div class="dropdown" style="z-index: 1030;">
-                <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                    {% if current_betting_period %}{{ current_betting_period.name }}{% else %}Select Period{% endif %}
-                </button>
-                <ul class="dropdown-menu fixture-period-menu" aria-labelledby="bettingPeriodDropdown">
-                    {% for period in active_periods %}
-                    <li><a class="dropdown-item" href="{% url 'betting:fixtures_with_period' period.id %}">{{ period.name }}</a></li>
-                    {% empty %}
-                    <li><span class="dropdown-item-text text-muted">No active betting periods.</span></li>
-                    {% endfor %}
-                </ul>
-            </div>
+    <div class="d-flex align-items-center mb-4 gap-3">
+        <h2 class="fw-bold mb-0 text-primary">Fixtures</h2>
+        <div class="dropdown" style="z-index: 1030;">
+            <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                {% if current_betting_period %}{{ current_betting_period.name }}{% else %}Select Period{% endif %}
+            </button>
+            <ul class="dropdown-menu fixture-period-menu" aria-labelledby="bettingPeriodDropdown">
+                {% for period in active_periods %}
+                <li><a class="dropdown-item" href="{% url 'betting:fixtures_with_period' period.id %}">{{ period.name }}</a></li>
+                {% empty %}
+                <li><span class="dropdown-item-text text-muted">No active betting periods.</span></li>
+                {% endfor %}
+            </ul>
         </div>
     </div>
 
     <div class="row">
-        <div class="col-md-8 fixtures-main">
+        <div class="col-md-8">
             <div id="fixtures-container">
                 {% include 'betting/includes/fixtures_list.html' %}
             </div>
         </div>
 
         <div class="col-md-4">
-            <div class="card app-glass-card shadow-lg rounded-3 betslip-card">
+            <div class="card app-glass-card shadow-lg rounded-3 sticky-top" style="top: 20px;">
                 <div class="card-header bg-primary text-center rounded-top-3">
                     <h4 class="mb-0 text-white">Your Betslip</h4>
                 </div>

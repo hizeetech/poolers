@@ -1647,16 +1647,33 @@ def withdraw_funds(request):
                 messages.error(request, 'Insufficient balance for withdrawal.')
                 return redirect('betting:wallet')
 
-            user_wallet.balance -= amount
+            balance_before = user_wallet.balance
+            balance_after = balance_before - amount
+            user_wallet.balance = balance_after
             user_wallet.save()
 
-            UserWithdrawal.objects.create(
+            withdrawal = UserWithdrawal.objects.create(
                 user=request.user,
                 amount=amount,
                 bank_name=bank_name,
                 account_name=form.cleaned_data['account_name'], # Corrected to use cleaned_data
                 account_number=account_number,
+                balance_before=balance_before,
+                balance_after=balance_after,
                 status='pending' # Set to pending for admin approval
+            )
+
+            Transaction.objects.create(
+                user=request.user,
+                initiating_user=request.user,
+                target_user=request.user,
+                transaction_type='withdrawal',
+                amount=amount,
+                is_successful=True,
+                status='completed',
+                description=f"Withdrawal request {withdrawal.id} created (deducted from wallet).",
+                related_withdrawal_request=withdrawal,
+                timestamp=timezone.now()
             )
             _clear_withdrawal_pin_verified(request)
             if expects_json:

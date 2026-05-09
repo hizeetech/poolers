@@ -5178,6 +5178,11 @@ def api_downline_search(request):
         users_page = paginator.page(paginator.num_pages)
         
     results = []
+    id_list = [u.id for u in users_page]
+    wallet_map = {
+        row["user_id"]: row["balance"]
+        for row in Wallet.objects.filter(user_id__in=id_list).values("user_id", "balance")
+    }
     for u in users_page:
         role_label = u.get_user_type_display()
         name_str = u.get_full_name()
@@ -5190,7 +5195,8 @@ def api_downline_search(request):
             
         results.append({
             'id': u.id,
-            'text': display_text
+            'text': display_text,
+            'balance': float(wallet_map.get(u.id) or 0),
         })
         
     return JsonResponse({
@@ -5199,6 +5205,37 @@ def api_downline_search(request):
             'more': users_page.has_next()
         }
     })
+
+
+@login_required
+def api_downline_wallet_balance(request):
+    user = request.user
+    try:
+        target_id = int(request.GET.get("user_id", "0"))
+    except (TypeError, ValueError):
+        target_id = 0
+
+    if not target_id:
+        return JsonResponse({"success": False, "message": "Invalid user."}, status=400)
+
+    qs = User.objects.none()
+    if user.user_type == 'agent':
+        qs = User.objects.filter(Q(agent=user) & Q(user_type__in=['cashier', 'player']))
+    elif user.user_type == 'super_agent':
+        qs = User.objects.filter(super_agent=user, user_type='agent')
+    elif user.user_type == 'master_agent':
+        qs = User.objects.filter(
+            Q(master_agent=user) | Q(super_agent__master_agent=user)
+        ).filter(user_type__in=['super_agent', 'agent']).distinct()
+    elif user.user_type == 'account_user':
+        qs = User.objects.filter(user_type__in=['master_agent', 'super_agent', 'agent', 'cashier'])
+
+    if not qs.filter(id=target_id).exists():
+        return JsonResponse({"success": False, "message": "Not authorized."}, status=403)
+
+    balance = Wallet.objects.filter(user_id=target_id).values_list("balance", flat=True).first()
+    balance = balance or Decimal("0.00")
+    return JsonResponse({"success": True, "balance": float(balance)})
 
 
 @login_required

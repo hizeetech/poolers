@@ -158,7 +158,12 @@
                     <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-4">
                         {% csrf_token %}
                         <div class="mb-3">
-                            <label for="id_recipient_email" class="form-label">Recipient</label>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <label for="id_recipient_email" class="form-label mb-1">Recipient</label>
+                                <div class="small text-muted" id="recipient-balance-wrap">
+                                    Available Balance: <span class="fw-bold" id="recipient-balance-value">—</span>
+                                </div>
+                            </div>
                             <select name="recipient_identifier" id="id_recipient_email" class="form-control" required style="width: 100%;">
                                 <!-- Options loaded via AJAX -->
                             </select>
@@ -302,7 +307,6 @@
 
 <script>
     $(document).ready(function() {
-        // Initialize Select2 for Recipient
         $('#id_recipient_email').select2({
             theme: 'default',
             placeholder: 'Search by Name, Email, or Cashier Prefix...',
@@ -329,6 +333,56 @@
                 cache: true
             },
             minimumInputLength: 0, // Allow showing results on click without typing
+        });
+
+        const balanceEl = document.getElementById('recipient-balance-value');
+        const setBalanceText = (value) => {
+            if (!balanceEl) return;
+            if (value === null || value === undefined || value === '') {
+                balanceEl.textContent = '—';
+                return;
+            }
+            const num = Number(value);
+            if (!Number.isFinite(num)) {
+                balanceEl.textContent = '—';
+                return;
+            }
+            const formatted = new Intl.NumberFormat('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
+            balanceEl.textContent = `₦${formatted}`;
+        };
+
+        const fetchBalance = async (userId) => {
+            if (!userId) {
+                setBalanceText('');
+                return;
+            }
+            try {
+                const resp = await fetch(`{% url "betting:api_downline_wallet_balance" %}?user_id=${encodeURIComponent(userId)}`, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data && data.success) {
+                    setBalanceText(data.balance);
+                    return;
+                }
+                setBalanceText('');
+            } catch (e) {
+                setBalanceText('');
+            }
+        };
+
+        $('#id_recipient_email').on('select2:select', function (e) {
+            const selected = e.params && e.params.data ? e.params.data : null;
+            if (selected && typeof selected.balance !== 'undefined') {
+                setBalanceText(selected.balance);
+            } else {
+                setBalanceText('');
+            }
+            fetchBalance(selected ? selected.id : null);
+        });
+
+        $('#id_recipient_email').on('select2:clear', function () {
+            setBalanceText('');
         });
     });
 
@@ -557,66 +611,4 @@
     });
 </script>
 
-<!-- Select2 Dependencies and Script -->
-<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
-
-<script>
-    $(document).ready(function() {
-        // Initialize Select2 on the recipient field
-        $('#id_recipient_email').select2({
-            placeholder: 'Search for recipient (Name, Email, Role)...',
-            allowClear: true,
-            width: '100%',
-            ajax: {
-                url: '{% url "betting:api_downline_search" %}',
-                dataType: 'json',
-                delay: 250,
-                data: function (params) {
-                    return {
-                        q: params.term, // search term
-                        page: params.page
-                    };
-                },
-                processResults: function (data, params) {
-                    params.page = params.page || 1;
-                    return {
-                        results: data.results,
-                        pagination: {
-                            more: data.pagination.more
-                        }
-                    };
-                },
-                cache: true
-            },
-            minimumInputLength: 0,
-        });
-        
-        // Custom Styling to match rounded-pill
-        // We target the Select2 container elements rendered after initialization
-        
-        // 1. Container
-        $('.select2-container--default .select2-selection--single').css({
-            'height': '45px',
-            'border-radius': '50rem', // rounded-pill
-            'border': '1px solid #dee2e6',
-            'display': 'flex',
-            'align-items': 'center',
-            'padding-left': '20px'
-        });
-
-        // 2. Arrow
-        $('.select2-container--default .select2-selection--single .select2-selection__arrow').css({
-            'height': '43px',
-            'right': '10px'
-        });
-        
-        // 3. Rendered text
-        $('.select2-container--default .select2-selection--single .select2-selection__rendered').css({
-            'line-height': '43px',
-            'color': '#495057'
-        });
-    });
-</script>
 {% endblock %}

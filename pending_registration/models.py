@@ -27,7 +27,7 @@ class PendingAgentRegistration(models.Model):
     master_agent = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pending_master_registrations')
     super_agent = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pending_super_registrations')
     
-    registered_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='submitted_registrations')
+    registered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_registrations')
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     created_at = models.DateTimeField(auto_now_add=True)

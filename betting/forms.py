@@ -14,9 +14,11 @@ from django.db.models import Q
 import logging
 from django.conf import settings
 from django.core.mail import send_mail, get_connection
+from django.contrib.auth.hashers import make_password
 
 from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State
 from .services.usernames import create_agent_and_cashiers
+from pending_registration.models import PendingAgentRegistration
 
 # Get the custom User model dynamically
 CustomUser = get_user_model()
@@ -82,6 +84,7 @@ class UserRegistrationForm(forms.ModelForm):
         cleaned_data = super().clean()
         password = cleaned_data.get("password")
         password2 = cleaned_data.get("password2")
+        email = cleaned_data.get("email")
 
         if password and not password2: 
             self.add_error('password2', "This field is required.")
@@ -92,6 +95,8 @@ class UserRegistrationForm(forms.ModelForm):
         if user_type == 'agent' and not cleaned_data.get('phone_number'):
             self.add_error('phone_number', "Agents must provide a phone number.")
         if user_type == 'agent':
+            if email and PendingAgentRegistration.objects.filter(email__iexact=email, status='PENDING').exists():
+                self.add_error('email', "A pending agent registration already exists for this email.")
             if not cleaned_data.get('first_name'):
                 self.add_error('first_name', "First Name is required.")
             if not cleaned_data.get('last_name'):
@@ -108,69 +113,19 @@ class UserRegistrationForm(forms.ModelForm):
         password = self.cleaned_data["password"]
 
         if user_type == 'agent':
-            state = self.cleaned_data.get('state')
-            agent, cashiers, _ = create_agent_and_cashiers(
-                CustomUser,
+            state_obj = self.cleaned_data.get('state')
+            full_name = f"{(self.cleaned_data.get('first_name') or '').strip()} {(self.cleaned_data.get('last_name') or '').strip()} {(self.cleaned_data.get('other_name') or '').strip()}".strip()
+            PendingAgentRegistration.objects.create(
+                full_name=full_name,
                 email=self.cleaned_data['email'],
-                password=password,
-                first_name=self.cleaned_data.get('first_name') or "",
-                last_name=self.cleaned_data.get('last_name') or "",
-                other_name=self.cleaned_data.get('other_name') or "",
-                state=state,
-                phone_number=self.cleaned_data.get('phone_number'),
-                shop_address=self.cleaned_data.get('shop_address'),
+                phone=self.cleaned_data.get('phone_number') or "",
+                state=getattr(state_obj, "state_name", None) or getattr(state_obj, "abbreviation", None) or "",
+                user_type='agent',
+                password=make_password(password),
+                registered_by=None,
+                status='PENDING',
             )
-            Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
-            for cashier in cashiers:
-                Wallet.objects.get_or_create(user=cashier, defaults={'balance': Decimal('0.00')})
-
-            cashier_usernames = [c.username for c in cashiers]
-            from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER or "no-reply@localhost"
-            subject = "Your StakeNaija Agent Account Details"
-            message = (
-                f"Hello {agent.first_name or ''},\n\n"
-                "Your registration was successful.\n\n"
-                f"Agent Username: {agent.username}\n"
-                f"Agent Email: {agent.email}\n"
-                f"Password: {password}\n\n"
-                "Cashier Usernames:\n"
-                f"- {cashier_usernames[0]}\n"
-                f"- {cashier_usernames[1]}\n\n"
-                "You can login using Email or Username.\n"
-            )
-
-            try:
-                use_console_backend = settings.DEBUG and (
-                    not getattr(settings, 'EMAIL_HOST', None)
-                    or not getattr(settings, 'EMAIL_HOST_USER', None)
-                    or not getattr(settings, 'EMAIL_HOST_PASSWORD', None)
-                    or not from_email
-                )
-                connection = get_connection('django.core.mail.backends.console.EmailBackend') if use_console_backend else get_connection()
-                send_mail(
-                    subject,
-                    message,
-                    from_email,
-                    [agent.email],
-                    fail_silently=False,
-                    connection=connection,
-                )
-            except Exception as e:
-                logger.exception(f"Agent credentials email failed: {str(e)}")
-                if settings.DEBUG:
-                    try:
-                        connection = get_connection('django.core.mail.backends.console.EmailBackend')
-                        send_mail(
-                            subject,
-                            message,
-                            from_email,
-                            [agent.email],
-                            fail_silently=True,
-                            connection=connection,
-                        )
-                    except Exception:
-                        pass
-            return agent
+            return None
 
         with db_transaction.atomic():
             user = super().save(commit=False)

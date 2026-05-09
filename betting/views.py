@@ -132,6 +132,10 @@ def register_user(request):
         form = UserRegistrationForm(request.POST, request=request) # Pass request to form
         if form.is_valid():
             user = form.save(request=request) # Pass request to form's save method for messages
+            user_type = form.cleaned_data.get('user_type')
+            if user_type == 'agent' and user is None:
+                messages.success(request, 'Registration submitted for approval. Login details will be sent after admin approval.')
+                return redirect('betting:login')
             messages.success(request, 'Registration successful. Please log in.')
             return redirect('betting:login')
         else:

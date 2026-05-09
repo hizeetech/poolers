@@ -42,6 +42,12 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 f"approve/{obj.id}/",
                 f"reject/{obj.id}/",
             )
+        if obj.status == 'APPROVED':
+            return format_html(
+                '<span style="margin-right:6px;">APPROVED</span>'
+                '<a class="button" href="{}">Resend Credentials</a>',
+                f"resend/{obj.id}/",
+            )
         return obj.status
     actions_buttons.short_description = 'Actions'
     actions_buttons.allow_tags = True
@@ -51,8 +57,55 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
         custom_urls = [
             path('approve/<int:pk>/', self.admin_site.admin_view(self.approve_agent), name='approve_agent'),
             path('reject/<int:pk>/', self.admin_site.admin_view(self.reject_agent), name='reject_agent'),
+            path('resend/<int:pk>/', self.admin_site.admin_view(self.resend_credentials), name='resend_credentials'),
         ]
         return custom_urls + urls
+
+    def resend_credentials(self, request, pk):
+        pending_reg = get_object_or_404(PendingAgentRegistration, pk=pk)
+        if pending_reg.status != 'APPROVED':
+            messages.warning(request, "This registration is not approved.")
+            return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
+
+        user = User.objects.filter(email__iexact=pending_reg.email).first()
+        if not user:
+            messages.error(request, "Approved registration has no matching user account.")
+            return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
+
+        raw_password = get_random_string(12)
+        cashier_accounts = []
+        try:
+            with transaction.atomic():
+                user.set_password(raw_password)
+                user.save(update_fields=["password"])
+
+                if user.user_type == 'agent':
+                    cashiers = User.objects.filter(user_type='cashier', agent=user).order_by('id')
+                    for cashier in cashiers:
+                        cashier.set_password(raw_password)
+                        cashier.save(update_fields=["password"])
+                        cashier_accounts.append(cashier)
+
+            login_url = request.build_absolute_uri('/login/')
+            html_message = render_to_string('pending_registration/email/agent_approved.html', {
+                'user': user,
+                'cashier_accounts': cashier_accounts,
+                'login_url': login_url,
+                'password': raw_password,
+            })
+            send_mail(
+                subject='Pool Betting Agent Registration Approved',
+                message=strip_tags(html_message),
+                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                recipient_list=[user.email],
+                html_message=html_message,
+                fail_silently=False
+            )
+            messages.success(request, f"Credentials resent to {user.email}.")
+        except Exception as e:
+            messages.error(request, f"Failed to resend credentials: {e}")
+
+        return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
 
     def approve_agent(self, request, pk):
         pending_reg = get_object_or_404(PendingAgentRegistration, pk=pk)

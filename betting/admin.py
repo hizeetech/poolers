@@ -1069,3 +1069,5 @@ class BiometricAuthLogAdmin(admin.ModelAdmin):
         return False
 betting_admin_site.register(LoginAttempt, LoginAttemptAdmin)
 betting_admin_site.register(WebAuthnCredential, WebAuthnCredentialAdmin)
+
+import pending_registration.admin

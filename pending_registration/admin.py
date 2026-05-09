@@ -176,14 +176,17 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                     'login_url': login_url,
                     'password': raw_password,
                 })
-                send_mail(
-                    subject='Pool Betting Agent Registration Approved',
-                    message=strip_tags(html_message),
-                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                    recipient_list=[user.email],
-                    html_message=html_message,
-                    fail_silently=True
-                )
+                try:
+                    send_mail(
+                        subject='Pool Betting Agent Registration Approved',
+                        message=strip_tags(html_message),
+                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                        recipient_list=[user.email],
+                        html_message=html_message,
+                        fail_silently=False
+                    )
+                except Exception as e:
+                    messages.warning(request, f"Agent created but approval email failed to send: {e}")
                 
             messages.success(request, f"Agent {user.email} approved and created successfully.")
             
@@ -207,14 +210,17 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 'pending_reg': pending_reg,
                 'reason': reason
             })
-            send_mail(
-                subject='Pool Betting Agent Registration Rejected',
-                message=strip_tags(html_message),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[pending_reg.email],
-                html_message=html_message,
-                fail_silently=True
-            )
+            try:
+                send_mail(
+                    subject='Pool Betting Agent Registration Rejected',
+                    message=strip_tags(html_message),
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[pending_reg.email],
+                    html_message=html_message,
+                    fail_silently=False
+                )
+            except Exception as e:
+                messages.warning(request, f"Rejection email failed to send: {e}")
             
             messages.info(request, "Agent registration rejected.")
             return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')

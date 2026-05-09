@@ -141,6 +141,16 @@ def _build_super_agent_total_wallet_map(super_agents_qs):
     return totals
 
 
+def _get_wallet_balance_map(user_ids):
+    ids = [int(i) for i in user_ids if i]
+    if not ids:
+        return {}
+    return {
+        row["user_id"]: row["balance"]
+        for row in Wallet.objects.filter(user_id__in=ids).values("user_id", "balance")
+    }
+
+
 # --- Helper Functions for User Permissions and Logging ---
 
 def is_admin(user):
@@ -2196,19 +2206,68 @@ def agent_dashboard(request):
     start_of_month = today.replace(day=1)
 
     direct_downline_rows = []
+    master_downline_tree = []
     if user.user_type == 'master_agent':
-        direct_super_agents_qs = User.objects.filter(user_type='super_agent', master_agent=user).select_related('state')
-        direct_agents_qs = User.objects.filter(user_type='agent', master_agent=user, super_agent__isnull=True).select_related('state')
+        direct_super_agents_qs = (
+            User.objects.filter(user_type='super_agent', master_agent=user)
+            .select_related('state')
+            .order_by('email')
+        )
+        agents_qs = (
+            User.objects.filter(user_type='agent', super_agent__in=direct_super_agents_qs)
+            .select_related('state', 'super_agent')
+            .order_by('email')
+        )
+        cashiers_qs = (
+            User.objects.filter(user_type='cashier', agent__in=agents_qs)
+            .select_related('state', 'agent')
+            .order_by('email')
+        )
 
-        super_agent_totals = _build_super_agent_total_wallet_map(direct_super_agents_qs)
-        agent_totals = _build_agent_total_wallet_map(direct_agents_qs)
+        wallet_map = _get_wallet_balance_map(
+            list(direct_super_agents_qs.values_list('id', flat=True))
+            + list(agents_qs.values_list('id', flat=True))
+            + list(cashiers_qs.values_list('id', flat=True))
+        )
+
+        cashiers_by_agent = {}
+        for cashier in cashiers_qs:
+            cashiers_by_agent.setdefault(cashier.agent_id, []).append(cashier)
+
+        agent_totals = {}
+        for ag in agents_qs:
+            total = wallet_map.get(ag.id) or Decimal('0.00')
+            for cashier in cashiers_by_agent.get(ag.id, []):
+                total += wallet_map.get(cashier.id) or Decimal('0.00')
+            agent_totals[ag.id] = total
+
+        agents_by_sa = {}
+        for ag in agents_qs:
+            agents_by_sa.setdefault(ag.super_agent_id, []).append(ag)
 
         for sa in direct_super_agents_qs:
-            direct_downline_rows.append({'user': sa, 'aggregated_balance': super_agent_totals.get(sa.id) or Decimal('0.00')})
-        for ag in direct_agents_qs:
-            direct_downline_rows.append({'user': ag, 'aggregated_balance': agent_totals.get(ag.id) or Decimal('0.00')})
+            sa_agents = agents_by_sa.get(sa.id, [])
+            sa_total = wallet_map.get(sa.id) or Decimal('0.00')
+            agent_rows = []
+            for ag in sa_agents:
+                cashier_rows = []
+                for cashier in cashiers_by_agent.get(ag.id, []):
+                    cashier_rows.append({
+                        'user': cashier,
+                        'balance': wallet_map.get(cashier.id) or Decimal('0.00'),
+                    })
+                agent_rows.append({
+                    'user': ag,
+                    'total_balance': agent_totals.get(ag.id) or Decimal('0.00'),
+                    'cashiers': cashier_rows,
+                })
+                sa_total += agent_totals.get(ag.id) or Decimal('0.00')
 
-        direct_downline_rows.sort(key=lambda r: (0 if r['user'].user_type == 'super_agent' else 1, (r['user'].email or '').lower()))
+            master_downline_tree.append({
+                'user': sa,
+                'total_balance': sa_total,
+                'agents': agent_rows,
+            })
 
     elif user.user_type == 'super_agent':
         direct_agents_qs = User.objects.filter(user_type='agent', super_agent=user).select_related('state')
@@ -2353,6 +2412,7 @@ def agent_dashboard(request):
         'user': user,
         'downline_users': downline_users_qs, # Pass the QuerySet
         'direct_downline_rows': direct_downline_rows,
+        'master_downline_tree': master_downline_tree,
         'downline_bet_tickets': downline_bet_tickets.order_by('-placed_at')[:50], # Pass the QuerySet, sliced
         'total_downline_users': total_downline_users,
         'total_downline_turnover': total_downline_turnover,

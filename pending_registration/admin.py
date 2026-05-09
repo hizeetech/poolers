@@ -37,15 +37,15 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
     def actions_buttons(self, obj):
         if obj.status == 'PENDING':
             return format_html(
-                '<a class="button" href="{}">Approve</a>&nbsp;'
-                '<a class="button" href="{}" style="background-color:red;">Reject</a>',
+                '<a class="btn btn-sm btn-success" href="{}">Approve</a>&nbsp;'
+                '<a class="btn btn-sm btn-danger" href="{}">Reject</a>',
                 f"approve/{obj.id}/",
                 f"reject/{obj.id}/",
             )
         if obj.status == 'APPROVED':
             return format_html(
-                '<span style="margin-right:6px;">APPROVED</span>'
-                '<a class="button" href="{}">Resend Credentials</a>',
+                '<span class="badge bg-success" style="margin-right:6px;">APPROVED</span>'
+                '<a class="btn btn-sm btn-primary" href="{}">Resend Credentials</a>',
                 f"resend/{obj.id}/",
             )
         return obj.status

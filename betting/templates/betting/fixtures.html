@@ -7,8 +7,16 @@
     }
     @media (min-width: 768px) {
         .betslip-card {
-            position: sticky;
+            position: fixed;
             top: 110px;
+            right: 12px;
+            width: min(420px, calc((100vw - 48px) / 3));
+            z-index: 1020;
+        }
+        @supports (right: max(0px, 0px)) {
+            .betslip-card {
+                right: max(12px, calc((100vw - 1200px) / 2 + 12px));
+            }
         }
         .betslip-card .card-body {
             max-height: calc(100vh - 180px);

@@ -108,7 +108,13 @@
                         <tbody>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 700;">CLIENT</td>
-                                <td style="border: 1px solid #000;" class="text-end">{{ request.user.username|default:request.user.email }}</td>
+                                <td style="border: 1px solid #000;" class="text-end">
+                                    {% if request.user.is_authenticated %}
+                                        {{ request.user.username|default:request.user.get_username }}
+                                    {% else %}
+                                        GUEST
+                                    {% endif %}
+                                </td>
                             </tr>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
@@ -522,7 +528,15 @@
                 const matchDate = this.dataset.matchDate;
                 const matchTime = this.dataset.matchTime;
 
-                // Remove any existing selection for this fixture before adding/updating
+                const existing = selectedBets.find(bet => bet.fixture_id === fixtureId);
+                if (existing && existing.bet_type === betType) {
+                    selectedBets = selectedBets.filter(bet => !(bet.fixture_id === fixtureId && bet.bet_type === betType));
+                    displayMessage('Selection removed.', 'info');
+                    updateBetslip();
+                    return;
+                }
+
+                // Replace any existing selection for this fixture before adding
                 selectedBets = selectedBets.filter(bet => bet.fixture_id !== fixtureId);
 
                 // Add the new selection with full details
@@ -539,7 +553,7 @@
                     fixture_match_time: matchTime,
                 });
 
-                displayMessage('Selection added/updated.', 'info');
+                displayMessage(existing ? 'Selection updated.' : 'Selection added.', 'info');
                 updateBetslip();
             });
         });

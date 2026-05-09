@@ -10,7 +10,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, Coalesce
 from django.db import transaction as db_transaction
 from django.utils import timezone
 from datetime import timedelta, date, datetime
@@ -77,6 +77,68 @@ def _notify_admin_deposit_success(user, transaction_record, amount, gateway):
         recipient_list=[admin_email],
         fail_silently=True
     )
+
+
+def _build_agent_total_wallet_map(agents_qs):
+    agent_ids = list(agents_qs.values_list('id', flat=True))
+    if not agent_ids:
+        return {}
+
+    agent_wallet_map = {
+        row['user_id']: row['balance']
+        for row in Wallet.objects.filter(user_id__in=agent_ids).values('user_id', 'balance')
+    }
+    cashier_totals = {
+        row['user__agent_id']: row['total']
+        for row in Wallet.objects.filter(user__user_type='cashier', user__agent_id__in=agent_ids)
+        .values('user__agent_id')
+        .annotate(total=Coalesce(Sum('balance'), Value(0), output_field=DecimalField()))
+    }
+
+    totals = {}
+    for agent_id in agent_ids:
+        totals[agent_id] = (agent_wallet_map.get(agent_id) or Decimal('0.00')) + (cashier_totals.get(agent_id) or Decimal('0.00'))
+    return totals
+
+
+def _build_super_agent_total_wallet_map(super_agents_qs):
+    sa_ids = list(super_agents_qs.values_list('id', flat=True))
+    if not sa_ids:
+        return {}
+
+    sa_wallet_map = {
+        row['user_id']: row['balance']
+        for row in Wallet.objects.filter(user_id__in=sa_ids).values('user_id', 'balance')
+    }
+
+    agent_totals = {
+        row['super_agent_id']: row['total']
+        for row in User.objects.filter(user_type='agent', super_agent_id__in=sa_ids)
+        .values('super_agent_id')
+        .annotate(total=Coalesce(Sum('wallet__balance'), Value(0), output_field=DecimalField()))
+    }
+    cashier_under_agents_totals = {
+        row['agent__super_agent_id']: row['total']
+        for row in User.objects.filter(user_type='cashier', agent__super_agent_id__in=sa_ids)
+        .values('agent__super_agent_id')
+        .annotate(total=Coalesce(Sum('wallet__balance'), Value(0), output_field=DecimalField()))
+    }
+    direct_cashier_totals = {
+        row['super_agent_id']: row['total']
+        for row in User.objects.filter(user_type='cashier', super_agent_id__in=sa_ids, agent__isnull=True)
+        .values('super_agent_id')
+        .annotate(total=Coalesce(Sum('wallet__balance'), Value(0), output_field=DecimalField()))
+    }
+
+    totals = {}
+    for sa_id in sa_ids:
+        totals[sa_id] = (
+            (sa_wallet_map.get(sa_id) or Decimal('0.00'))
+            + (agent_totals.get(sa_id) or Decimal('0.00'))
+            + (cashier_under_agents_totals.get(sa_id) or Decimal('0.00'))
+            + (direct_cashier_totals.get(sa_id) or Decimal('0.00'))
+        )
+    return totals
 
 
 # --- Helper Functions for User Permissions and Logging ---
@@ -2133,6 +2195,34 @@ def agent_dashboard(request):
     start_of_week = today - timedelta(days=today.weekday()) # Monday
     start_of_month = today.replace(day=1)
 
+    direct_downline_rows = []
+    if user.user_type == 'master_agent':
+        direct_super_agents_qs = User.objects.filter(user_type='super_agent', master_agent=user).select_related('state')
+        direct_agents_qs = User.objects.filter(user_type='agent', master_agent=user, super_agent__isnull=True).select_related('state')
+
+        super_agent_totals = _build_super_agent_total_wallet_map(direct_super_agents_qs)
+        agent_totals = _build_agent_total_wallet_map(direct_agents_qs)
+
+        for sa in direct_super_agents_qs:
+            direct_downline_rows.append({'user': sa, 'aggregated_balance': super_agent_totals.get(sa.id) or Decimal('0.00')})
+        for ag in direct_agents_qs:
+            direct_downline_rows.append({'user': ag, 'aggregated_balance': agent_totals.get(ag.id) or Decimal('0.00')})
+
+        direct_downline_rows.sort(key=lambda r: (0 if r['user'].user_type == 'super_agent' else 1, (r['user'].email or '').lower()))
+
+    elif user.user_type == 'super_agent':
+        direct_agents_qs = User.objects.filter(user_type='agent', super_agent=user).select_related('state')
+        agent_totals = _build_agent_total_wallet_map(direct_agents_qs)
+        for ag in direct_agents_qs:
+            direct_downline_rows.append({'user': ag, 'aggregated_balance': agent_totals.get(ag.id) or Decimal('0.00')})
+        direct_downline_rows.sort(key=lambda r: (r['user'].email or '').lower())
+
+    elif user.user_type == 'agent':
+        direct_cashiers_qs = User.objects.filter(user_type='cashier', agent=user).select_related('state')
+        for ca in direct_cashiers_qs:
+            direct_downline_rows.append({'user': ca, 'aggregated_balance': getattr(getattr(ca, 'wallet', None), 'balance', Decimal('0.00'))})
+        direct_downline_rows.sort(key=lambda r: (r['user'].email or '').lower())
+
     # Get downline users
     if user.user_type == 'master_agent':
         downline_users_qs = User.objects.filter(
@@ -2262,6 +2352,7 @@ def agent_dashboard(request):
     context = {
         'user': user,
         'downline_users': downline_users_qs, # Pass the QuerySet
+        'direct_downline_rows': direct_downline_rows,
         'downline_bet_tickets': downline_bet_tickets.order_by('-placed_at')[:50], # Pass the QuerySet, sliced
         'total_downline_users': total_downline_users,
         'total_downline_turnover': total_downline_turnover,

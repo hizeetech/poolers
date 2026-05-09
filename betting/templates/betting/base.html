@@ -300,6 +300,22 @@
             border: 1px solid rgba(255, 255, 255, 0.55);
             backdrop-filter: blur(10px);
         }
+
+        .wa-float {
+            position: fixed;
+            right: 18px;
+            bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+            z-index: 1200;
+            width: 56px;
+            height: 56px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            background: #25d366;
+            color: #0b0f14;
+        }
     </style>
 </head>
 

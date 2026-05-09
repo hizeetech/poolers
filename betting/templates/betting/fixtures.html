@@ -1,5 +1,21 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Fixtures - Pool Betting{% endblock %} {% block content %}
 <div class="app-page">
+<style>
+    .app-page {
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+    @media (min-width: 768px) {
+        .betslip-card {
+            position: sticky;
+            top: 110px;
+        }
+        .betslip-card .card-body {
+            max-height: calc(100vh - 180px);
+            overflow: auto;
+        }
+    }
+</style>
 <div class="container py-5 position-relative">
     <div class="d-flex align-items-center mb-4 gap-3">
         <h2 class="fw-bold mb-0 text-primary">Fixtures</h2>
@@ -25,7 +41,7 @@
         </div>
 
         <div class="col-md-4">
-            <div class="card app-glass-card shadow-lg rounded-3 sticky-top" style="top: 20px;">
+            <div class="card app-glass-card shadow-lg rounded-3 betslip-card">
                 <div class="card-header bg-primary text-center rounded-top-3">
                     <h4 class="mb-0 text-white">Your Betslip</h4>
                 </div>

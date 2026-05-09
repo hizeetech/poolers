@@ -808,7 +808,18 @@ betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
 
 # --- Processed Withdrawal Admin (Audit) ---
 class ProcessedWithdrawalAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'amount', 'balance_before', 'balance_after', 'approved_rejected_by', 'approver_balance_before', 'approver_balance_after', 'status_badge', 'approved_rejected_time')
+    list_display = (
+        'id',
+        'user',
+        'amount',
+        'balance_before_display',
+        'balance_after_display',
+        'approved_rejected_by_display',
+        'approver_balance_before_display',
+        'approver_balance_after_display',
+        'status_badge',
+        'approved_rejected_time_display',
+    )
     list_filter = ('approved_rejected_time', 'approved_rejected_by', 'user')
     search_fields = ('user__email', 'user__username', 'id', 'processed_ip')
     readonly_fields = [field.name for field in UserWithdrawal._meta.fields] + ['balance_before', 'balance_after', 'approver_balance_before', 'approver_balance_after', 'processed_ip']
@@ -818,7 +829,7 @@ class ProcessedWithdrawalAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.filter(status__in=['approved', 'completed'])
+        return qs.filter(status__in=['approved', 'completed', 'rejected']).select_related('user', 'approved_rejected_by')
 
     def has_add_permission(self, request):
         return False
@@ -838,21 +849,146 @@ class ProcessedWithdrawalAdmin(admin.ModelAdmin):
         )
     status_badge.short_description = 'Status'
 
+    def _ensure_cache(self, result_list):
+        self._pw_cache = {
+            'wallet_map': {},
+            'approver_wallet_map': {},
+            'activity_map': {},
+        }
+
+        ids = [obj.id for obj in result_list]
+        if not ids:
+            return
+
+        user_ids = {obj.user_id for obj in result_list if obj.user_id}
+        approver_ids = {obj.approved_rejected_by_id for obj in result_list if obj.approved_rejected_by_id}
+
+        affected_objects = [f"Withdrawal: {i}" for i in ids]
+        logs = (
+            ActivityLog.objects
+            .filter(affected_object__in=affected_objects, action_type='UPDATE')
+            .select_related('user')
+            .order_by('affected_object', '-timestamp')
+        )
+        seen = set()
+        for log in logs:
+            key = log.affected_object
+            if key in seen:
+                continue
+            seen.add(key)
+            self._pw_cache['activity_map'][key] = log
+            if log.user_id:
+                approver_ids.add(log.user_id)
+
+        self._pw_cache['wallet_map'] = {
+            row['user_id']: row['balance']
+            for row in Wallet.objects.filter(user_id__in=list(user_ids)).values('user_id', 'balance')
+        }
+        self._pw_cache['approver_wallet_map'] = {
+            row['user_id']: row['balance']
+            for row in Wallet.objects.filter(user_id__in=list(approver_ids)).values('user_id', 'balance')
+        }
+
     def changelist_view(self, request, extra_context=None):
         response = super().changelist_view(request, extra_context)
         try:
-            qs = response.context_data['cl'].queryset
+            cl = response.context_data['cl']
         except (AttributeError, KeyError):
             return response
-            
+
+        self._pw_cache = {}
+        try:
+            self._ensure_cache(cl.result_list)
+        except Exception:
+            self._pw_cache = {}
+
+        try:
+            qs = cl.queryset
+        except Exception:
+            return response
+
         total = qs.aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
         extra_context = extra_context or {}
         extra_context['total_withdrawal_amount'] = total
-        
         if hasattr(response, 'context_data'):
             response.context_data.update(extra_context)
-            
         return response
+
+    def _fmt_money(self, value):
+        if value is None:
+            return "-"
+        try:
+            return f"₦{Decimal(value):,.2f}"
+        except Exception:
+            return str(value)
+
+    def _activity_for(self, obj):
+        cache = getattr(self, '_pw_cache', {}) or {}
+        return cache.get('activity_map', {}).get(f"Withdrawal: {obj.id}")
+
+    def balance_before_display(self, obj):
+        if obj.balance_before is not None:
+            return self._fmt_money(obj.balance_before)
+        cache = getattr(self, '_pw_cache', {}) or {}
+        wallet_bal = cache.get('wallet_map', {}).get(obj.user_id)
+        if wallet_bal is None:
+            return "-"
+        if obj.status == 'rejected':
+            return self._fmt_money(wallet_bal)
+        return self._fmt_money(wallet_bal + obj.amount)
+    balance_before_display.short_description = 'Balance before'
+
+    def balance_after_display(self, obj):
+        if obj.balance_after is not None:
+            return self._fmt_money(obj.balance_after)
+        cache = getattr(self, '_pw_cache', {}) or {}
+        wallet_bal = cache.get('wallet_map', {}).get(obj.user_id)
+        if wallet_bal is None:
+            return "-"
+        if obj.status == 'rejected':
+            return self._fmt_money(wallet_bal - obj.amount)
+        return self._fmt_money(wallet_bal)
+    balance_after_display.short_description = 'Balance after'
+
+    def approved_rejected_by_display(self, obj):
+        if obj.approved_rejected_by_id:
+            return obj.approved_rejected_by
+        log = self._activity_for(obj)
+        return getattr(log, 'user', None) or "-"
+    approved_rejected_by_display.short_description = 'Approved rejected by'
+
+    def approver_balance_before_display(self, obj):
+        if obj.approver_balance_before is not None:
+            return self._fmt_money(obj.approver_balance_before)
+        approver_id = obj.approved_rejected_by_id
+        if not approver_id:
+            log = self._activity_for(obj)
+            approver_id = getattr(log, 'user_id', None)
+        cache = getattr(self, '_pw_cache', {}) or {}
+        bal = cache.get('approver_wallet_map', {}).get(approver_id)
+        return self._fmt_money(bal) if bal is not None else "-"
+    approver_balance_before_display.short_description = 'Approver balance before'
+
+    def approver_balance_after_display(self, obj):
+        if obj.approver_balance_after is not None:
+            return self._fmt_money(obj.approver_balance_after)
+        approver_id = obj.approved_rejected_by_id
+        if not approver_id:
+            log = self._activity_for(obj)
+            approver_id = getattr(log, 'user_id', None)
+        cache = getattr(self, '_pw_cache', {}) or {}
+        bal = cache.get('approver_wallet_map', {}).get(approver_id)
+        return self._fmt_money(bal) if bal is not None else "-"
+    approver_balance_after_display.short_description = 'Approver balance after'
+
+    def approved_rejected_time_display(self, obj):
+        if obj.approved_rejected_time:
+            return obj.approved_rejected_time
+        log = self._activity_for(obj)
+        if log and log.timestamp:
+            return log.timestamp
+        return obj.request_time
+    approved_rejected_time_display.short_description = 'Approved rejected time'
 
 betting_admin_site.register(ProcessedWithdrawal, ProcessedWithdrawalAdmin)
 # Activity Log Admin

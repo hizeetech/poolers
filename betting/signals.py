@@ -136,6 +136,7 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
 
         if old_instance.status != instance.status:
             user = get_current_user()
+            request = get_current_request()
             
             # If becoming rejected, refund.
             if instance.status == 'rejected' and old_instance.status != 'rejected':
@@ -169,11 +170,35 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                     wallet.save()
             
             # Update audit fields
-            if instance.status in ['approved', 'rejected']:
+            if instance.status in ['approved', 'rejected', 'completed']:
                 if not instance.approved_rejected_time:
                     instance.approved_rejected_time = timezone.now()
                 if not instance.approved_rejected_by and user and user.is_authenticated:
                     instance.approved_rejected_by = user
+                if not instance.processed_ip and request:
+                    instance.processed_ip = get_client_ip(request)
+
+                try:
+                    user_wallet = Wallet.objects.select_for_update().get(user=instance.user)
+                except Wallet.DoesNotExist:
+                    user_wallet = None
+
+                if user_wallet and (instance.balance_before is None or instance.balance_after is None):
+                    if instance.status in ['approved', 'completed']:
+                        instance.balance_after = user_wallet.balance
+                        instance.balance_before = user_wallet.balance + instance.amount
+                    elif instance.status == 'rejected':
+                        instance.balance_before = user_wallet.balance
+                        instance.balance_after = user_wallet.balance - instance.amount
+
+                if user and user.is_authenticated and (instance.approver_balance_before is None or instance.approver_balance_after is None):
+                    try:
+                        approver_wallet = Wallet.objects.select_for_update().get(user=user)
+                    except Wallet.DoesNotExist:
+                        approver_wallet = None
+                    if approver_wallet:
+                        instance.approver_balance_before = instance.approver_balance_before if instance.approver_balance_before is not None else approver_wallet.balance
+                        instance.approver_balance_after = instance.approver_balance_after if instance.approver_balance_after is not None else approver_wallet.balance
 
 @receiver(post_save, sender=UserWithdrawal)
 def log_withdrawal(sender, instance, created, **kwargs):
@@ -201,5 +226,4 @@ def log_withdrawal(sender, instance, created, **kwargs):
 def create_user_wallet(sender, instance, created, **kwargs):
     if created:
         Wallet.objects.get_or_create(user=instance)
-
 

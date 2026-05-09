@@ -226,6 +226,61 @@
         {% else %}
         <p class="alert alert-info rounded-3 shadow-sm">No super agents found.</p>
         {% endif %}
+    {% elif user.user_type == 'super_agent' %}
+        {% if super_downline_tree %}
+        <div class="app-glass-card rounded-3 shadow-sm p-3">
+            <div class="accordion" id="superDownlineAccordion">
+                {% for ag_row in super_downline_tree %}
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="heading-super-ag-{{ ag_row.user.id }}">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-super-ag-{{ ag_row.user.id }}" aria-expanded="false" aria-controls="collapse-super-ag-{{ ag_row.user.id }}">
+                            <div class="d-flex justify-content-between align-items-center w-100">
+                                <div>
+                                    <div class="fw-semibold">{{ ag_row.user.get_full_name }}</div>
+                                    <div class="text-muted small">{{ ag_row.user.email }}</div>
+                                </div>
+                                <div class="text-end">
+                                    <div class="small text-muted">Agent + Cashiers</div>
+                                    <div class="fw-bold text-primary">₦{{ ag_row.total_balance|floatformat:2 }}</div>
+                                </div>
+                            </div>
+                        </button>
+                    </h2>
+                    <div id="collapse-super-ag-{{ ag_row.user.id }}" class="accordion-collapse collapse" aria-labelledby="heading-super-ag-{{ ag_row.user.id }}" data-bs-parent="#superDownlineAccordion">
+                        <div class="accordion-body">
+                            {% if ag_row.cashiers %}
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th scope="col">Cashier Email</th>
+                                            <th scope="col">Cashier Name</th>
+                                            <th scope="col" class="text-end">Wallet Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for ca_row in ag_row.cashiers %}
+                                        <tr>
+                                            <td>{{ ca_row.user.email }}</td>
+                                            <td>{{ ca_row.user.get_full_name }}</td>
+                                            <td class="text-end">₦{{ ca_row.balance|floatformat:2 }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {% else %}
+                            <p class="alert alert-info rounded-3 shadow-sm mb-0">No cashiers found under this agent.</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <p class="alert alert-info rounded-3 shadow-sm">No direct agents found.</p>
+        {% endif %}
     {% else %}
         {% if direct_downline_rows %}
         <div class="table-responsive app-glass-card rounded-3 shadow-sm p-3">

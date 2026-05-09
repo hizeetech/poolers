@@ -2207,6 +2207,7 @@ def agent_dashboard(request):
 
     direct_downline_rows = []
     master_downline_tree = []
+    super_downline_tree = []
     if user.user_type == 'master_agent':
         direct_super_agents_qs = (
             User.objects.filter(user_type='super_agent', master_agent=user)
@@ -2270,11 +2271,39 @@ def agent_dashboard(request):
             })
 
     elif user.user_type == 'super_agent':
-        direct_agents_qs = User.objects.filter(user_type='agent', super_agent=user).select_related('state')
-        agent_totals = _build_agent_total_wallet_map(direct_agents_qs)
+        direct_agents_qs = (
+            User.objects.filter(user_type='agent', super_agent=user)
+            .select_related('state')
+            .order_by('email')
+        )
+        cashiers_qs = (
+            User.objects.filter(user_type='cashier', agent__in=direct_agents_qs)
+            .select_related('state', 'agent')
+            .order_by('email')
+        )
+
+        wallet_map = _get_wallet_balance_map(
+            list(direct_agents_qs.values_list('id', flat=True))
+            + list(cashiers_qs.values_list('id', flat=True))
+        )
+
+        cashiers_by_agent = {}
+        for cashier in cashiers_qs:
+            cashiers_by_agent.setdefault(cashier.agent_id, []).append(cashier)
+
         for ag in direct_agents_qs:
-            direct_downline_rows.append({'user': ag, 'aggregated_balance': agent_totals.get(ag.id) or Decimal('0.00')})
-        direct_downline_rows.sort(key=lambda r: (r['user'].email or '').lower())
+            total = wallet_map.get(ag.id) or Decimal('0.00')
+            cashier_rows = []
+            for cashier in cashiers_by_agent.get(ag.id, []):
+                bal = wallet_map.get(cashier.id) or Decimal('0.00')
+                total += bal
+                cashier_rows.append({'user': cashier, 'balance': bal})
+
+            super_downline_tree.append({
+                'user': ag,
+                'total_balance': total,
+                'cashiers': cashier_rows,
+            })
 
     elif user.user_type == 'agent':
         direct_cashiers_qs = User.objects.filter(user_type='cashier', agent=user).select_related('state')
@@ -2413,6 +2442,7 @@ def agent_dashboard(request):
         'downline_users': downline_users_qs, # Pass the QuerySet
         'direct_downline_rows': direct_downline_rows,
         'master_downline_tree': master_downline_tree,
+        'super_downline_tree': super_downline_tree,
         'downline_bet_tickets': downline_bet_tickets.order_by('-placed_at')[:50], # Pass the QuerySet, sliced
         'total_downline_users': total_downline_users,
         'total_downline_turnover': total_downline_turnover,

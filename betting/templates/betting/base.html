@@ -61,6 +61,8 @@
             top: 0;
             width: 100%;
             z-index: 1030;
+            padding-top: 0.15rem;
+            padding-bottom: 0.15rem;
         }
         
         .navbar-brand {
@@ -71,8 +73,12 @@
         }
         
         .navbar-brand img {
-            height: 30px;
+            height: 46px;
             margin-right: 10px;
+            width: auto;
+            display: block;
+            transform: scale(1.15);
+            transform-origin: left center;
         }
         
         .nav-link {
@@ -331,9 +337,9 @@
         <div class="container-fluid">
             <a class="navbar-brand d-flex align-items-center" href="{% url 'betting:frontpage' %}">
                 {% if site_config.logo %}
-                <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="height: 75px; width: auto;" class="me-2">
+                <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="me-2">
                 {% else %}
-                <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="height: 50px; width: auto;" class="me-2">
+                <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="me-2">
                 {% endif %}
                 {# <span class="fw-bold fs-4">{{ site_config.site_name|default:"StakeNaija" }}</span> #}
             </a>

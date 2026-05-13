@@ -42,7 +42,8 @@ from .models import (
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
-    PasswordResetRequest, State, FooterPage, FooterBadge
+    PasswordResetRequest, State, FooterPage, FooterBadge,
+    GlobalBettingSettings, AgentBettingLimitOverride, BettingLimitAuditLog
 )
 
 
@@ -106,6 +107,7 @@ class BettingAdminSite(admin.AdminSite):
             path('reports/ticket/<uuid:ticket_id>/', self.admin_view(views.admin_ticket_details), name='admin_ticket_details'), 
             path('reports/ticket/void/<uuid:ticket_id>/', self.admin_view(views.admin_void_ticket_single), name='admin_void_ticket_single'), 
             path('reports/ticket/settle-won/<uuid:ticket_id>/', self.admin_view(views.admin_settle_won_ticket_single), name='admin_settle_won_ticket_single'), 
+            path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
 
             path('reports/wallet/', self.admin_view(views.admin_wallet_report), name='admin_wallet_report'),
             path('reports/sales-winnings/', self.admin_view(views.admin_sales_winnings_report), name='admin_sales_winnings_report'),
@@ -794,6 +796,167 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
 
+# --- BonusRule Admin ---
+class BonusRuleAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'is_active',
+        'min_selections',
+        'max_selections',
+        'min_odd_per_selection',
+        'bonus_percentage',
+        'max_bonus_cap',
+        'bonus_base',
+        'allow_system_bets',
+        'allow_accumulator_bets',
+        'allow_single_bets',
+    )
+    list_filter = ('is_active', 'bonus_base', 'allow_system_bets', 'allow_accumulator_bets', 'allow_single_bets')
+    search_fields = ('name',)
+    ordering = ('min_selections', 'max_selections', 'min_odd_per_selection')
+
+    def save_model(self, request, obj, form, change):
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
+
+class GlobalBettingSettingsAdmin(admin.ModelAdmin):
+    list_display = ('is_active', 'betting_enabled', 'min_stake', 'max_stake', 'max_winning', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at', 'created_by', 'updated_by')
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_add_permission(self, request):
+        return not GlobalBettingSettings.objects.exists()
+
+    def save_model(self, request, obj, form, change):
+        existing = GlobalBettingSettings.objects.filter(pk=obj.pk).first()
+        obj.updated_by = request.user
+        if not obj.created_by:
+            obj.created_by = request.user
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
+
+        changed = {}
+        if existing:
+            for f in ['is_active', 'betting_enabled', 'min_stake', 'max_stake', 'max_winning', 'max_stake_by_ticket_type', 'max_winning_by_ticket_type', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_day', 'max_payout_per_user_per_day']:
+                old_val = getattr(existing, f)
+                new_val = getattr(obj, f)
+                if old_val != new_val:
+                    changed[f] = {'old': str(old_val) if old_val is not None else None, 'new': str(new_val) if new_val is not None else None}
+        else:
+            changed['created'] = True
+
+        BettingLimitAuditLog.objects.create(
+            action_type='GLOBAL_UPDATE',
+            actor=request.user,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Global betting settings updated.',
+            data={'changed': changed}
+        )
+
+class AgentBettingLimitOverrideAdmin(admin.ModelAdmin):
+    list_display = ('agent', 'is_active', 'custom_limits_enabled', 'min_stake', 'max_stake', 'max_winning', 'updated_at')
+    list_filter = ('is_active', 'custom_limits_enabled')
+    search_fields = ('agent__email', 'agent__username', 'agent__first_name', 'agent__last_name', 'agent__phone_number')
+    autocomplete_fields = ('agent',)
+    readonly_fields = ('created_at', 'updated_at', 'created_by', 'updated_by')
+    actions = ('activate_overrides', 'deactivate_overrides', 'enable_custom_limits', 'disable_custom_limits')
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def save_model(self, request, obj, form, change):
+        existing = AgentBettingLimitOverride.objects.filter(pk=obj.pk).select_related('agent').first()
+        obj.updated_by = request.user
+        if not obj.created_by:
+            obj.created_by = request.user
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
+
+        changed = {}
+        if existing:
+            for f in ['is_active', 'custom_limits_enabled', 'min_stake', 'max_stake', 'max_winning', 'max_stake_by_ticket_type', 'max_winning_by_ticket_type', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_agent_per_day', 'max_payout_per_user_per_day']:
+                old_val = getattr(existing, f)
+                new_val = getattr(obj, f)
+                if old_val != new_val:
+                    changed[f] = {'old': str(old_val) if old_val is not None else None, 'new': str(new_val) if new_val is not None else None}
+        else:
+            changed['created'] = True
+
+        BettingLimitAuditLog.objects.create(
+            action_type='AGENT_UPDATE',
+            actor=request.user,
+            agent=obj.agent,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Agent betting limits override updated.',
+            data={'changed': changed}
+        )
+
+    @admin.action(description='Activate selected overrides')
+    def activate_overrides(self, request, queryset):
+        updated = queryset.update(is_active=True)
+        BettingLimitAuditLog.objects.create(
+            action_type='AGENT_UPDATE',
+            actor=request.user,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Bulk activate agent betting limit overrides.',
+            data={'count': updated, 'ids': list(queryset.values_list('id', flat=True))}
+        )
+        self.message_user(request, f"Activated {updated} overrides.", level=messages.SUCCESS)
+
+    @admin.action(description='Deactivate selected overrides')
+    def deactivate_overrides(self, request, queryset):
+        updated = queryset.update(is_active=False)
+        BettingLimitAuditLog.objects.create(
+            action_type='AGENT_UPDATE',
+            actor=request.user,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Bulk deactivate agent betting limit overrides.',
+            data={'count': updated, 'ids': list(queryset.values_list('id', flat=True))}
+        )
+        self.message_user(request, f"Deactivated {updated} overrides.", level=messages.SUCCESS)
+
+    @admin.action(description='Enable custom limits on selected overrides')
+    def enable_custom_limits(self, request, queryset):
+        updated = queryset.update(custom_limits_enabled=True)
+        BettingLimitAuditLog.objects.create(
+            action_type='AGENT_UPDATE',
+            actor=request.user,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Bulk enable custom limits for agent overrides.',
+            data={'count': updated, 'ids': list(queryset.values_list('id', flat=True))}
+        )
+        self.message_user(request, f"Enabled custom limits for {updated} overrides.", level=messages.SUCCESS)
+
+    @admin.action(description='Disable custom limits on selected overrides')
+    def disable_custom_limits(self, request, queryset):
+        updated = queryset.update(custom_limits_enabled=False)
+        BettingLimitAuditLog.objects.create(
+            action_type='AGENT_UPDATE',
+            actor=request.user,
+            ip_address=(request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR')),
+            message='Bulk disable custom limits for agent overrides.',
+            data={'count': updated, 'ids': list(queryset.values_list('id', flat=True))}
+        )
+        self.message_user(request, f"Disabled custom limits for {updated} overrides.", level=messages.SUCCESS)
+
+class BettingLimitAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'action_type', 'actor', 'agent', 'affected_user', 'ticket')
+    list_filter = ('action_type', 'created_at')
+    search_fields = ('message', 'actor__email', 'agent__email', 'affected_user__email', 'ticket__ticket_id', 'ticket__id')
+    readonly_fields = [f.name for f in BettingLimitAuditLog._meta.fields]
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
 # Register your models with the CUSTOM admin site
 betting_admin_site.register(User, CustomUserAdmin)
 betting_admin_site.register(Wallet, WalletAdmin)
@@ -802,9 +965,12 @@ betting_admin_site.register(BettingPeriod, BettingPeriodAdmin)
 betting_admin_site.register(Fixture, FixtureAdmin)
 betting_admin_site.register(Result, ResultAdmin)
 betting_admin_site.register(BetTicket, BetTicketAdmin)
-betting_admin_site.register(BonusRule)
+betting_admin_site.register(BonusRule, BonusRuleAdmin)
 betting_admin_site.register(SystemSetting)
 betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
+betting_admin_site.register(GlobalBettingSettings, GlobalBettingSettingsAdmin)
+betting_admin_site.register(AgentBettingLimitOverride, AgentBettingLimitOverrideAdmin)
+betting_admin_site.register(BettingLimitAuditLog, BettingLimitAuditLogAdmin)
 
 # --- Processed Withdrawal Admin (Audit) ---
 class ProcessedWithdrawalAdmin(admin.ModelAdmin):

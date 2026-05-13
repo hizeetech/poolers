@@ -3,9 +3,9 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
-from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture
+from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride
 from .middleware import get_current_user, get_current_request
-from .utils import get_ip_details, get_client_ip, log_debug
+from .utils import get_ip_details, get_client_ip, log_debug, clear_bonus_rules_cache, clear_betting_limits_cache
 import threading
 
 def fetch_and_update_isp(log_id, ip_address):
@@ -227,3 +227,22 @@ def create_user_wallet(sender, instance, created, **kwargs):
     if created:
         Wallet.objects.get_or_create(user=instance)
 
+@receiver(post_save, sender=BonusRule)
+def clear_bonus_cache_on_save(sender, instance, **kwargs):
+    clear_bonus_rules_cache()
+
+@receiver(post_delete, sender=BonusRule)
+def clear_bonus_cache_on_delete(sender, instance, **kwargs):
+    clear_bonus_rules_cache()
+
+@receiver(post_save, sender=GlobalBettingSettings)
+def clear_betting_limits_cache_on_global_save(sender, instance, **kwargs):
+    clear_betting_limits_cache()
+
+@receiver(post_save, sender=AgentBettingLimitOverride)
+def clear_betting_limits_cache_on_override_save(sender, instance, **kwargs):
+    clear_betting_limits_cache(agent_id=instance.agent_id)
+
+@receiver(post_delete, sender=AgentBettingLimitOverride)
+def clear_betting_limits_cache_on_override_delete(sender, instance, **kwargs):
+    clear_betting_limits_cache(agent_id=instance.agent_id)

@@ -48,6 +48,7 @@
                     <div class="mb-3">
                         <label for="stake_amount" class="form-label fw-bold" id="stake-label">Stake Amount (per line) (₦)</label>
                         <input type="number" step="0.01" min="0.01" id="stake_amount" class="form-control rounded-pill" value="100">
+                        <div class="text-muted small mt-1" id="betting-limits-hint"></div>
                     </div>
                     <div class="d-flex justify-content-between mb-2" id="lines-count-div" style="display: none !important;">
                          <span class="fw-bold">No. of Lines:</span>
@@ -73,6 +74,14 @@
                         <span class="fw-bold">Bonus:</span>
                         <span id="bonus-amount" class="fw-bold text-warning">₦0.00</span>
                     </div>
+                    <div class="d-flex justify-content-between mb-3 d-none" id="minimum-winning-row">
+                        <span class="fw-bold">Minimum Winning:</span>
+                        <span id="minimum-winning" class="fw-bold text-secondary">₦0.00</span>
+                    </div>
+                    <!-- <div class="d-flex justify-content-between mb-3">
+                        <span class="fw-bold">Qualified Bonus %:</span>
+                        <span id="bonus-percent" class="fw-bold text-warning">0%</span>
+                    </div> -->
                     <div class="d-flex justify-content-between mb-3">
                         <span class="fw-bold">Maximum Winning:</span>
                         <span id="max-winning" class="fw-bold text-success">₦0.00</span>
@@ -160,6 +169,10 @@
                                 <td style="border: 1px solid #000; font-weight: 700;">BONUS</td>
                                 <td style="border: 1px solid #000;" class="text-end" id="modal-bonus-amount"></td>
                             </tr>
+                            <tr id="modal-minimum-winning-row" style="display: none;">
+                                <td style="border: 1px solid #000; font-weight: 700;">MIN WIN</td>
+                                <td style="border: 1px solid #000;" class="text-end" id="modal-minimum-winning"></td>
+                            </tr>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL WIN</td>
                                 <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end" id="modal-max-winning"></td>
@@ -173,6 +186,7 @@
                 </div>
             </div>
             <div class="modal-footer">
+                <button type="button" class="btn btn-outline-primary rounded-pill" id="rebet-ticket-btn" disabled>Rebet</button>
                 <button type="button" class="btn btn-secondary rounded-pill" data-bs-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-primary rounded-pill" id="print-ticket-btn">Print Ticket</button>
             </div>
@@ -198,13 +212,18 @@
     const totalOddsSpan = document.getElementById('total-odds');
     const potentialWinningSpan = document.getElementById('potential-winning');
     const bonusAmountSpan = document.getElementById('bonus-amount');
+    const bonusPercentSpan = document.getElementById('bonus-percent');
     const minWinningSpan = document.getElementById('min-winning');
     const maxWinningSpan = document.getElementById('max-winning');
+    const minimumWinningRow = document.getElementById('minimum-winning-row');
+    const minimumWinningSpan = document.getElementById('minimum-winning');
     const betslipSelectionsDiv = document.getElementById('betslip-selections');
     const emptyBetslipMessage = document.getElementById('empty-betslip-message');
     const placeBetBtn = document.getElementById('place-bet-btn');
     const responseMessageDiv = document.getElementById('response-message');
     const printTicketModal = new bootstrap.Modal(document.getElementById('printTicketModal'));
+    const rebetTicketBtn = document.getElementById('rebet-ticket-btn');
+    let lastPlacedTicketId = null;
 
     // System Bet Elements
     const systemBetCheckbox = document.getElementById('system_bet_checkbox');
@@ -214,6 +233,82 @@
     const numberOfLinesSpan = document.getElementById('number-of-lines');
     const totalStakeContainer = document.getElementById('total-stake-container');
     const stakeLabel = document.getElementById('stake-label');
+    const bettingLimitsHint = document.getElementById('betting-limits-hint');
+    let currentBettingLimits = null;
+    let lastLimitsTicketType = null;
+    let lastComputedMaxPotential = 0;
+    let lastComputedMinPotential = 0;
+    let lastComputedMaxWinningRaw = 0;
+
+    function formatCurrency(value) {
+        const n = parseFloat(value);
+        if (Number.isNaN(n)) return '0.00';
+        return n.toFixed(2);
+    }
+
+    function formatMoney(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return '₦0.00';
+        const formatted = n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `₦${formatted}`;
+    }
+
+    function updateBettingLimitsHint() {
+        if (!bettingLimitsHint) return;
+        if (!currentBettingLimits) {
+            bettingLimitsHint.textContent = '';
+            return;
+        }
+
+        const minStake = currentBettingLimits.min_stake;
+        const maxStake = currentBettingLimits.max_stake_effective || currentBettingLimits.max_stake;
+        const maxWin = currentBettingLimits.max_winning_effective || currentBettingLimits.max_winning;
+        const maxSel = currentBettingLimits.max_selections_per_ticket;
+        const maxOdds = currentBettingLimits.max_odds_per_ticket;
+
+        const parts = [];
+        if (minStake) parts.push(`Min Stake: ₦${formatCurrency(minStake)}`);
+        if (maxStake) parts.push(`Max Stake: ₦${formatCurrency(maxStake)}`);
+        if (maxWin) parts.push(`Max Winning: ₦${formatCurrency(maxWin)}`);
+        if (maxSel) parts.push(`Max Selections: ${maxSel}`);
+        if (maxOdds) parts.push(`Max Odds: ${formatCurrency(maxOdds)}`);
+
+        if (currentBettingLimits.has_agent_override) {
+            parts.push('Agent Limits Applied');
+        }
+
+        bettingLimitsHint.textContent = parts.join(' • ');
+    }
+
+    async function loadBettingLimits(ticketType) {
+        try {
+            let url = '{% url "betting:api_betting_limits" %}';
+            if (ticketType) {
+                url += `?ticket_type=${encodeURIComponent(ticketType)}`;
+            }
+            const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const payload = await resp.json();
+            if (payload && payload.success && payload.limits) {
+                currentBettingLimits = payload.limits;
+                updateBettingLimitsHint();
+
+                const bettingEnabled = !(currentBettingLimits.is_active === false || currentBettingLimits.betting_enabled === false);
+                if (!bettingEnabled) {
+                    placeBetBtn.disabled = true;
+                    displayMessage('Betting is temporarily disabled.', 'warning');
+                }
+            }
+        } catch (e) {
+            currentBettingLimits = null;
+        }
+    }
+
+    async function ensureBettingLimitsForTicketType(ticketType) {
+        const t = ticketType || null;
+        if (t && t === lastLimitsTicketType && currentBettingLimits) return;
+        lastLimitsTicketType = t;
+        await loadBettingLimits(t);
+    }
 
     // Function to display messages (mimicking Django messages)
     function displayMessage(message, type) {
@@ -246,6 +341,34 @@
             }
         }
         return ret;
+    }
+
+    function combinationCount(n, k) {
+        n = Math.max(0, parseInt(n, 10) || 0);
+        k = Math.max(0, parseInt(k, 10) || 0);
+        if (k > n) return 0;
+        if (k === 0 || k === n) return 1;
+        k = Math.min(k, n - k);
+        let result = 1;
+        for (let i = 1; i <= k; i++) {
+            result = (result * (n - (k - i))) / i;
+        }
+        return Math.round(result);
+    }
+
+    function symmetricSumK(odds, k) {
+        const kk = Math.max(0, parseInt(k, 10) || 0);
+        if (kk === 0) return 1;
+        const dp = new Array(kk + 1).fill(0);
+        dp[0] = 1;
+        for (let i = 0; i < odds.length; i++) {
+            const o = parseFloat(odds[i]) || 0;
+            const upper = Math.min(kk, i + 1);
+            for (let j = upper; j >= 1; j--) {
+                dp[j] = dp[j] + (dp[j - 1] * o);
+            }
+        }
+        return dp[kk] || 0;
     }
 
     // Function to update the bet slip display and calculations
@@ -354,10 +477,7 @@
 
         if (isSystemBet && totalSelections >= 3) {
             const k = parseInt(permutationCountInput.value) || 2;
-            
-            // Calculate Combinations
-            const combinations = getCombinations(selectedBets, k);
-            numLines = combinations.length;
+            numLines = combinationCount(totalSelections, k);
 
             // Handle 2-way binding for stake
             if (source === 'total') {
@@ -370,17 +490,10 @@
                 totalStakeInput.value = totalStake.toFixed(2);
             }
 
-            // Calculate Max Winning (Sum of all winning lines if all selections win)
-            let totalSystemReturn = 0;
-            combinations.forEach(combo => {
-                let lineOdds = 1;
-                combo.forEach(bet => {
-                    lineOdds *= parseFloat(bet.odd);
-                });
-                totalSystemReturn += (lineOdds * stakePerLine);
-            });
-            maxWin = totalSystemReturn;
-            potentialWin = maxWin; 
+            const odds = selectedBets.map(b => parseFloat(b.odd) || 0);
+            const sumProducts = symmetricSumK(odds, k);
+            maxWin = stakePerLine * sumProducts;
+            potentialWin = maxWin;
 
             // Calculate Minimum Winning
             // Find the k selections with the lowest odds
@@ -410,53 +523,90 @@
              minWin = maxWin; // For acca, min winning is same as max (all must win)
         }
 
+        lastComputedMaxPotential = potentialWin;
+        lastComputedMinPotential = minWin;
+
         // Update UI
         numberOfLinesSpan.textContent = numLines;
-        potentialWinningSpan.textContent = `₦${potentialWin.toFixed(2)}`; // Shows Max Potential
-        minWinningSpan.textContent = `₦${minWin.toFixed(2)}`;
+        const configuredMaxWinning = currentBettingLimits ? (parseFloat(currentBettingLimits.max_winning_effective || currentBettingLimits.max_winning) || 0) : 0;
+        const displayedMaxPotential = (configuredMaxWinning > 0) ? Math.min(potentialWin, configuredMaxWinning) : potentialWin;
+        const displayedMinPotential = (configuredMaxWinning > 0) ? Math.min(minWin, configuredMaxWinning) : minWin;
+        potentialWinningSpan.textContent = formatMoney(displayedMaxPotential); // Shows Max Potential (capped for display)
+        minWinningSpan.textContent = formatMoney(displayedMinPotential); // Shows Min Potential (capped for display)
 
         // Bonus and Final Max Calculation
-        calculateBonusAndMaxWinning(potentialWin, isSystemBet, minWin);
+        const betTypeForBonus = (isSystemBet && totalSelections >= 3) ? 'system' : (totalSelections <= 1 ? 'single' : 'multiple');
+        const oddsForBonus = selectedBets.map(b => parseFloat(b.odd) || 0);
+        ensureBettingLimitsForTicketType(betTypeForBonus);
+        calculateBonusAndMaxWinning(potentialWin, minWin, totalStake, betTypeForBonus, totalSelections, oddsForBonus);
     }
 
 
     // Function to calculate bonus and max winning
-    function calculateBonusAndMaxWinning(potential, isSystemBet, minWin) {
+    function calculateBonusAndMaxWinning(potential, minPotential, totalStake, betType, selectionCount, odds) {
         let bonus = 0;
-        
-        if (!isSystemBet && typeof bonusRules !== 'undefined' && bonusRules.length > 0) {
-             // Iterate through rules to find the best match (highest bonus)
-             // Rules are sorted by min_selections ASC from backend. 
-             // We want the rule with the highest min_selections that fits.
-             
-             // Extract odds from selectedBets for validation
-             const odds = selectedBets.map(bet => parseFloat(bet.odd) || 0);
-             
-             for (let i = bonusRules.length - 1; i >= 0; i--) {
-                 const rule = bonusRules[i];
-                 
-                 // Check how many selections meet the min_odd requirement
-                 const qualifyingCount = odds.reduce((count, odd) => {
-                     return (odd >= rule.min_odd) ? count + 1 : count;
-                 }, 0);
-                 
-                 if (qualifyingCount >= rule.min_selections) {
-                     bonus = potential * rule.bonus_percentage;
-                     break; // Stop at the highest applicable rule
-                 }
-             }
+        let pct = 0;
+        let applicable = null;
+
+        if (typeof bonusRules !== 'undefined' && bonusRules && bonusRules.length > 0) {
+            const minOdd = odds.length ? Math.min(...odds) : 0;
+            for (let i = 0; i < bonusRules.length; i++) {
+                const rule = bonusRules[i];
+
+                const allowed = (betType === 'system') ? rule.allow_system : ((betType === 'single') ? rule.allow_single : rule.allow_acca);
+                if (!allowed) continue;
+
+                if (selectionCount < rule.min) continue;
+                if (rule.max !== null && rule.max !== undefined && selectionCount > rule.max) continue;
+                if (minOdd && minOdd < rule.min_odd) continue;
+
+                applicable = rule;
+                break;
+            }
         }
 
-        bonusAmountSpan.textContent = `₦${bonus.toFixed(2)}`;
-        let maxWinning = potential + bonus;
-
-        // Client-side max winning limit 
-        const clientSideMaxWinningLimit = 10000000.00;
-        if (maxWinning > clientSideMaxWinningLimit) {
-            maxWinning = clientSideMaxWinningLimit;
+        if (applicable) {
+            pct = parseFloat(applicable.pct) || 0;
+            const baseMode = applicable.base || 'gross';
+            let baseAmount = potential;
+            if (baseMode === 'net') {
+                baseAmount = Math.max(0, potential - (parseFloat(totalStake) || 0));
+            }
+            bonus = baseAmount * pct;
+            if (applicable.cap !== null && applicable.cap !== undefined) {
+                bonus = Math.min(bonus, parseFloat(applicable.cap) || 0);
+            }
         }
 
-        maxWinningSpan.textContent = `₦${maxWinning.toFixed(2)}`;
+        bonusAmountSpan.textContent = formatMoney(bonus);
+        if (bonusPercentSpan) {
+            bonusPercentSpan.textContent = `${(pct * 100).toFixed(2)}%`;
+        }
+        lastComputedMaxWinningRaw = (parseFloat(potential) || 0) + (parseFloat(bonus) || 0);
+        let maxWinning = lastComputedMaxWinningRaw;
+
+        const configuredMaxWinning = currentBettingLimits ? (parseFloat(currentBettingLimits.max_winning_effective || currentBettingLimits.max_winning) || 0) : 0;
+        if (configuredMaxWinning > 0 && maxWinning > configuredMaxWinning) {
+            maxWinning = configuredMaxWinning;
+        }
+
+        maxWinningSpan.textContent = formatMoney(maxWinning);
+
+        const showMinimumWinning = (betType === 'system') && systemBetCheckbox.checked && selectionCount >= 3;
+        if (minimumWinningRow) {
+            minimumWinningRow.classList.toggle('d-none', !showMinimumWinning);
+        }
+        if (minimumWinningSpan) {
+            if (!showMinimumWinning) {
+                minimumWinningSpan.textContent = formatMoney(0);
+            } else {
+                let minimumWinning = (parseFloat(minPotential) || 0) + bonus;
+                if (configuredMaxWinning > 0 && minimumWinning > configuredMaxWinning) {
+                    minimumWinning = configuredMaxWinning;
+                }
+                minimumWinningSpan.textContent = formatMoney(minimumWinning);
+            }
+        }
         
         // Also apply cap to min winning if needed (usually min winning is small enough, but good practice)
         // For Min Winning display, we usually don't add bonus if it's not applicable to the base condition?
@@ -690,6 +840,45 @@
                  return;
             }
 
+            if (currentBettingLimits) {
+                const bettingEnabled = !(currentBettingLimits.is_active === false || currentBettingLimits.betting_enabled === false);
+                if (!bettingEnabled) {
+                    displayMessage('Betting is temporarily disabled.', 'warning');
+                    placeBetBtn.disabled = false;
+                    return;
+                }
+
+                const maxSel = parseInt(currentBettingLimits.max_selections_per_ticket || '0', 10) || 0;
+                if (maxSel > 0 && selectedBets.length > maxSel) {
+                    displayMessage(`Error: Maximum selections per ticket is ${maxSel}.`, 'danger');
+                    placeBetBtn.disabled = false;
+                    return;
+                }
+
+                const totalStakeNum = parseFloat(totalStake) || 0;
+                const minStake = parseFloat(currentBettingLimits.min_stake || '0') || 0;
+                const maxStake = parseFloat(currentBettingLimits.max_stake_effective || currentBettingLimits.max_stake || '0') || 0;
+                if (minStake > 0 && totalStakeNum < minStake) {
+                    displayMessage(`Error: Minimum stake is ₦${minStake.toFixed(2)}.`, 'danger');
+                    placeBetBtn.disabled = false;
+                    return;
+                }
+                if (maxStake > 0 && totalStakeNum > maxStake) {
+                    displayMessage(`Error: Maximum stake is ₦${maxStake.toFixed(2)}.`, 'danger');
+                    placeBetBtn.disabled = false;
+                    return;
+                }
+
+                const maxWinLimit = parseFloat(currentBettingLimits.max_winning_effective || currentBettingLimits.max_winning || '0') || 0;
+                if (maxWinLimit > 0) {
+                    if ((parseFloat(lastComputedMaxWinningRaw) || 0) > maxWinLimit) {
+                        displayMessage(`Error: Maximum winning per ticket is ₦${maxWinLimit.toFixed(2)}.`, 'danger');
+                        placeBetBtn.disabled = false;
+                        return;
+                    }
+                }
+            }
+
             const formData = new FormData();
             formData.append('selections', JSON.stringify(selectedBets));
             formData.append('stake_amount', stakeAmount); // Backend expects stake per line
@@ -728,6 +917,8 @@
                             // Populate and show the print modal
                             const ticketIdEl = document.getElementById('modal-ticket-id');
                             if(ticketIdEl) ticketIdEl.textContent = data.ticket_id;
+                            lastPlacedTicketId = data.ticket_id || null;
+                            if (rebetTicketBtn) rebetTicketBtn.disabled = !lastPlacedTicketId;
                             
                             const modalStakeEl = document.getElementById('modal-stake-amount');
                             if(modalStakeEl) modalStakeEl.textContent = `₦${totalStakeInput.value}`; 
@@ -743,6 +934,16 @@
                             
                             const modalBonusEl = document.getElementById('modal-bonus-amount');
                             if(modalBonusEl) modalBonusEl.textContent = bonusAmountSpan.textContent;
+
+                            const modalMinimumWinRow = document.getElementById('modal-minimum-winning-row');
+                            const modalMinimumWinEl = document.getElementById('modal-minimum-winning');
+                            const shouldShowMinimumWinning = minimumWinningRow && !minimumWinningRow.classList.contains('d-none');
+                            if (modalMinimumWinRow) {
+                                modalMinimumWinRow.style.display = shouldShowMinimumWinning ? '' : 'none';
+                            }
+                            if (modalMinimumWinEl) {
+                                modalMinimumWinEl.textContent = shouldShowMinimumWinning && minimumWinningSpan ? minimumWinningSpan.textContent : '';
+                            }
                             
                             const modalMaxWinEl = document.getElementById('modal-max-winning');
                             if(modalMaxWinEl) modalMaxWinEl.textContent = maxWinningSpan.textContent;
@@ -839,16 +1040,16 @@
             
             // Custom CSS for Thermal Printer (58mm/80mm)
             printWindow.document.write('<style>');
-            printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 6px; color: #000; }');
-            printWindow.document.write('img { max-width: 100%; height: auto; }');
+            printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 6px; color: #000; text-rendering: geometricPrecision; -webkit-print-color-adjust: exact; print-color-adjust: exact; }');
+            printWindow.document.write('img { max-width: 100%; height: auto; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; }');
             printWindow.document.write('table { width: 100%; border-collapse: collapse; }');
-            printWindow.document.write('th, td { border: 1px solid #000; padding: 3px 4px; font-size: 12px; line-height: 1.2; vertical-align: top; }');
-            printWindow.document.write('th { font-weight: 800; text-transform: uppercase; }');
+            printWindow.document.write('th, td { border: 1.5px solid #000; padding: 4px 5px; font-size: 13px; line-height: 1.3; vertical-align: top; }');
+            printWindow.document.write('th { font-weight: 900; text-transform: uppercase; }');
             printWindow.document.write('.text-center { text-align: center; }');
             printWindow.document.write('.text-end { text-align: right; }');
-            printWindow.document.write('.fw-bold { font-weight: 800; }');
-            printWindow.document.write('.small { font-size: 10px; }');
-            printWindow.document.write('.text-muted { color: #444; }');
+            printWindow.document.write('.fw-bold { font-weight: 900; }');
+            printWindow.document.write('.small { font-size: 11px; }');
+            printWindow.document.write('.text-muted { color: #000; }');
             printWindow.document.write('.mb-2 { margin-bottom: 6px; }');
             printWindow.document.write('.mt-2 { margin-top: 6px; }');
             printWindow.document.write('</style>');
@@ -866,56 +1067,98 @@
 
         // Initial update when page loads
         updateBetslip();
+        loadBettingLimits();
+
+        function applyRebetTicket(ticket) {
+            selectedBets = [];
+
+            ticket.selections.forEach(sel => {
+                if (sel.is_active) {
+                    selectedBets.push({
+                        fixture_id: sel.fixture_id,
+                        fixture_home_team: sel.fixture_home_team,
+                        fixture_away_team: sel.fixture_away_team,
+                        fixture_match_date: sel.fixture_match_date,
+                        fixture_match_time: sel.fixture_match_time,
+                        bet_type: sel.bet_type,
+                        bet_type_display: sel.bet_type_display,
+                        odd: sel.odd,
+                        fixture_period_name: sel.fixture_period_name
+                    });
+                }
+            });
+
+            if (selectedBets.length > 0) {
+                if (ticket.bet_type === 'system' && ticket.system_min_count) {
+                    if (systemBetCheckbox) {
+                        systemBetCheckbox.checked = true;
+                        systemBetCheckbox.dispatchEvent(new Event('change'));
+                    }
+                    if (permutationCountInput) {
+                        permutationCountInput.value = ticket.system_min_count;
+                        permutationCountInput.dispatchEvent(new Event('input'));
+                    }
+                } else {
+                    if (systemBetCheckbox) {
+                        systemBetCheckbox.checked = false;
+                        systemBetCheckbox.dispatchEvent(new Event('change'));
+                    }
+                }
+
+                if (ticket.stake_amount) {
+                    if (ticket.bet_type === 'system' && totalStakeInput) {
+                        totalStakeInput.value = ticket.stake_amount;
+                        totalStakeInput.dispatchEvent(new Event('input'));
+                    } else if (stakeAmountInput) {
+                        stakeAmountInput.value = ticket.stake_amount;
+                        stakeAmountInput.dispatchEvent(new Event('input'));
+                    }
+                }
+
+                updateBetslip();
+                return true;
+            }
+
+            return false;
+        }
+
+        if (rebetTicketBtn) {
+            rebetTicketBtn.addEventListener('click', async function () {
+                if (!lastPlacedTicketId) {
+                    displayMessage('Rebet unavailable: missing ticket ID.', 'warning');
+                    return;
+                }
+
+                try {
+                    const resp = await fetch(`{% url 'betting:get_ticket_details_json' %}?ticket_id=${encodeURIComponent(lastPlacedTicketId)}&mode=rebet`, {
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    const payload = await resp.json();
+                    if (!payload.success) {
+                        displayMessage(payload.message || 'Unable to load ticket for rebet.', 'danger');
+                        return;
+                    }
+
+                    const ok = applyRebetTicket(payload.ticket);
+                    if (ok) {
+                        printTicketModal.hide();
+                        displayMessage('Rebet selections loaded. Please verify odds and stake before placing bet.', 'info');
+                    } else {
+                        displayMessage('Rebet failed: All selected fixtures are no longer active.', 'warning');
+                    }
+                } catch (e) {
+                    displayMessage('Failed to load rebet selections.', 'danger');
+                }
+            });
+        }
 
         // Check for Rebet Data
         const rebetData = sessionStorage.getItem('rebet_data');
         if (rebetData) {
             try {
                 const ticket = JSON.parse(rebetData);
-                // Clear existing selections just in case
-                selectedBets = [];
-                
-                ticket.selections.forEach(sel => {
-                    if (sel.is_active) {
-                        selectedBets.push({
-                            fixture_id: sel.fixture_id,
-                            fixture_home_team: sel.fixture_home_team,
-                            fixture_away_team: sel.fixture_away_team,
-                            fixture_match_date: sel.fixture_match_date,
-                            fixture_match_time: sel.fixture_match_time,
-                            bet_type: sel.bet_type,
-                            bet_type_display: sel.bet_type_display,
-                            odd: sel.odd,
-                            fixture_period_name: sel.fixture_period_name
-                        });
-                    }
-                });
-                
-                if (selectedBets.length > 0) {
-                    updateBetslip();
-                    
-                    // Handle System Bet
-                    if (ticket.bet_type === 'system' && ticket.system_min_count) {
-                        if(systemBetCheckbox) {
-                            systemBetCheckbox.checked = true;
-                            // Manually trigger change to show/hide permutation input
-                             systemBetCheckbox.dispatchEvent(new Event('change'));
-                        }
-                        if(permutationCountInput) {
-                            permutationCountInput.value = ticket.system_min_count;
-                            permutationCountInput.dispatchEvent(new Event('input'));
-                        }
-                    }
-                    
-                    if(ticket.stake_amount) {
-                         if (ticket.bet_type === 'system' && totalStakeInput) {
-                             totalStakeInput.value = ticket.stake_amount;
-                             totalStakeInput.dispatchEvent(new Event('input'));
-                         } else if (stakeAmountInput) {
-                             stakeAmountInput.value = ticket.stake_amount;
-                             stakeAmountInput.dispatchEvent(new Event('input'));
-                         }
-                    }
+                const ok = applyRebetTicket(ticket);
+                if (ok) {
                     displayMessage('Rebet selections loaded. Please verify odds and stake before placing bet.', 'info');
                 } else {
                     displayMessage('Rebet failed: All selected fixtures are no longer active.', 'warning');

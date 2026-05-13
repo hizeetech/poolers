@@ -14,10 +14,12 @@ class SystemBetTestCase(TestCase):
         self.user = User.objects.create_user(
             email='test@example.com',
             password='password123',
-            user_type='player'
+            user_type='cashier'
         )
         # Fund Wallet
-        self.wallet = Wallet.objects.create(user=self.user, balance=Decimal('1000.00'))
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+        self.wallet.balance = Decimal('1000.00')
+        self.wallet.save(update_fields=['balance'])
         
         # Create Betting Period
         self.period = BettingPeriod.objects.create(
@@ -32,6 +34,7 @@ class SystemBetTestCase(TestCase):
             betting_period=self.period,
             home_team='Team A',
             away_team='Team B',
+            serial_number='1',
             match_date=timezone.now().date() + datetime.timedelta(days=1),
             match_time=datetime.time(14, 0),
             home_win_odd=1.5,
@@ -43,6 +46,7 @@ class SystemBetTestCase(TestCase):
             betting_period=self.period,
             home_team='Team C',
             away_team='Team D',
+            serial_number='2',
             match_date=timezone.now().date() + datetime.timedelta(days=1),
             match_time=datetime.time(16, 0),
             home_win_odd=1.8,
@@ -54,6 +58,7 @@ class SystemBetTestCase(TestCase):
             betting_period=self.period,
             home_team='Team E',
             away_team='Team F',
+            serial_number='3',
             match_date=timezone.now().date() + datetime.timedelta(days=1),
             match_time=datetime.time(18, 0),
             home_win_odd=2.0,
@@ -63,7 +68,7 @@ class SystemBetTestCase(TestCase):
         )
         
         self.client = Client()
-        self.client.login(email='test@example.com', password='password123')
+        self.client.force_login(self.user)
 
     def test_system_bet_placement(self):
         # Prepare Selections (3 fixtures)

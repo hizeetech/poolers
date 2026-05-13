@@ -5,6 +5,7 @@ from django.db.models import Q, IntegerField, Sum
 from django.db.models.functions import Cast
 from django.utils import timezone
 from django.db import transaction as db_transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.contrib import messages
 from decimal import Decimal
 from django.urls import path, reverse 
@@ -827,7 +828,10 @@ class GlobalBettingSettingsAdmin(admin.ModelAdmin):
         return False
 
     def has_add_permission(self, request):
-        return not GlobalBettingSettings.objects.exists()
+        try:
+            return not GlobalBettingSettings.objects.exists()
+        except (OperationalError, ProgrammingError):
+            return True
 
     def save_model(self, request, obj, form, change):
         existing = GlobalBettingSettings.objects.filter(pk=obj.pk).first()

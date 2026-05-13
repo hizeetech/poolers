@@ -1,4 +1,5 @@
 import itertools
+import math
 import os
 import re
 import traceback
@@ -32,7 +33,8 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
-    SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage
+    SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage,
+    BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -165,7 +167,19 @@ def is_super_agent(user):
 def is_agent(user):
     return user.is_authenticated and user.user_type == 'agent'
 
-from .utils import get_client_ip
+from .utils import (
+    get_client_ip,
+    get_active_bonus_rules_cached,
+    select_bonus_rule,
+    compute_bonus_amount,
+    get_effective_betting_limits_for_user,
+    acquire_ticket_placement_lock,
+    release_ticket_placement_lock,
+    validate_ticket_against_limits,
+    BettingLimitViolation,
+    serialize_limits,
+    system_bet_payout_projections,
+)
 
 def is_cashier(user):
     return user.is_authenticated and user.user_type == 'cashier'
@@ -447,42 +461,28 @@ def _get_fixtures_data(period_id=None):
         
     return fixtures, current_betting_period
 
-def calculate_bonus_amount(potential_winning, selections, is_system_bet=False):
-    """
-    Calculates bonus based on active BonusRules.
-    selections: list of dicts with 'odd' key or objects with 'odd_selected' attribute.
-    """
-    if is_system_bet:
-        return Decimal('0.00')
-
-    # Fetch active rules sorted by min_selections desc (highest requirement first)
-    rules = BonusRule.objects.all().order_by('-min_selections')
-    
-    applicable_rule = None
-    
-    # Extract odds list
+def calculate_bonus_amount(potential_winning, stake_amount, selections, bet_type):
     odds = []
     for s in selections:
         if isinstance(s, dict):
             odds.append(s.get('odd', Decimal('0.00')))
         elif hasattr(s, 'odd_selected'):
-             odds.append(s.odd_selected)
+            odds.append(s.odd_selected)
         else:
-            # Fallback
             odds.append(Decimal('0.00'))
 
-    for rule in rules:
-        # Check if enough selections meet the min_odd criteria
-        qualifying_count = sum(1 for odd in odds if odd >= rule.min_odd_per_selection)
-        
-        if qualifying_count >= rule.min_selections:
-            applicable_rule = rule
-            break
-    
-    if applicable_rule:
-        return (potential_winning * applicable_rule.bonus_percentage).quantize(Decimal('0.01'))
-    
-    return Decimal('0.00')
+    rule = select_bonus_rule(bet_type, len(selections), odds)
+    if not rule:
+        return None, Decimal('0.00'), Decimal('0.00')
+
+    base_amount = Decimal(str(potential_winning or 0))
+    if rule.get('base') == 'net':
+        base_amount = base_amount - Decimal(str(stake_amount or 0))
+        if base_amount < 0:
+            base_amount = Decimal('0.00')
+
+    bonus_amount = compute_bonus_amount(base_amount, rule.get('pct'), rule.get('cap'))
+    return rule, base_amount, bonus_amount
 
 def fixtures_view(request, period_id=None):
     fixtures, current_betting_period = _get_fixtures_data(period_id)
@@ -490,14 +490,19 @@ def fixtures_view(request, period_id=None):
     all_periods = BettingPeriod.objects.all().order_by('-start_date')
     active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
 
-    # Serialize Bonus Rules for Frontend
-    bonus_rules = BonusRule.objects.all().order_by('min_selections')
     bonus_rules_data = []
-    for rule in bonus_rules:
+    for r in get_active_bonus_rules_cached():
         bonus_rules_data.append({
-            'min_selections': rule.min_selections,
-            'bonus_percentage': float(rule.bonus_percentage),
-            'min_odd': float(rule.min_odd_per_selection)
+            'id': r['id'],
+            'min': r['min'],
+            'max': r['max'],
+            'min_odd': float(r['min_odd']),
+            'pct': float(r['pct']),
+            'cap': float(r['cap']) if r['cap'] is not None else None,
+            'base': r['base'],
+            'allow_system': r['allow_system'],
+            'allow_acca': r['allow_acca'],
+            'allow_single': r['allow_single'],
         })
 
     context = {
@@ -574,11 +579,19 @@ def place_bet(request):
                         # Continue if check fails, don't block user
                     # -------------------------
 
+                    placement_lock_key = None
+
                     # Helper to clear lock on failure
                     def fail_response(message):
                         if idempotency_key:
                             cache.delete(idempotency_key)
+                        if placement_lock_key:
+                            release_ticket_placement_lock(placement_lock_key)
                         return JsonResponse({'success': False, 'message': message})
+
+                    placement_lock_key = acquire_ticket_placement_lock(request.user.id)
+                    if not placement_lock_key:
+                        return fail_response('Too many requests. Please retry.')
 
                     # Basic Validation of selections
                     valid_selections = []
@@ -664,10 +677,9 @@ def place_bet(request):
                         # System Bet Logic
                         if permutation_count < 2 or permutation_count > len(valid_selections):
                                 return fail_response('Invalid permutation count.')
-                        
-                        combinations = list(itertools.combinations(valid_selections, permutation_count))
-                        num_lines = len(combinations)
-                        total_stake = stake_amount_per_line * num_lines
+
+                        num_lines = math.comb(len(valid_selections), permutation_count)
+                        total_stake = stake_amount_per_line * Decimal(num_lines)
                         
                         bet_type = 'system'
                         system_min_count = permutation_count
@@ -679,7 +691,89 @@ def place_bet(request):
                         bet_type = 'multiple' if len(valid_selections) > 1 else 'single'
                         system_min_count = None
 
-                    # Check Wallet
+                    # Calculate Potential Winning (Max Winning) for the single ticket
+                    if bet_type == 'system':
+                        k = int(system_min_count or 0)
+                        odds_list = [s['odd'] for s in valid_selections]
+                        projections = system_bet_payout_projections(odds_list, stake_amount_per_line, k)
+                        potential_win = projections['max_potential_winning']
+                        total_ticket_odd = Decimal('0.00')
+                        max_line_odd = projections['max_line_odd']
+                    else:
+                        total_ticket_odd = Decimal('1.00')
+                        for sel in valid_selections:
+                            total_ticket_odd *= sel['odd']
+                        potential_win = (stake_amount_per_line * total_ticket_odd).quantize(Decimal('0.01'))
+                        max_line_odd = total_ticket_odd.quantize(Decimal('0.01'))
+
+                    odds_list = [s['odd'] for s in valid_selections]
+                    rule_dict, bonus_base_amount, estimated_bonus_amount = calculate_bonus_amount(potential_win, total_stake, valid_selections, bet_type)
+                    max_winning = (potential_win + estimated_bonus_amount).quantize(Decimal('0.01'))
+                    def _resolve_agent_for_user(u):
+                        if not u:
+                            return None
+                        if u.user_type in ['agent', 'super_agent', 'master_agent']:
+                            return u
+                        if getattr(u, 'agent', None):
+                            return u.agent
+                        if getattr(u, 'super_agent', None):
+                            return u.super_agent
+                        if getattr(u, 'master_agent', None):
+                            return u.master_agent
+                        return None
+
+                    agent_obj = _resolve_agent_for_user(request.user)
+
+                    try:
+                        limits = validate_ticket_against_limits(
+                            user=request.user,
+                            ticket_type=bet_type,
+                            selection_count=len(valid_selections),
+                            total_stake=total_stake,
+                            max_winning=max_winning,
+                            ticket_odds=max_line_odd,
+                        )
+                    except BettingLimitViolation as e:
+                        BettingLimitAuditLog.objects.create(
+                            action_type='TICKET_REJECTED',
+                            actor=request.user,
+                            agent=agent_obj,
+                            affected_user=request.user,
+                            ip_address=get_client_ip(request),
+                            message=e.message,
+                            data={
+                                'code': e.code,
+                                'bet_type': bet_type,
+                                'selection_count': len(valid_selections),
+                                'system_min_count': system_min_count,
+                                'stake_per_line': str(stake_amount_per_line),
+                                'total_stake': str(total_stake),
+                                'ticket_max_winning': str(max_winning),
+                                'ticket_potential_winning': str(potential_win),
+                                'ticket_odds': str(max_line_odd),
+                                'limits': (e.data.get('limits') if isinstance(e.data, dict) else {}) or {},
+                                'details': e.data,
+                            }
+                        )
+
+                        try:
+                            reject_key = f"betting_limits:rejects:u:{request.user.id}"
+                            cnt = int(cache.get(reject_key) or 0) + 1
+                            cache.set(reject_key, cnt, timeout=600)
+                            if cnt >= 5:
+                                ActivityLog.objects.create(
+                                    user=request.user,
+                                    action_type='RISK',
+                                    action=f"Repeated ticket rejections due to limits. Count:{cnt} LastReason:{e.code}",
+                                    affected_object=f"User: {request.user.id}",
+                                    ip_address=get_client_ip(request),
+                                    path=request.path
+                                )
+                        except Exception:
+                            pass
+
+                        return fail_response(e.message)
+
                     try:
                         user_wallet = Wallet.objects.select_for_update().get(user=request.user)
                     except Wallet.DoesNotExist:
@@ -688,32 +782,19 @@ def place_bet(request):
                     if user_wallet.balance < total_stake:
                         return fail_response(f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}')
 
-                    # Deduct Balance
                     user_wallet.balance -= total_stake
                     user_wallet.save()
 
-                    # Calculate Potential Winning (Max Winning) for the single ticket
-                    if bet_type == 'system':
-                        # Sum of max winning of all lines
-                        max_winning = Decimal('0.00')
-                        for combo in combinations:
-                            line_odd = Decimal('1.00')
-                            for sel in combo:
-                                line_odd *= sel['odd']
-                            max_winning += (stake_amount_per_line * line_odd)
-                        potential_win = max_winning.quantize(Decimal('0.01'))
-                        total_ticket_odd = Decimal('0.00') # Variable for system bets
-                    else:
-                        total_ticket_odd = Decimal('1.00')
-                        for sel in valid_selections:
-                            total_ticket_odd *= sel['odd']
-                        potential_win = (stake_amount_per_line * total_ticket_odd).quantize(Decimal('0.01'))
-                        
-                        # Calculate Bonus
-                        bonus_amount = calculate_bonus_amount(potential_win, valid_selections, is_system_bet=False)
-                        max_winning = potential_win + bonus_amount
-
                     # Create Single BetTicket
+                    ip = get_client_ip(request)
+                    bonus_rule_obj = BonusRule.objects.filter(id=rule_dict['id']).first() if rule_dict else None
+                    limits_snapshot = serialize_limits(limits)
+                    limits_snapshot.update({
+                        'applied_ticket_type': bet_type,
+                        'stake_per_line': str(stake_amount_per_line),
+                        'total_stake': str(total_stake),
+                        'ticket_odds': str(max_line_odd),
+                    })
                     bet_ticket = BetTicket.objects.create(
                         user=request.user,
                         stake_amount=total_stake, # Total stake for the ticket
@@ -722,7 +803,13 @@ def place_bet(request):
                         max_winning=max_winning,
                         status='pending',
                         bet_type=bet_type,
-                        system_min_count=system_min_count
+                        system_min_count=system_min_count,
+                        original_selections_count=len(valid_selections),
+                        placed_ip=ip,
+                        bonus_rule=bonus_rule_obj,
+                        bonus_percentage_applied=(rule_dict['pct'] if rule_dict else Decimal('0.0000')),
+                        bonus_base=(rule_dict['base'] if rule_dict else 'gross'),
+                        betting_limits_snapshot=limits_snapshot
                     )
                     
                     # Create Selections
@@ -749,6 +836,35 @@ def place_bet(request):
                     # Refresh wallet to get the latest balance
                     user_wallet.refresh_from_db()
 
+                    if bet_type == 'system' and bet_ticket.bonus_percentage_applied and bet_ticket.bonus_percentage_applied > 0:
+                        try:
+                            ip_users_key = f"sysbonus:ip:{ip}:users"
+                            recent_users = cache.get(ip_users_key) or []
+                            if request.user.id not in recent_users:
+                                recent_users.append(request.user.id)
+                            cache.set(ip_users_key, recent_users, timeout=600)
+
+                            sig_payload = f"{bet_type}:{system_min_count}:{sorted([(str(s['fixture'].id), s['bet_type']) for s in valid_selections])}:{stake_amount_str}"
+                            sig_hash = hashlib.sha256(sig_payload.encode('utf-8')).hexdigest()
+                            sig_key = f"sysbonus:sig:{request.user.id}:{sig_hash}"
+                            duplicate_sig = cache.get(sig_key) is not None
+                            cache.set(sig_key, 1, timeout=120)
+
+                            if len(recent_users) >= 4 or duplicate_sig:
+                                ActivityLog.objects.create(
+                                    user=request.user,
+                                    action_type='RISK',
+                                    action=f"System-bet bonus risk flag. UsersOnIP:{len(recent_users)} DuplicateSig:{duplicate_sig} BonusPct:{bet_ticket.bonus_percentage_applied} Ticket:{bet_ticket.ticket_id}",
+                                    affected_object=f"BetTicket: {bet_ticket.ticket_id}",
+                                    ip_address=ip,
+                                    path=request.path
+                                )
+                        except Exception:
+                            pass
+
+                    if placement_lock_key:
+                        release_ticket_placement_lock(placement_lock_key)
+
                     return JsonResponse({
                         'success': True, 
                         'message': f'Successfully placed bet!',
@@ -763,6 +879,8 @@ def place_bet(request):
                     traceback.print_exc()
                     if idempotency_key:
                         cache.delete(idempotency_key)
+                    if placement_lock_key:
+                        release_ticket_placement_lock(placement_lock_key)
                     return JsonResponse({'success': False, 'message': f'An error occurred: {str(e)}'})
 
             # Fallback to old single bet form logic
@@ -833,18 +951,54 @@ def place_bet(request):
                     potential_winning = stake_amount * odd
                     max_winning = potential_winning # For single bet, max_winning is same as potential_winning
 
+                    placement_lock_key = acquire_ticket_placement_lock(request.user.id)
+                    if not placement_lock_key:
+                        messages.error(request, 'Too many requests. Please retry.')
+                        return redirect('betting:fixtures')
+
+                    try:
+                        limits = validate_ticket_against_limits(
+                            user=request.user,
+                            ticket_type='single',
+                            selection_count=1,
+                            total_stake=stake_amount,
+                            max_winning=max_winning,
+                            ticket_odds=odd,
+                        )
+                    except BettingLimitViolation as e:
+                        BettingLimitAuditLog.objects.create(
+                            action_type='TICKET_REJECTED',
+                            actor=request.user,
+                            agent=(request.user if request.user.user_type in ['agent', 'super_agent', 'master_agent'] else (request.user.agent or request.user.super_agent or request.user.master_agent)),
+                            affected_user=request.user,
+                            ip_address=get_client_ip(request),
+                            message=e.message,
+                            data={'code': e.code, 'details': e.data}
+                        )
+                        release_ticket_placement_lock(placement_lock_key)
+                        messages.error(request, e.message)
+                        return redirect('betting:fixtures')
+
                     # Deduct stake from wallet
                     user_wallet.balance -= stake_amount
                     user_wallet.save()
 
                     # Create BetTicket
+                    limits_snapshot = serialize_limits(limits)
+                    limits_snapshot.update({
+                        'applied_ticket_type': 'single',
+                        'stake_per_line': str(stake_amount),
+                        'total_stake': str(stake_amount),
+                        'ticket_odds': str(odd),
+                    })
                     bet_ticket = BetTicket.objects.create(
                         user=request.user,
                         stake_amount=stake_amount,
                         total_odd=odd, # For a single bet, total_odd is just the odd of the selected outcome
                         potential_winning=potential_winning,
                         max_winning=max_winning,
-                        status='pending'
+                        status='pending',
+                        betting_limits_snapshot=limits_snapshot
                     )
                     # Create Selection for the bet ticket
                     Selection.objects.create(
@@ -866,6 +1020,7 @@ def place_bet(request):
                         timestamp=timezone.now()
                     )
 
+                    release_ticket_placement_lock(placement_lock_key)
                     messages.success(request, f'Bet placed successfully! Your ticket ID is {bet_ticket.ticket_id}. Potential winning: ₦{potential_winning:.2f}')
                     return redirect('betting:fixtures') # Redirect back to fixtures with errors
                 else:
@@ -1018,6 +1173,8 @@ def check_ticket_status(request):
         'now': timezone.now(),
         'bet_type_choices': BetTicket.BET_TYPE_CHOICES,
         'status_choices': BetTicket.STATUS_CHOICES,
+        'ticket_bonus_percent': (ticket.bonus_percentage_applied * Decimal('100')) if ticket else Decimal('0.00'),
+        'ticket_estimated_bonus': (max(Decimal('0.00'), (ticket.max_winning - ticket.potential_winning)) if ticket and not ticket.bonus_is_final else (ticket.bonus_amount if ticket else Decimal('0.00'))),
     }
     return render(request, 'betting/check_ticket.html', context)
 
@@ -3001,6 +3158,38 @@ def admin_dashboard(request):
     
     pending_registrations_count = PendingAgentRegistration.objects.filter(status='PENDING').count()
 
+    global_limits = GlobalBettingSettings.load()
+    active_agent_overrides = AgentBettingLimitOverride.objects.filter(is_active=True, custom_limits_enabled=True).count()
+    today = timezone.localdate()
+    rejected_tickets_today = BettingLimitAuditLog.objects.filter(action_type='TICKET_REJECTED', created_at__date=today).count()
+
+    agents_with_custom_limits = (
+        AgentBettingLimitOverride.objects
+        .filter(is_active=True, custom_limits_enabled=True)
+        .select_related('agent')
+        .order_by('-updated_at')[:10]
+    )
+
+    top_exposure_agents = (
+        BetTicket.objects
+        .filter(status='pending', user__agent__isnull=False)
+        .values('user__agent_id', 'user__agent__email', 'user__agent__username')
+        .annotate(exposure=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))
+        .order_by('-exposure')[:10]
+    )
+
+    platform_exposure_today = (
+        BetTicket.objects
+        .filter(placed_at__date=today, status__in=['pending', 'won'])
+        .aggregate(total=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['total']
+    )
+
+    platform_sales_today = (
+        BetTicket.objects
+        .filter(placed_at__date=today)
+        .aggregate(total=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['total']
+    )
+
     context = {
         'total_users': total_users,
         'total_players': total_players,
@@ -3019,6 +3208,13 @@ def admin_dashboard(request):
         'lost_bets': lost_bets,
         'deleted_bets': deleted_bets,
         'pending_registrations_count': pending_registrations_count,
+        'global_limits': global_limits,
+        'active_agent_overrides': active_agent_overrides,
+        'rejected_tickets_today': rejected_tickets_today,
+        'agents_with_custom_limits': agents_with_custom_limits,
+        'top_exposure_agents': top_exposure_agents,
+        'platform_exposure_today': platform_exposure_today,
+        'platform_sales_today': platform_sales_today,
     }
     return render(request, 'betting/admin/dashboard.html', context)
 
@@ -3848,6 +4044,75 @@ def admin_ticket_report(request):
         'end_date_filter': end_date_str,
     }
     return render(request, 'betting/admin/ticket_report.html', context)
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_limit_rejections_report(request):
+    agent_query = (request.GET.get('agent') or '').strip()
+    user_query = (request.GET.get('user') or '').strip()
+    start_date_str = request.GET.get('start_date')
+    end_date_str = request.GET.get('end_date')
+
+    qs = (
+        BettingLimitAuditLog.objects
+        .filter(action_type='TICKET_REJECTED')
+        .select_related('actor', 'agent', 'affected_user', 'ticket')
+        .order_by('-created_at')
+    )
+
+    if agent_query:
+        qs = qs.filter(
+            Q(agent__email__icontains=agent_query)
+            | Q(agent__username__icontains=agent_query)
+            | Q(agent__first_name__icontains=agent_query)
+            | Q(agent__last_name__icontains=agent_query)
+            | Q(agent__phone_number__icontains=agent_query)
+        )
+
+    if user_query:
+        qs = qs.filter(
+            Q(affected_user__email__icontains=user_query)
+            | Q(affected_user__username__icontains=user_query)
+            | Q(affected_user__first_name__icontains=user_query)
+            | Q(affected_user__last_name__icontains=user_query)
+            | Q(affected_user__phone_number__icontains=user_query)
+        )
+
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            qs = qs.filter(created_at__date__gte=start_date)
+        except ValueError:
+            messages.error(request, "Invalid start date format.")
+
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            qs = qs.filter(created_at__date__lte=end_date)
+        except ValueError:
+            messages.error(request, "Invalid end date format.")
+
+    total_rejections = qs.count()
+
+    paginator = Paginator(qs, 50)
+    page_number = request.GET.get('page')
+    try:
+        logs = paginator.page(page_number)
+    except PageNotAnInteger:
+        logs = paginator.page(1)
+    except EmptyPage:
+        logs = paginator.page(paginator.num_pages)
+
+    context = {
+        'report_title': "Tickets Rejected Due To Limits",
+        'logs': logs,
+        'total_rejections': total_rejections,
+        'agent_filter': agent_query,
+        'user_filter': user_query,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+    }
+    return render(request, 'betting/admin/betting_limit_rejections_report.html', context)
 
 
 @login_required
@@ -5136,6 +5401,12 @@ def stop_impersonation(request):
         return redirect('/admin/login/')
 
 @login_required
+def api_betting_limits(request):
+    ticket_type = request.GET.get('ticket_type') or request.GET.get('bet_type')
+    limits = get_effective_betting_limits_for_user(request.user, ticket_type=ticket_type)
+    return JsonResponse({'success': True, 'limits': serialize_limits(limits)})
+
+@login_required
 def api_downline_search(request):
     """
     API endpoint for searching downline users for Wallet Transfer.
@@ -5206,7 +5477,11 @@ def api_downline_search(request):
         if not name_str:
              name_str = u.first_name if u.first_name else ""
         
-        display_text = f"{name_str} ({role_label}) - {u.email}"
+        display_name = name_str
+        if u.user_type == 'cashier' and u.username:
+            display_name = u.username
+
+        display_text = f"{display_name} ({role_label}) - {u.email}"
         if u.user_type == 'cashier' and u.cashier_prefix:
             display_text = f"{u.cashier_prefix} - {display_text}"
             
@@ -5274,14 +5549,20 @@ def api_admin_user_search(request):
     
     # Apply search filter
     if search_term:
-        queryset = queryset.filter(
+        qs_filter = (
             Q(email__icontains=search_term) |
             Q(phone_number__icontains=search_term) |
+            Q(username__icontains=search_term) |
             Q(first_name__icontains=search_term) |
-            Q(last_name__icontains=search_term)
+            Q(last_name__icontains=search_term) |
+            Q(other_name__icontains=search_term)
         )
+        queryset = queryset.filter(qs_filter)
         if search_term.isdigit():
-             queryset = queryset | User.objects.filter(id=int(search_term)).exclude(is_superuser=True)
+            extra = User.objects.filter(id=int(search_term)).exclude(is_superuser=True)
+            if request.user.user_type == 'account_user':
+                extra = extra.exclude(user_type='account_user')
+            queryset = (queryset | extra).distinct()
     
     # Pagination
     paginator = Paginator(queryset.order_by('email'), 20)
@@ -5296,6 +5577,8 @@ def api_admin_user_search(request):
     results = []
     for u in users_page:
         text = f"{u.get_full_name()} ({u.email})"
+        if u.username:
+            text += f" @{u.username}"
         if u.phone_number:
             text += f" - {u.phone_number}"
         text += f" [{u.get_user_type_display()}]"
@@ -5388,7 +5671,13 @@ def get_ticket_details_json(request):
         'total_odd': 0.0 if is_voided else float(ticket.total_odd),
         'max_winning': 0.0 if is_voided else float(ticket.max_winning),
         'potential_winning': 0.0 if is_voided else float(ticket.potential_winning),
-        'bonus': 0.0 if is_voided else float(ticket.bonus) if hasattr(ticket, 'bonus') else 0.0,
+        'bonus_percentage_applied': 0.0 if is_voided else float(ticket.bonus_percentage_applied),
+        'bonus_base': ticket.bonus_base,
+        'bonus_base_amount': 0.0 if is_voided else float(ticket.bonus_base_amount),
+        'bonus_amount': 0.0 if is_voided else float(ticket.bonus_amount),
+        'bonus_is_final': False if is_voided else bool(ticket.bonus_is_final),
+        'bonus_applied_at': None if is_voided or not ticket.bonus_applied_at else ticket.bonus_applied_at.strftime('%Y-%m-%d %H:%M:%S'),
+        'original_selections_count': ticket.original_selections_count or ticket.selections.count(),
         'selections': selections_data,
         'status': ticket.get_status_display(),
         'status_code': ticket.status,

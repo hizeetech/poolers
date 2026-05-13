@@ -16,7 +16,7 @@
 $(document).ready(function() {
     $('#user_search_select').select2({
         theme: 'bootstrap-5',
-        placeholder: 'Search by Name, Email, or Phone...',
+        placeholder: 'Search by Name, Email, Phone, or Username...',
         allowClear: true,
         ajax: {
             url: '{% url "betting:api_admin_user_search" %}',

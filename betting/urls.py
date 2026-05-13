@@ -96,6 +96,7 @@ urlpatterns = [
     path('api/get-ticket-details/', views.get_ticket_details_json, name='get_ticket_details_json'),
     path('api/log-ticket-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
     path('api/user-wallet/', views.api_user_wallet, name='api_user_wallet'),
+    path('api/betting-limits/', views.api_betting_limits, name='api_betting_limits'),
     path('api/downline-wallet-balance/', views.api_downline_wallet_balance, name='api_downline_wallet_balance'),
     path('api/deposit/initiate/', views.api_initiate_deposit, name='api_initiate_deposit'),
     path('api/deposit/verify/', views.api_verify_deposit, name='api_verify_deposit'),

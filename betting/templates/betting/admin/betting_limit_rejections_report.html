@@ -1,0 +1,122 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <h2 class="h3 text-dark fw-semibold mb-0">{{ report_title }}</h2>
+        <div class="text-muted">Total: <span class="fw-bold">{{ total_rejections }}</span></div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_limit_rejections_report' %}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label for="agent_filter" class="form-label">Agent (email/username/name/phone)</label>
+                <input type="text" name="agent" id="agent_filter" class="form-control rounded-md" value="{{ agent_filter }}">
+            </div>
+            <div class="col-md-4">
+                <label for="user_filter" class="form-label">User (email/username/name/phone)</label>
+                <input type="text" name="user" id="user_filter" class="form-control rounded-md" value="{{ user_filter }}">
+            </div>
+            <div class="col-md-2">
+                <label for="start_date" class="form-label">Start Date</label>
+                <input type="date" name="start_date" id="start_date" class="form-control rounded-md" value="{{ start_date_filter }}">
+            </div>
+            <div class="col-md-2">
+                <label for="end_date" class="form-label">End Date</label>
+                <input type="date" name="end_date" id="end_date" class="form-control rounded-md" value="{{ end_date_filter }}">
+            </div>
+            <div class="col-12 col-md-auto">
+                <button type="submit" class="btn btn-primary w-100 rounded-pill px-4 py-2">Apply Filters</button>
+            </div>
+        </form>
+    </div>
+
+    {% if logs %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col">Agent</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Ticket</th>
+                        <th scope="col">Bet Type</th>
+                        <th scope="col">Stake</th>
+                        <th scope="col">Odds</th>
+                        <th scope="col">Max Winning</th>
+                        <th scope="col">Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                        <tr>
+                            <td>{{ log.created_at|date:"Y-m-d H:i" }}</td>
+                            <td>
+                                {% if log.agent %}
+                                    {{ log.agent.email }}{% if log.agent.username %} <span class="text-muted">@{{ log.agent.username }}</span>{% endif %}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if log.affected_user %}
+                                    {{ log.affected_user.email }}{% if log.affected_user.username %} <span class="text-muted">@{{ log.affected_user.username }}</span>{% endif %}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if log.ticket %}
+                                    <a href="{% url 'betting_admin:admin_ticket_details' log.ticket.id %}" class="text-decoration-none">{{ log.ticket.ticket_id }}</a>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ log.data.bet_type|default:"—" }}</td>
+                            <td>₦{{ log.data.total_stake|default:"0.00" }}</td>
+                            <td>{{ log.data.ticket_odds|default:"—" }}</td>
+                            <td>₦{{ log.data.ticket_max_winning|default:"0.00" }}</td>
+                            <td>
+                                {% if log.data.code %}<span class="badge bg-danger">{{ log.data.code }}</span>{% endif %}
+                                <div class="small">{{ log.message }}</div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <nav class="mt-3">
+            <ul class="pagination justify-content-center">
+                {% if logs.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ logs.previous_page_number }}&agent={{ agent_filter|urlencode }}&user={{ user_filter|urlencode }}&start_date={{ start_date_filter|urlencode }}&end_date={{ end_date_filter|urlencode }}">Previous</a>
+                    </li>
+                {% else %}
+                    <li class="page-item disabled"><span class="page-link">Previous</span></li>
+                {% endif %}
+
+                <li class="page-item disabled">
+                    <span class="page-link">Page {{ logs.number }} of {{ logs.paginator.num_pages }}</span>
+                </li>
+
+                {% if logs.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ logs.next_page_number }}&agent={{ agent_filter|urlencode }}&user={{ user_filter|urlencode }}&start_date={{ start_date_filter|urlencode }}&end_date={{ end_date_filter|urlencode }}">Next</a>
+                    </li>
+                {% else %}
+                    <li class="page-item disabled"><span class="page-link">Next</span></li>
+                {% endif %}
+            </ul>
+        </nav>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            No rejected tickets found for the selected filters.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

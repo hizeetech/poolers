@@ -9,6 +9,7 @@ import secrets
 import string
 import re
 import hashlib
+import math
 from datetime import timedelta
 from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
@@ -402,6 +403,105 @@ class SystemSetting(models.Model):
         except cls.DoesNotExist:
             return default
 
+class GlobalBettingSettings(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    is_active = models.BooleanField(default=True)
+    betting_enabled = models.BooleanField(default=True)
+
+    min_stake = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('100.00'), validators=[MinValueValidator(Decimal('0.00'))])
+    max_stake = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('500000.00'), validators=[MinValueValidator(Decimal('0.00'))])
+    max_winning = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('40000000.00'), validators=[MinValueValidator(Decimal('0.00'))])
+
+    max_stake_by_ticket_type = models.JSONField(blank=True, default=dict)
+    max_winning_by_ticket_type = models.JSONField(blank=True, default=dict)
+
+    max_odds_per_ticket = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_selections_per_ticket = models.PositiveIntegerField(null=True, blank=True)
+
+    max_payout_per_day = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_payout_per_user_per_day = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_global_betting_settings')
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_global_betting_settings')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        errors = {}
+        if self.min_stake is not None and self.max_stake is not None and self.max_stake < self.min_stake:
+            errors['max_stake'] = "Maximum stake must be greater than or equal to minimum stake."
+        if errors:
+            raise ValidationError(errors)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "Global Betting Settings"
+
+class AgentBettingLimitOverride(models.Model):
+    agent = models.OneToOneField(User, on_delete=models.CASCADE, related_name='betting_limit_override', limit_choices_to={'user_type__in': ['agent', 'super_agent', 'master_agent']})
+    is_active = models.BooleanField(default=True)
+    custom_limits_enabled = models.BooleanField(default=True)
+
+    min_stake = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_stake = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_winning = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_odds_per_ticket = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_stake_by_ticket_type = models.JSONField(blank=True, default=dict)
+    max_winning_by_ticket_type = models.JSONField(blank=True, default=dict)
+
+    max_selections_per_ticket = models.PositiveIntegerField(null=True, blank=True)
+    max_payout_per_agent_per_day = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_payout_per_user_per_day = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_agent_betting_overrides')
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_agent_betting_overrides')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        errors = {}
+        if self.min_stake is not None and self.max_stake is not None and self.max_stake < self.min_stake:
+            errors['max_stake'] = "Maximum stake must be greater than or equal to minimum stake."
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return f"Betting Limits Override: {self.agent.email}"
+
+class BettingLimitAuditLog(models.Model):
+    ACTION_CHOICES = (
+        ('GLOBAL_UPDATE', 'Global Update'),
+        ('AGENT_UPDATE', 'Agent Update'),
+        ('TICKET_REJECTED', 'Ticket Rejected'),
+    )
+
+    action_type = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='betting_limit_audit_logs')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    agent = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='betting_limit_audit_agent', limit_choices_to={'user_type__in': ['agent', 'super_agent', 'master_agent']})
+    affected_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='betting_limit_audit_affected_user')
+    ticket = models.ForeignKey('BetTicket', on_delete=models.SET_NULL, null=True, blank=True, related_name='betting_limit_audit_logs')
+
+    message = models.TextField(blank=True, default='')
+    data = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action_type} - {self.created_at}"
+
 class Wallet(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='wallet')
     balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
@@ -534,18 +634,36 @@ class BetTicket(models.Model):
         ('multiple', 'Multiple'),
         ('system', 'System'),
     )
+    BONUS_BASE_CHOICES = (
+        ('gross', 'Gross Winnings (Total Return)'),
+        ('net', 'Net Winnings (Return - Stake)'),
+    )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ticket_id = models.CharField(max_length=8, unique=True, editable=False, null=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bet_tickets')
     bet_type = models.CharField(max_length=20, choices=BET_TYPE_CHOICES, default='single')
     system_min_count = models.PositiveIntegerField(null=True, blank=True, help_text="Minimum selections required for system bet (k in k/n)")
+    original_selections_count = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    placed_ip = models.GenericIPAddressField(null=True, blank=True)
     
     stake_amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))], db_index=True)
     total_odd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     potential_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     max_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+
+    bonus_rule = models.ForeignKey('BonusRule', on_delete=models.SET_NULL, null=True, blank=True, related_name='tickets')
+    bonus_percentage_applied = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0000'), validators=[MinValueValidator(Decimal('0.0000'))])
+    bonus_base = models.CharField(max_length=10, choices=BONUS_BASE_CHOICES, default='gross')
+    bonus_base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), validators=[MinValueValidator(Decimal('0.00'))])
+    bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), validators=[MinValueValidator(Decimal('0.00'))])
+    bonus_is_final = models.BooleanField(default=False)
+    bonus_applied_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    payout_processed = models.BooleanField(default=False, db_index=True)
+
+    betting_limits_snapshot = models.JSONField(blank=True, default=dict)
     
     placed_at = models.DateTimeField(auto_now_add=True, db_index=True)
     last_updated = models.DateTimeField(auto_now=True, db_index=True)
@@ -578,44 +696,59 @@ class BetTicket(models.Model):
 
         self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
 
+        self.max_winning = self.potential_winning
+
+        snapshot_limit = None
+        try:
+            snapshot_limit = self.betting_limits_snapshot.get('max_winning')
+        except Exception:
+            snapshot_limit = None
+
+        if snapshot_limit is not None:
+            try:
+                self.max_winning = min(self.max_winning, Decimal(str(snapshot_limit))).quantize(Decimal('0.01'))
+                return
+            except Exception:
+                pass
+
         max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
         if max_winning_setting and max_winning_setting.value:
             try:
                 max_winning_limit = Decimal(max_winning_setting.value)
-                self.max_winning = min(self.potential_winning, max_winning_limit).quantize(Decimal('0.01'))
+                self.max_winning = min(self.max_winning, max_winning_limit).quantize(Decimal('0.01'))
             except Exception:
                 self.max_winning = self.potential_winning
-        else:
-            self.max_winning = self.potential_winning
 
     def get_min_potential_winning(self):
         if self.bet_type != 'system' or not self.system_min_count:
             return self.max_winning
-        
-        # System bet calculation
-        from itertools import combinations
+
         all_selections = list(self.selections.all())
-        if len(all_selections) < self.system_min_count:
+        k = int(self.system_min_count or 0)
+        n = len(all_selections)
+        if n < k or k <= 0:
             return Decimal('0.00')
-            
-        lines = list(combinations(all_selections, self.system_min_count))
-        num_lines = len(lines)
-        if num_lines == 0:
+
+        try:
+            num_lines = math.comb(n, k)
+        except Exception:
             return Decimal('0.00')
-            
-        stake_per_line = self.stake_amount / Decimal(num_lines)
-        
-        # Find min odd line
-        min_line_odd = None
-        
-        for line in lines:
-            line_odd = Decimal('1.00')
-            for sel in line:
-                line_odd *= sel.odd_selected
-            
-            if min_line_odd is None or line_odd < min_line_odd:
-                min_line_odd = line_odd
-                
+        if not num_lines:
+            return Decimal('0.00')
+
+        stake_per_line = (self.stake_amount / Decimal(num_lines)).quantize(Decimal('0.01'))
+
+        odds = []
+        for sel in all_selections:
+            o = sel.odd_selected
+            if getattr(sel, 'is_winning_selection', None) is None:
+                o = Decimal('1.00')
+            odds.append(o)
+        odds.sort()
+        min_line_odd = Decimal('1.00')
+        for o in odds[:k]:
+            min_line_odd *= o
+
         return (stake_per_line * min_line_odd).quantize(Decimal('0.01'))
 
     def recalculate_ticket(self):
@@ -625,7 +758,6 @@ class BetTicket(models.Model):
         if self.status != 'pending':
             return
 
-        from itertools import combinations
         from django.apps import apps
         BonusRule = apps.get_model('betting', 'BonusRule')
         SystemSetting = apps.get_model('betting', 'SystemSetting')
@@ -673,28 +805,27 @@ class BetTicket(models.Model):
 
         # 2. Recalculate based on Ticket Type
         if self.bet_type == 'system' and self.system_min_count:
-            # System Bet: Void selections are treated as 1.00 odd but remain in the combination
             k = self.system_min_count
-            lines = list(combinations(all_selections, k))
-            num_lines = len(lines)
-            
-            if num_lines > 0:
-                stake_per_line = self.stake_amount / Decimal(num_lines)
-                max_winning = Decimal('0.00')
-                
-                for line in lines:
-                    line_odd = Decimal('1.00')
-                    for sel in line:
-                        if sel.fixture.status in void_statuses:
-                            line_odd *= Decimal('1.00')
-                        else:
-                            line_odd *= sel.odd_selected
-                    max_winning += (stake_per_line * line_odd)
-                
-                self.potential_winning = max_winning.quantize(Decimal('0.01'))
-                self.total_odd = Decimal('0.00') # Not applicable for system
+            n = len(all_selections)
+            if k and n >= k:
+                num_lines = math.comb(n, k)
+                stake_per_line = (self.stake_amount / Decimal(num_lines)) if num_lines else Decimal('0.00')
+
+                dp = [Decimal('0.00')] * (k + 1)
+                dp[0] = Decimal('1.00')
+                count = 0
+                for sel in all_selections:
+                    o = Decimal('1.00') if sel.fixture.status in void_statuses else sel.odd_selected
+                    count += 1
+                    upper = min(k, count)
+                    for j in range(upper, 0, -1):
+                        dp[j] = dp[j] + (dp[j - 1] * o)
+
+                self.potential_winning = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
+                self.total_odd = Decimal('0.00')
             else:
                 self.potential_winning = Decimal('0.00')
+                self.total_odd = Decimal('0.00')
 
         else: # Single or Multiple
             new_total_odd = Decimal('1.00')
@@ -707,38 +838,47 @@ class BetTicket(models.Model):
             self.total_odd = new_total_odd.quantize(Decimal('0.01'))
             self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
 
-        # 3. Bonus Calculation
-        # Rule: If > 3 postponed events, Bonus = 0
         bonus_amount = Decimal('0.00')
-        
-        if self.bet_type != 'system':
-             if num_void > 3:
-                 bonus_amount = Decimal('0.00')
-             else:
-                rules = BonusRule.objects.all().order_by('-min_selections')
-                applicable_rule = None
-                odds = [s.odd_selected for s in valid_selections]
-                
-                for rule in rules:
-                    qualifying_count = sum(1 for odd in odds if odd >= rule.min_odd_per_selection)
-                    if qualifying_count >= rule.min_selections:
-                        applicable_rule = rule
-                        break
-                
-                if applicable_rule:
-                    bonus_amount = (self.potential_winning * applicable_rule.bonus_percentage).quantize(Decimal('0.01'))
+        if self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0 and self.status == 'pending':
+            rule = self.bonus_rule
+            if rule:
+                effective_count = self.original_selections_count or len(all_selections)
+                effective_count = max(0, int(effective_count) - int(num_void))
+
+                qualifies = effective_count >= rule.min_selections and (rule.max_selections is None or effective_count <= rule.max_selections)
+                if qualifies:
+                    base_amount = self.potential_winning
+                    if (self.bonus_base or rule.bonus_base) == 'net':
+                        base_amount = self.potential_winning - self.stake_amount
+                        if base_amount < 0:
+                            base_amount = Decimal('0.00')
+
+                    bonus_amount = (base_amount * self.bonus_percentage_applied).quantize(Decimal('0.01'))
+                    if rule.max_bonus_cap is not None:
+                        bonus_amount = min(bonus_amount, rule.max_bonus_cap)
         
         # 4. Finalize Max Winning
         self.max_winning = self.potential_winning + bonus_amount
         
-        # Check Global Max Winning Limit
-        max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
-        if max_winning_setting and max_winning_setting.value:
+        snapshot_limit = None
+        try:
+            snapshot_limit = self.betting_limits_snapshot.get('max_winning')
+        except Exception:
+            snapshot_limit = None
+
+        if snapshot_limit is not None:
             try:
-                limit = Decimal(max_winning_setting.value)
-                self.max_winning = min(self.max_winning, limit)
-            except:
+                self.max_winning = min(self.max_winning, Decimal(str(snapshot_limit)))
+            except Exception:
                 pass
+        else:
+            max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
+            if max_winning_setting and max_winning_setting.value:
+                try:
+                    limit = Decimal(max_winning_setting.value)
+                    self.max_winning = min(self.max_winning, limit)
+                except Exception:
+                    pass
         
         self.save()
         
@@ -756,199 +896,234 @@ class BetTicket(models.Model):
 
     def check_and_update_status(self):
         if self.status == 'pending':
+            void_statuses = ['cancelled', 'postponed', 'abandoned', 'no_result']
+            selections = list(self.selections.select_related('fixture').all())
+
             all_fixtures_settled = True
-            
-            # First pass: Update all selections based on fixture status/score
-            for selection in self.selections.all():
+            to_update = []
+
+            for selection in selections:
                 fixture = selection.fixture
-                
-                # Treat cancelled, postponed, abandoned, no_result as void (finalized)
-                void_statuses = ['cancelled', 'postponed', 'abandoned', 'no_result']
-                
+                new_value = selection.is_winning_selection
+
                 if fixture.status in void_statuses:
-                    # Mark as void (None)
-                    selection.is_winning_selection = None
-                    selection.save()
-                    continue # It is considered "settled" for the purpose of ticket resolution
-
-                if fixture.status not in ['settled', 'finished']:
+                    new_value = None
+                elif fixture.status not in ['settled', 'finished']:
                     all_fixtures_settled = False
-                
-                # Determine winning status if scores are available
-                is_winning_selection = False
-                total_goals = (fixture.home_score + fixture.away_score) if (fixture.home_score is not None and fixture.away_score is not None) else None
+                    continue
+                elif fixture.home_score is None or fixture.away_score is None:
+                    all_fixtures_settled = False
+                    continue
+                else:
+                    total_goals = fixture.home_score + fixture.away_score
+                    if selection.bet_type == 'home_win':
+                        new_value = fixture.home_score > fixture.away_score
+                    elif selection.bet_type == 'draw':
+                        new_value = fixture.home_score == fixture.away_score
+                    elif selection.bet_type == 'away_win':
+                        new_value = fixture.home_score < fixture.away_score
+                    elif selection.bet_type == 'over_1_5':
+                        new_value = total_goals > Decimal('1.5')
+                    elif selection.bet_type == 'under_1_5':
+                        new_value = total_goals <= Decimal('1.5')
+                    elif selection.bet_type == 'over_2_5':
+                        new_value = total_goals > Decimal('2.5')
+                    elif selection.bet_type == 'under_2_5':
+                        new_value = total_goals <= Decimal('2.5')
+                    elif selection.bet_type == 'over_3_5':
+                        new_value = total_goals > Decimal('3.5')
+                    elif selection.bet_type == 'under_3_5':
+                        new_value = total_goals <= Decimal('3.5')
+                    elif selection.bet_type == 'btts_yes':
+                        new_value = fixture.home_score > 0 and fixture.away_score > 0
+                    elif selection.bet_type == 'btts_no':
+                        new_value = fixture.home_score == 0 or fixture.away_score == 0
+                    elif selection.bet_type == 'home_dnb':
+                        new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score > fixture.away_score)
+                    elif selection.bet_type == 'away_dnb':
+                        new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score < fixture.away_score)
+                    else:
+                        new_value = False
 
-                # Only update selection status if the fixture is finished or settled
-                if fixture.status in ['finished', 'settled'] and fixture.home_score is not None and fixture.away_score is not None:
-                     if selection.bet_type == 'home_win':
-                         is_winning_selection = (fixture.home_score > fixture.away_score)
-                     elif selection.bet_type == 'draw':
-                         is_winning_selection = (fixture.home_score == fixture.away_score)
-                     elif selection.bet_type == 'away_win':
-                         is_winning_selection = (fixture.home_score < fixture.away_score)
-                     elif selection.bet_type == 'over_1_5' and total_goals is not None:
-                         is_winning_selection = (total_goals > Decimal('1.5'))
-                     elif selection.bet_type == 'under_1_5' and total_goals is not None:
-                         is_winning_selection = (total_goals <= Decimal('1.5'))
-                     elif selection.bet_type == 'over_2_5' and total_goals is not None:
-                         is_winning_selection = (total_goals > Decimal('2.5'))
-                     elif selection.bet_type == 'under_2_5' and total_goals is not None:
-                         is_winning_selection = (total_goals <= Decimal('2.5'))
-                     elif selection.bet_type == 'over_3_5' and total_goals is not None:
-                         is_winning_selection = (total_goals > Decimal('3.5'))
-                     elif selection.bet_type == 'under_3_5' and total_goals is not None:
-                         is_winning_selection = (total_goals <= Decimal('3.5'))
-                     elif selection.bet_type == 'btts_yes':
-                         is_winning_selection = (fixture.home_score > 0 and fixture.away_score > 0)
-                     elif selection.bet_type == 'btts_no':
-                         is_winning_selection = (fixture.home_score == 0 or fixture.away_score == 0)
-                     elif selection.bet_type == 'home_dnb':
-                         if fixture.home_score == fixture.away_score:
-                             is_winning_selection = None
-                         else:
-                             is_winning_selection = (fixture.home_score > fixture.away_score)
-                     elif selection.bet_type == 'away_dnb':
-                         if fixture.home_score == fixture.away_score:
-                             is_winning_selection = None
-                         else:
-                             is_winning_selection = (fixture.home_score < fixture.away_score)
-                     
-                     selection.is_winning_selection = is_winning_selection
-                     selection.save()
+                if selection.is_winning_selection != new_value:
+                    selection.is_winning_selection = new_value
+                    to_update.append(selection)
 
-            # Second pass: Determine ticket status
+            if to_update:
+                Selection.objects.bulk_update(to_update, ['is_winning_selection'])
+
             if self.bet_type == 'system' and self.system_min_count:
-                # System bet logic (simplified for brevity, keeping existing structure)
-                # Only resolve if all fixtures are settled for system bets to avoid complexity
                 if not all_fixtures_settled:
                     return
 
-                from itertools import combinations
-                winning_selections = [s for s in self.selections.all() if s.is_winning_selection]
-                
-                # ... (calculation logic same as before) ...
-                # Re-implementing simplified version to ensure context match
-                all_selections = list(self.selections.all())
-                lines = list(combinations(all_selections, self.system_min_count))
-                
-                winning_amount = Decimal('0.00')
-                lines_won_count = 0
-                num_lines = len(lines)
-                stake_per_line = self.stake_amount / Decimal(num_lines)
+                n = len(selections)
+                k = int(self.system_min_count or 0)
+                if not k or n < k:
+                    return
 
-                for line in lines:
-                    line_won = True
-                    line_odd = Decimal('1.00')
-                    for sel in line:
-                        if sel.is_winning_selection is False:
-                            line_won = False
-                            break
-                        elif sel.is_winning_selection is True:
-                            line_odd *= sel.odd_selected
-                        elif sel.is_winning_selection is None: # Void
-                            line_odd *= Decimal('1.00')
-                    
-                    if line_won:
-                        lines_won_count += 1
-                        winning_amount += (stake_per_line * line_odd)
-                
-                if lines_won_count > 0:
-                    self.status = 'won'
-                    self.potential_winning = winning_amount.quantize(Decimal('0.01'))
-                    self.max_winning = self.potential_winning
+                num_lines = math.comb(n, k)
+                stake_per_line = (self.stake_amount / Decimal(num_lines)) if num_lines else Decimal('0.00')
+
+                void_count = 0
+                odds = []
+                for s in selections:
+                    if s.is_winning_selection is False:
+                        continue
+                    if s.is_winning_selection is None:
+                        void_count += 1
+                        odds.append(Decimal('1.00'))
+                    else:
+                        odds.append(s.odd_selected)
+
+                if len(odds) < k:
+                    self.status = 'lost'
+                    self.total_odd = Decimal('0.00')
+                    self.potential_winning = Decimal('0.00')
                 else:
-                    self.status = 'lost'
-                    self.potential_winning = Decimal('0.00')
+                    dp = [Decimal('0.00')] * (k + 1)
+                    dp[0] = Decimal('1.00')
+                    count = 0
+                    for o in odds:
+                        count += 1
+                        upper = min(k, count)
+                        for j in range(upper, 0, -1):
+                            dp[j] = dp[j] + (dp[j - 1] * o)
 
-            else: # Single or Multiple
-                ticket_won = True
-                total_odd_settled = Decimal('1.00')
-                any_selection_lost = False
-                
-                for selection in self.selections.all():
-                    if selection.is_winning_selection is False:
-                        ticket_won = False
-                        any_selection_lost = True
-                        break # One loss kills the ticket
-                    elif selection.is_winning_selection is True:
-                        total_odd_settled *= selection.odd_selected
-                    elif selection.is_winning_selection is None: # Void
-                        total_odd_settled *= Decimal('1.00')
-                    # If None (not settled yet), we can't decide unless we found a loss
-                
-                if any_selection_lost:
-                    self.status = 'lost'
-                    self.potential_winning = Decimal('0.00')
-                    self.save()
-                    return # Instant update to lost
+                    winning_amount = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
+                    if winning_amount > 0:
+                        self.status = 'won'
+                        self.total_odd = Decimal('0.00')
+                        self.potential_winning = winning_amount
+                    else:
+                        self.status = 'lost'
+                        self.total_odd = Decimal('0.00')
+                        self.potential_winning = Decimal('0.00')
+
+            else:
+                for s in selections:
+                    if s.is_winning_selection is False:
+                        self.status = 'lost'
+                        self.potential_winning = Decimal('0.00')
+                        self.total_odd = Decimal('0.00')
+                        self.max_winning = Decimal('0.00')
+                        self.bonus_base_amount = Decimal('0.00')
+                        self.bonus_amount = Decimal('0.00')
+                        self.bonus_is_final = True
+                        self.bonus_applied_at = None
+                        self.save()
+                        return
 
                 if not all_fixtures_settled:
-                    return # Still pending and no losses yet
+                    return
 
-                if ticket_won:
-                    self.status = 'won'
-                    
-                    # Update totals based on settled results (handling DNB/Voids)
-                    self.total_odd = total_odd_settled.quantize(Decimal('0.01'))
-                    self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
-                    
-                    # Re-calculate bonus based on final settled results
-                    from django.apps import apps
-                    BonusRule = apps.get_model('betting', 'BonusRule')
-                    SystemSetting = apps.get_model('betting', 'SystemSetting')
-                    
-                    void_count = 0
-                    winning_odds = []
-                    
-                    for selection in self.selections.all():
-                        if selection.is_winning_selection is None:
-                            void_count += 1
-                        elif selection.is_winning_selection is True:
-                            winning_odds.append(selection.odd_selected)
-                            
-                    bonus_amount = Decimal('0.00')
-                    if void_count <= 3:
-                        rules = BonusRule.objects.all().order_by('-min_selections')
-                        for rule in rules:
-                            qualifying_count = sum(1 for odd in winning_odds if odd >= rule.min_odd_per_selection)
-                            if qualifying_count >= rule.min_selections:
-                                bonus_amount = (self.potential_winning * rule.bonus_percentage).quantize(Decimal('0.01'))
-                                break
-                                
-                    self.max_winning = self.potential_winning + bonus_amount
-                    
-                    # Global Max Winning Limit
-                    max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
-                    if max_winning_setting and max_winning_setting.value:
-                        try:
-                            limit = Decimal(max_winning_setting.value)
-                            self.max_winning = min(self.max_winning, limit)
-                        except:
-                            pass
-                else:
-                    self.status = 'lost'
-                    self.potential_winning = Decimal('0.00')
+                total_odd_settled = Decimal('1.00')
+                void_count = 0
+                non_void_odds = []
+
+                for s in selections:
+                    if s.is_winning_selection is None:
+                        void_count += 1
+                        total_odd_settled *= Decimal('1.00')
+                    else:
+                        total_odd_settled *= s.odd_selected
+                        non_void_odds.append(s.odd_selected)
+
+                self.status = 'won'
+                self.total_odd = total_odd_settled.quantize(Decimal('0.01'))
+                self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
+
+            old_bonus = self.bonus_amount
+            bonus_amount = Decimal('0.00')
+            bonus_base_amount = Decimal('0.00')
+
+            if self.status == 'won' and self.status != 'cashed_out' and self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0:
+                rule = self.bonus_rule
+                if rule:
+                    current_void_count = sum(1 for s in selections if s.is_winning_selection is None)
+                    effective_count = self.original_selections_count or len(selections)
+                    effective_count = max(0, int(effective_count) - int(current_void_count))
+
+                    qualifies = effective_count >= rule.min_selections and (rule.max_selections is None or effective_count <= rule.max_selections)
+
+                    odds_to_check = [s.odd_selected for s in selections if s.is_winning_selection is not None]
+                    odds_ok = True if not odds_to_check else (min(odds_to_check) >= rule.min_odd_per_selection)
+
+                    if qualifies and odds_ok:
+                        bonus_base_amount = self.potential_winning
+                        if (self.bonus_base or rule.bonus_base) == 'net':
+                            bonus_base_amount = self.potential_winning - self.stake_amount
+                            if bonus_base_amount < 0:
+                                bonus_base_amount = Decimal('0.00')
+
+                        bonus_amount = (bonus_base_amount * self.bonus_percentage_applied).quantize(Decimal('0.01'))
+                        if rule.max_bonus_cap is not None:
+                            bonus_amount = min(bonus_amount, rule.max_bonus_cap)
+
+            self.bonus_base_amount = bonus_base_amount
+            self.bonus_amount = bonus_amount
+            self.bonus_is_final = True
+            if bonus_amount > 0:
+                if not self.bonus_applied_at:
+                    self.bonus_applied_at = timezone.now()
+            else:
+                self.bonus_applied_at = None
+
+            self.max_winning = (self.potential_winning + bonus_amount).quantize(Decimal('0.01'))
+
+            snapshot_limit = None
+            try:
+                snapshot_limit = self.betting_limits_snapshot.get('max_winning')
+            except Exception:
+                snapshot_limit = None
+
+            if snapshot_limit is not None:
+                try:
+                    self.max_winning = min(self.max_winning, Decimal(str(snapshot_limit)))
+                except Exception:
+                    pass
+            else:
+                max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
+                if max_winning_setting and max_winning_setting.value:
+                    try:
+                        limit = Decimal(max_winning_setting.value)
+                        self.max_winning = min(self.max_winning, limit)
+                    except Exception:
+                        pass
 
             self.save()
 
-            # Post-save: Credit wallet if won
+            if bonus_amount > 0 and (not old_bonus or old_bonus != bonus_amount):
+                ActivityLog.objects.create(
+                    user=self.user,
+                    action_type='BONUS_APPLIED',
+                    action=f"Bonus applied on ticket {self.ticket_id}. Base: {bonus_base_amount} Pct: {self.bonus_percentage_applied} Bonus: {bonus_amount} Final: {self.max_winning}",
+                    affected_object=f"BetTicket: {self.ticket_id}",
+                    ip_address=self.placed_ip
+                )
+
             if self.status == 'won':
                 with transaction.atomic():
+                    locked_ticket = BetTicket.objects.select_for_update().get(pk=self.pk)
+                    if locked_ticket.payout_processed or locked_ticket.status != 'won':
+                        return
                     wallet = Wallet.objects.select_for_update().get(user=self.user)
-                    wallet.balance += self.max_winning
+                    wallet.balance += locked_ticket.max_winning
                     wallet.save()
-                    
+
                     Transaction.objects.create(
                         user=self.user,
-                        initiating_user=None, # System
+                        initiating_user=None,
                         transaction_type='bet_payout',
-                        amount=self.max_winning,
+                        amount=locked_ticket.max_winning,
                         is_successful=True,
                         status='completed',
-                        description=f"Winnings for ticket {self.ticket_id}",
-                        related_bet_ticket=self,
+                        description=f"Winnings for ticket {locked_ticket.ticket_id}",
+                        related_bet_ticket=locked_ticket,
                         timestamp=timezone.now()
                     )
+
+                    locked_ticket.payout_processed = True
+                    locked_ticket.save(update_fields=['payout_processed'])
 
 class Result(Fixture):
     class Meta:
@@ -958,17 +1133,63 @@ class Result(Fixture):
 
 
 class BonusRule(models.Model):
+    BONUS_BASE_CHOICES = (
+        ('gross', 'Gross Winnings (Total Return)'),
+        ('net', 'Net Winnings (Return - Stake)'),
+    )
+
     name = models.CharField(max_length=255)
-    min_selections = models.IntegerField(default=1, validators=[MinValueValidator(1)])
-    min_odd_per_selection = models.DecimalField(max_digits=5, decimal_places=2, default=1.01, validators=[MinValueValidator(Decimal('1.01'))])
-    bonus_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
+    is_active = models.BooleanField(default=True)
+
+    min_selections = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    max_selections = models.PositiveIntegerField(null=True, blank=True)
+
+    min_odd_per_selection = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('1.01'), validators=[MinValueValidator(Decimal('1.01'))])
+    bonus_percentage = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0000'), validators=[MinValueValidator(Decimal('0.0000'))])
+    max_bonus_cap = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    bonus_base = models.CharField(max_length=10, choices=BONUS_BASE_CHOICES, default='gross')
+
+    allow_system_bets = models.BooleanField(default=False)
+    allow_accumulator_bets = models.BooleanField(default=True)
+    allow_single_bets = models.BooleanField(default=True)
 
     class Meta:
         verbose_name_plural = "Bonus Rules"
-        unique_together = (('min_selections', 'min_odd_per_selection'),)
+        ordering = ['min_selections', 'max_selections', 'min_odd_per_selection']
+
+    def clean(self):
+        errors = {}
+
+        if self.max_selections is not None and self.max_selections < self.min_selections:
+            errors['max_selections'] = "Maximum selections must be greater than or equal to minimum selections."
+
+        if not (self.allow_system_bets or self.allow_accumulator_bets or self.allow_single_bets):
+            errors['allow_system_bets'] = "At least one bet type must be enabled."
+
+        if errors:
+            raise ValidationError(errors)
+
+        def _overlaps(a_min, a_max, b_min, b_max):
+            a_max_eff = a_max if a_max is not None else 10**9
+            b_max_eff = b_max if b_max is not None else 10**9
+            return not (a_max_eff < b_min or b_max_eff < a_min)
+
+        qs = BonusRule.objects.filter(is_active=True).exclude(pk=self.pk)
+        for other in qs:
+            if not _overlaps(self.min_selections, self.max_selections, other.min_selections, other.max_selections):
+                continue
+
+            shares_system = self.allow_system_bets and other.allow_system_bets
+            shares_acca = self.allow_accumulator_bets and other.allow_accumulator_bets
+            shares_single = self.allow_single_bets and other.allow_single_bets
+
+            if shares_system or shares_acca or shares_single:
+                raise ValidationError("Overlapping active bonus ranges are not allowed for the same enabled bet type(s).")
 
     def __str__(self):
-        return f"Bonus: {self.name} ({self.bonus_percentage*100}% for {self.min_selections}+ selections)"
+        max_part = f"{self.max_selections}" if self.max_selections is not None else "∞"
+        pct = (self.bonus_percentage * Decimal('100')).quantize(Decimal('0.01'))
+        return f"Bonus: {self.name} ({pct}% for {self.min_selections}-{max_part} selections)"
 
 class AgentPayout(models.Model):
     STATUS_CHOICES = (

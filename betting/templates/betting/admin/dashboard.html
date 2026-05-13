@@ -60,6 +60,111 @@
         </div>
     </div>
 
+    <div class="row row-cols-1 row-cols-lg-3 g-4 mb-4">
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-light">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Global Betting Limits</h3>
+                    <p class="card-text fs-6 text-muted mb-1">Active: {{ global_limits.is_active|yesno:"Yes,No" }} | Enabled: {{ global_limits.betting_enabled|yesno:"Yes,No" }}</p>
+                    <p class="card-text fs-6 text-muted mb-1">Min Stake: ₦{{ global_limits.min_stake|floatformat:2 }}</p>
+                    <p class="card-text fs-6 text-muted mb-1">Max Stake: ₦{{ global_limits.max_stake|floatformat:2 }}</p>
+                    <p class="card-text fs-6 text-muted mb-0">Max Winning: ₦{{ global_limits.max_winning|floatformat:2 }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-danger-subtle text-danger-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Limits Activity</h3>
+                    <p class="card-text fs-1 fw-bold text-danger">{{ rejected_tickets_today }}</p>
+                    <p class="card-text fs-6 text-muted mb-1">Tickets rejected today</p>
+                    <p class="card-text fs-6 text-muted mb-0">Active agent overrides: {{ active_agent_overrides }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-success-subtle text-success-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Today Exposure</h3>
+                    <p class="card-text fs-6 text-muted mb-1">Sales: ₦{{ platform_sales_today|floatformat:2 }}</p>
+                    <p class="card-text fs-6 text-muted mb-0">Max payout exposure: ₦{{ platform_exposure_today|floatformat:2 }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h3 class="h5 mb-3 fw-semibold">Highest Exposure Agents</h3>
+                    {% if top_exposure_agents %}
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Agent</th>
+                                        <th class="text-end">Pending Exposure</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in top_exposure_agents %}
+                                        <tr>
+                                            <td>
+                                                {{ row.user__agent__email }}
+                                                {% if row.user__agent__username %}<span class="text-muted">@{{ row.user__agent__username }}</span>{% endif %}
+                                            </td>
+                                            <td class="text-end">₦{{ row.exposure|floatformat:2 }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-muted">No exposure data.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h3 class="h5 mb-3 fw-semibold">Agents With Custom Limits</h3>
+                    {% if agents_with_custom_limits %}
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Agent</th>
+                                        <th class="text-end">Max Stake</th>
+                                        <th class="text-end">Max Winning</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for ov in agents_with_custom_limits %}
+                                        <tr>
+                                            <td>
+                                                {{ ov.agent.email }}
+                                                {% if ov.agent.username %}<span class="text-muted">@{{ ov.agent.username }}</span>{% endif %}
+                                            </td>
+                                            <td class="text-end">{% if ov.max_stake %}₦{{ ov.max_stake|floatformat:2 }}{% else %}<span class="text-muted">Global</span>{% endif %}</td>
+                                            <td class="text-end">{% if ov.max_winning %}₦{{ ov.max_winning|floatformat:2 }}{% else %}<span class="text-muted">Global</span>{% endif %}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-muted">No active agent overrides.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     {# Quick Actions & Reports Section #}
     <div class="card border-0 shadow-sm p-4 bg-light">
         <div class="card-body">
@@ -104,6 +209,11 @@
                 <div class="col">
                     <a href="{% url 'betting:admin_commission_financial_report' %}" class="btn btn-primary w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm" style="background-color: #6f42c1; border-color: #6f42c1;">
                         <i class="fas fa-chart-line me-2"></i> Commission Financials
+                    </a>
+                </div>
+                <div class="col">
+                    <a href="{% url 'betting_admin:admin_limit_rejections_report' %}" class="btn btn-outline-danger w-100 py-3 d-flex align-items-center justify-content-center rounded-3 shadow-sm">
+                        <i class="fas fa-ban me-2"></i> Limit Rejections
                     </a>
                 </div>
             </div>

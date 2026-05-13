@@ -13,6 +13,7 @@ from django.conf import settings
 from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField
 from django.db.models.functions import Cast, Coalesce
 from django.db import transaction as db_transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.utils import timezone
 from datetime import timedelta, date, datetime
 import logging
@@ -3158,7 +3159,10 @@ def admin_dashboard(request):
     
     pending_registrations_count = PendingAgentRegistration.objects.filter(status='PENDING').count()
 
-    global_limits = GlobalBettingSettings.load()
+    try:
+        global_limits = GlobalBettingSettings.load()
+    except (OperationalError, ProgrammingError):
+        global_limits = None
     active_agent_overrides = AgentBettingLimitOverride.objects.filter(is_active=True, custom_limits_enabled=True).count()
     today = timezone.localdate()
     rejected_tickets_today = BettingLimitAuditLog.objects.filter(action_type='TICKET_REJECTED', created_at__date=today).count()

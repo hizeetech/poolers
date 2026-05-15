@@ -133,7 +133,7 @@
 
 <!-- Modal -->
 <div class="modal fade" id="registerAgentModal" tabindex="-1" aria-labelledby="registerAgentModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="registerAgentModalLabel">Register New Agent</h5>
@@ -143,24 +143,46 @@
         <form method="post" action="{% url 'pending_registration:register_agent' %}">
             {% csrf_token %}
             <div class="mb-3">
-                <label for="id_full_name" class="form-label">Full Name</label>
-                <input type="text" class="form-control" name="full_name" id="id_full_name" required>
+                <label for="id_full_name" class="form-label fw-semibold">
+                    <i class="fa-regular fa-id-card me-2"></i>Full Name <span class="text-danger">*</span>
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-regular fa-id-card"></i></span>
+                    <input type="text" class="form-control" name="full_name" id="id_full_name" placeholder="Enter full name" required>
+                </div>
             </div>
             <div class="mb-3">
-                <label for="id_email" class="form-label">Email</label>
-                <input type="email" class="form-control" name="email" id="id_email" required>
+                <label for="id_email" class="form-label fw-semibold">
+                    <i class="fa-regular fa-envelope me-2"></i>Email <span class="text-danger">*</span>
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-regular fa-envelope"></i></span>
+                    <input type="email" class="form-control" name="email" id="id_email" placeholder="Enter email address" required>
+                </div>
             </div>
             <div class="mb-3">
-                <label for="id_phone" class="form-label">Phone</label>
-                <input type="text" class="form-control" name="phone" id="id_phone" required>
+                <label for="id_phone" class="form-label fw-semibold">
+                    <i class="fa-solid fa-phone me-2"></i>Phone <span class="text-danger">*</span>
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-solid fa-phone"></i></span>
+                    <input type="text" class="form-control" name="phone" id="id_phone" placeholder="e.g. +234XXXXXXXXXX" required>
+                </div>
             </div>
             <div class="mb-3">
-                <label for="id_state" class="form-label">State</label>
-                <input type="text" class="form-control" name="state" id="id_state">
+                <label for="id_state" class="form-label fw-semibold">
+                    <i class="fa-solid fa-location-dot me-2"></i>State
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-solid fa-location-dot"></i></span>
+                    <input type="text" class="form-control" name="state" id="id_state" placeholder="Enter state (optional)">
+                </div>
             </div>
             
             <div class="mb-3">
-                <label for="id_user_type" class="form-label">Role</label>
+                <label for="id_user_type" class="form-label fw-semibold">
+                    <i class="fa-solid fa-user-tag me-2"></i>Role
+                </label>
                 <select name="user_type" id="id_user_type" class="form-select">
                     <option value="agent">Agent</option>
                     {% if request.user.user_type == 'master_agent' %}
@@ -170,12 +192,28 @@
             </div>
 
             <div class="mb-3">
-                <label for="id_password" class="form-label">Password</label>
-                <input type="password" class="form-control" name="password" id="id_password" required>
+                <label for="id_password" class="form-label fw-semibold">
+                    <i class="fa-solid fa-lock me-2"></i>Password <span class="text-danger">*</span>
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-solid fa-lock"></i></span>
+                    <input type="password" class="form-control" name="password" id="id_password" placeholder="Create a strong password" required>
+                    <button class="btn btn-outline-secondary" type="button" data-toggle-password="id_password">
+                        <i class="fa-regular fa-eye"></i>
+                    </button>
+                </div>
             </div>
             <div class="mb-3">
-                <label for="id_confirm_password" class="form-label">Confirm Password</label>
-                <input type="password" class="form-control" name="confirm_password" id="id_confirm_password" required>
+                <label for="id_confirm_password" class="form-label fw-semibold">
+                    <i class="fa-solid fa-lock me-2"></i>Confirm Password <span class="text-danger">*</span>
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-white"><i class="fa-solid fa-lock"></i></span>
+                    <input type="password" class="form-control" name="confirm_password" id="id_confirm_password" placeholder="Confirm password" required>
+                    <button class="btn btn-outline-secondary" type="button" data-toggle-password="id_confirm_password">
+                        <i class="fa-regular fa-eye"></i>
+                    </button>
+                </div>
             </div>
 
             <button type="submit" class="btn btn-primary w-100">Submit for Approval</button>
@@ -187,4 +225,22 @@
 
 
 <!-- Include Font Awesome for icons -->
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('#registerAgentModal [data-toggle-password]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const inputId = btn.getAttribute('data-toggle-password');
+                const input = document.getElementById(inputId);
+                if (!input) return;
+                const isPassword = input.getAttribute('type') === 'password';
+                input.setAttribute('type', isPassword ? 'text' : 'password');
+                const icon = btn.querySelector('i');
+                if (icon) {
+                    icon.classList.toggle('fa-eye', !isPassword);
+                    icon.classList.toggle('fa-eye-slash', isPassword);
+                }
+            });
+        });
+    });
+</script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"> {% endblock %}

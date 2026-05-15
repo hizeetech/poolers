@@ -177,5 +177,171 @@
             </div>
         </div>
     </div>
+
+    <div class="row">
+        <div class="col-lg-8 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Fixtures by Liability (Pending Tickets)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Fixture</th>
+                                    <th>Total Stake</th>
+                                    <th>Potential Payout</th>
+                                    <th>Net Exposure</th>
+                                    <th>Tickets</th>
+                                    <th>Risk</th>
+                                    <th>Updated</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in metrics.top_fixtures %}
+                                <tr>
+                                    <td>{{ s.fixture.home_team }} vs {{ s.fixture.away_team }}</td>
+                                    <td>₦{{ s.total_stake|intcomma }}</td>
+                                    <td>₦{{ s.total_potential_payout|intcomma }}</td>
+                                    <td>₦{{ s.net_exposure|intcomma }}</td>
+                                    <td>{{ s.ticket_count|intcomma }}</td>
+                                    <td>{{ s.risk_score }}%</td>
+                                    <td>{{ s.updated_at }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="7" class="text-center">No liability snapshots available yet.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Risk Suspensions</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <div class="fw-bold mb-1">Fixtures</div>
+                        <ul class="list-group">
+                            {% for s in metrics.suspended_fixtures %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>{{ s.fixture.home_team }} vs {{ s.fixture.away_team }}</span>
+                                <span class="badge bg-danger">Suspended</span>
+                            </li>
+                            {% empty %}
+                            <li class="list-group-item text-muted">None</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div class="mb-3">
+                        <div class="fw-bold mb-1">Markets</div>
+                        <ul class="list-group">
+                            {% for s in metrics.suspended_markets %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>{{ s.fixture.home_team }} vs {{ s.fixture.away_team }} ({{ s.market_key }})</span>
+                                <span class="badge bg-danger">Suspended</span>
+                            </li>
+                            {% empty %}
+                            <li class="list-group-item text-muted">None</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div>
+                        <div class="fw-bold mb-1">Selections</div>
+                        <ul class="list-group">
+                            {% for s in metrics.suspended_selections %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>{{ s.fixture.home_team }} vs {{ s.fixture.away_team }} ({{ s.selection_key }})</span>
+                                <span class="badge bg-danger">Suspended</span>
+                            </li>
+                            {% empty %}
+                            <li class="list-group-item text-muted">None</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Recent Suspicious Activity</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Kind</th>
+                                    <th>User</th>
+                                    <th>Ticket</th>
+                                    <th>Risk</th>
+                                    <th>IP</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for l in metrics.suspicious_logs %}
+                                <tr>
+                                    <td>{{ l.created_at }}</td>
+                                    <td>{{ l.get_kind_display }}</td>
+                                    <td>{{ l.user.email }}</td>
+                                    <td>{% if l.ticket %}{{ l.ticket.ticket_id }}{% else %}-{% endif %}</td>
+                                    <td>{{ l.risk_score }}</td>
+                                    <td>{{ l.ip_address|default:"-" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="6" class="text-center">No suspicious activity logs.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Flagged Sharp Bettors</h6>
+                </div>
+                <div class="card-body">
+                    <ul class="list-group mb-3">
+                        {% for p in metrics.sharp_bettors %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <span>{{ p.user.email }}</span>
+                            <span class="badge bg-warning text-dark">ROI {{ p.roi }}</span>
+                        </li>
+                        {% empty %}
+                        <li class="list-group-item text-muted">None</li>
+                        {% endfor %}
+                    </ul>
+                    <div class="fw-bold mb-1">Syndicates</div>
+                    <ul class="list-group">
+                        {% for g in metrics.syndicates %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <span>{{ g.name|default:"Group" }}</span>
+                            <span class="badge bg-danger">{{ g.risk_score }}</span>
+                        </li>
+                        {% empty %}
+                        <li class="list-group-item text-muted">None</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

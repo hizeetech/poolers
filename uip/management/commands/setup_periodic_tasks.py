@@ -71,4 +71,76 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS('Confirmed task: Weekly Agent Commission Processing'))
 
+        # 4. Risk: Refresh Fixture Liabilities (Every 5 Minutes)
+        schedule_5m, _ = CrontabSchedule.objects.get_or_create(
+            minute='*/5',
+            hour='*',
+            day_of_week='*',
+            day_of_month='*',
+            month_of_year='*',
+            timezone='Africa/Lagos'
+        )
+        PeriodicTask.objects.update_or_create(
+            name='Risk Refresh Fixture Liabilities',
+            defaults={
+                'crontab': schedule_5m,
+                'task': 'risk.tasks.refresh_fixture_liabilities',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Risk Refresh Fixture Liabilities'))
+
+        # 5. Risk: Refresh Agent Exposures (Every 10 Minutes)
+        schedule_10m, _ = CrontabSchedule.objects.get_or_create(
+            minute='*/10',
+            hour='*',
+            day_of_week='*',
+            day_of_month='*',
+            month_of_year='*',
+            timezone='Africa/Lagos'
+        )
+        PeriodicTask.objects.update_or_create(
+            name='Risk Refresh Agent Exposures',
+            defaults={
+                'crontab': schedule_10m,
+                'task': 'risk.tasks.refresh_agent_exposures',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Risk Refresh Agent Exposures'))
+
+        # 6. Risk: Compute Sharp Bettors (Daily 02:10 AM)
+        schedule_sharp, _ = CrontabSchedule.objects.get_or_create(
+            minute='10',
+            hour='2',
+            day_of_week='*',
+            day_of_month='*',
+            month_of_year='*',
+            timezone='Africa/Lagos'
+        )
+        PeriodicTask.objects.update_or_create(
+            name='Risk Compute Sharp Bettors',
+            defaults={
+                'crontab': schedule_sharp,
+                'task': 'risk.tasks.compute_sharp_bettors',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Risk Compute Sharp Bettors'))
+
+        # 7. Notifications: Deposit Reminders (Every Hour)
+        PeriodicTask.objects.update_or_create(
+            name='Notifications Deposit Reminders',
+            defaults={
+                'crontab': schedule_hourly,
+                'task': 'notifications.tasks.send_deposit_reminders',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Notifications Deposit Reminders'))
+
         self.stdout.write(self.style.SUCCESS('All periodic tasks configured successfully!'))

@@ -371,6 +371,18 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{% url 'betting:wallet' %}">Wallet</a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link position-relative" href="{% url 'notifications:center' %}" aria-label="Notifications">
+                            <i class="fas fa-bell"></i>
+                            {% if notifications_unread_count|default:0|add:0 > 0 %}
+                                <span id="notificationsBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                                    {{ notifications_unread_count }}
+                                </span>
+                            {% else %}
+                                <span id="notificationsBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none">0</span>
+                            {% endif %}
+                        </a>
+                    </li>
                     {% if show_agent_notifications %}
                     <li class="nav-item dropdown">
                         <a class="nav-link position-relative" href="#" id="agentNotificationsDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -526,6 +538,72 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    {% if user.is_authenticated %}
+        <script>window.__VAPID_PUBLIC_KEY__ = "{{ vapid_public_key|escapejs }}";</script>
+        <script src="{% static 'notifications/notifications_nav.js' %}"></script>
+        {% if deposit_reminder_alert %}
+            {{ deposit_reminder_alert|json_script:"deposit-reminder-data" }}
+            <script>
+                document.addEventListener('DOMContentLoaded', function () {
+                    const el = document.getElementById('deposit-reminder-data');
+                    if (!el || typeof Swal === 'undefined') return;
+                    let payload = null;
+                    try { payload = JSON.parse(el.textContent || 'null'); } catch (e) { payload = null; }
+                    if (!payload || !payload.id) return;
+
+                    try {
+                        const getCookie = (name) => {
+                            const value = `; ${document.cookie}`;
+                            const parts = value.split(`; ${name}=`);
+                            if (parts.length === 2) return parts.pop().split(';').shift();
+                            return '';
+                        };
+
+                        const sessionId = getCookie('sessionid') || 'anon';
+                        const dismissedKey = `depositReminderDismissed:${sessionId}`;
+                        const dismissedId = sessionStorage.getItem(dismissedKey) || '';
+                        if (`${payload.id}` === dismissedId) return;
+                    } catch (e) {}
+
+                    const markRead = async (id) => {
+                        try {
+                            await fetch('/notifications/api/mark-read/', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-CSRFToken': getCookie('csrftoken')
+                                },
+                                credentials: 'same-origin',
+                                body: JSON.stringify({ ids: [id] })
+                            });
+                            window.dispatchEvent(new CustomEvent('notifications:updated'));
+                        } catch (e) {}
+                    };
+
+                    Swal.fire({
+                        icon: 'warning',
+                        title: payload.title || 'Low wallet balance',
+                        text: payload.message || '',
+                        showCancelButton: true,
+                        confirmButtonText: 'Deposit',
+                        cancelButtonText: 'Cancel',
+                        confirmButtonColor: '#0d6efd'
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            markRead(payload.id);
+                            window.location.href = payload.url || '/wallet/';
+                        } else {
+                            try {
+                                const sessionId = getCookie('sessionid') || 'anon';
+                                const dismissedKey = `depositReminderDismissed:${sessionId}`;
+                                sessionStorage.setItem(dismissedKey, `${payload.id}`);
+                            } catch (e) {}
+                        }
+                    });
+                });
+            </script>
+        {% endif %}
+    {% endif %}
     {% if messages %}
     <script>
         document.addEventListener('DOMContentLoaded', function () {

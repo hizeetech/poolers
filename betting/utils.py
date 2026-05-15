@@ -227,11 +227,14 @@ def system_bet_payout_projections(odds, stake_per_line, k):
 
 GLOBAL_BETTING_LIMITS_CACHE_KEY = "betting_limits:v1:global"
 AGENT_BETTING_LIMITS_CACHE_PREFIX = "betting_limits:v1:agent:"
+USER_BETTING_LIMITS_CACHE_PREFIX = "betting_limits:v1:user:"
 
-def clear_betting_limits_cache(agent_id=None):
+def clear_betting_limits_cache(agent_id=None, user_id=None):
     cache.delete(GLOBAL_BETTING_LIMITS_CACHE_KEY)
     if agent_id:
         cache.delete(f"{AGENT_BETTING_LIMITS_CACHE_PREFIX}{agent_id}")
+    if user_id:
+        cache.delete(f"{USER_BETTING_LIMITS_CACHE_PREFIX}{user_id}")
 
 def get_global_betting_settings_cached():
     cached = cache.get(GLOBAL_BETTING_LIMITS_CACHE_KEY)
@@ -307,6 +310,41 @@ def get_agent_betting_override_cached(agent_id):
     cache.set(cache_key, data, timeout=300)
     return data
 
+
+def get_user_betting_override_cached(user_id):
+    if not user_id:
+        return None
+
+    cache_key = f"{USER_BETTING_LIMITS_CACHE_PREFIX}{user_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    UserBettingLimitOverride = apps.get_model('betting', 'UserBettingLimitOverride')
+    override = (
+        UserBettingLimitOverride.objects
+        .filter(user_id=user_id, is_active=True, custom_limits_enabled=True)
+        .select_related('user')
+        .first()
+    )
+    if not override:
+        cache.set(cache_key, None, timeout=300)
+        return None
+
+    data = {
+        'user_id': user_id,
+        'min_stake': Decimal(str(override.min_stake)) if override.min_stake is not None else None,
+        'max_stake': Decimal(str(override.max_stake)) if override.max_stake is not None else None,
+        'max_winning': Decimal(str(override.max_winning)) if override.max_winning is not None else None,
+        'max_stake_by_ticket_type': dict(override.max_stake_by_ticket_type or {}),
+        'max_winning_by_ticket_type': dict(override.max_winning_by_ticket_type or {}),
+        'max_odds_per_ticket': Decimal(str(override.max_odds_per_ticket)) if override.max_odds_per_ticket is not None else None,
+        'max_selections_per_ticket': int(override.max_selections_per_ticket) if override.max_selections_per_ticket is not None else None,
+        'max_payout_per_user_per_day': Decimal(str(override.max_payout_per_user_per_day)) if override.max_payout_per_user_per_day is not None else None,
+    }
+    cache.set(cache_key, data, timeout=300)
+    return data
+
 def _normalize_ticket_type(ticket_type):
     if not ticket_type:
         return None
@@ -335,10 +373,12 @@ def get_effective_betting_limits_for_user(user, ticket_type=None):
     global_limits = get_global_betting_settings_cached()
     agent = _get_agent_for_user(user)
     override = get_agent_betting_override_cached(getattr(agent, 'id', None)) if agent else None
+    user_override = get_user_betting_override_cached(getattr(user, 'id', None)) if user else None
 
     effective = dict(global_limits)
     effective['agent_id'] = getattr(agent, 'id', None)
     effective['has_agent_override'] = bool(override)
+    effective['has_user_override'] = bool(user_override)
 
     if override:
         for k in ['min_stake', 'max_stake', 'max_winning', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_agent_per_day', 'max_payout_per_user_per_day']:
@@ -351,6 +391,19 @@ def get_effective_betting_limits_for_user(user, ticket_type=None):
         if override.get('max_winning_by_ticket_type'):
             merged = dict(effective.get('max_winning_by_ticket_type') or {})
             merged.update(override.get('max_winning_by_ticket_type') or {})
+            effective['max_winning_by_ticket_type'] = merged
+
+    if user_override:
+        for k in ['min_stake', 'max_stake', 'max_winning', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_user_per_day']:
+            if user_override.get(k) is not None:
+                effective[k] = user_override[k]
+        if user_override.get('max_stake_by_ticket_type'):
+            merged = dict(effective.get('max_stake_by_ticket_type') or {})
+            merged.update(user_override.get('max_stake_by_ticket_type') or {})
+            effective['max_stake_by_ticket_type'] = merged
+        if user_override.get('max_winning_by_ticket_type'):
+            merged = dict(effective.get('max_winning_by_ticket_type') or {})
+            merged.update(user_override.get('max_winning_by_ticket_type') or {})
             effective['max_winning_by_ticket_type'] = merged
 
     ticket_type = _normalize_ticket_type(ticket_type)

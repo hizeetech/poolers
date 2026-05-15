@@ -1,0 +1,157 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Leaderboards{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
+        <h1 class="h3 text-gray-800">Leaderboards</h1>
+        <a href="{% url 'uip:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
+    </div>
+
+    <div class="card shadow mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-2 align-items-end">
+                <div class="col-12 col-md-2">
+                    <label class="form-label small text-muted">Timeframe</label>
+                    <select name="timeframe" class="form-select form-select-sm">
+                        <option value="daily" {% if timeframe == "daily" %}selected{% endif %}>Daily</option>
+                        <option value="weekly" {% if timeframe == "weekly" %}selected{% endif %}>Weekly</option>
+                        <option value="monthly" {% if timeframe == "monthly" %}selected{% endif %}>Monthly</option>
+                        <option value="yearly" {% if timeframe == "yearly" %}selected{% endif %}>Yearly</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label small text-muted">Start date</label>
+                    <input type="date" name="start_date" class="form-control form-control-sm" value="{{ start_date|date:'Y-m-d' }}">
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label small text-muted">End date</label>
+                    <input type="date" name="end_date" class="form-control form-control-sm" value="{{ end_date|date:'Y-m-d' }}">
+                </div>
+                <div class="col-12 col-md-4 d-flex gap-2">
+                    <button class="btn btn-primary btn-sm" type="submit">Apply</button>
+                    <a class="btn btn-outline-success btn-sm"
+                       href="?timeframe={{ timeframe }}&start_date={{ start_date|date:'Y-m-d' }}&end_date={{ end_date|date:'Y-m-d' }}&export=xlsx">
+                        Export Excel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12 col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Deposits (Downline)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-sm" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Agent</th>
+                                    <th>Total Deposits</th>
+                                    <th>Turnover</th>
+                                    <th>Tickets</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for a in leaderboards.top_deposits %}
+                                <tr>
+                                    <td>{{ forloop.counter }}</td>
+                                    <td>{{ a.email }}</td>
+                                    <td>₦{{ a.total_deposits|default:0|intcomma }}</td>
+                                    <td>₦{{ a.total_turnover|default:0|intcomma }}</td>
+                                    <td>{{ a.tickets_sold|default:0|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="5" class="text-center">No data.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Turnover (Downline)</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-sm" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Agent</th>
+                                    <th>Turnover</th>
+                                    <th>Tickets</th>
+                                    <th>Winnings Paid</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for a in leaderboards.top_turnover %}
+                                <tr>
+                                    <td>{{ forloop.counter }}</td>
+                                    <td>{{ a.email }}</td>
+                                    <td>₦{{ a.total_turnover|default:0|intcomma }}</td>
+                                    <td>{{ a.tickets_sold|default:0|intcomma }}</td>
+                                    <td>₦{{ a.winnings_paid|default:0|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="5" class="text-center">No data.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">Best Profit Margin (Downline)</h6>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-sm" width="100%" cellspacing="0">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Agent</th>
+                            <th>Profit Margin %</th>
+                            <th>Revenue</th>
+                            <th>Turnover</th>
+                            <th>Winnings</th>
+                            <th>Tickets</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in leaderboards.top_margin %}
+                        <tr>
+                            <td>{{ forloop.counter }}</td>
+                            <td>{{ row.agent.email }}</td>
+                            <td>{{ row.margin|floatformat:2 }}%</td>
+                            <td>₦{{ row.revenue|floatformat:2|intcomma }}</td>
+                            <td>₦{{ row.turnover|floatformat:2|intcomma }}</td>
+                            <td>₦{{ row.winnings|floatformat:2|intcomma }}</td>
+                            <td>{{ row.tickets|intcomma }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="7" class="text-center">No data.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

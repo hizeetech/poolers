@@ -1,0 +1,27 @@
+{% extends "betting/base.html" %}
+{% load static %}
+
+{% block title %}Notifications{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Notifications</h4>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-primary" id="enable-push-btn">Enable Push</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="mark-all-read-btn">Mark all read</button>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div id="notifications-list" class="list-group"></div>
+            <div class="d-flex justify-content-center mt-3">
+                <button type="button" class="btn btn-outline-primary btn-sm" id="load-more-btn">Load more</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{% static 'notifications/notifications_center.js' %}"></script>
+{% endblock %}

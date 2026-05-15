@@ -4,6 +4,7 @@ from django.conf.urls.static import static
 
 # Import your custom admin site instance
 from betting.admin import betting_admin_site
+from notifications import views as notification_views
 
 urlpatterns = [
     # IMPORTANT: Use your custom admin site's URLs here.
@@ -14,6 +15,8 @@ urlpatterns = [
     # Include ALL other betting app URLs (non-admin paths like frontpage, wallet, etc.)
     # IMPORTANT: Add the 'namespace' argument here for your betting app.
     path('', include(('betting.urls', 'betting'), namespace='betting')),
+    path('sw.js', notification_views.service_worker, name='service_worker'),
+    path('notifications/', include(('notifications.urls', 'notifications'), namespace='notifications')),
     path('commission/', include('commission.urls')),
     path('uip/', include('uip.urls')),
     path('registration/', include('pending_registration.urls')),

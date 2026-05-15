@@ -1,5 +1,6 @@
-from django.db.models import Sum, Count, Q, F, FloatField, ExpressionWrapper
-from django.db.models.functions import Cast
+from django.apps import apps
+from django.db.models import Sum, Count, Q, F, FloatField, ExpressionWrapper, DecimalField, Value
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.core.cache import cache
 from datetime import timedelta
@@ -255,6 +256,100 @@ class DashboardService:
         return top_agents
 
     @staticmethod
+    def get_agent_leaderboards(start_time, end_time, limit=50):
+        start_key = (start_time.isoformat() if hasattr(start_time, "isoformat") else str(start_time)).replace(":", "_")
+        end_key = (end_time.isoformat() if hasattr(end_time, "isoformat") else str(end_time)).replace(":", "_")
+        cache_key = f"uip_agent_leaderboards_v1_{start_key}_{end_key}_{limit}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        ticket_statuses = ['pending', 'won', 'lost', 'cashed_out']
+        money_field = DecimalField(max_digits=18, decimal_places=2)
+
+        base = User.objects.filter(user_type='agent').annotate(
+            total_turnover=Coalesce(
+                Sum(
+                    'agents_under__bet_tickets__stake_amount',
+                    filter=Q(
+                        agents_under__bet_tickets__placed_at__gte=start_time,
+                        agents_under__bet_tickets__placed_at__lte=end_time,
+                        agents_under__bet_tickets__status__in=ticket_statuses,
+                    )
+                ),
+                Value(0),
+                output_field=money_field,
+            ),
+            tickets_sold=Coalesce(
+                Count(
+                    'agents_under__bet_tickets',
+                    filter=Q(
+                        agents_under__bet_tickets__placed_at__gte=start_time,
+                        agents_under__bet_tickets__placed_at__lte=end_time,
+                        agents_under__bet_tickets__status__in=ticket_statuses,
+                    ),
+                    distinct=True,
+                ),
+                0
+            ),
+            winnings_paid=Coalesce(
+                Sum(
+                    'agents_under__bet_tickets__max_winning',
+                    filter=Q(
+                        agents_under__bet_tickets__last_updated__gte=start_time,
+                        agents_under__bet_tickets__last_updated__lte=end_time,
+                        agents_under__bet_tickets__status='won',
+                    )
+                ),
+                Value(0),
+                output_field=money_field,
+            ),
+            total_deposits=Coalesce(
+                Sum(
+                    'agents_under__transactions__amount',
+                    filter=Q(
+                        agents_under__transactions__transaction_type='deposit',
+                        agents_under__transactions__is_successful=True,
+                        agents_under__transactions__status='completed',
+                        agents_under__transactions__timestamp__gte=start_time,
+                        agents_under__transactions__timestamp__lte=end_time,
+                    )
+                ),
+                Value(0),
+                output_field=money_field,
+            ),
+        )
+
+        top_deposits = list(base.order_by('-total_deposits')[:limit])
+        top_turnover = list(base.order_by('-total_turnover')[:limit])
+
+        leaderboard_profit = []
+        for a in base.only('id', 'email')[:limit * 3]:
+            turnover = float(getattr(a, 'total_turnover', 0) or 0)
+            winnings = float(getattr(a, 'winnings_paid', 0) or 0)
+            revenue = turnover - winnings
+            margin = (revenue / turnover * 100.0) if turnover > 0 else 0.0
+            leaderboard_profit.append({
+                'agent': a,
+                'turnover': turnover,
+                'winnings': winnings,
+                'revenue': revenue,
+                'margin': margin,
+                'tickets': int(getattr(a, 'tickets_sold', 0) or 0),
+                'deposits': float(getattr(a, 'total_deposits', 0) or 0),
+            })
+        leaderboard_profit.sort(key=lambda x: x['margin'], reverse=True)
+        top_margin = leaderboard_profit[:limit]
+
+        data = {
+            'top_deposits': top_deposits,
+            'top_turnover': top_turnover,
+            'top_margin': top_margin,
+        }
+        cache.set(cache_key, data, 120)
+        return data
+
+    @staticmethod
     def get_financial_metrics():
         cache_key = 'uip_financial_metrics'
         cached_data = cache.get(cache_key)
@@ -343,6 +438,11 @@ class DashboardService:
 
     @staticmethod
     def get_risk_metrics():
+        cache_key = "uip_risk_metrics_v2"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
         today = timezone.now().date()
         # Convert to aware datetime
         start_of_week_date = today - timedelta(days=today.weekday())
@@ -381,10 +481,50 @@ class DashboardService:
             stake_amount__gte=10000, # Threshold
             placed_at__gte=start_of_week
         ).order_by('-placed_at')[:10]
+
+        FixtureLiabilitySnapshot = apps.get_model("risk", "FixtureLiabilitySnapshot")
+        FixtureRiskState = apps.get_model("risk", "FixtureRiskState")
+        MarketRiskState = apps.get_model("risk", "MarketRiskState")
+        SelectionRiskState = apps.get_model("risk", "SelectionRiskState")
+        SuspiciousActivityLog = apps.get_model("risk", "SuspiciousActivityLog")
+        SharpBettorProfile = apps.get_model("risk", "SharpBettorProfile")
+        SyndicateGroup = apps.get_model("risk", "SyndicateGroup")
+
+        top_fixtures = list(
+            FixtureLiabilitySnapshot.objects.select_related("fixture")
+            .order_by("-risk_score", "-total_potential_payout", "-updated_at")[:20]
+        )
+        suspended_fixtures = list(
+            FixtureRiskState.objects.filter(is_suspended=True).select_related("fixture").order_by("-updated_at")[:20]
+        )
+        suspended_markets = list(
+            MarketRiskState.objects.filter(is_suspended=True).select_related("fixture").order_by("-updated_at")[:20]
+        )
+        suspended_selections = list(
+            SelectionRiskState.objects.filter(is_suspended=True).select_related("fixture").order_by("-updated_at")[:20]
+        )
+        suspicious_logs = list(
+            SuspiciousActivityLog.objects.select_related("user", "ticket").order_by("-created_at")[:50]
+        )
+        sharp_bettors = list(
+            SharpBettorProfile.objects.filter(is_flagged=True).select_related("user").order_by("-roi", "-win_rate")[:20]
+        )
+        syndicates = list(
+            SyndicateGroup.objects.filter(is_active=True).order_by("-risk_score", "-updated_at")[:20]
+        )
         
-        return {
+        data = {
             'suspicious_ips': suspicious_ips,
             'bonus_abusers': bonus_abusers,
             'high_winners': high_winners,
-            'large_bets': large_bets
+            'large_bets': large_bets,
+            'top_fixtures': top_fixtures,
+            'suspended_fixtures': suspended_fixtures,
+            'suspended_markets': suspended_markets,
+            'suspended_selections': suspended_selections,
+            'suspicious_logs': suspicious_logs,
+            'sharp_bettors': sharp_bettors,
+            'syndicates': syndicates,
         }
+        cache.set(cache_key, data, 10)
+        return data

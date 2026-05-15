@@ -90,6 +90,8 @@ INSTALLED_APPS = [
     'betting',
     'commission',
     'uip',
+    'risk.apps.RiskConfig',
+    'notifications.apps.NotificationsConfig',
     'pending_registration.apps.PendingRegistrationConfig',
     'django_celery_results',
     'django_celery_beat',
@@ -103,6 +105,7 @@ MIDDLEWARE = [
     'betting.middleware.EnsureRemoteAddrMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'betting.middleware.LowBalanceDepositReminderMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'csp.middleware.CSPMiddleware',
@@ -137,6 +140,7 @@ TEMPLATES = [
                 'betting.context_processors.site_configuration',
                 'betting.context_processors.impersonation_context',
                 'betting.context_processors.agent_downline_activity_notifications',
+                'notifications.context_processors.notifications_context',
             ],
         },
     },
@@ -145,14 +149,24 @@ TEMPLATES = [
 WSGI_APPLICATION = 'poolbetting.wsgi.application'
 ASGI_APPLICATION = 'poolbetting.asgi.application'
 
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [('127.0.0.1', 6379)],
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+USE_INMEMORY_CHANNEL_LAYER = os.getenv("USE_INMEMORY_CHANNEL_LAYER", "0").strip().lower() in ("1", "true", "yes", "on")
+
+if USE_INMEMORY_CHANNEL_LAYER or (DEBUG and not REDIS_URL):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL] if REDIS_URL else [("127.0.0.1", 6379)],
+            },
         },
-    },
-}
+    }
 
 
 # Database
@@ -189,14 +203,22 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Celery Configuration Options
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL or 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL or 'redis://localhost:6379/0')
 CELERY_CACHE_BACKEND = 'django-cache'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Lagos'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+_CELERY_ALWAYS_EAGER_ENV = os.getenv("CELERY_TASK_ALWAYS_EAGER", "").strip().lower()
+if _CELERY_ALWAYS_EAGER_ENV:
+    CELERY_TASK_ALWAYS_EAGER = _CELERY_ALWAYS_EAGER_ENV in ("1", "true", "yes", "on")
+else:
+    CELERY_TASK_ALWAYS_EAGER = bool(DEBUG and USE_INMEMORY_CHANNEL_LAYER)
+
+CELERY_TASK_EAGER_PROPAGATES = bool(CELERY_TASK_ALWAYS_EAGER)
 
 # Phase 3: Financial-Grade Task Reliability
 CELERY_TASK_ACKS_LATE = True
@@ -209,8 +231,14 @@ CELERY_TASK_ROUTES = {
     'commission.tasks.*': {'queue': 'commission_queue'},
     'uip.tasks.aggregate_daily_metrics': {'queue': 'uip_queue'},
     'uip.tasks.run_risk_checks': {'queue': 'risk_queue'},
+    'risk.tasks.*': {'queue': 'risk_queue'},
+    'notifications.tasks.*': {'queue': 'uip_queue'},
     'poolbetting.celery.debug_task': {'queue': 'celery'},
 }
+
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")
 
 CKEDITOR_5_UPLOAD_PATH = "ckeditor5/"
 

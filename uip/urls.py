@@ -8,6 +8,7 @@ urlpatterns = [
     path('financials/', views.uip_financials, name='financials'),
     path('analytics/', views.uip_analytics, name='analytics'),
     path('risk/', views.uip_risk, name='risk'),
+    path('leaderboards/', views.uip_leaderboards, name='leaderboards'),
     path('forecasting/', views.uip_forecasting, name='forecasting'),
     path('reports/', views.uip_reports, name='reports'),
     path('audit/', views.uip_audit, name='audit'),

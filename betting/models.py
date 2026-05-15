@@ -477,10 +477,43 @@ class AgentBettingLimitOverride(models.Model):
     def __str__(self):
         return f"Betting Limits Override: {self.agent.email}"
 
+
+class UserBettingLimitOverride(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='user_betting_limit_override')
+    is_active = models.BooleanField(default=True)
+    custom_limits_enabled = models.BooleanField(default=True)
+
+    min_stake = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_stake = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_winning = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_odds_per_ticket = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+    max_stake_by_ticket_type = models.JSONField(blank=True, default=dict)
+    max_winning_by_ticket_type = models.JSONField(blank=True, default=dict)
+
+    max_selections_per_ticket = models.PositiveIntegerField(null=True, blank=True)
+    max_payout_per_user_per_day = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.00'))])
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_user_betting_overrides')
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_user_betting_overrides')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        errors = {}
+        if self.min_stake is not None and self.max_stake is not None and self.max_stake < self.min_stake:
+            errors['max_stake'] = "Maximum stake must be greater than or equal to minimum stake."
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return f"User Betting Limits Override: {self.user.email}"
+
+
 class BettingLimitAuditLog(models.Model):
     ACTION_CHOICES = (
         ('GLOBAL_UPDATE', 'Global Update'),
         ('AGENT_UPDATE', 'Agent Update'),
+        ('USER_UPDATE', 'User Update'),
         ('TICKET_REJECTED', 'Ticket Rejected'),
     )
 

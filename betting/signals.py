@@ -3,9 +3,11 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
-from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride
+from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride
 from .middleware import get_current_user, get_current_request
 from .utils import get_ip_details, get_client_ip, log_debug, clear_bonus_rules_cache, clear_betting_limits_cache
+from notifications.services import create_notification
+from django.core.cache import cache
 import threading
 
 def fetch_and_update_isp(log_id, ip_address):
@@ -246,3 +248,84 @@ def clear_betting_limits_cache_on_override_save(sender, instance, **kwargs):
 @receiver(post_delete, sender=AgentBettingLimitOverride)
 def clear_betting_limits_cache_on_override_delete(sender, instance, **kwargs):
     clear_betting_limits_cache(agent_id=instance.agent_id)
+
+@receiver(post_save, sender=UserBettingLimitOverride)
+def clear_betting_limits_cache_on_user_override_save(sender, instance, **kwargs):
+    clear_betting_limits_cache(user_id=instance.user_id)
+
+@receiver(post_delete, sender=UserBettingLimitOverride)
+def clear_betting_limits_cache_on_user_override_delete(sender, instance, **kwargs):
+    clear_betting_limits_cache(user_id=instance.user_id)
+
+
+@receiver(pre_save, sender=Fixture)
+def notify_fixture_status_and_odds_change(sender, instance, **kwargs):
+    if not instance.pk:
+        return
+    try:
+        old = Fixture.objects.get(pk=instance.pk)
+    except Fixture.DoesNotExist:
+        return
+
+    status_changed = old.status != instance.status
+    odds_fields = [
+        "home_win_odd",
+        "draw_odd",
+        "away_win_odd",
+        "home_dnb_odd",
+        "away_dnb_odd",
+        "over_1_5_odd",
+        "under_1_5_odd",
+        "over_2_5_odd",
+        "under_2_5_odd",
+        "over_3_5_odd",
+        "under_3_5_odd",
+        "btts_yes_odd",
+        "btts_no_odd",
+    ]
+    odds_changed = any(getattr(old, f) != getattr(instance, f) for f in odds_fields)
+
+    if not status_changed and not odds_changed:
+        return
+
+    affected_user_ids = (
+        BetTicket.objects.filter(status="pending", selections__fixture_id=instance.pk)
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    users_qs = User.objects.filter(id__in=list(affected_user_ids), is_active=True).only("id")
+
+    if status_changed and instance.status in ["postponed", "abandoned", "cancelled", "no_result"]:
+        notif_type = "FIXTURE_POSTPONED" if instance.status == "postponed" else "EVENT_ABANDONED"
+        title = "Fixture Updated"
+        message = f"{instance.home_team} vs {instance.away_team} status changed to {instance.get_status_display()}."
+        for u in users_qs.iterator():
+            try:
+                create_notification(
+                    recipient=u,
+                    notification_type=notif_type,
+                    title=title,
+                    message=message,
+                    data={"fixture_id": instance.pk, "status": instance.status},
+                )
+            except Exception:
+                continue
+
+    if odds_changed and instance.status == "scheduled":
+        dedupe_key = f"notifications:odds_changed:{instance.pk}"
+        if cache.get(dedupe_key):
+            return
+        cache.set(dedupe_key, 1, timeout=600)
+        title = "Odds Changed"
+        message = f"Odds updated for {instance.home_team} vs {instance.away_team}."
+        for u in users_qs.iterator():
+            try:
+                create_notification(
+                    recipient=u,
+                    notification_type="ODDS_CHANGED",
+                    title=title,
+                    message=message,
+                    data={"fixture_id": instance.pk},
+                )
+            except Exception:
+                continue

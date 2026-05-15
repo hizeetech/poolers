@@ -10,6 +10,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
+from django.apps import apps
 from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField
 from django.db.models.functions import Cast, Coalesce
 from django.db import transaction as db_transaction
@@ -29,6 +30,19 @@ from django.contrib.auth import authenticate, login, logout # Ensure these are i
 from django_ratelimit.decorators import ratelimit
 from django.core.cache import cache
 import hashlib
+
+from risk.services import (
+    is_suspended as risk_is_suspended,
+    market_key_for_bet_type,
+    selection_key_for_bet_type,
+    auto_suspend_if_needed,
+    compute_duplicate_ticket_signature,
+    log_duplicate_ticket_if_needed,
+    record_device_fingerprint,
+    evaluate_ticket_risk,
+    check_ip_intelligence,
+)
+from notifications.services import create_notification
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
@@ -654,10 +668,17 @@ def place_bet(request):
                         else:
                             return fail_response(f'Invalid outcome for {fixture.home_team} vs {fixture.away_team}')
 
+                        market_key = market_key_for_bet_type(outcome)
+                        selection_key = selection_key_for_bet_type(outcome)
+                        if risk_is_suspended(fixture.id, market_key, selection_key):
+                            return fail_response('This event/market is temporarily suspended due to risk management.')
+
                         valid_selections.append({
                             'fixture': fixture,
                             'bet_type': outcome,
-                            'odd': odd
+                            'odd': odd,
+                            'market_key': market_key,
+                            'selection_key': selection_key,
                         })
 
                     # --- Bet Permission Validation ---
@@ -710,6 +731,104 @@ def place_bet(request):
                     odds_list = [s['odd'] for s in valid_selections]
                     rule_dict, bonus_base_amount, estimated_bonus_amount = calculate_bonus_amount(potential_win, total_stake, valid_selections, bet_type)
                     max_winning = (potential_win + estimated_bonus_amount).quantize(Decimal('0.01'))
+
+                    SelectionLiabilitySnapshot = apps.get_model("risk", "SelectionLiabilitySnapshot")
+                    MarketLiabilitySnapshot = apps.get_model("risk", "MarketLiabilitySnapshot")
+                    FixtureLiabilitySnapshot = apps.get_model("risk", "FixtureLiabilitySnapshot")
+                    ip_address = get_client_ip(request)
+                    fingerprint_hash = request.headers.get("X-Device-Fingerprint") or request.POST.get("device_fingerprint") or ""
+
+                    try:
+                        record_device_fingerprint(
+                            user=request.user,
+                            fingerprint_hash=fingerprint_hash,
+                            ip_address=ip_address,
+                            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                            timezone_name=request.POST.get("device_timezone", ""),
+                            screen=request.POST.get("device_screen", ""),
+                            platform=request.POST.get("device_platform", ""),
+                            language=request.POST.get("device_language", ""),
+                        )
+                    except Exception:
+                        pass
+
+                    try:
+                        ipintel = check_ip_intelligence(ip_address)
+                        if ipintel.get("blocked"):
+                            return fail_response("Betting is blocked from your current network. Please disable VPN/Proxy or contact support.")
+                    except Exception:
+                        pass
+
+                    for s in valid_selections:
+                        existing_selection = (
+                            SelectionLiabilitySnapshot.objects.filter(
+                                fixture_id=s["fixture"].id,
+                                market_key=s["market_key"],
+                                selection_key=s["selection_key"],
+                            )
+                            .values("total_potential_payout")
+                            .first()
+                        )
+                        existing_market = (
+                            MarketLiabilitySnapshot.objects.filter(
+                                fixture_id=s["fixture"].id,
+                                market_key=s["market_key"],
+                            )
+                            .values("total_potential_payout")
+                            .first()
+                        )
+                        existing_fixture = (
+                            FixtureLiabilitySnapshot.objects.filter(fixture_id=s["fixture"].id)
+                            .values("total_potential_payout")
+                            .first()
+                        )
+
+                        existing_selection_liability = Decimal(str((existing_selection or {}).get("total_potential_payout") or "0.00"))
+                        existing_market_liability = Decimal(str((existing_market or {}).get("total_potential_payout") or "0.00"))
+                        existing_fixture_liability = Decimal(str((existing_fixture or {}).get("total_potential_payout") or "0.00"))
+
+                        projected_selection_liability = (existing_selection_liability + max_winning).quantize(Decimal("0.01"))
+                        projected_market_liability = (existing_market_liability + max_winning).quantize(Decimal("0.01"))
+                        projected_fixture_liability = (existing_fixture_liability + max_winning).quantize(Decimal("0.01"))
+                        decision = auto_suspend_if_needed(
+                            actor=request.user,
+                            fixture_id=s["fixture"].id,
+                            market_key=s["market_key"],
+                            selection_key=s["selection_key"],
+                            projected_selection_liability=projected_selection_liability,
+                            projected_market_liability=projected_market_liability,
+                            projected_fixture_liability=projected_fixture_liability,
+                        )
+                        if decision.suspended:
+                            for admin_user in User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"])).only("id")[:200]:
+                                try:
+                                    create_notification(
+                                        recipient=admin_user,
+                                        notification_type="EVENT_SUSPENDED",
+                                        title="Risk Auto-Suspension Triggered",
+                                        message=f"Auto-suspended {decision.level} due to exposure. Fixture #{s['fixture'].id}.",
+                                        data={
+                                            "fixture_id": s["fixture"].id,
+                                            "market_key": s["market_key"],
+                                            "selection_key": s["selection_key"],
+                                            "projected_selection_liability": str(projected_selection_liability),
+                                            "projected_market_liability": str(projected_market_liability),
+                                            "projected_fixture_liability": str(projected_fixture_liability),
+                                        },
+                                    )
+                                except Exception:
+                                    continue
+                            return fail_response('This event/market is temporarily suspended due to high exposure.')
+
+                    duplicate_signature = compute_duplicate_ticket_signature(
+                        user_id=request.user.id,
+                        selections=selections_data,
+                        stake_per_line=str(stake_amount_per_line),
+                        is_system_bet=is_system_bet,
+                        permutation_count=permutation_count,
+                        fingerprint_hash=fingerprint_hash,
+                        ip_address=ip_address,
+                    )
                     def _resolve_agent_for_user(u):
                         if not u:
                             return None
@@ -821,6 +940,59 @@ def place_bet(request):
                             bet_type=sel['bet_type'],
                             odd_selected=sel['odd']
                         )
+
+                    try:
+                        log_duplicate_ticket_if_needed(
+                            user=request.user,
+                            ticket=bet_ticket,
+                            signature=duplicate_signature,
+                            ip_address=ip_address,
+                            fingerprint_hash=fingerprint_hash,
+                        )
+                    except Exception:
+                        pass
+
+                    try:
+                        risk_score = evaluate_ticket_risk(
+                            user=request.user,
+                            ticket=bet_ticket,
+                            ip_address=ip_address,
+                            fingerprint_hash=fingerprint_hash,
+                            selections=valid_selections,
+                            stake_amount=total_stake,
+                        )
+                        if risk_score >= 70:
+                            for admin_user in User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"])).only("id")[:200]:
+                                try:
+                                    create_notification(
+                                        recipient=admin_user,
+                                        notification_type="RISK_ALERT",
+                                        title="Risk Alert: Suspicious Betting",
+                                        message=f"User {request.user.email} triggered a risk score of {risk_score} on ticket {bet_ticket.ticket_id}.",
+                                        data={"user_id": request.user.id, "ticket_id": bet_ticket.ticket_id, "risk_score": risk_score},
+                                    )
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+
+                    try:
+                        from risk.tasks import (
+                            refresh_fixture_liability,
+                            refresh_agent_exposure,
+                            refresh_user_exposure,
+                            refresh_betting_period_liability,
+                        )
+
+                        for fid in {s["fixture"].id for s in valid_selections}:
+                            refresh_fixture_liability.delay(fid)
+                        if agent_obj:
+                            refresh_agent_exposure.delay(agent_obj.id)
+                        refresh_user_exposure.delay(request.user.id)
+                        if valid_selections and valid_selections[0].get("fixture") and getattr(valid_selections[0]["fixture"], "betting_period_id", None):
+                            refresh_betting_period_liability.delay(valid_selections[0]["fixture"].betting_period_id)
+                    except Exception:
+                        pass
 
                     # Transaction Record (Summary)
                     Transaction.objects.create(

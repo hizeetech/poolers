@@ -8,9 +8,9 @@
     <div class="d-flex justify-content-between align-items-center mb-4 mt-4">
         <h1 class="h3 text-gray-800">Unified Intelligence Platform</h1>
         <div class="btn-group">
-            <a href="?timeframe=daily" class="btn btn-sm {% if current_timeframe == 'daily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Daily</a>
-            <a href="?timeframe=weekly" class="btn btn-sm {% if current_timeframe == 'weekly' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Weekly</a>
-            <a href="?timeframe=monthly" class="btn btn-sm {% if current_timeframe == 'monthly' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Monthly</a>
+            <a href="?timeframe=daily&start_date={{ leaderboard_start_date }}&end_date={{ leaderboard_end_date }}{% if leaderboard_period_id %}&period_id={{ leaderboard_period_id }}{% endif %}" class="btn btn-sm {% if current_timeframe == 'daily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Daily</a>
+            <a href="?timeframe=weekly&start_date={{ leaderboard_start_date }}&end_date={{ leaderboard_end_date }}{% if leaderboard_period_id %}&period_id={{ leaderboard_period_id }}{% endif %}" class="btn btn-sm {% if current_timeframe == 'weekly' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Weekly</a>
+            <a href="?timeframe=monthly&start_date={{ leaderboard_start_date }}&end_date={{ leaderboard_end_date }}{% if leaderboard_period_id %}&period_id={{ leaderboard_period_id }}{% endif %}" class="btn btn-sm {% if current_timeframe == 'monthly' %}btn-primary{% else %}btn-outline-secondary{% endif %}">Monthly</a>
         </div>
     </div>
 
@@ -205,8 +205,26 @@
     <div class="row">
         <div class="col-12 mb-4">
             <div class="card shadow">
-                <div class="card-header py-3">
+                <div class="card-header py-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
                     <h6 class="m-0 font-weight-bold text-primary">Top Performing Agents ({{ current_timeframe|title }})</h6>
+                    <form method="get" class="d-flex flex-wrap align-items-center gap-2">
+                        <input type="hidden" name="timeframe" value="{{ current_timeframe }}">
+                        <div class="input-group input-group-sm" style="width: auto;">
+                            <span class="input-group-text">Date</span>
+                            <input type="date" name="start_date" class="form-control form-control-sm" value="{{ leaderboard_start_date }}">
+                            <span class="input-group-text">-</span>
+                            <input type="date" name="end_date" class="form-control form-control-sm" value="{{ leaderboard_end_date }}">
+                        </div>
+                        <select name="period_id" class="form-select form-select-sm" style="width: auto;">
+                            <option value="">All Periods</option>
+                            {% for period in betting_periods %}
+                                <option value="{{ period.id }}" {% if leaderboard_period_id == period.id|stringformat:"s" %}selected{% endif %}>
+                                    {{ period.name }} ({{ period.start_date|date:"d M" }})
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                    </form>
                 </div>
                 <div class="card-body">
                      <div class="table-responsive">
@@ -217,7 +235,7 @@
                                     <th>Agent Name</th>
                                     <th>Email</th>
                                     <th>Tickets Sold (Downline)</th>
-                                    <th>Sales Volume (Downline)</th>
+                                    <th>Turnover (Downline)</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -226,12 +244,12 @@
                                     <td>{{ forloop.counter }}</td>
                                     <td>{{ agent.first_name }} {{ agent.last_name }}</td>
                                     <td>{{ agent.email }}</td>
-                                    <td>{{ agent.ticket_count }}</td>
-                                    <td>₦{{ agent.daily_sales|intcomma }}</td>
+                                    <td>{{ agent.tickets_sold|intcomma }}</td>
+                                    <td>₦{{ agent.total_turnover|intcomma }}</td>
                                 </tr>
                                 {% empty %}
                                 <tr>
-                                    <td colspan="5" class="text-center">No agent activity recorded today.</td>
+                                    <td colspan="5" class="text-center">No agent activity recorded for the selected range.</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

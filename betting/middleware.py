@@ -2,6 +2,7 @@ from django.utils import timezone
 from django.shortcuts import redirect
 from django.contrib import messages
 from django.urls import reverse
+from django.core.cache import cache
 from .models import ImpersonationLog
 
 class ImpersonationMiddleware:
@@ -122,4 +123,51 @@ class EnsureRemoteAddrMiddleware:
                 real_ip = request.META.get('HTTP_X_REAL_IP')
                 if real_ip:
                     request.META['REMOTE_ADDR'] = real_ip.strip()
+        return self.get_response(request)
+
+
+class LowBalanceDepositReminderMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            path = request.path or ""
+            if not (path.startswith("/admin/") or path.startswith("/static/") or path.startswith("/media/")):
+                try:
+                    if request.session.get("low_balance_deposit_reminder_checked"):
+                        return self.get_response(request)
+
+                    request.session["low_balance_deposit_reminder_checked"] = True
+                    from django.apps import apps
+                    from django.utils import timezone as dj_timezone
+
+                    from risk.services import get_risk_settings_cached
+                    from notifications.services import create_notification
+
+                    settings_obj = get_risk_settings_cached()
+                    threshold = settings_obj.get("deposit_reminder_threshold")
+                    if threshold is not None:
+                        Wallet = apps.get_model("betting", "Wallet")
+                        balance = Wallet.objects.filter(user_id=user.id).values_list("balance", flat=True).first()
+                        if balance is not None and balance <= threshold:
+                            Notification = apps.get_model("notifications", "Notification")
+                            existing = (
+                                Notification.objects.filter(recipient_id=user.id, is_read=False, notification_type="DEPOSIT_REMINDER")
+                                .order_by("-created_at")
+                                .values_list("id", flat=True)
+                                .first()
+                            )
+                            if not existing:
+                                create_notification(
+                                    recipient=user,
+                                    notification_type="DEPOSIT_REMINDER",
+                                    title="Low wallet balance",
+                                    message=f"Your wallet balance is ₦{balance:.2f}. Deposit now to keep betting and avoid missing live fixtures.",
+                                    data={"threshold": str(threshold), "balance": str(balance), "url": "/wallet/"},
+                                )
+                except Exception:
+                    pass
+
         return self.get_response(request)

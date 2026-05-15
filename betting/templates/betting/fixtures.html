@@ -240,6 +240,32 @@
     let lastComputedMinPotential = 0;
     let lastComputedMaxWinningRaw = 0;
 
+    async function sha256Hex(text) {
+        const data = new TextEncoder().encode(String(text || ''));
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function getDeviceFingerprint() {
+        const key = 'device_fingerprint_v1';
+        const existing = localStorage.getItem(key);
+        if (existing) return existing;
+
+        const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+        const scr = `${window.screen.width}x${window.screen.height}x${window.devicePixelRatio || 1}`;
+        const ua = navigator.userAgent || '';
+        const lang = navigator.language || '';
+        const plat = navigator.platform || '';
+
+        const rand = new Uint32Array(4);
+        crypto.getRandomValues(rand);
+        const seed = `${ua}|${tz}|${scr}|${lang}|${plat}|${Array.from(rand).join('-')}`;
+        const fp = await sha256Hex(seed);
+        localStorage.setItem(key, fp);
+        return fp;
+    }
+
     function formatCurrency(value) {
         const n = parseFloat(value);
         if (Number.isNaN(n)) return '0.00';
@@ -879,11 +905,17 @@
                 }
             }
 
+            const deviceFingerprint = await getDeviceFingerprint();
             const formData = new FormData();
             formData.append('selections', JSON.stringify(selectedBets));
             formData.append('stake_amount', stakeAmount); // Backend expects stake per line
             formData.append('is_system_bet', isSystemBet); // Send system bet flag
             formData.append('permutation_count', permutationCount); // Send k value
+            formData.append('device_fingerprint', deviceFingerprint);
+            formData.append('device_timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+            formData.append('device_screen', `${window.screen.width}x${window.screen.height}x${window.devicePixelRatio || 1}`);
+            formData.append('device_platform', navigator.platform || '');
+            formData.append('device_language', navigator.language || '');
             formData.append('csrfmiddlewaretoken', '{{ csrf_token }}'); // Include CSRF token
 
             try {
@@ -892,6 +924,7 @@
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest',
                         'Accept': 'application/json',
+                        'X-Device-Fingerprint': deviceFingerprint,
                     },
                     body: formData,
                 });

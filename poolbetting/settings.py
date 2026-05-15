@@ -128,7 +128,7 @@ ROOT_URLCONF = 'poolbetting.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'uip' / 'templates'],
+        'DIRS': [BASE_DIR / 'templates', BASE_DIR / 'uip' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

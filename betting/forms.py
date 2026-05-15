@@ -62,7 +62,7 @@ class UserRegistrationForm(forms.ModelForm):
             'first_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your first name'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your last name'}),
             'other_name': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your other name'}),
-            'state': forms.Select(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2'}),
+            'state': forms.Select(attrs={'class': 'form-select form-select-lg'}),
             'phone_number': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'e.g. +234XXXXXXXXXX'}),
             'shop_address': forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your shop address (Optional)'}),
         }
@@ -144,8 +144,13 @@ class UserRegistrationForm(forms.ModelForm):
 
 # --- Login Form ---
 class LoginForm(AuthenticationForm):
-    identifier = forms.CharField(label="Email or Username", widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Email or Username'}))
-    password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Password'}))
+    identifier = forms.CharField(
+        label="Email or Username",
+        widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Email or Username'})
+    )
+    password = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Password'})
+    )
 
     def __init__(self, request=None, *args, **kwargs):
         super().__init__(request=request, *args, **kwargs)

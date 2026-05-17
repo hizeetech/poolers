@@ -7,7 +7,10 @@ from django.http import HttpResponse
 from datetime import timedelta
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from betting.models import ActivityLog, BettingPeriod
+from betting.models import ActivityLog, BettingPeriod, User
+from .models import FraudAlert, AlertAffectedUser, InvestigationCase, AdminActionLog
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from .services import DashboardService
 from .forecasting import ForecastingService
 from .reporting import ReportingService
@@ -62,11 +65,39 @@ def uip_dashboard(request):
     leaderboards = DashboardService.get_agent_leaderboards(start_time, end_time, limit=10)
     leaderboard = leaderboards.get("top_turnover") or []
     recent_activity = DashboardService.get_recent_activity()
+    
+    # Fraud Alerts Filtering
+    fraud_alerts = FraudAlert.objects.prefetch_related('affected_user_details__user')
+    
+    alert_type = request.GET.get('alert_type')
+    if alert_type:
+        fraud_alerts = fraud_alerts.filter(alert_type=alert_type)
+        
+    severity = request.GET.get('severity')
+    if severity:
+        fraud_alerts = fraud_alerts.filter(severity=severity)
+        
+    status = request.GET.get('status')
+    if status:
+        fraud_alerts = fraud_alerts.filter(status=status)
+        
+    search = request.GET.get('search')
+    if search:
+        fraud_alerts = fraud_alerts.filter(
+            Q(description__icontains=search) |
+            Q(affected_users__email__icontains=search) |
+            Q(affected_users__username__icontains=search) |
+            Q(related_ips__contains=[search])
+        ).distinct()
+    
+    fraud_alerts = fraud_alerts.order_by('-timestamp')[:50]
+    
     betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')[:10]
     context = {
         'metrics': metrics,
         'leaderboard': leaderboard,
         'recent_activity': recent_activity,
+        'fraud_alerts': fraud_alerts,
         'betting_periods': betting_periods,
         'page_title': 'Unified Intelligence Platform',
         'current_timeframe': timeframe,
@@ -281,3 +312,172 @@ def uip_leaderboards(request):
         "leaderboards": data,
     }
     return render(request, "uip/leaderboards.html", context)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def investigation_user_action(request):
+    if request.method == 'POST':
+        import json
+        data = json.loads(request.body)
+        action = data.get('action')
+        user_id = data.get('user_id')
+        alert_id = data.get('alert_id')
+        
+        try:
+            target_user = User.objects.get(id=user_id)
+            alert = FraudAlert.objects.get(id=alert_id)
+            
+            if action == 'freeze':
+                target_user.is_active = False
+                target_user.save()
+                AdminActionLog.objects.create(
+                    alert=alert, admin=request.user, 
+                    action=f"Froze user {target_user.email}",
+                    notes=data.get('notes', '')
+                )
+            elif action == 'unfreeze':
+                target_user.is_active = True
+                target_user.save()
+                AdminActionLog.objects.create(
+                    alert=alert, admin=request.user, 
+                    action=f"Unfroze user {target_user.email}",
+                    notes=data.get('notes', '')
+                )
+            elif action == 'suspend_betting':
+                target_user.is_locked = True
+                target_user.lock_reason = "Suspended due to fraud investigation"
+                target_user.save()
+                AdminActionLog.objects.create(
+                    alert=alert, admin=request.user, 
+                    action=f"Suspended betting for {target_user.email}",
+                    notes=data.get('notes', '')
+                )
+            elif action == 'unsuspend_betting':
+                target_user.is_locked = False
+                target_user.lock_reason = ""
+                target_user.save()
+                AdminActionLog.objects.create(
+                    alert=alert, admin=request.user, 
+                    action=f"Unsuspended betting for {target_user.email}",
+                    notes=data.get('notes', '')
+                )
+            
+            return JsonResponse({'status': 'success', 'message': f"Action {action} applied successfully."})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request'}, status=405)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def update_fraud_alert_status(request):
+    if request.method == 'POST':
+        import json
+        data = json.loads(request.body)
+        alert_id = data.get('alert_id')
+        new_status = data.get('status')
+        
+        try:
+            alert = FraudAlert.objects.get(id=alert_id)
+            old_status = alert.status
+            alert.status = new_status
+            alert.save()
+            
+            AdminActionLog.objects.create(
+                alert=alert, admin=request.user, 
+                action=f"Changed status from {old_status} to {new_status}",
+                notes=data.get('notes', '')
+            )
+            
+            return JsonResponse({'status': 'success', 'message': "Alert status updated."})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request'}, status=405)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def add_fraud_alert_note(request):
+    if request.method == 'POST':
+        import json
+        data = json.loads(request.body)
+        alert_id = data.get('alert_id')
+        note = data.get('note')
+        
+        try:
+            alert = FraudAlert.objects.get(id=alert_id)
+            AdminActionLog.objects.create(
+                alert=alert, admin=request.user, 
+                action="Added investigation note",
+                notes=note
+            )
+            return JsonResponse({'status': 'success', 'message': "Note added."})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request'}, status=405)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def export_investigation_report(request, alert_id):
+    try:
+        alert = FraudAlert.objects.get(id=alert_id)
+        details = alert.affected_user_details.select_related('user').all()
+        
+        format = request.GET.get('format', 'xlsx')
+        
+        if format == 'xlsx':
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Investigation Report"
+            
+            ws.append(["Alert ID", f"#{alert.id}"])
+            ws.append(["Alert Type", alert.get_alert_type_display()])
+            ws.append(["Severity", alert.severity.upper()])
+            ws.append(["Status", alert.get_status_display()])
+            ws.append(["Timestamp", alert.timestamp.strftime("%Y-%m-%d %H:%M")])
+            ws.append(["Description", alert.description])
+            ws.append([])
+            
+            headers = ["Username", "Email", "IP Address", "Risk Score", "Wallet Balance", "Total Deposits", "Total Withdrawals", "Total Bets"]
+            ws.append(headers)
+            
+            for d in details:
+                ws.append([
+                    d.user.username or d.user.get_full_name(),
+                    d.user.email,
+                    d.ip_address,
+                    d.risk_score,
+                    float(d.wallet_balance),
+                    float(d.total_deposits),
+                    float(d.total_withdrawals),
+                    d.total_bets_count
+                ])
+                
+            resp = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            resp["Content-Disposition"] = f'attachment; filename="investigation_report_{alert_id}.xlsx"'
+            wb.save(resp)
+            return resp
+        
+        elif format == 'csv':
+            import csv
+            resp = HttpResponse(content_type='text/csv')
+            resp['Content-Disposition'] = f'attachment; filename="investigation_report_{alert_id}.csv"'
+            writer = csv.writer(resp)
+            writer.writerow(["Alert Type", alert.get_alert_type_display()])
+            writer.writerow(["Severity", alert.severity.upper()])
+            writer.writerow(["Description", alert.description])
+            writer.writerow([])
+            writer.writerow(["Username", "Email", "IP Address", "Risk Score", "Wallet Balance", "Total Bets"])
+            for d in details:
+                writer.writerow([
+                    d.user.username or d.user.get_full_name(),
+                    d.user.email,
+                    d.ip_address,
+                    d.risk_score,
+                    d.wallet_balance,
+                    d.total_bets_count
+                ])
+            return resp
+
+    except FraudAlert.DoesNotExist:
+        return HttpResponse("Alert not found", status=404)
+    except Exception as e:
+        return HttpResponse(str(e), status=500)

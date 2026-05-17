@@ -16,4 +16,8 @@ urlpatterns = [
     path('export/financials/', views.export_financials, name='export_financials'),
     path('export/agents/', views.export_agents, name='export_agents'),
     path('export/audit/', views.export_audit, name='export_audit'),
+    path('api/investigation/action/', views.investigation_user_action, name='investigation_action'),
+    path('api/investigation/status/', views.update_fraud_alert_status, name='update_investigation_status'),
+    path('api/investigation/note/', views.add_fraud_alert_note, name='add_investigation_note'),
+    path('export/investigation/<int:alert_id>/', views.export_investigation_report, name='export_investigation'),
 ]

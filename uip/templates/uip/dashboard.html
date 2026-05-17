@@ -260,6 +260,139 @@
         </div>
     </div>
 
+    <!-- Affected Users / Investigation Queue -->
+    <div class="row">
+        <div class="col-12 mb-4">
+            <div class="card shadow">
+                <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="m-0 font-weight-bold text-danger">Affected Users & Linked Accounts</h6>
+                    <div class="d-flex gap-2 align-items-center">
+                        <form method="get" class="d-flex gap-2">
+                            <input type="text" name="search" class="form-control form-control-sm" placeholder="Search IP/User..." value="{{ request.GET.search }}">
+                            <select name="alert_type" class="form-select form-select-sm">
+                                <option value="">All Types</option>
+                                <option value="multi_account" {% if request.GET.alert_type == 'multi_account' %}selected{% endif %}>Multi-Account</option>
+                                <option value="bonus_abuse" {% if request.GET.alert_type == 'bonus_abuse' %}selected{% endif %}>Bonus Abuse</option>
+                            </select>
+                            <select name="status" class="form-select form-select-sm">
+                                <option value="">All Status</option>
+                                <option value="pending" {% if request.GET.status == 'pending' %}selected{% endif %}>Pending</option>
+                                <option value="under_investigation" {% if request.GET.status == 'under_investigation' %}selected{% endif %}>Investigating</option>
+                            </select>
+                            <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+                        </form>
+                        <span class="badge bg-danger" id="fraud-alert-count">{{ fraud_alerts.count }} Active Alerts</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="accordion" id="fraudAlertsAccordion">
+                        {% for alert in fraud_alerts %}
+                        <div class="accordion-item mb-3 border shadow-sm">
+                            <h2 class="accordion-header" id="heading{{ alert.id }}">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ alert.id }}" aria-expanded="false" aria-controls="collapse{{ alert.id }}">
+                                    <div class="d-flex w-100 justify-content-between align-items-center me-3">
+                                        <div>
+                                            <span class="badge bg-{% if alert.severity == 'critical' %}danger{% elif alert.severity == 'high' %}warning{% else %}info{% endif %} me-2">
+                                                {{ alert.severity|upper }}
+                                            </span>
+                                            <strong>{{ alert.get_alert_type_display }}</strong>
+                                            <small class="text-muted ms-2">{{ alert.timestamp|timesince }} ago</small>
+                                        </div>
+                                        <div>
+                                            <span class="badge bg-secondary">Users: {{ alert.affected_users.count }}</span>
+                                            <span class="badge bg-outline-primary ms-2">{{ alert.get_status_display }}</span>
+                                        </div>
+                                    </div>
+                                </button>
+                            </h2>
+                            <div id="collapse{{ alert.id }}" class="accordion-collapse collapse" aria-labelledby="heading{{ alert.id }}" data-bs-parent="#fraudAlertsAccordion">
+                                <div class="accordion-body bg-light">
+                                    <div class="mb-3">
+                                        <h6><strong>Description:</strong></h6>
+                                        <p>{{ alert.description }}</p>
+                                        {% if alert.related_ips %}
+                                        <p><strong>IPs Involved:</strong> {{ alert.related_ips|join:", " }}</p>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-bordered bg-white">
+                                            <thead class="table-dark">
+                                                <tr>
+                                                    <th>Username</th>
+                                                    <th>Email</th>
+                                                    <th>IP Address</th>
+                                                    <th>Risk Score</th>
+                                                    <th>Wallet</th>
+                                                    <th>Total Bets</th>
+                                                    <th>Last Activity</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for detail in alert.affected_user_details.all %}
+                                                <tr>
+                                                    <td>{{ detail.user.username|default:detail.user.get_full_name }}</td>
+                                                    <td>{{ detail.user.email }}</td>
+                                                    <td>{{ detail.ip_address }}</td>
+                                                    <td>
+                                                        <span class="badge bg-{% if detail.risk_score > 70 %}danger{% elif detail.risk_score > 40 %}warning{% else %}success{% endif %}">
+                                                            {{ detail.risk_score }}
+                                                        </span>
+                                                    </td>
+                                                    <td>₦{{ detail.wallet_balance|intcomma }}</td>
+                                                    <td>{{ detail.total_bets_count }}</td>
+                                                    <td>{{ detail.last_activity_time|date:"d M, H:i" }}</td>
+                                                    <td>
+                                                        <div class="btn-group btn-group-sm">
+                                                            <a href="/admin/betting/user/{{ detail.user.id }}/change/" class="btn btn-outline-primary" target="_blank">Profile</a>
+                                                            
+                                                            {% if detail.user.is_locked %}
+                                                                <button class="btn btn-success" onclick="investigationAction('unsuspend_betting', {{ detail.user.id }}, {{ alert.id }})">Re-activate</button>
+                                                            {% else %}
+                                                                <button class="btn btn-outline-warning" onclick="investigationAction('suspend_betting', {{ detail.user.id }}, {{ alert.id }})">Suspend</button>
+                                                            {% endif %}
+
+                                                            {% if not detail.user.is_active %}
+                                                                <button class="btn btn-success" onclick="investigationAction('unfreeze', {{ detail.user.id }}, {{ alert.id }})">Unfreeze</button>
+                                                            {% else %}
+                                                                <button class="btn btn-outline-danger" onclick="investigationAction('freeze', {{ detail.user.id }}, {{ alert.id }})">Freeze</button>
+                                                            {% endif %}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div class="mt-3 d-flex justify-content-end gap-2">
+                                         <div class="dropdown me-auto">
+                                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                                 Export Report
+                                             </button>
+                                             <ul class="dropdown-menu">
+                                                 <li><a class="dropdown-menu-item px-3 py-1 d-block text-decoration-none" href="/uip/export/investigation/{{ alert.id }}/?format=xlsx">Excel (.xlsx)</a></li>
+                                                 <li><a class="dropdown-menu-item px-3 py-1 d-block text-decoration-none" href="/uip/export/investigation/{{ alert.id }}/?format=csv">CSV (.csv)</a></li>
+                                             </ul>
+                                         </div>
+                                         <button class="btn btn-sm btn-info" onclick="addInvestigationNote({{ alert.id }})">Add Note</button>
+                                        <button class="btn btn-sm btn-warning" onclick="updateAlertStatus({{ alert.id }}, 'under_investigation')">Investigating</button>
+                                        <button class="btn btn-sm btn-success" onclick="updateAlertStatus({{ alert.id }}, 'resolved_safe')">Resolve (Safe)</button>
+                                        <button class="btn btn-sm btn-danger" onclick="updateAlertStatus({{ alert.id }}, 'resolved_fraud')">Resolve (Fraud)</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% empty %}
+                        <p class="text-center text-muted">No pending fraud investigations.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Real-Time Alerts Row -->
     <div class="row">
         <div class="col-12 mb-4">
@@ -297,6 +430,83 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+ <script>
+    // Investigation Actions
+    async function investigationAction(action, userId, alertId) {
+        if (!confirm(`Are you sure you want to ${action} this user?`)) return;
+        
+        const response = await fetch('/uip/api/investigation/action/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({ action, user_id: userId, alert_id: alertId })
+        });
+        
+        const result = await response.json();
+        alert(result.message);
+        if (result.status === 'success') location.reload();
+    }
+
+    async function updateAlertStatus(alertId, status) {
+        const response = await fetch('/uip/api/investigation/status/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({ alert_id: alertId, status: status })
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') location.reload();
+    }
+
+    async function addInvestigationNote(alertId) {
+        const note = prompt("Enter investigation note:");
+        if (!note) return;
+        
+        const response = await fetch('/uip/api/investigation/note/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: JSON.stringify({ alert_id: alertId, note: note })
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') alert("Note added.");
+    }
+
+    // Real-Time WebSocket for Fraud Alerts
+    const dashboardSocket = new WebSocket(
+        (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + 
+        window.location.host + '/ws/uip/dashboard/'
+    );
+
+    dashboardSocket.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        if (data.type === 'fraud_alert') {
+            // Show toast notification
+            showToast('New Fraud Alert!', data.message, 'danger');
+            // Refresh the page or update the list dynamically
+            // For now, let's just show the alert count and a refresh button
+            const alertBadge = document.getElementById('fraud-alert-count');
+            if (alertBadge) {
+                alertBadge.innerText = 'New Alerts Available (Refresh)';
+                alertBadge.classList.add('bg-primary');
+                alertBadge.style.cursor = 'pointer';
+                alertBadge.onclick = () => location.reload();
+            }
+        }
+    };
+
+    function showToast(title, message, type='info') {
+        console.log(`[${type}] ${title}: ${message}`);
+    }
+ </script>
 <script>
     document.addEventListener("DOMContentLoaded", function() {
         // --- Chart Initialization ---

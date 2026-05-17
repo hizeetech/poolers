@@ -1,0 +1,202 @@
+{% extends 'betting/base.html' %}
+{% load humanize %}
+
+{% block title %}Betting Results - {{ site_config.site_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .results-card {
+        border: none;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(10px);
+    }
+    .results-header {
+        background: linear-gradient(135deg, var(--navbar-gradient-start), var(--navbar-gradient-end));
+        color: var(--navbar-text);
+        border-radius: 15px 15px 0 0 !important;
+        padding: 1.5rem;
+    }
+    .period-select-card {
+        border-radius: 12px;
+        border: 1px solid rgba(0,0,0,0.05);
+        background: #f8f9fa;
+    }
+    .table-results {
+        border-collapse: separate;
+        border-spacing: 0 8px;
+    }
+    .table-results thead th {
+        border: none;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        letter-spacing: 1px;
+        color: #6c757d;
+        padding: 1rem;
+    }
+    .table-results tbody tr {
+        background: white;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.02);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border-radius: 8px;
+    }
+    .table-results tbody tr:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+    }
+    .table-results td {
+        border: none;
+        padding: 1.2rem 1rem;
+        vertical-align: middle;
+    }
+    .table-results td:first-child {
+        border-top-left-radius: 8px;
+        border-bottom-left-radius: 8px;
+    }
+    .table-results td:last-child {
+        border-top-right-radius: 8px;
+        border-bottom-right-radius: 8px;
+    }
+    .score-badge {
+        background: #f1f3f5;
+        color: #212529;
+        font-weight: 700;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 1.1rem;
+        min-width: 80px;
+        display: inline-block;
+        text-align: center;
+    }
+    .team-name {
+        font-weight: 600;
+        color: #2c3e50;
+    }
+    .serial-number {
+        width: 40px;
+        height: 40px;
+        background: var(--navbar-gradient-start);
+        color: var(--navbar-text);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        margin: 0 auto;
+    }
+    .status-pill {
+        font-size: 0.75rem;
+        padding: 0.35rem 0.8rem;
+        border-radius: 50px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="app-page py-5">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-11">
+                <!-- Period Selector -->
+                <div class="card period-select-card shadow-sm mb-4">
+                    <div class="card-body">
+                        <form method="get" action="{% url 'betting:betting_results' %}" class="row align-items-center g-3">
+                            <div class="col-md-auto">
+                                <label class="fw-bold text-muted mb-0"><i class="fas fa-calendar-alt me-2"></i> Select Betting Period:</label>
+                            </div>
+                            <div class="col-md-6">
+                                <select name="period_id" class="form-select form-select-lg border-0 shadow-sm" onchange="this.form.submit()">
+                                    {% for period in betting_periods %}
+                                        <option value="{{ period.id }}" {% if selected_period.id == period.id %}selected{% endif %}>
+                                            {{ period.name }} ({{ period.start_date|date:"d M" }} - {{ period.end_date|date:"d M Y" }})
+                                        </option>
+                                    {% empty %}
+                                        <option value="">No periods available</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            {% if selected_period %}
+                            <div class="col-md-auto ms-auto">
+                                <span class="badge bg-primary px-3 py-2 rounded-pill">
+                                    <i class="fas fa-info-circle me-1"></i> {{ fixtures|length }} Results Found
+                                </span>
+                            </div>
+                            {% endif %}
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Results Table Card -->
+                <div class="card results-card shadow">
+                    <div class="card-header results-header d-flex justify-content-between align-items-center">
+                        <h4 class="mb-0 fw-bold"><i class="fas fa-trophy me-2"></i> Betting Results</h4>
+                        <div class="text-end">
+                            <small class="d-block opacity-75">Current Period</small>
+                            <span class="fw-bold">{{ selected_period.name|default:"N/A" }}</span>
+                        </div>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="table-responsive">
+                            <table class="table table-results">
+                                <thead>
+                                    <tr class="text-center">
+                                        <th>SN</th>
+                                        <th class="text-start">Date & Time</th>
+                                        <th class="text-end">Home Team</th>
+                                        <th>Score</th>
+                                        <th class="text-start">Away Team</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for fixture in fixtures %}
+                                    <tr class="text-center">
+                                        <td>
+                                            <div class="serial-number">{{ fixture.serial_number }}</div>
+                                        </td>
+                                        <td class="text-start">
+                                            <div class="fw-bold text-dark">{{ fixture.match_date|date:"D, d M" }}</div>
+                                            <small class="text-muted">{{ fixture.match_time|time:"H:i" }}</small>
+                                        </td>
+                                        <td class="text-end">
+                                            <span class="team-name">{{ fixture.home_team }}</span>
+                                        </td>
+                                        <td>
+                                            <div class="score-badge shadow-sm">
+                                                {{ fixture.home_score }} - {{ fixture.away_score }}
+                                            </div>
+                                        </td>
+                                        <td class="text-start">
+                                            <span class="team-name">{{ fixture.away_team }}</span>
+                                        </td>
+                                        <td>
+                                            {% if fixture.status == 'settled' %}
+                                                <span class="status-pill bg-success text-white">Settled</span>
+                                            {% else %}
+                                                <span class="status-pill bg-info text-white">Finished</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% empty %}
+                                    <tr>
+                                        <td colspan="6" class="text-center py-5">
+                                            <div class="text-muted">
+                                                <i class="fas fa-folder-open fa-3x mb-3 d-block opacity-25"></i>
+                                                <p class="mb-0">No results have been declared for this period yet.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -355,6 +355,9 @@
                         <a class="nav-link" href="{% url 'betting:fixtures' %}">Fixtures</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="{% url 'betting:betting_results' %}">Results</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="{% url 'betting:check_ticket_status' %}">Check Ticket</a>
                     </li>
                     {% if impersonation_active or request.session.original_admin_id %}

@@ -100,31 +100,45 @@
     <div class="container">
         <div class="row justify-content-center">
             <div class="col-lg-11">
-                <!-- Period Selector -->
+                <!-- Filter Selector -->
                 <div class="card period-select-card shadow-sm mb-4">
                     <div class="card-body">
                         <form method="get" action="{% url 'betting:betting_results' %}" class="row align-items-center g-3">
-                            <div class="col-md-auto">
-                                <label class="fw-bold text-muted mb-0"><i class="fas fa-calendar-alt me-2"></i> Select Betting Period:</label>
-                            </div>
-                            <div class="col-md-6">
-                                <select name="period_id" class="form-select form-select-lg border-0 shadow-sm" onchange="this.form.submit()">
+                            <!-- Betting Period -->
+                            <div class="col-lg-4 col-md-12">
+                                <label class="fw-bold text-muted mb-1 d-block small"><i class="fas fa-calendar-alt me-1"></i> Betting Period:</label>
+                                <select name="period_id" class="form-select form-select-sm border-0 shadow-sm" onchange="this.form.submit()">
                                     {% for period in betting_periods %}
                                         <option value="{{ period.id }}" {% if selected_period.id == period.id %}selected{% endif %}>
-                                            {{ period.name }} ({{ period.start_date|date:"d M" }} - {{ period.end_date|date:"d M Y" }})
+                                            {{ period.name }}
                                         </option>
                                     {% empty %}
                                         <option value="">No periods available</option>
                                     {% endfor %}
                                 </select>
                             </div>
-                            {% if selected_period %}
-                            <div class="col-md-auto ms-auto">
-                                <span class="badge bg-primary px-3 py-2 rounded-pill">
-                                    <i class="fas fa-info-circle me-1"></i> {{ fixtures|length }} Results Found
-                                </span>
+
+                            <!-- Serial Number -->
+                            <div class="col-lg-2 col-md-6">
+                                <label class="fw-bold text-muted mb-1 d-block small"><i class="fas fa-hashtag me-1"></i> SN:</label>
+                                <input type="number" name="serial_number" class="form-control form-control-sm border-0 shadow-sm" placeholder="e.g. 2" value="{{ current_serial }}">
                             </div>
-                            {% endif %}
+
+                            <!-- Match Date -->
+                            <div class="col-lg-3 col-md-6">
+                                <label class="fw-bold text-muted mb-1 d-block small"><i class="fas fa-clock me-1"></i> Match Date:</label>
+                                <input type="date" name="match_date" class="form-control form-control-sm border-0 shadow-sm" value="{{ current_date }}">
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="col-lg-3 col-md-12 d-flex align-items-end gap-2">
+                                <button type="submit" class="btn btn-primary btn-sm flex-grow-1">
+                                    <i class="fas fa-filter me-1"></i> Filter
+                                </button>
+                                <a href="{% url 'betting:betting_results' %}?period_id={{ selected_period.id }}" class="btn btn-outline-secondary btn-sm">
+                                    <i class="fas fa-undo me-1"></i> Reset
+                                </a>
+                            </div>
                         </form>
                     </div>
                 </div>

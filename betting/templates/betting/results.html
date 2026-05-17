@@ -189,8 +189,16 @@
                                         <td>
                                             {% if fixture.status == 'settled' %}
                                                 <span class="status-pill bg-success text-white">Settled</span>
-                                            {% else %}
+                                            {% elif fixture.status == 'finished' %}
                                                 <span class="status-pill bg-info text-white">Finished</span>
+                                            {% elif fixture.status == 'abandoned' %}
+                                                <span class="status-pill bg-danger text-white">Abandoned</span>
+                                            {% elif fixture.status == 'postponed' %}
+                                                <span class="status-pill bg-warning text-dark">Postponed</span>
+                                            {% elif fixture.status == 'cancelled' %}
+                                                <span class="status-pill bg-secondary text-white">Cancelled</span>
+                                            {% else %}
+                                                <span class="status-pill bg-light text-dark">{{ fixture.status|title }}</span>
                                             {% endif %}
                                         </td>
                                     </tr>

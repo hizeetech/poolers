@@ -2834,10 +2834,9 @@ def betting_results_view(request):
 
     fixtures = Fixture.objects.none()
     if selected_period:
-        # Base queryset for the selected period with results
+        # Base queryset for the selected period
         fixtures = Fixture.objects.filter(
-            betting_period=selected_period,
-            status__in=['finished', 'settled']
+            betting_period=selected_period
         )
         
         # Apply Serial Number filter

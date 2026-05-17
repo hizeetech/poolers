@@ -2816,9 +2816,11 @@ def footer_page(request, slug):
 
 def betting_results_view(request):
     """
-    View for displaying betting results filtered by BettingPeriod.
+    View for displaying betting results filtered by BettingPeriod, Serial Number, and Date.
     """
     period_id = request.GET.get('period_id')
+    serial_number = request.GET.get('serial_number')
+    match_date = request.GET.get('match_date')
     
     # Get all active betting periods for the dropdown
     betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
@@ -2830,19 +2832,31 @@ def betting_results_view(request):
     else:
         selected_period = get_object_or_404(BettingPeriod, id=period_id) if period_id else None
 
-    fixtures = []
+    fixtures = Fixture.objects.none()
     if selected_period:
-        # Get all fixtures for the selected period that have results
+        # Base queryset for the selected period with results
         fixtures = Fixture.objects.filter(
             betting_period=selected_period,
             status__in=['finished', 'settled']
-        ).order_by('match_date', 'match_time', 'serial_number')
+        )
+        
+        # Apply Serial Number filter
+        if serial_number:
+            fixtures = fixtures.filter(serial_number=serial_number)
+            
+        # Apply Date filter
+        if match_date:
+            fixtures = fixtures.filter(match_date=match_date)
+            
+        fixtures = fixtures.order_by('serial_number')
 
     context = {
         'betting_periods': betting_periods,
         'selected_period': selected_period,
         'fixtures': fixtures,
-        'page_title': 'Betting Results'
+        'page_title': 'Betting Results',
+        'current_serial': serial_number,
+        'current_date': match_date
     }
     return render(request, 'betting/results.html', context)
 

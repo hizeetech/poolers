@@ -19,6 +19,7 @@ urlpatterns = [
     path('fixtures/partial/', views.fixtures_list_partial, name='fixtures_list_partial'),
     path('fixtures/partial/<int:period_id>/', views.fixtures_list_partial, name='fixtures_list_partial_with_period'),
     path('fixtures/<int:period_id>/', views.fixtures_view, name='fixtures_with_period'),
+    path('results/', views.betting_results_view, name='betting_results'),
     path('place-bet/', views.place_bet, name='place_bet'),
     path('check-ticket/', views.check_ticket_status, name='check_ticket_status'),
     path('agent-void-ticket/<str:ticket_id>/', views.agent_void_ticket, name='agent_void_ticket'),

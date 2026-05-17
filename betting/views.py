@@ -2814,6 +2814,39 @@ def footer_page(request, slug):
     return render(request, 'betting/footer_page.html', {'page': page})
 
 
+def betting_results_view(request):
+    """
+    View for displaying betting results filtered by BettingPeriod.
+    """
+    period_id = request.GET.get('period_id')
+    
+    # Get all active betting periods for the dropdown
+    betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
+    
+    # Default to the most recent period if none selected
+    if not period_id and betting_periods.exists():
+        selected_period = betting_periods.first()
+        period_id = selected_period.id
+    else:
+        selected_period = get_object_or_404(BettingPeriod, id=period_id) if period_id else None
+
+    fixtures = []
+    if selected_period:
+        # Get all fixtures for the selected period that have results
+        fixtures = Fixture.objects.filter(
+            betting_period=selected_period,
+            status__in=['finished', 'settled']
+        ).order_by('match_date', 'match_time', 'serial_number')
+
+    context = {
+        'betting_periods': betting_periods,
+        'selected_period': selected_period,
+        'fixtures': fixtures,
+        'page_title': 'Betting Results'
+    }
+    return render(request, 'betting/results.html', context)
+
+
 @login_required
 @user_passes_test(is_master_agent)
 def master_agent_dashboard(request):

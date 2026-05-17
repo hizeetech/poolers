@@ -2,33 +2,56 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
 from betting.models import User
-from .services import DashboardService
-from .models import Alert
+from .services import DashboardService, FraudDetectionService
+from .models import Alert, FraudAlert
 
 class AlertService:
     @staticmethod
     def check_and_send_alerts():
         """
         Checks for risk metrics and sends alerts if thresholds are breached.
-        This should be called periodically (e.g., via Celery).
         """
         metrics = DashboardService.get_risk_metrics()
         
         # 1. Multi-Account Users
         if metrics['suspicious_ips']:
+            # Create standard alert
             AlertService.create_alert(
                 title="Potential Multi-Account Detected",
                 message=f"Detected {len(metrics['suspicious_ips'])} IPs with multiple users. Please investigate.",
                 severity='warning'
             )
+            # Create Advanced Fraud Alert
+            for item in metrics['suspicious_ips']:
+                ip = item['ip_address']
+                users = User.objects.filter(login_attempts__ip_address=ip, login_attempts__status='success').distinct()
+                
+                if not FraudAlert.objects.filter(alert_type='multi_account', related_ips__contains=[ip], timestamp__date=timezone.now().date()).exists():
+                    FraudDetectionService.create_fraud_alert(
+                        alert_type='multi_account',
+                        description=f"Multiple accounts ({item['user_count']}) detected using the same IP address: {ip}",
+                        severity='high',
+                        related_users=users,
+                        related_ips=[ip]
+                    )
 
         # 2. Bonus Abuse
         if metrics['bonus_abusers']:
             AlertService.create_alert(
                 title="Bonus Abuse Suspected",
-                message=f"Detected {len(metrics['bonus_abusers'])} users with excessive bonus claims (>3/week).",
+                message=f"Detected {len(metrics['bonus_abusers'])} users with excessive bonus claims.",
                 severity='warning'
             )
+            # Create Advanced Fraud Alert
+            for item in metrics['bonus_abusers']:
+                user = User.objects.get(email=item['user__email'])
+                if not FraudAlert.objects.filter(alert_type='bonus_abuse', affected_users=user, timestamp__date=timezone.now().date()).exists():
+                    FraudDetectionService.create_fraud_alert(
+                        alert_type='bonus_abuse',
+                        description=f"User has claimed {item['bonus_count']} bonuses in the last 7 days.",
+                        severity='medium',
+                        related_users=[user]
+                    )
 
         # 3. High Value Bets (Example threshold check)
         # Note: metrics['large_bets'] returns a QuerySet or list

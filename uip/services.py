@@ -1,4 +1,7 @@
 from django.apps import apps
+from django.db import transaction
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db.models import Sum, Count, Q, F, FloatField, ExpressionWrapper, DecimalField, Value
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
@@ -6,7 +9,7 @@ from django.core.cache import cache
 from datetime import timedelta
 import redis
 from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt, Selection
-from .models import Alert
+from .models import Alert, FraudAlert, AlertAffectedUser, InvestigationCase, AdminActionLog
 
 class DashboardService:
     @staticmethod
@@ -528,3 +531,153 @@ class DashboardService:
         }
         cache.set(cache_key, data, 10)
         return data
+
+class FraudDetectionService:
+    @staticmethod
+    def create_fraud_alert(alert_type, description, severity, related_users, related_ips=None, related_devices=None):
+        """
+        Creates a FraudAlert and links affected users with a snapshot of their data.
+        """
+        with transaction.atomic():
+            alert = FraudAlert.objects.create(
+                alert_type=alert_type,
+                description=description,
+                severity=severity,
+                related_ips=related_ips or [],
+                related_devices=related_devices or [],
+            )
+            
+            for user in related_users:
+                # Calculate individual risk score for this user in the context of this alert
+                risk_score = FraudDetectionService.calculate_user_risk_score(user, alert_type)
+                
+                # Snapshot data for investigation
+                total_bets = BetTicket.objects.filter(user=user).count()
+                total_deposits = Transaction.objects.filter(
+                    user=user, transaction_type='deposit', status='completed'
+                ).aggregate(total=Sum('amount'))['total'] or 0
+                total_withdrawals = Transaction.objects.filter(
+                    user=user, transaction_type='withdrawal', status='completed'
+                ).aggregate(total=Sum('amount'))['total'] or 0
+                
+                last_activity = user.activity_logs.order_by('-timestamp').first()
+                
+                AlertAffectedUser.objects.create(
+                    alert=alert,
+                    user=user,
+                    ip_address=last_activity.ip_address if last_activity else None,
+                    device_fingerprint=last_activity.user_agent if last_activity else None, # Using user_agent as a proxy for fingerprint if not available
+                    risk_score=risk_score,
+                    last_activity_time=last_activity.timestamp if last_activity else None,
+                    wallet_balance=user.wallet.balance,
+                    total_deposits=total_deposits,
+                    total_withdrawals=total_withdrawals,
+                    total_bets_count=total_bets,
+                )
+            
+            # Create an investigation case automatically
+            InvestigationCase.objects.create(alert=alert)
+            
+            # Send Real-Time Notification via WebSockets
+            try:
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    'uip_dashboard',
+                    {
+                        'type': 'dashboard_update',
+                        'data': {
+                            'type': 'fraud_alert',
+                            'message': description,
+                            'alert_id': alert.id
+                        }
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to send WebSocket alert: {e}")
+            
+            return alert
+
+    @staticmethod
+    def calculate_user_risk_score(user, alert_type):
+        """
+        Dynamic risk score calculation based on user behavior and alert type.
+        """
+        score = 0
+        
+        # Base score by alert type
+        base_scores = {
+            'multi_account': 50,
+            'bonus_abuse': 40,
+            'suspicious_betting': 60,
+            'high_value_bet': 20,
+            'vpn_usage': 30,
+            'shared_device': 40,
+            'payment_fraud': 80,
+        }
+        score += base_scores.get(alert_type, 10)
+        
+        # Multipliers / Additives
+        # 1. VPN Usage check (if available in activity logs)
+        if user.activity_logs.filter(isp__icontains='VPN').exists():
+            score += 20
+            
+        # 2. High win rate check
+        total_bets = BetTicket.objects.filter(user=user).count()
+        if total_bets > 10:
+            won_bets = BetTicket.objects.filter(user=user, status='won').count()
+            win_rate = (won_bets / total_bets) * 100
+            if win_rate > 70:
+                score += 30
+                
+        # 3. Account age (New accounts are higher risk)
+        days_since_joined = (timezone.now() - user.date_joined).days
+        if days_since_joined < 7:
+            score += 15
+            
+        return min(score, 100)
+
+    @staticmethod
+    def run_detection_cycle():
+        """
+        Runs various fraud detection algorithms and generates alerts.
+        """
+        # 1. Multi-Account Detection (Same IP)
+        start_of_week = timezone.now() - timedelta(days=7)
+        suspicious_ips = LoginAttempt.objects.filter(
+            status='success', 
+            timestamp__gte=start_of_week
+        ).values('ip_address').annotate(
+            user_count=Count('user', distinct=True)
+        ).filter(user_count__gt=2)
+        
+        for item in suspicious_ips:
+            ip = item['ip_address']
+            users = User.objects.filter(login_attempts__ip_address=ip, login_attempts__status='success').distinct()
+            
+            # Avoid duplicate alerts for the same IP today
+            if not FraudAlert.objects.filter(alert_type='multi_account', related_ips__contains=[ip], timestamp__date=timezone.now().date()).exists():
+                FraudDetectionService.create_fraud_alert(
+                    alert_type='multi_account',
+                    description=f"Multiple accounts ({item['user_count']}) detected using the same IP address: {ip}",
+                    severity='high',
+                    related_users=users,
+                    related_ips=[ip]
+                )
+
+        # 2. Bonus Abuse Detection
+        bonus_abusers = Transaction.objects.filter(
+            transaction_type='bonus',
+            timestamp__gte=start_of_week
+        ).values('user').annotate(
+            bonus_count=Count('id')
+        ).filter(bonus_count__gt=5)
+        
+        for item in bonus_abusers:
+            user = User.objects.get(id=item['user'])
+            if not FraudAlert.objects.filter(alert_type='bonus_abuse', affected_users=user, timestamp__date=timezone.now().date()).exists():
+                FraudDetectionService.create_fraud_alert(
+                    alert_type='bonus_abuse',
+                    description=f"User has claimed {item['bonus_count']} bonuses in the last 7 days, exceeding the threshold.",
+                    severity='medium',
+                    related_users=[user]
+                )

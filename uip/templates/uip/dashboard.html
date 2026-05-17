@@ -268,6 +268,9 @@
                     <h6 class="m-0 font-weight-bold text-danger">Affected Users & Linked Accounts</h6>
                     <div class="d-flex gap-2 align-items-center">
                         <form method="get" class="d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="syncAlerts()" title="Spool existing alerts into investigation queue">
+                                <i class="fas fa-sync"></i> Sync
+                            </button>
                             <input type="text" name="search" class="form-control form-control-sm" placeholder="Search IP/User..." value="{{ request.GET.search }}">
                             <select name="alert_type" class="form-select form-select-sm">
                                 <option value="">All Types</option>
@@ -478,6 +481,33 @@
         
         const result = await response.json();
         if (result.status === 'success') alert("Note added.");
+    }
+
+    async function syncAlerts() {
+        const btn = event.currentTarget;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+        btn.disabled = true;
+
+        try {
+            const response = await fetch('/uip/api/investigation/sync/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+                location.reload();
+            } else {
+                alert("Sync failed: " + result.message);
+            }
+        } catch (e) {
+            alert("Error syncing: " + e);
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
     }
 
     // Real-Time WebSocket for Fraud Alerts

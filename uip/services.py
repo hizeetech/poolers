@@ -458,7 +458,7 @@ class DashboardService:
             timestamp__gte=start_of_week
         ).values('ip_address').annotate(
             user_count=Count('user', distinct=True)
-        ).filter(user_count__gt=2).order_by('-user_count')
+        ).filter(user_count__gt=1).order_by('-user_count')
         
         # 2. Repeated Bonus Abuse (Users with > 3 bonuses this week)
         bonus_abusers = Transaction.objects.filter(
@@ -648,7 +648,7 @@ class FraudDetectionService:
             timestamp__gte=start_of_week
         ).values('ip_address').annotate(
             user_count=Count('user', distinct=True)
-        ).filter(user_count__gt=2)
+        ).filter(user_count__gt=1)
         
         for item in suspicious_ips:
             ip = item['ip_address']

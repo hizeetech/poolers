@@ -19,5 +19,6 @@ urlpatterns = [
     path('api/investigation/action/', views.investigation_user_action, name='investigation_action'),
     path('api/investigation/status/', views.update_fraud_alert_status, name='update_investigation_status'),
     path('api/investigation/note/', views.add_fraud_alert_note, name='add_investigation_note'),
+    path('api/investigation/sync/', views.sync_investigation_alerts, name='sync_investigation'),
     path('export/investigation/<int:alert_id>/', views.export_investigation_report, name='export_investigation'),
 ]

@@ -481,3 +481,15 @@ def export_investigation_report(request, alert_id):
         return HttpResponse("Alert not found", status=404)
     except Exception as e:
         return HttpResponse(str(e), status=500)
+
+@login_required
+@user_passes_test(is_admin_or_executive)
+def sync_investigation_alerts(request):
+    if request.method == 'POST':
+        try:
+            from django.core.management import call_command
+            call_command('spool_fraud_alerts')
+            return JsonResponse({'status': 'success', 'message': 'Alerts spooled successfully.'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request'}, status=405)

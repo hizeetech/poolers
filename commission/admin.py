@@ -6,7 +6,7 @@ from betting.admin import betting_admin_site
 from .models import (
     CommissionPlan, HybridCommissionRule, AgentCommissionProfile,
     CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission,
-    NetworkCommissionSettings, RetailTransaction
+    NetworkCommissionSettings, RetailTransaction, PaidWeeklyAgentCommission
 )
 from .services import (
     calculate_weekly_agent_commission, calculate_monthly_network_commission,
@@ -339,14 +339,17 @@ class CommissionPeriodAdmin(admin.ModelAdmin):
 class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
     list_display = ('agent', 'period', 'total_stake', 'ggr', 'commission_total_amount', 'status', 'is_marked_for_payment', 'paid_at')
     list_editable = ('is_marked_for_payment',)
-    list_filter = ('status', 'period')
-    search_fields = ('agent__email',)
+    list_filter = ('period',)
+    search_fields = ('agent__email', 'agent__username')
     actions = ['pay_commissions']
     readonly_fields = ('created_at', 'paid_at', 'total_stake', 'total_winnings', 'ggr', 
                       'commission_ggr_amount', 'commission_hybrid_amount', 'commission_total_amount', 'status')
 
     class Media:
-        js = ('commission/js/weekly_commission_admin.js',)
+        js = ('commission/js/weekly_commission_admin.js', 'commission/js/select_all_commissions.js')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(status='pending')
 
     def add_view(self, request, form_url='', extra_context=None):
         from django.template.response import TemplateResponse
@@ -559,11 +562,24 @@ class MonthlyNetworkCommissionAdmin(admin.ModelAdmin):
         self.message_user(request, f"Paid {success_count} commissions.")
     pay_commissions.short_description = "Pay selected commissions to Wallet"
 
+class PaidWeeklyAgentCommissionAdmin(admin.ModelAdmin):
+    list_display = ('agent', 'period', 'total_stake', 'ggr', 'commission_total_amount', 'status', 'paid_at')
+    list_filter = ('agent', 'paid_at', 'period')
+    search_fields = ('agent__email', 'agent__username')
+    readonly_fields = [f.name for f in WeeklyAgentCommission._meta.fields]
+    
+    def has_add_permission(self, request):
+        return False
+        
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(status='paid')
+
 # Register models with the custom betting_admin_site
 betting_admin_site.register(CommissionPlan, CommissionPlanAdmin)
 betting_admin_site.register(AgentCommissionProfile, AgentCommissionProfileAdmin)
 betting_admin_site.register(NetworkCommissionSettings, NetworkCommissionSettingsAdmin)
 betting_admin_site.register(CommissionPeriod, CommissionPeriodAdmin)
 betting_admin_site.register(WeeklyAgentCommission, WeeklyAgentCommissionAdmin)
+betting_admin_site.register(PaidWeeklyAgentCommission, PaidWeeklyAgentCommissionAdmin)
 betting_admin_site.register(MonthlyNetworkCommission, MonthlyNetworkCommissionAdmin)
 betting_admin_site.register(RetailTransaction, RetailTransactionAdmin)

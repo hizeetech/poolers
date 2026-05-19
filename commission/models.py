@@ -120,6 +120,12 @@ class WeeklyAgentCommission(models.Model):
         verbose_name = "Weekly Agent Commission"
         verbose_name_plural = "Weekly Agent Commissions"
 
+class PaidWeeklyAgentCommission(WeeklyAgentCommission):
+    class Meta:
+        proxy = True
+        verbose_name = "Commission Paid"
+        verbose_name_plural = "Commission Paid"
+
 class MonthlyNetworkCommission(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending'),

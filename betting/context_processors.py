@@ -44,11 +44,18 @@ def impersonation_context(request):
     }
 
 def agent_downline_activity_notifications(request):
+    default_context = {
+        'show_agent_notifications': False,
+        'agent_notifications_unread_count': 0,
+        'agent_notifications_recent': [],
+        'agent_notifications_last_seen_at': None,
+    }
+
     if not request.user.is_authenticated:
-        return {}
+        return default_context
 
     if request.user.user_type not in ['agent', 'super_agent', 'master_agent']:
-        return {}
+        return default_context
 
     user = request.user
 

@@ -12,6 +12,8 @@ def notifications_context(request):
         }
 
     unread = Notification.objects.filter(recipient=user, is_read=False).count()
+    recent_system = list(Notification.objects.filter(recipient=user).order_by("-created_at")[:10])
+    
     reminder = (
         Notification.objects.filter(recipient=user, is_read=False, notification_type="DEPOSIT_REMINDER")
         .order_by("-created_at")
@@ -24,6 +26,7 @@ def notifications_context(request):
 
     return {
         "notifications_unread_count": unread,
+        "notifications_recent": recent_system,
         "vapid_public_key": getattr(settings, "VAPID_PUBLIC_KEY", "") or "",
         "deposit_reminder_alert": reminder,
     }

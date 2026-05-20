@@ -27,7 +27,10 @@
         <div class="col-md-4">
             <div class="card app-glass-card shadow-lg rounded-3 sticky-top" style="top: 20px;">
                 <div class="card-header bg-primary text-center rounded-top-3">
-                    <h4 class="mb-0 text-white">Your Betslip</h4>
+                    <h4 class="mb-0 text-white d-flex align-items-center justify-content-center">
+                        Your Betslip
+                        <span id="betslip-counter" class="badge rounded-circle bg-danger ms-2 d-none" style="width: 24px; height: 24px; font-size: 0.8rem; line-height: 24px; padding: 0;">0</span>
+                    </h4>
                 </div>
                 <div class="card-body">
                     <div id="betslip-selections" class="mb-3">
@@ -405,6 +408,17 @@
         // System Bet Logic Update
         const isSystemBet = systemBetCheckbox.checked;
         const totalSelections = selectedBets.length;
+
+        // Update Counter
+        const counterEl = document.getElementById('betslip-counter');
+        if (counterEl) {
+            counterEl.textContent = totalSelections;
+            if (totalSelections > 0) {
+                counterEl.classList.remove('d-none');
+            } else {
+                counterEl.classList.add('d-none');
+            }
+        }
 
         // Update Permutation Input State
         if (isSystemBet) {

@@ -586,7 +586,7 @@
                     Swal.fire({
                         icon: 'warning',
                         title: payload.title || 'Low wallet balance',
-                        text: payload.message || '',
+                        text: `Your wallet balance is ₦{{ user_wallet_balance|floatformat:2|default:"0.00" }}. Deposit now to keep betting and avoid missing live fixtures.`,
                         showCancelButton: true,
                         confirmButtonText: 'Deposit',
                         cancelButtonText: 'Cancel',

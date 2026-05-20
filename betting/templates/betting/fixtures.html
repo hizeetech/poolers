@@ -405,6 +405,9 @@
         betslipSelectionsDiv.innerHTML = ''; // Clear current selections
         let currentTotalOdds = 1;
 
+        // Save to localStorage
+        localStorage.setItem('selectedBets', JSON.stringify(selectedBets));
+
         // System Bet Logic Update
         const isSystemBet = systemBetCheckbox.checked;
         const totalSelections = selectedBets.length;
@@ -770,6 +773,17 @@
 
     // Event listener for adding/removing selections
     document.addEventListener('DOMContentLoaded', () => {
+        // Load saved bets from localStorage
+        const savedBets = localStorage.getItem('selectedBets');
+        if (savedBets) {
+            try {
+                selectedBets = JSON.parse(savedBets);
+                updateBetslip();
+            } catch (e) {
+                console.error('Error loading saved bets:', e);
+                localStorage.removeItem('selectedBets');
+            }
+        }
         
         // System Bet Listeners
         systemBetCheckbox.addEventListener('change', updateBetslip);

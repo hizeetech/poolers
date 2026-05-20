@@ -162,6 +162,7 @@
                                         <th class="text-end">Home Team</th>
                                         <th>Score</th>
                                         <th class="text-start">Away Team</th>
+                                        <th>Outcome</th>
                                         <th>Status</th>
                                     </tr>
                                 </thead>
@@ -185,6 +186,25 @@
                                         </td>
                                         <td class="text-start">
                                             <span class="team-name">{{ fixture.away_team }}</span>
+                                        </td>
+                                        <td>
+                                            {% if fixture.status == 'abandoned' %}
+                                                <span class="text-danger fw-bold">Abandoned</span>
+                                            {% elif fixture.status == 'postponed' %}
+                                                <span class="text-warning fw-bold">Postponed</span>
+                                            {% elif fixture.status == 'cancelled' %}
+                                                <span class="text-secondary fw-bold">Cancelled</span>
+                                            {% elif fixture.home_score is not None and fixture.away_score is not None %}
+                                                {% if fixture.home_score > fixture.away_score %}
+                                                    <span class="text-success fw-bold">Home Win</span>
+                                                {% elif fixture.away_score > fixture.home_score %}
+                                                    <span class="text-primary fw-bold">Away Win</span>
+                                                {% else %}
+                                                    <span class="text-dark fw-bold">Draw</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="text-muted">-</span>
+                                            {% endif %}
                                         </td>
                                         <td>
                                             {% if fixture.status == 'settled' %}

@@ -2822,8 +2822,8 @@ def betting_results_view(request):
     serial_number = request.GET.get('serial_number')
     match_date = request.GET.get('match_date')
     
-    # Get all active betting periods for the dropdown
-    betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
+    # Get all betting periods (including past ones) for the dropdown, latest first
+    betting_periods = BettingPeriod.objects.all().order_by('-start_date')
     
     # Default to the most recent period if none selected
     if not period_id and betting_periods.exists():

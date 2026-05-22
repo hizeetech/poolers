@@ -37,6 +37,9 @@
                         <p class="text-muted text-center" id="empty-betslip-message">No selections yet.</p>
                     </div>
                     <hr>
+                    <div class="d-flex justify-content-end mb-2">
+                        <button type="button" id="clear-betslip-btn" class="btn btn-sm btn-outline-danger rounded-pill px-3 py-1 shadow-sm d-none">Clear all</button>
+                    </div>
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" id="system_bet_checkbox">
                         <label class="form-check-label" for="system_bet_checkbox">
@@ -224,6 +227,7 @@
     const emptyBetslipMessage = document.getElementById('empty-betslip-message');
     const placeBetBtn = document.getElementById('place-bet-btn');
     const responseMessageDiv = document.getElementById('response-message');
+    const clearBetslipBtn = document.getElementById('clear-betslip-btn');
     const printTicketModal = new bootstrap.Modal(document.getElementById('printTicketModal'));
     const rebetTicketBtn = document.getElementById('rebet-ticket-btn');
     let lastPlacedTicketId = null;
@@ -411,6 +415,10 @@
         // System Bet Logic Update
         const isSystemBet = systemBetCheckbox.checked;
         const totalSelections = selectedBets.length;
+
+        if (clearBetslipBtn) {
+            clearBetslipBtn.classList.toggle('d-none', totalSelections === 0);
+        }
 
         // Update Counter
         const counterEl = document.getElementById('betslip-counter');
@@ -608,9 +616,12 @@
             }
         }
 
+        let minBonus = 0;
         if (applicable) {
             pct = parseFloat(applicable.pct) || 0;
             const baseMode = applicable.base || 'gross';
+            
+            // Max Bonus calculation
             let baseAmount = potential;
             if (baseMode === 'net') {
                 baseAmount = Math.max(0, potential - (parseFloat(totalStake) || 0));
@@ -618,6 +629,16 @@
             bonus = baseAmount * pct;
             if (applicable.cap !== null && applicable.cap !== undefined) {
                 bonus = Math.min(bonus, parseFloat(applicable.cap) || 0);
+            }
+
+            // Min Bonus calculation (for system bets)
+            let minBaseAmount = minPotential;
+            if (baseMode === 'net') {
+                minBaseAmount = Math.max(0, minPotential - (parseFloat(totalStake) || 0));
+            }
+            minBonus = minBaseAmount * pct;
+            if (applicable.cap !== null && applicable.cap !== undefined) {
+                minBonus = Math.min(minBonus, parseFloat(applicable.cap) || 0);
             }
         }
 
@@ -643,17 +664,13 @@
             if (!showMinimumWinning) {
                 minimumWinningSpan.textContent = formatMoney(0);
             } else {
-                let minimumWinning = (parseFloat(minPotential) || 0) + bonus;
+                let minimumWinning = (parseFloat(minPotential) || 0) + minBonus;
                 if (configuredMaxWinning > 0 && minimumWinning > configuredMaxWinning) {
                     minimumWinning = configuredMaxWinning;
                 }
                 minimumWinningSpan.textContent = formatMoney(minimumWinning);
             }
         }
-        
-        // Also apply cap to min winning if needed (usually min winning is small enough, but good practice)
-        // For Min Winning display, we usually don't add bonus if it's not applicable to the base condition?
-        // Let's assume bonus only applies to "Potential" (Max).
     }
 
     // Function to update button highlights based on selectedBets array
@@ -785,6 +802,21 @@
             }
         }
         
+        if (clearBetslipBtn) {
+            clearBetslipBtn.addEventListener('click', () => {
+                selectedBets = [];
+                localStorage.setItem('selectedBets', JSON.stringify(selectedBets));
+                if (systemBetCheckbox) {
+                    systemBetCheckbox.checked = false;
+                }
+                if (permutationCountInput) {
+                    permutationCountInput.value = 2;
+                }
+                displayMessage('Betslip cleared.', 'info');
+                updateBetslip();
+            });
+        }
+
         // System Bet Listeners
         systemBetCheckbox.addEventListener('change', updateBetslip);
         permutationCountInput.addEventListener('input', updateBetslip);

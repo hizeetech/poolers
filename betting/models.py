@@ -683,6 +683,7 @@ class BetTicket(models.Model):
     stake_amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))], db_index=True)
     total_odd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     potential_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    min_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     max_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
 
@@ -892,6 +893,23 @@ class BetTicket(models.Model):
         
         # 4. Finalize Max Winning
         self.max_winning = self.potential_winning + bonus_amount
+        
+        # Calculate min_winning for system bets during recalculation
+        if self.bet_type == 'system' and self.system_min_count:
+            min_potential = self.get_min_potential_winning()
+            min_bonus = Decimal('0.00')
+            if self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0:
+                rule = self.bonus_rule
+                if rule:
+                    min_base = min_potential
+                    if (self.bonus_base or rule.bonus_base) == 'net':
+                        min_base = max(Decimal('0.00'), min_potential - self.stake_amount)
+                    min_bonus = (min_base * self.bonus_percentage_applied).quantize(Decimal('0.01'))
+                    if rule.max_bonus_cap is not None:
+                        min_bonus = min(min_bonus, rule.max_bonus_cap)
+            self.min_winning = min_potential + min_bonus
+        else:
+            self.min_winning = self.max_winning
         
         snapshot_limit = None
         try:

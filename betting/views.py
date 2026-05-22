@@ -488,16 +488,17 @@ def calculate_bonus_amount(potential_winning, stake_amount, selections, bet_type
 
     rule = select_bonus_rule(bet_type, len(selections), odds)
     if not rule:
-        return None, Decimal('0.00'), Decimal('0.00')
+        return None, Decimal('0.00'), Decimal('0.00'), Decimal('0.0000')
 
+    pct = rule.get('pct', Decimal('0.0000'))
     base_amount = Decimal(str(potential_winning or 0))
     if rule.get('base') == 'net':
         base_amount = base_amount - Decimal(str(stake_amount or 0))
         if base_amount < 0:
             base_amount = Decimal('0.00')
 
-    bonus_amount = compute_bonus_amount(base_amount, rule.get('pct'), rule.get('cap'))
-    return rule, base_amount, bonus_amount
+    bonus_amount = compute_bonus_amount(base_amount, pct, rule.get('cap'))
+    return rule, base_amount, bonus_amount, pct
 
 def fixtures_view(request, period_id=None):
     fixtures, current_betting_period = _get_fixtures_data(period_id)
@@ -719,6 +720,7 @@ def place_bet(request):
                         odds_list = [s['odd'] for s in valid_selections]
                         projections = system_bet_payout_projections(odds_list, stake_amount_per_line, k)
                         potential_win = projections['max_potential_winning']
+                        min_potential_win = projections['min_potential_winning']
                         total_ticket_odd = Decimal('0.00')
                         max_line_odd = projections['max_line_odd']
                     else:
@@ -726,10 +728,23 @@ def place_bet(request):
                         for sel in valid_selections:
                             total_ticket_odd *= sel['odd']
                         potential_win = (stake_amount_per_line * total_ticket_odd).quantize(Decimal('0.01'))
+                        min_potential_win = potential_win
                         max_line_odd = total_ticket_odd.quantize(Decimal('0.01'))
 
                     odds_list = [s['odd'] for s in valid_selections]
-                    rule_dict, bonus_base_amount, estimated_bonus_amount = calculate_bonus_amount(potential_win, total_stake, valid_selections, bet_type)
+                    rule_dict, bonus_base_amount, estimated_bonus_amount, applied_pct = calculate_bonus_amount(potential_win, total_stake, valid_selections, bet_type)
+                    
+                    # Calculate Min Winning with its own bonus
+                    min_winning = min_potential_win
+                    if rule_dict:
+                        pct = rule_dict.get('pct', Decimal('0.0000'))
+                        min_base = min_potential_win
+                        if rule_dict.get('base') == 'net':
+                            min_base = max(Decimal('0.00'), min_potential_win - total_stake)
+                        
+                        min_bonus = compute_bonus_amount(min_base, pct, rule_dict.get('cap'))
+                        min_winning = (min_potential_win + min_bonus).quantize(Decimal('0.01'))
+
                     max_winning = (potential_win + estimated_bonus_amount).quantize(Decimal('0.01'))
 
                     SelectionLiabilitySnapshot = apps.get_model("risk", "SelectionLiabilitySnapshot")
@@ -920,6 +935,7 @@ def place_bet(request):
                         stake_amount=total_stake, # Total stake for the ticket
                         total_odd=total_ticket_odd,
                         potential_winning=potential_win,
+                        min_winning=min_winning,
                         max_winning=max_winning,
                         status='pending',
                         bet_type=bet_type,

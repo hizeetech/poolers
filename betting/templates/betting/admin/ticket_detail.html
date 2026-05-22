@@ -23,6 +23,12 @@
             <p class="text-muted mb-0">Potential Winning:</p>
             <p class="fs-5 text-dark">₦{{ bet_ticket.potential_winning|floatformat:2 }}</p>
         </div>
+        {% if bet_ticket.bet_type == 'system' %}
+        <div class="col">
+            <p class="text-muted mb-0">Minimum Winning:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.min_winning|floatformat:2 }}</p>
+        </div>
+        {% endif %}
         <div class="col">
             <p class="text-muted mb-0">Max Winning:</p>
             <p class="fs-5 text-dark">₦{{ bet_ticket.max_winning|floatformat:2 }}</p>

@@ -443,7 +443,7 @@ class SelectionInline(admin.TabularInline):
 class BetTicketAdmin(admin.ModelAdmin):
     list_display = (
         'ticket_id', 'user', 'stake_amount', 'total_odd', 'potential_winning',
-        'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
+        'min_winning', 'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
     )
     list_filter = ('status', 'placed_at', 'user')
     search_fields = ('ticket_id', 'id__startswith', 'user__email__icontains')

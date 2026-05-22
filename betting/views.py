@@ -49,7 +49,8 @@ from .models import (
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
     SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage,
-    BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride
+    BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
+    CashierRegistrationRequest
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -195,6 +196,7 @@ from .utils import (
     serialize_limits,
     system_bet_payout_projections,
 )
+from .services.usernames import generate_cashier_email
 
 def is_cashier(user):
     return user.is_authenticated and user.user_type == 'cashier'
@@ -4681,6 +4683,11 @@ def admin_activity_log(request):
 @user_passes_test(is_agent)
 def agent_cashier_list(request):
     cashiers = User.objects.filter(agent=request.user, user_type='cashier').order_by('-date_joined')
+    pending_requests = (
+        CashierRegistrationRequest.objects
+        .filter(agent=request.user, status='PENDING')
+        .order_by('-created_at')
+    )
     paginator = Paginator(cashiers, 10)
     page = request.GET.get('page')
     try:
@@ -4692,62 +4699,110 @@ def agent_cashier_list(request):
 
     context = {
         'cashiers': cashiers_page,
+        'pending_cashier_requests': pending_requests,
     }
     return render(request, 'betting/agent/cashier_list.html', context)
 
 @login_required
 @user_passes_test(is_agent)
 def agent_create_cashier(request):
+    redirect_to = request.META.get('HTTP_REFERER') or reverse('betting:agent_cashier_list')
     if request.method == 'POST':
         try:
-            email = request.POST.get('email')
-            password = request.POST.get('password')
-            confirm_password = request.POST.get('confirm_password')
             first_name = request.POST.get('first_name')
             last_name = request.POST.get('last_name')
+            other_name = request.POST.get('other_name')
             phone_number = request.POST.get('phone_number')
-            cashier_prefix = request.POST.get('cashier_prefix')
 
-            if not cashier_prefix:
-                 # Auto-generate prefix if not provided: CSH + 5 random digits
-                 import random
-                 while True:
-                     cashier_prefix = f"CSH{random.randint(10000, 99999)}"
-                     if not User.objects.filter(cashier_prefix=cashier_prefix).exists():
-                         break
+            if not first_name or not last_name or not other_name:
+                messages.error(request, "First Name, Last Name, and Other Name are required.")
+                return redirect(redirect_to)
 
-            if password != confirm_password:
-                messages.error(request, "Passwords do not match.")
-                return redirect('betting:agent_cashier_list')
+            agent = request.user
 
-            if User.objects.filter(email=email).exists():
-                messages.error(request, "Email already exists.")
-                return redirect('betting:agent_cashier_list')
-            
-            # Check prefix uniqueness if provided, though model constraints might handle it, better to check nicely
-            if cashier_prefix and User.objects.filter(cashier_prefix=cashier_prefix).exists():
-                messages.error(request, "Cashier prefix already in use.")
-                return redirect('betting:agent_cashier_list')
+            if not agent.cashier_prefix:
+                import random
+                while True:
+                    prefix = str(random.randint(1000, 9999))
+                    if not User.objects.filter(cashier_prefix=prefix).exists():
+                        break
+                agent.cashier_prefix = prefix
+                agent.save(update_fields=['cashier_prefix'])
 
-            user = User.objects.create_user(
-                email=email,
-                password=password,
+            base_prefix = agent.cashier_prefix
+
+            existing_numbers = []
+            for cashier in User.objects.filter(agent=agent, user_type='cashier').only('cashier_prefix'):
+                cp = (cashier.cashier_prefix or '').strip()
+                if not cp or '-' not in cp:
+                    continue
+                base, _, suffix = cp.partition('-')
+                if base != base_prefix:
+                    continue
+                try:
+                    existing_numbers.append(int(suffix))
+                except Exception:
+                    continue
+
+            for req in CashierRegistrationRequest.objects.filter(agent=agent).exclude(status='REJECTED').only('cashier_code'):
+                m = re.match(r'^C(\d+)$', (req.cashier_code or '').strip(), re.IGNORECASE)
+                if m:
+                    try:
+                        existing_numbers.append(int(m.group(1)))
+                    except Exception:
+                        pass
+
+            max_existing = max(existing_numbers) if existing_numbers else 2
+            next_num = max_existing + 1
+
+            cashier_code = f"C{next_num}"
+            cashier_email = generate_cashier_email(agent.email, cashier_code)
+            if User.objects.filter(email__iexact=cashier_email).exists():
+                messages.error(request, f"{cashier_code} already exists for this agent.")
+                return redirect(redirect_to)
+
+            root = None
+            for c in User.objects.filter(agent=agent, user_type='cashier').exclude(username__isnull=True).only('username').order_by('date_joined'):
+                uname = (c.username or '').strip()
+                m = re.match(r'^(.*)C\d+$', uname, re.IGNORECASE)
+                if m and m.group(1):
+                    root = m.group(1)
+                    break
+            if not root:
+                root = (agent.username or (agent.email.split('@')[0] if agent.email else 'Agent')).strip()
+                root = re.sub(r'[^A-Za-z0-9]', '', root)[:30] or 'Agent'
+
+            cashier_username = f"{root}{cashier_code}"
+            if User.objects.filter(username__iexact=cashier_username).exists():
+                counter = 1
+                while True:
+                    candidate = f"{root}{cashier_code}{counter}"
+                    if not User.objects.filter(username__iexact=candidate).exists():
+                        cashier_username = candidate
+                        break
+                    counter += 1
+
+            cashier_prefix = f"{base_prefix}-{next_num:02d}"
+
+            CashierRegistrationRequest.objects.create(
+                agent=agent,
                 first_name=first_name,
                 last_name=last_name,
+                other_name=other_name,
                 phone_number=phone_number,
-                user_type='cashier',
-                agent=request.user,
-                cashier_prefix=cashier_prefix
+                cashier_code=cashier_code,
+                cashier_email=cashier_email,
+                cashier_username=cashier_username,
+                cashier_prefix=cashier_prefix,
+                status='PENDING'
             )
-            # Ensure wallet exists
-            Wallet.objects.get_or_create(user=user)
-            
-            messages.success(request, f"Cashier {email} created successfully.")
+
+            messages.success(request, f"Cashier registration {cashier_code} submitted for admin approval.")
         except Exception as e:
-            messages.error(request, f"Error creating cashier: {e}")
-            logger.error(f"Error creating cashier: {e}")
+            messages.error(request, f"Error submitting cashier registration: {e}")
+            logger.error(f"Error submitting cashier registration: {e}")
     
-    return redirect('betting:agent_cashier_list')
+    return redirect(redirect_to)
 
 @login_required
 @user_passes_test(is_agent)

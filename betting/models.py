@@ -587,6 +587,64 @@ class Transaction(models.Model):
     def __str__(self):
         return f"{self.transaction_type} - {self.user.email} - {self.amount} ({self.status})"
 
+
+class PaymentGatewayDeposit(Transaction):
+    class Meta:
+        proxy = True
+        verbose_name = "Payment Gateway Deposit"
+        verbose_name_plural = "Payment Gateway Deposit"
+
+
+class CashierRegistrationRequest(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+    )
+
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cashier_registration_requests', limit_choices_to={'user_type': 'agent'})
+
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    other_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+
+    cashier_code = models.CharField(max_length=10)
+    cashier_email = models.EmailField()
+    cashier_username = models.CharField(max_length=50)
+    cashier_prefix = models.CharField(max_length=10, blank=True, null=True)
+
+    created_cashier = models.OneToOneField(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_from_cashier_request')
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    admin_notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['cashier_email'], name='unique_cashier_request_email'),
+            models.UniqueConstraint(fields=['agent', 'cashier_code'], name='unique_cashier_request_agent_code'),
+        ]
+
+    def __str__(self):
+        return f"{self.agent.email} - {self.cashier_code} - {self.status}"
+
+
+class PendingCashierRegistration(CashierRegistrationRequest):
+    class Meta:
+        proxy = True
+        verbose_name = "Pending Cashier Registration"
+        verbose_name_plural = "Pending Cashier Registration"
+
+
+class ApprovedNewCashier(CashierRegistrationRequest):
+    class Meta:
+        proxy = True
+        verbose_name = "Approved New Cashier"
+        verbose_name_plural = "Approved New Cashier"
+
 class BettingPeriod(models.Model):
     name = models.CharField(max_length=255, unique=True)
     start_date = models.DateField()

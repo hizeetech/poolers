@@ -21,6 +21,11 @@
                 <i class="fas fa-user-plus me-2"></i> Register Agent
             </button>
             {% endif %}
+            {% if user.user_type == 'agent' %}
+            <button type="button" class="btn btn-outline-danger rounded-pill px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#requestCashierModal">
+                <i class="fas fa-user-plus me-2"></i> Register Cashier
+            </button>
+            {% endif %}
             {% if user.user_type == 'agent' and user.can_manage_downline_wallets %}
             <a href="{% url 'betting:wallet_transfer' %}" class="btn btn-success rounded-pill px-4 shadow-sm w-100 w-sm-auto">
                 <i class="fas fa-exchange-alt me-2"></i> Wallet Transfer
@@ -569,6 +574,44 @@
   </div>
 </div>
 
+</div>
+
+<div class="modal fade" id="requestCashierModal" tabindex="-1" aria-labelledby="requestCashierModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="requestCashierModalLabel">Register New Cashier (Admin Approval Required)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form method="post" action="{% url 'betting:agent_create_cashier' %}">
+            {% csrf_token %}
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label fw-semibold">First Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" name="first_name" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label fw-semibold">Last Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" name="last_name" required>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Other Name <span class="text-danger">*</span></label>
+                <input type="text" class="form-control" name="other_name" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Phone (optional)</label>
+                <input type="text" class="form-control" name="phone_number" placeholder="+234XXXXXXXXXX">
+            </div>
+            <div class="small text-muted mb-3">
+                Cashier credentials will be generated after admin approval and sent to your agent email.
+            </div>
+            <button type="submit" class="btn btn-danger w-100">Submit for Approval</button>
+        </form>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>

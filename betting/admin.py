@@ -9,9 +9,11 @@ from django.db.utils import OperationalError, ProgrammingError
 from django.contrib import messages
 from decimal import Decimal
 from django.urls import path, reverse 
-from django.shortcuts import redirect, render
+from django.shortcuts import redirect, render, get_object_or_404
 from django.utils.html import format_html 
 from django_ckeditor_5.widgets import CKEditor5Widget
+from django.core.mail import send_mail
+from django.utils.crypto import get_random_string
 
 # Celery Beat and Results imports
 from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
@@ -44,7 +46,9 @@ from .models import (
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
     PasswordResetRequest, State, FooterPage, FooterBadge,
-    GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog
+    GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog,
+    PaymentGatewayDeposit,
+    CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier
 )
 
 
@@ -780,12 +784,162 @@ class WalletAdmin(admin.ModelAdmin):
 
 # --- Transaction Admin ---
 class TransactionAdmin(admin.ModelAdmin):
-    list_display = ('timestamp', 'user', 'transaction_type', 'amount', 'status', 'is_successful')
+    list_display = ('timestamp', 'user', 'transaction_type', 'payment_gateway_used', 'amount', 'status', 'is_successful')
     list_filter = ('transaction_type', 'status', 'is_successful', 'timestamp')
     search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
     readonly_fields = ('timestamp',)
     date_hierarchy = 'timestamp'
     list_select_related = ('user',)
+
+    def payment_gateway_used(self, obj):
+        if obj.transaction_type != 'deposit':
+            return ''
+        if getattr(obj, 'payment_gateway', None):
+            try:
+                return obj.get_payment_gateway_display()
+            except Exception:
+                return obj.payment_gateway
+        return ''
+    payment_gateway_used.short_description = 'Payment Gateway'
+    payment_gateway_used.admin_order_field = 'payment_gateway'
+
+class PaymentGatewayDepositAdmin(admin.ModelAdmin):
+    list_display = ('timestamp', 'user', 'payment_gateway', 'amount', 'status', 'is_successful', 'external_reference')
+    list_filter = ('payment_gateway', 'status', 'is_successful', 'timestamp')
+    search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
+    readonly_fields = ('timestamp',)
+    date_hierarchy = 'timestamp'
+    list_select_related = ('user',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(transaction_type='deposit', payment_gateway__in=['monnify', 'paystack', 'kora'])
+
+class PendingCashierRegistrationAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'agent', 'cashier_code', 'cashier_email', 'cashier_username', 'status', 'actions_buttons')
+    list_filter = ('status', 'created_at')
+    search_fields = ('agent__email', 'cashier_email', 'cashier_username', 'cashier_code')
+    readonly_fields = ('created_at', 'reviewed_at', 'cashier_code', 'cashier_email', 'cashier_username', 'cashier_prefix', 'created_cashier', 'status')
+    date_hierarchy = 'created_at'
+    list_select_related = ('agent',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(status='PENDING')
+
+    def actions_buttons(self, obj):
+        if obj.status == 'PENDING':
+            return format_html(
+                '<a class="btn btn-sm btn-success" href="{}">Approve</a>&nbsp;'
+                '<a class="btn btn-sm btn-danger" href="{}">Reject</a>',
+                f"approve/{obj.id}/",
+                f"reject/{obj.id}/",
+            )
+        return obj.status
+    actions_buttons.short_description = 'Actions'
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('approve/<int:pk>/', self.admin_site.admin_view(self.approve_cashier), name='approve_cashier_request'),
+            path('reject/<int:pk>/', self.admin_site.admin_view(self.reject_cashier), name='reject_cashier_request'),
+        ]
+        return custom_urls + urls
+
+    def approve_cashier(self, request, pk):
+        cashier_req = get_object_or_404(CashierRegistrationRequest, pk=pk)
+        if cashier_req.status != 'PENDING':
+            messages.warning(request, "This cashier registration is not pending.")
+            return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+        agent = cashier_req.agent
+        if not agent:
+            messages.error(request, "This request has no agent attached.")
+            return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+        if User.objects.filter(email__iexact=cashier_req.cashier_email).exists():
+            cashier_req.status = 'REJECTED'
+            cashier_req.reviewed_at = timezone.now()
+            cashier_req.admin_notes = 'Cashier email already exists.'
+            cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
+            messages.error(request, "Cashier email already exists. Request rejected.")
+            return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+        raw_password = get_random_string(12)
+        try:
+            with db_transaction.atomic():
+                cashier = User.objects.create_user(
+                    email=cashier_req.cashier_email,
+                    password=raw_password,
+                    username=cashier_req.cashier_username,
+                    first_name=cashier_req.first_name,
+                    last_name=cashier_req.last_name,
+                    other_name=cashier_req.other_name,
+                    phone_number=cashier_req.phone_number,
+                    state=agent.state,
+                    user_type='cashier',
+                    agent=agent,
+                    master_agent=agent.master_agent,
+                    super_agent=agent.super_agent,
+                    cashier_prefix=cashier_req.cashier_prefix,
+                    is_active=True
+                )
+                Wallet.objects.get_or_create(user=cashier)
+
+                cashier_req.created_cashier = cashier
+                cashier_req.status = 'APPROVED'
+                cashier_req.reviewed_at = timezone.now()
+                cashier_req.admin_notes = None
+                cashier_req.save(update_fields=['created_cashier', 'status', 'reviewed_at', 'admin_notes'])
+
+            login_url = request.build_absolute_uri('/login/')
+            message = (
+                f"A new cashier registration has been approved for your shop.\n\n"
+                f"Cashier Code: {cashier_req.cashier_code}\n"
+                f"Cashier Email: {cashier_req.cashier_email}\n"
+                f"Cashier Username: {cashier_req.cashier_username}\n"
+                f"Cashier Prefix: {cashier_req.cashier_prefix or ''}\n"
+                f"Password: {raw_password}\n\n"
+                f"Login: {login_url}\n"
+            )
+            send_mail(
+                subject='Cashier Registration Approved',
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                recipient_list=[agent.email],
+                fail_silently=True
+            )
+
+            messages.success(request, f"Cashier {cashier_req.cashier_email} approved and created successfully.")
+        except Exception as e:
+            messages.error(request, f"Error approving cashier: {e}")
+
+        return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+    def reject_cashier(self, request, pk):
+        cashier_req = get_object_or_404(CashierRegistrationRequest, pk=pk)
+        if cashier_req.status != 'PENDING':
+            messages.warning(request, "This cashier registration is not pending.")
+            return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+        cashier_req.status = 'REJECTED'
+        cashier_req.reviewed_at = timezone.now()
+        cashier_req.admin_notes = 'Rejected by admin.'
+        cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
+        messages.success(request, "Cashier registration rejected.")
+        return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
+
+class ApprovedNewCashierAdmin(admin.ModelAdmin):
+    list_display = ('reviewed_at', 'agent', 'cashier_code', 'cashier_email', 'cashier_username', 'cashier_prefix')
+    list_filter = ('reviewed_at', 'created_at')
+    search_fields = ('agent__email', 'cashier_email', 'cashier_username', 'cashier_code')
+    readonly_fields = [f.name for f in CashierRegistrationRequest._meta.fields]
+    date_hierarchy = 'reviewed_at'
+    list_select_related = ('agent',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(status='APPROVED')
 
 # --- UserWithdrawal Admin ---
 class UserWithdrawalAdmin(admin.ModelAdmin):
@@ -1053,6 +1207,9 @@ class BettingLimitAuditLogAdmin(admin.ModelAdmin):
 betting_admin_site.register(User, CustomUserAdmin)
 betting_admin_site.register(Wallet, WalletAdmin)
 betting_admin_site.register(Transaction, TransactionAdmin)
+betting_admin_site.register(PaymentGatewayDeposit, PaymentGatewayDepositAdmin)
+betting_admin_site.register(PendingCashierRegistration, PendingCashierRegistrationAdmin)
+betting_admin_site.register(ApprovedNewCashier, ApprovedNewCashierAdmin)
 betting_admin_site.register(BettingPeriod, BettingPeriodAdmin)
 betting_admin_site.register(Fixture, FixtureAdmin)
 betting_admin_site.register(Result, ResultAdmin)

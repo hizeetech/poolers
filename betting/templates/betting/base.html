@@ -704,6 +704,13 @@
                         } catch (e) {}
                     };
 
+                    const currentBalance = Number('{{ user_wallet_balance|default_if_none:"0" }}');
+                    const thresholdValue = Number((payload.data && payload.data.threshold) ? payload.data.threshold : '');
+                    if (Number.isFinite(currentBalance) && Number.isFinite(thresholdValue) && currentBalance > thresholdValue) {
+                        markRead(payload.id);
+                        return;
+                    }
+
                     Swal.fire({
                         icon: 'warning',
                         title: payload.title || 'Low wallet balance',

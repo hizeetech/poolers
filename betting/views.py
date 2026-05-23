@@ -932,6 +932,18 @@ def place_bet(request):
                         'total_stake': str(total_stake),
                         'ticket_odds': str(max_line_odd),
                     })
+                    limits_snapshot['selections_snapshot'] = [
+                        {
+                            'fixture_id': s['fixture'].id,
+                            'home_team': s['fixture'].home_team,
+                            'away_team': s['fixture'].away_team,
+                            'match_date': str(getattr(s['fixture'], 'match_date', '') or ''),
+                            'match_time': str(getattr(s['fixture'], 'match_time', '') or ''),
+                            'bet_type': s['bet_type'],
+                            'odd_selected': str(s['odd']),
+                        }
+                        for s in valid_selections
+                    ]
                     bet_ticket = BetTicket.objects.create(
                         user=request.user,
                         stake_amount=total_stake, # Total stake for the ticket
@@ -1182,6 +1194,17 @@ def place_bet(request):
                         'total_stake': str(stake_amount),
                         'ticket_odds': str(odd),
                     })
+                    limits_snapshot['selections_snapshot'] = [
+                        {
+                            'fixture_id': fixture.id,
+                            'home_team': fixture.home_team,
+                            'away_team': fixture.away_team,
+                            'match_date': str(getattr(fixture, 'match_date', '') or ''),
+                            'match_time': str(getattr(fixture, 'match_time', '') or ''),
+                            'bet_type': selected_outcome,
+                            'odd_selected': str(odd),
+                        }
+                    ]
                     bet_ticket = BetTicket.objects.create(
                         user=request.user,
                         stake_amount=stake_amount,
@@ -1366,6 +1389,7 @@ def check_ticket_status(request):
         'status_choices': BetTicket.STATUS_CHOICES,
         'ticket_bonus_percent': (ticket.bonus_percentage_applied * Decimal('100')) if ticket else Decimal('0.00'),
         'ticket_estimated_bonus': (max(Decimal('0.00'), (ticket.max_winning - ticket.potential_winning)) if ticket and not ticket.bonus_is_final else (ticket.bonus_amount if ticket else Decimal('0.00'))),
+        'ticket_selections_snapshot': (ticket.betting_limits_snapshot or {}).get('selections_snapshot', []) if ticket else [],
     }
     return render(request, 'betting/check_ticket.html', context)
 
@@ -2569,6 +2593,22 @@ def agent_dashboard(request):
     today = timezone.now().date()
     start_of_week = today - timedelta(days=today.weekday()) # Monday
     start_of_month = today.replace(day=1)
+    start_date_str = request.GET.get('start_date') or ''
+    end_date_str = request.GET.get('end_date') or ''
+    start_date = None
+    end_date = None
+    try:
+        if start_date_str:
+            start_date = date.fromisoformat(start_date_str)
+    except Exception:
+        start_date = None
+    try:
+        if end_date_str:
+            end_date = date.fromisoformat(end_date_str)
+    except Exception:
+        end_date = None
+    if start_date and end_date and start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     direct_downline_rows = []
     master_downline_tree = []
@@ -2709,7 +2749,16 @@ def agent_dashboard(request):
         ).exclude(status__in=['deleted', 'cancelled'])
 
     scope = request.GET.get('scope', 'all')
-    if scope == 'week':
+    if start_date and end_date:
+        metrics_start = start_date
+        metrics_end = end_date
+        downline_bet_tickets = downline_bet_tickets.filter(
+            placed_at__date__gte=metrics_start,
+            placed_at__date__lte=metrics_end,
+        )
+        metrics_label = 'Custom'
+        scope = 'custom'
+    elif scope == 'week':
         try:
             from commission.models import CommissionPeriod
         except Exception:
@@ -2786,21 +2835,59 @@ def agent_dashboard(request):
 
     # Top performing users/agents (example: based on GGR)
     # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
-    top_performers = downline_users_qs.annotate(
-        user_total_stake=Sum(
-            Case(When(bet_tickets__status__in=['won', 'lost', 'pending', 'cashed_out', 'cancelled'], then=F('bet_tickets__stake_amount')), default=Value(0), output_field=DecimalField())
-        ),
-        user_total_winnings=Sum(
-            Case(When(bet_tickets__status='won', then=F('bet_tickets__potential_winning')), default=Value(0), output_field=DecimalField())
-        ),
-    ).annotate(
-        user_ggr=F('user_total_stake') - F('user_total_winnings')
-    ).order_by('-user_ggr')[:5] # Top 5 based on GGR
+    tickets_date_filter = None
+    if metrics_start and metrics_end:
+        tickets_date_filter = Q(bet_tickets__placed_at__date__gte=metrics_start, bet_tickets__placed_at__date__lte=metrics_end)
+
+    stake_case = Case(
+        When(bet_tickets__status__in=['won', 'lost', 'pending', 'cashed_out', 'cancelled'], then=F('bet_tickets__stake_amount')),
+        default=Value(0),
+        output_field=DecimalField()
+    )
+    win_case = Case(
+        When(bet_tickets__status='won', then=F('bet_tickets__potential_winning')),
+        default=Value(0),
+        output_field=DecimalField()
+    )
+
+    if tickets_date_filter is not None:
+        top_performers = downline_users_qs.annotate(
+            user_total_stake=Sum(stake_case, filter=tickets_date_filter),
+            user_total_winnings=Sum(win_case, filter=tickets_date_filter),
+        ).annotate(
+            user_ggr=F('user_total_stake') - F('user_total_winnings')
+        ).order_by('-user_ggr')[:5]
+    else:
+        top_performers = downline_users_qs.annotate(
+            user_total_stake=Sum(stake_case),
+            user_total_winnings=Sum(win_case),
+        ).annotate(
+            user_ggr=F('user_total_stake') - F('user_total_winnings')
+        ).order_by('-user_ggr')[:5] # Top 5 based on GGR
 
     # Recent activity from downline users
     recent_downline_transactions = Transaction.objects.filter(
         Q(user__in=downline_users_qs) | Q(initiating_user__in=downline_users_qs)
-    ).order_by('-timestamp')[:10]
+    )
+    if metrics_start and metrics_end:
+        recent_downline_transactions = recent_downline_transactions.filter(
+            timestamp__date__gte=metrics_start,
+            timestamp__date__lte=metrics_end,
+        )
+    recent_downline_transactions = recent_downline_transactions.order_by('-timestamp')[:10]
+
+    sort_by = request.GET.get('sort_by') or 'placed_at'
+    sort_dir = request.GET.get('sort_dir') or 'desc'
+    sort_map = {
+        'placed_at': 'placed_at',
+        'stake': 'stake_amount',
+        'potential': 'potential_winning',
+        'max': 'max_winning',
+        'status': 'status',
+        'user': 'user__email',
+    }
+    sort_field = sort_map.get(sort_by, 'placed_at')
+    order_expr = f"-{sort_field}" if sort_dir == 'desc' else sort_field
 
     context = {
         'user': user,
@@ -2808,7 +2895,7 @@ def agent_dashboard(request):
         'direct_downline_rows': direct_downline_rows,
         'master_downline_tree': master_downline_tree,
         'super_downline_tree': super_downline_tree,
-        'downline_bet_tickets': downline_bet_tickets.order_by('-placed_at')[:50], # Pass the QuerySet, sliced
+        'downline_bet_tickets': downline_bet_tickets.order_by(order_expr)[:50], # Pass the QuerySet, sliced
         'total_downline_users': total_downline_users,
         'total_downline_turnover': total_downline_turnover,
         'total_downline_stake': total_downline_turnover, # Alias for total stake
@@ -2818,6 +2905,10 @@ def agent_dashboard(request):
         'metrics_label': metrics_label,
         'metrics_start': metrics_start,
         'metrics_end': metrics_end,
+        'current_start_date': metrics_start.isoformat() if metrics_start else '',
+        'current_end_date': metrics_end.isoformat() if metrics_end else '',
+        'current_sort_by': sort_by,
+        'current_sort_dir': sort_dir,
         'total_commission_paid': total_commission_paid,
         'pending_commission': pending_commission,
         'top_performers': top_performers,
@@ -5168,13 +5259,26 @@ def account_user_dashboard(request):
         elif 'search_user' in request.POST:
             search_form = AccountUserSearchForm(request.POST)
             if search_form.is_valid():
-                search_term = search_form.cleaned_data['search_term']
-                users = User.objects.filter(
-                    Q(email__icontains=search_term) | 
+                search_term = (search_form.cleaned_data.get('search_term') or '').strip()
+
+                base_qs = User.objects.filter(
+                    Q(email__icontains=search_term) |
                     Q(phone_number__icontains=search_term) |
+                    Q(username__icontains=search_term) |
                     Q(first_name__icontains=search_term) |
-                    Q(last_name__icontains=search_term)
+                    Q(last_name__icontains=search_term) |
+                    Q(other_name__icontains=search_term)
                 ).exclude(is_superuser=True).exclude(user_type='account_user')
+
+                tokens = [t for t in re.split(r'\s+', search_term) if t]
+                name_qs = User.objects.none()
+                if len(tokens) > 1 and '@' not in search_term:
+                    tokens_q = Q()
+                    for t in tokens:
+                        tokens_q &= (Q(first_name__icontains=t) | Q(last_name__icontains=t) | Q(other_name__icontains=t))
+                    name_qs = User.objects.filter(tokens_q).exclude(is_superuser=True).exclude(user_type='account_user')
+
+                users = (base_qs | name_qs)
                 
                 if search_term.isdigit():
                      # Prioritize exact ID match if search term is a digit (likely from autocomplete)
@@ -5183,7 +5287,9 @@ def account_user_dashboard(request):
                          found_user = exact_match
                          users = User.objects.filter(pk=exact_match.pk)
                      else:
-                         users = users | User.objects.filter(id=int(search_term))
+                         users = users | User.objects.filter(id=int(search_term)).exclude(is_superuser=True).exclude(user_type='account_user')
+
+                users = users.distinct()
                 
                 if found_user:
                      pass # Already found via exact ID match

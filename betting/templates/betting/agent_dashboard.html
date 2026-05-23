@@ -5,7 +5,7 @@
         <h2 class="fw-bold text-primary mb-0">
             {% if user.user_type == 'agent' %} Agent Dashboard {% elif user.user_type == 'cashier' %} Cashier Dashboard {% else %} Dashboard {% endif %}
         </h2>
-        <div class="d-flex flex-column align-items-end gap-1">
+        <div class="d-flex flex-column align-items-end gap-2 w-100 w-md-auto">
             <div class="btn-group btn-group-sm" role="group" aria-label="Dashboard scope">
                 <a class="btn btn-outline-secondary {% if metrics_scope == 'week' %}active{% endif %}" href="?scope=week">Weekly</a>
                 <a class="btn btn-outline-secondary {% if metrics_scope == 'month' %}active{% endif %}" href="?scope=month">Monthly</a>
@@ -14,6 +14,38 @@
             <div class="text-muted small">
                 {{ metrics_label }}{% if metrics_start and metrics_end %}: {{ metrics_start }} - {{ metrics_end }}{% endif %}
             </div>
+            <form method="get" class="d-flex flex-column flex-sm-row gap-2 align-items-end">
+                <div>
+                    <label class="form-label small text-muted mb-1">From</label>
+                    <input type="date" name="start_date" class="form-control form-control-sm" value="{{ current_start_date }}">
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-1">To</label>
+                    <input type="date" name="end_date" class="form-control form-control-sm" value="{{ current_end_date }}">
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-1">Sort</label>
+                    <select name="sort_by" class="form-select form-select-sm">
+                        <option value="placed_at" {% if current_sort_by == 'placed_at' %}selected{% endif %}>Date</option>
+                        <option value="user" {% if current_sort_by == 'user' %}selected{% endif %}>User</option>
+                        <option value="stake" {% if current_sort_by == 'stake' %}selected{% endif %}>Stake</option>
+                        <option value="potential" {% if current_sort_by == 'potential' %}selected{% endif %}>Potential</option>
+                        <option value="max" {% if current_sort_by == 'max' %}selected{% endif %}>Max Winning</option>
+                        <option value="status" {% if current_sort_by == 'status' %}selected{% endif %}>Status</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-1">Order</label>
+                    <select name="sort_dir" class="form-select form-select-sm">
+                        <option value="desc" {% if current_sort_dir == 'desc' %}selected{% endif %}>Desc</option>
+                        <option value="asc" {% if current_sort_dir == 'asc' %}selected{% endif %}>Asc</option>
+                    </select>
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:agent_dashboard' %}">Reset</a>
+                </div>
+            </form>
         </div>
         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
             {% if user.user_type == 'agent' or user.user_type == 'super_agent' or user.user_type == 'master_agent' %}

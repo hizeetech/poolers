@@ -967,6 +967,12 @@ def place_bet(request):
                         Selection.objects.create(
                             bet_ticket=bet_ticket,
                             fixture=sel['fixture'],
+                            betting_period=sel['fixture'].betting_period,
+                            fixture_serial_number=str(getattr(sel['fixture'], 'serial_number', '') or ''),
+                            fixture_home_team=sel['fixture'].home_team,
+                            fixture_away_team=sel['fixture'].away_team,
+                            fixture_match_date=getattr(sel['fixture'], 'match_date', None),
+                            fixture_match_time=getattr(sel['fixture'], 'match_time', None),
                             bet_type=sel['bet_type'],
                             odd_selected=sel['odd']
                         )
@@ -1218,6 +1224,12 @@ def place_bet(request):
                     Selection.objects.create(
                         bet_ticket=bet_ticket,
                         fixture=fixture,
+                        betting_period=fixture.betting_period,
+                        fixture_serial_number=str(getattr(fixture, 'serial_number', '') or ''),
+                        fixture_home_team=fixture.home_team,
+                        fixture_away_team=fixture.away_team,
+                        fixture_match_date=getattr(fixture, 'match_date', None),
+                        fixture_match_time=getattr(fixture, 'match_time', None),
                         bet_type=selected_outcome, # Corrected field name
                         odd_selected=odd # Store the odd at the time of betting
                     )

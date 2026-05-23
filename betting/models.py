@@ -699,7 +699,13 @@ class Fixture(models.Model):
 
 class Selection(models.Model):
     bet_ticket = models.ForeignKey('BetTicket', on_delete=models.CASCADE, related_name='selections')
-    fixture = models.ForeignKey(Fixture, on_delete=models.CASCADE, related_name='selections')
+    fixture = models.ForeignKey(Fixture, on_delete=models.SET_NULL, null=True, blank=True, related_name='selections')
+    betting_period = models.ForeignKey('BettingPeriod', on_delete=models.SET_NULL, null=True, blank=True, related_name='selections')
+    fixture_serial_number = models.CharField(max_length=50, blank=True, default='', db_index=True)
+    fixture_home_team = models.CharField(max_length=255, blank=True, default='')
+    fixture_away_team = models.CharField(max_length=255, blank=True, default='')
+    fixture_match_date = models.DateField(null=True, blank=True)
+    fixture_match_time = models.TimeField(null=True, blank=True)
     bet_type = models.CharField(max_length=50)
     odd_selected = models.DecimalField(max_digits=10, decimal_places=2)
     is_winning_selection = models.BooleanField(null=True, blank=True)
@@ -708,7 +714,10 @@ class Selection(models.Model):
         return self.bet_type.replace('_', ' ').title()
 
     def __str__(self):
-        return f"{self.fixture} - {self.bet_type}"
+        if self.fixture_id:
+            return f"{self.fixture} - {self.bet_type}"
+        label = f"{self.fixture_home_team} vs {self.fixture_away_team}".strip()
+        return f"{label or 'Fixture'} - {self.bet_type}"
 
 class BetTicket(models.Model):
     STATUS_CHOICES = (
@@ -864,7 +873,8 @@ class BetTicket(models.Model):
         void_selections = []
         
         for selection in all_selections:
-            if selection.fixture.status in void_statuses:
+            fixture_status = getattr(selection.fixture, 'status', None)
+            if fixture_status in void_statuses:
                 void_selections.append(selection)
             else:
                 valid_selections.append(selection)
@@ -907,7 +917,8 @@ class BetTicket(models.Model):
                 dp[0] = Decimal('1.00')
                 count = 0
                 for sel in all_selections:
-                    o = Decimal('1.00') if sel.fixture.status in void_statuses else sel.odd_selected
+                    fixture_status = getattr(sel.fixture, 'status', None)
+                    o = Decimal('1.00') if fixture_status in void_statuses else sel.odd_selected
                     count += 1
                     upper = min(k, count)
                     for j in range(upper, 0, -1):
@@ -922,7 +933,8 @@ class BetTicket(models.Model):
         else: # Single or Multiple
             new_total_odd = Decimal('1.00')
             for sel in all_selections:
-                if sel.fixture.status in void_statuses:
+                fixture_status = getattr(sel.fixture, 'status', None)
+                if fixture_status in void_statuses:
                     new_total_odd *= Decimal('1.00')
                 else:
                     new_total_odd *= sel.odd_selected
@@ -1014,6 +1026,9 @@ class BetTicket(models.Model):
             for selection in selections:
                 fixture = selection.fixture
                 new_value = selection.is_winning_selection
+                if fixture is None:
+                    all_fixtures_settled = False
+                    continue
 
                 if fixture.status in void_statuses:
                     new_value = None
@@ -1437,6 +1452,25 @@ def refund_stake_on_void(sender, instance, **kwargs):
 @receiver(post_save, sender=Fixture)
 @receiver(post_save, sender=Result)
 def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
+    try:
+        serial = str(getattr(instance, 'serial_number', '') or '').strip()
+        relink_q = Q(fixture__isnull=True, betting_period=instance.betting_period)
+        if serial:
+            relink_q &= (Q(fixture_serial_number__iexact=serial) | Q(fixture_home_team__iexact=instance.home_team, fixture_away_team__iexact=instance.away_team, fixture_match_date=instance.match_date, fixture_match_time=instance.match_time))
+        else:
+            relink_q &= Q(fixture_home_team__iexact=instance.home_team, fixture_away_team__iexact=instance.away_team, fixture_match_date=instance.match_date, fixture_match_time=instance.match_time)
+
+        Selection.objects.filter(relink_q).update(
+            fixture=instance,
+            fixture_serial_number=serial or '',
+            fixture_home_team=instance.home_team,
+            fixture_away_team=instance.away_team,
+            fixture_match_date=instance.match_date,
+            fixture_match_time=instance.match_time,
+        )
+    except Exception:
+        pass
+
     if not created:
         try:
             # Import task locally to avoid circular import

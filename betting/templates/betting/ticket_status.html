@@ -18,7 +18,13 @@
                 {% for selection in selections %}
                 <li class="list-group-item d-flex justify-content-between align-items-center">
                     <div>
-                        <strong>{{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}</strong><br>
+                        <strong>
+                            {% if selection.fixture %}
+                                {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}
+                            {% else %}
+                                {{ selection.fixture_home_team }} vs {{ selection.fixture_away_team }}
+                            {% endif %}
+                        </strong><br>
                         <small>
                                     Your Pick: {{ selection.bet_type }} (Odd: {{ selection.odd_selected }}) <br>
                                     Result: {% if selection.fixture.full_time_result %}{{ selection.fixture.get_full_time_result_display }}{% else %}Pending{% endif %}

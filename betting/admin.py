@@ -439,8 +439,22 @@ class CustomUserAdmin(UserAdmin):
 class SelectionInline(admin.TabularInline):
     model = Selection
     extra = 0
-    readonly_fields = ('fixture', 'bet_type', 'odd_selected', 'is_winning_selection')
+    readonly_fields = ('fixture_display', 'bet_type', 'odd_selected', 'is_winning_selection')
+    fields = ('fixture_display', 'bet_type', 'odd_selected', 'is_winning_selection')
     can_delete = False
+
+    def fixture_display(self, obj):
+        if getattr(obj, 'fixture_id', None):
+            try:
+                return f"{obj.fixture.home_team} vs {obj.fixture.away_team} ({obj.fixture.match_date})"
+            except Exception:
+                return str(obj.fixture)
+        label = f"{getattr(obj, 'fixture_home_team', '')} vs {getattr(obj, 'fixture_away_team', '')}".strip()
+        dt = getattr(obj, 'fixture_match_date', None)
+        serial = getattr(obj, 'fixture_serial_number', '') or ''
+        parts = [p for p in [label or 'Fixture', (str(dt) if dt else ''), (f"#{serial}" if serial else '')] if p]
+        return " ".join(parts)
+    fixture_display.short_description = 'Fixture'
 
 
 # --- BetTicket Admin (Registered with custom site) ---
@@ -639,6 +653,7 @@ class FixtureAdmin(admin.ModelAdmin):
                     success_count = 0
                     skip_count = 0
                     errors = []
+                    created_fixture_ids = []
                     
                     for index, row in df.iterrows():
                         try:
@@ -709,7 +724,7 @@ class FixtureAdmin(admin.ModelAdmin):
                                 continue
 
                             # Create Fixture
-                            Fixture.objects.create(
+                            created_fixture = Fixture.objects.create(
                                 betting_period=betting_period,
                                 serial_number=serial,
                                 home_team=home,
@@ -720,11 +735,39 @@ class FixtureAdmin(admin.ModelAdmin):
                                 status='scheduled',
                                 is_active=True
                             )
+                            created_fixture_ids.append(created_fixture.id)
                             success_count += 1
                             
                         except Exception as e:
                             errors.append(f"Row {index + 2}: {str(e)}")
                             
+                    try:
+                        if created_fixture_ids:
+                            from django.db.models import Q
+                            relinked = 0
+                            for f in Fixture.objects.filter(id__in=created_fixture_ids).select_related('betting_period'):
+                                serial = str(getattr(f, 'serial_number', '') or '').strip()
+                                relink_q = Q(fixture__isnull=True, betting_period=f.betting_period)
+                                if serial:
+                                    relink_q &= (Q(fixture_serial_number__iexact=serial) | Q(fixture_home_team__iexact=f.home_team, fixture_away_team__iexact=f.away_team, fixture_match_date=f.match_date, fixture_match_time=f.match_time))
+                                else:
+                                    relink_q &= Q(fixture_home_team__iexact=f.home_team, fixture_away_team__iexact=f.away_team, fixture_match_date=f.match_date, fixture_match_time=f.match_time)
+
+                                updated = Selection.objects.filter(relink_q).update(
+                                    fixture=f,
+                                    fixture_serial_number=serial or '',
+                                    fixture_home_team=f.home_team,
+                                    fixture_away_team=f.away_team,
+                                    fixture_match_date=f.match_date,
+                                    fixture_match_time=f.match_time,
+                                )
+                                relinked += int(updated or 0)
+
+                            if relinked:
+                                messages.info(request, f"Relinked {relinked} old ticket selections to newly uploaded fixtures.")
+                    except Exception:
+                        pass
+
                     messages.success(request, f"Upload Complete: {success_count} added, {skip_count} skipped.")
                     if errors:
                         error_msg = " | ".join(errors[:10])

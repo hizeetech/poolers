@@ -76,12 +76,16 @@
                 {% for selection in bet_ticket.selections.all %}
                 <tr>
                     <td class="py-3 px-4 fw-medium">
-                        {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }} ({{ selection.fixture.match_date }})
+                        {% if selection.fixture %}
+                            {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }} ({{ selection.fixture.match_date }})
+                        {% else %}
+                            {{ selection.fixture_home_team }} vs {{ selection.fixture_away_team }} ({{ selection.fixture_match_date }})
+                        {% endif %}
                     </td>
                     <td class="py-3 px-4 text-muted">{{ selection.get_bet_type_display }}</td>
                     <td class="py-3 px-4 text-muted">{{ selection.odd_selected|floatformat:2 }}</td>
                     <td class="py-3 px-4 text-muted">
-                        {% if selection.fixture.result %} {{ selection.fixture.get_result_display }} ({{ selection.fixture.home_score }}-{{ selection.fixture.away_score }}) {% else %} N/A {% endif %}
+                        {% if selection.fixture and selection.fixture.result %} {{ selection.fixture.get_result_display }} ({{ selection.fixture.home_score }}-{{ selection.fixture.away_score }}) {% else %} N/A {% endif %}
                     </td>
                     <td class="py-3 px-4">
                         {% if bet_ticket.status == 'cancelled' or bet_ticket.status == 'deleted' %}
@@ -89,10 +93,14 @@
                         {% elif selection.is_winning_selection == True %}
                         <span class="badge bg-success">Yes</span> {% elif selection.is_winning_selection == False %}
                         <span class="badge bg-danger">No</span> {% else %}
-                            {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' or selection.fixture.status == 'abandoned' or selection.fixture.status == 'no_result' %}
-                            <span class="badge bg-secondary">Void</span>
+                            {% if selection.fixture %}
+                                {% if selection.fixture.status == 'cancelled' or selection.fixture.status == 'postponed' or selection.fixture.status == 'abandoned' or selection.fixture.status == 'no_result' %}
+                                    <span class="badge bg-secondary">Void</span>
+                                {% else %}
+                                    <span class="badge bg-warning text-dark">Pending</span>
+                                {% endif %}
                             {% else %}
-                            <span class="badge bg-warning text-dark">Pending</span>
+                                <span class="badge bg-warning text-dark">Pending</span>
                             {% endif %}
                         {% endif %}
                     </td>

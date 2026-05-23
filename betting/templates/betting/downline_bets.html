@@ -60,7 +60,12 @@
                                         <ul class="list-unstyled mb-0">
                                             {% for selection in bet_ticket.selections.all %}
                                             <li>
-                                                {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}: {{ selection.get_bet_type_display }} (Odd: {{ selection.odd_selected|floatformat:2 }}) {% if selection.is_winning_selection is True %}
+                                                {% if selection.fixture %}
+                                                    {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}
+                                                {% else %}
+                                                    {{ selection.fixture_home_team }} vs {{ selection.fixture_away_team }}
+                                                {% endif %}
+                                                : {{ selection.get_bet_type_display }} (Odd: {{ selection.odd_selected|floatformat:2 }}) {% if selection.is_winning_selection is True %}
                                                 <i class="fas fa-check-circle text-success ms-1" title="Winning Selection"></i> {% elif selection.is_winning_selection is False %}
                                                 <i class="fas fa-times-circle text-danger ms-1" title="Losing Selection"></i> {% elif selection.is_winning_selection is None %}
                                                 <i class="fas fa-minus-circle text-info ms-1" title="Voided/Pending Selection"></i> {% endif %}

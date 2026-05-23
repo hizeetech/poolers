@@ -454,6 +454,22 @@ class BetTicketAdmin(admin.ModelAdmin):
     raw_id_fields = ('user', 'deleted_by')
     ordering = ('-placed_at',)
     inlines = [SelectionInline]
+    readonly_fields = ('selections_snapshot_preview',)
+
+    def selections_snapshot_preview(self, obj):
+        snap = (getattr(obj, 'betting_limits_snapshot', None) or {}).get('selections_snapshot') or []
+        if not snap:
+            return ''
+        lines = []
+        for s in snap:
+            home = s.get('home_team') or ''
+            away = s.get('away_team') or ''
+            bt = s.get('bet_type') or ''
+            odd = s.get('odd_selected') or ''
+            lines.append(f"{home} vs {away} | {bt} | {odd}")
+        return "\n".join(lines)
+
+    selections_snapshot_preview.short_description = 'Selections Snapshot'
 
     def save_model(self, request, obj, form, change):
         if change:

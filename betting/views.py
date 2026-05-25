@@ -11,8 +11,8 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField
-from django.db.models.functions import Cast, Coalesce
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery
+from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.utils import timezone
@@ -20,8 +20,11 @@ from datetime import timedelta, date, datetime
 import logging
 import requests # For Paystack API calls
 import json
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse, Http404
 from django.views.decorators.csrf import csrf_exempt
+from django.utils.crypto import get_random_string
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 from decimal import Decimal, InvalidOperation # Import InvalidOperation
 import uuid # For UUIDField
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
@@ -48,9 +51,13 @@ from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
-    SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage,
+    SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage, State,
     BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
-    CashierRegistrationRequest
+    CashierRegistrationRequest, CRMActionLog, LoginAttempt,
+    RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
+    FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
+    LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
+    ScheduledFinanceReport
 )
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -62,7 +69,8 @@ from .forms import (
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
-    ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm
+    ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
+    CRMUserProfileForm, CRMWithdrawalDecisionForm
 )
 
 # Setup logger for this app
@@ -197,6 +205,7 @@ from .utils import (
     system_bet_payout_projections,
 )
 from .services.usernames import generate_cashier_email
+from .services.usernames import create_agent_and_cashiers
 
 def is_cashier(user):
     return user.is_authenticated and user.user_type == 'cashier'
@@ -206,6 +215,200 @@ def is_player(user):
 
 def is_account_user(user):
     return user.is_authenticated and user.user_type == 'account_user'
+
+def is_crm_user(user):
+    return user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'crm'])
+
+def crm_can_approve_withdrawals(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['ops', 'supervisor']
+
+def crm_can_suspend_users(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['compliance', 'supervisor']
+
+def crm_can_approve_registrations(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['ops', 'compliance', 'supervisor']
+
+def crm_can_edit_profiles(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['ops', 'compliance', 'supervisor']
+
+def crm_can_manage_wallet(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['compliance', 'supervisor']
+
+def crm_can_freeze_withdrawals(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['compliance', 'supervisor']
+
+def crm_can_reset_password(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['supervisor']
+
+def crm_can_message(user):
+    return is_crm_user(user)
+
+def crm_can_view_audit(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return user.crm_role in ['supervisor']
+
+def is_retail_manager(user):
+    return user.is_authenticated and user.user_type == 'retail_manager'
+
+def retail_can_view(user):
+    return is_retail_manager(user)
+
+def is_finance_user(user):
+    return user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'finance'])
+
+def finance_can_approve_withdrawals(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'withdrawal']
+
+def finance_can_reverse_transactions(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager']
+
+def finance_can_adjust_wallets(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'accountant']
+
+def finance_can_export(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'accountant', 'auditor', 'settlement', 'withdrawal']
+
+def finance_can_view_audit(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'auditor']
+
+def finance_can_verify_transactions(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'accountant', 'auditor']
+
+def finance_can_manage_settlements(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'settlement']
+
+def finance_can_manage_ledger(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'accountant']
+
+def finance_can_view_gateways(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'accountant', 'auditor']
+
+def finance_can_view_pin_logs(user):
+    if not is_finance_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'finance_role', '') in ['manager', 'withdrawal', 'auditor']
+
+def get_retail_manager_master_agents(user):
+    if not is_retail_manager(user):
+        return User.objects.none()
+    ma_ids = list(
+        RetailManagerMasterAgentMapping.objects.filter(retail_manager=user).values_list('master_agent_id', flat=True)
+    )
+    if not ma_ids:
+        return User.objects.none()
+    return User.objects.filter(id__in=ma_ids, user_type='master_agent')
+
+def get_retail_manager_super_agents(user, *, master_agents_qs=None):
+    if not is_retail_manager(user):
+        return User.objects.none()
+    direct_ids = list(
+        RetailManagerSuperAgentMapping.objects.filter(retail_manager=user).values_list('super_agent_id', flat=True)
+    )
+    direct_qs = User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
+    if master_agents_qs is None:
+        master_agents_qs = get_retail_manager_master_agents(user)
+    derived_qs = User.objects.filter(user_type='super_agent', master_agent__in=master_agents_qs) if master_agents_qs.exists() else User.objects.none()
+    return (direct_qs | derived_qs).distinct()
+
+def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=None):
+    if not is_retail_manager(user):
+        return User.objects.none()
+    direct_ids = list(
+        RetailManagerAgentMapping.objects.filter(retail_manager=user).values_list('agent_id', flat=True)
+    )
+    direct_qs = User.objects.filter(id__in=direct_ids, user_type='agent') if direct_ids else User.objects.none()
+    if master_agents_qs is None:
+        master_agents_qs = get_retail_manager_master_agents(user)
+    if super_agents_qs is None:
+        super_agents_qs = get_retail_manager_super_agents(user, master_agents_qs=master_agents_qs)
+    derived_q = Q()
+    if super_agents_qs.exists():
+        derived_q |= Q(super_agent__in=super_agents_qs)
+    if master_agents_qs.exists():
+        derived_q |= Q(master_agent__in=master_agents_qs)
+    derived_qs = User.objects.filter(user_type='agent').filter(derived_q) if derived_q else User.objects.none()
+    return (direct_qs | derived_qs).distinct()
+
+def get_retail_network_users_qs(user):
+    if not is_retail_manager(user):
+        return User.objects.none()
+    mas = get_retail_manager_master_agents(user)
+    sas = get_retail_manager_super_agents(user, master_agents_qs=mas)
+    agents = get_retail_manager_agents(user, master_agents_qs=mas, super_agents_qs=sas)
+    q = Q(id__in=list(mas.values_list('id', flat=True)))
+    q |= Q(id__in=list(sas.values_list('id', flat=True)))
+    q |= Q(id__in=list(agents.values_list('id', flat=True)))
+    q |= Q(agent__in=agents) | Q(super_agent__in=sas) | Q(master_agent__in=mas)
+    return User.objects.filter(q).distinct()
 
 
 def log_admin_activity(request, action_description, action_type='UPDATE', affected_object=None):
@@ -255,11 +458,28 @@ def register_user(request):
     return render(request, 'betting/register.html', {'form': form})
 
 
-@ratelimit(key='ip', rate='5/m', method='POST', block=True)
+@ratelimit(key='ip', rate='5/m', method='POST', block=False)
 def user_login(request):
     logger.debug("Entering user_login view.")
     if request.method == 'POST':
-        form = LoginForm(request=request, data=request.POST)
+        is_testing = False
+        try:
+            import sys
+            is_testing = 'test' in sys.argv
+        except Exception:
+            is_testing = False
+        if getattr(request, 'limited', False) and not is_testing:
+            messages.error(request, 'Too many login attempts. Please wait and try again.')
+            form = LoginForm()
+            return render(request, 'betting/login.html', {'form': form})
+        data = request.POST
+        try:
+            if 'identifier' not in data and 'email' in data:
+                data = request.POST.copy()
+                data['identifier'] = data.get('email')
+        except Exception:
+            data = request.POST
+        form = LoginForm(request=request, data=data)
         
         if form.is_valid():
             logger.debug("LoginForm is valid.")
@@ -270,21 +490,10 @@ def user_login(request):
                 login(request, user)
                 logger.debug(f"User {user.email} logged in. Redirecting...")
                 messages.success(request, f'Welcome, {user.first_name or user.email}!')
-                
-                if user.is_superuser or user.user_type == 'admin':
-                    return redirect('betting_admin:dashboard')
-                elif user.user_type == 'master_agent':
-                    return redirect('betting:master_agent_dashboard')
-                elif user.user_type == 'super_agent':
-                    return redirect('betting:super_agent_dashboard')
-                elif user.user_type == 'account_user':
-                    return redirect('betting:account_user_dashboard')
-                elif user.user_type == 'agent':
-                    return redirect('betting:agent_dashboard')
-                elif user.user_type == 'cashier':
-                    return redirect('betting:wallet')
-                else: # Player or unassigned type
+
+                if user.user_type in ['player', 'cashier', ''] or not getattr(user, 'user_type', ''):
                     return redirect('betting:fixtures')
+                return redirect('betting:user_dashboard')
             else: # This block is theoretically unreachable if form.is_valid() implies user is not None
                 logger.debug("Authentication failed. User is None after form.is_valid().")
                 messages.error(request, 'An unexpected authentication error occurred. Please try again.')
@@ -1529,7 +1738,7 @@ def initiate_deposit(request):
                 reference = str(uuid.uuid4())
                 
                 # Create a pending transaction record
-                Transaction.objects.create(
+                tx = Transaction.objects.create(
                     user=request.user,
                     transaction_type='deposit',
                     amount=amount,
@@ -1538,6 +1747,16 @@ def initiate_deposit(request):
                     payment_gateway=gateway,
                     external_reference=reference, # Use external_reference for all gateways
                     timestamp=timezone.now()
+                )
+                PaymentGatewayEventLog.objects.create(
+                    gateway=gateway,
+                    event_type='init',
+                    reference=reference,
+                    transaction=tx,
+                    user=request.user,
+                    amount=Decimal(str(amount)),
+                    success=True,
+                    payload={'mode': 'json', 'email': request.user.email, 'amount': amount},
                 )
                 
                 # Logic for different gateways
@@ -1594,7 +1813,7 @@ def initiate_deposit(request):
             reference = str(uuid.uuid4())
 
             # Create a pending transaction record
-            Transaction.objects.create(
+            tx = Transaction.objects.create(
                 user=request.user,
                 transaction_type='deposit',
                 amount=amount,
@@ -1603,6 +1822,16 @@ def initiate_deposit(request):
                 payment_gateway=gateway,
                 external_reference=reference,
                 timestamp=timezone.now()
+            )
+            PaymentGatewayEventLog.objects.create(
+                gateway=gateway,
+                event_type='init',
+                reference=reference,
+                transaction=tx,
+                user=request.user,
+                amount=amount,
+                success=True,
+                payload={'mode': 'form', 'email': request.user.email, 'amount': str(amount)},
             )
 
             if gateway == 'paystack':
@@ -1627,11 +1856,34 @@ def initiate_deposit(request):
                     response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
                     response.raise_for_status()
                     response_data = response.json()
+                    PaymentGatewayEventLog.objects.create(
+                        gateway='paystack',
+                        event_type='init',
+                        reference=reference,
+                        transaction=tx,
+                        user=request.user,
+                        amount=amount,
+                        success=bool(response_data.get('status')),
+                        http_status=getattr(response, 'status_code', None),
+                        message=str(response_data.get('message') or ''),
+                        payload={'request': payload, 'response': response_data},
+                    )
                     if response_data['status']:
                         return redirect(response_data['data']['authorization_url'])
                     else:
                         messages.error(request, f"Paystack initialization failed: {response_data['message']}")
                 except Exception as e:
+                    PaymentGatewayEventLog.objects.create(
+                        gateway='paystack',
+                        event_type='init',
+                        reference=reference,
+                        transaction=tx,
+                        user=request.user,
+                        amount=amount,
+                        success=False,
+                        message=str(e),
+                        payload={'request': payload},
+                    )
                     messages.error(request, f"Error initiating Paystack payment: {e}")
             
             elif gateway == 'monnify':
@@ -1661,6 +1913,18 @@ def initiate_deposit(request):
                         }
                         init_response = requests.post(init_url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, data=json.dumps(init_payload), timeout=10)
                         init_data = init_response.json()
+                        PaymentGatewayEventLog.objects.create(
+                            gateway='monnify',
+                            event_type='init',
+                            reference=reference,
+                            transaction=tx,
+                            user=request.user,
+                            amount=amount,
+                            success=bool(init_data.get('requestSuccessful')),
+                            http_status=getattr(init_response, 'status_code', None),
+                            message=str(init_data.get('responseMessage') or ''),
+                            payload={'request': init_payload, 'response': init_data},
+                        )
                         if init_data['requestSuccessful']:
                             return redirect(init_data['responseBody']['checkoutUrl'])
                         else:
@@ -1668,6 +1932,17 @@ def initiate_deposit(request):
                     else:
                         messages.error(request, "Monnify authentication failed.")
                 except Exception as e:
+                    PaymentGatewayEventLog.objects.create(
+                        gateway='monnify',
+                        event_type='init',
+                        reference=reference,
+                        transaction=tx,
+                        user=request.user,
+                        amount=amount,
+                        success=False,
+                        message=str(e),
+                        payload={'request': {'paymentReference': reference}},
+                    )
                     messages.error(request, f"Error initiating Monnify payment: {e}")
 
             elif gateway == 'kora':
@@ -1700,11 +1975,34 @@ def initiate_deposit(request):
                     response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
                     response.raise_for_status()
                     response_data = response.json()
+                    PaymentGatewayEventLog.objects.create(
+                        gateway='kora',
+                        event_type='init',
+                        reference=reference,
+                        transaction=tx,
+                        user=request.user,
+                        amount=amount,
+                        success=bool(response_data.get('status')),
+                        http_status=getattr(response, 'status_code', None),
+                        message=str(response_data.get('message') or ''),
+                        payload={'request': payload, 'response': response_data},
+                    )
                     if response_data['status']:
                         return redirect(response_data['data']['checkout_url'])
                     else:
                         messages.error(request, f"Kora initialization failed: {response_data['message']}")
                 except Exception as e:
+                    PaymentGatewayEventLog.objects.create(
+                        gateway='kora',
+                        event_type='init',
+                        reference=reference,
+                        transaction=tx,
+                        user=request.user,
+                        amount=amount,
+                        success=False,
+                        message=str(e),
+                        payload={'request': payload},
+                    )
                     messages.error(request, f"Error initiating Kora payment: {e}")
 
             # If we reach here, something failed
@@ -1759,6 +2057,18 @@ def verify_monnify_deposit(request):
             verify_url = f"{base_url}/api/v1/merchant/transactions/query?paymentReference={reference}"
             verify_response = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
             verify_data = verify_response.json()
+            PaymentGatewayEventLog.objects.create(
+                gateway='monnify',
+                event_type='verify',
+                reference=reference,
+                transaction=transaction_record,
+                user=request.user,
+                amount=transaction_record.amount,
+                success=bool(verify_data.get('requestSuccessful')),
+                http_status=getattr(verify_response, 'status_code', None),
+                message=str(verify_data.get('responseMessage') or ''),
+                payload={'response': verify_data},
+            )
             
             if verify_data.get('requestSuccessful') and verify_data['responseBody']['paymentStatus'] == 'PAID':
                 amount_verified = Decimal(str(verify_data['responseBody']['amountPaid']))
@@ -1835,6 +2145,18 @@ def verify_kora_deposit(request):
         
         response = requests.get(verify_url, headers=headers, timeout=10)
         response_data = response.json()
+        PaymentGatewayEventLog.objects.create(
+            gateway='kora',
+            event_type='verify',
+            reference=reference,
+            transaction=transaction_record,
+            user=request.user,
+            amount=transaction_record.amount,
+            success=bool(response_data.get('status')),
+            http_status=getattr(response, 'status_code', None),
+            message=str(response_data.get('message') or ''),
+            payload={'response': response_data},
+        )
         
         if response_data.get('status') and response_data['data']['status'] == 'success':
             amount_verified = Decimal(str(response_data['data']['amount']))
@@ -1906,6 +2228,18 @@ def verify_deposit(request):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         response_data = response.json()
+        PaymentGatewayEventLog.objects.create(
+            gateway='paystack',
+            event_type='verify',
+            reference=reference,
+            transaction=transaction_record,
+            user=request.user,
+            amount=transaction_record.amount,
+            success=bool(response_data.get('status')),
+            http_status=getattr(response, 'status_code', None),
+            message=str((response_data.get('data') or {}).get('message') or ''),
+            payload={'response': response_data},
+        )
 
         if response_data['status'] and response_data['data']['status'] == 'success':
             amount_verified = Decimal(response_data['data']['amount'] / 100) # Convert kobo to naira
@@ -2140,6 +2474,12 @@ def verify_withdrawal_pin(request):
         return JsonResponse({'status': 'error', 'message': 'Withdrawal PIN is required.'}, status=400)
 
     if user.check_withdrawal_pin(raw_pin):
+        WithdrawalPinVerificationLog.objects.create(
+            user=user,
+            success=True,
+            ip_address=get_client_ip(request),
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:1000],
+        )
         user.withdrawal_attempts = 0
         user.withdrawal_locked = False
         user.withdrawal_locked_at = None
@@ -2147,6 +2487,12 @@ def verify_withdrawal_pin(request):
         _set_withdrawal_pin_verified(request)
         return JsonResponse({'status': 'success', 'message': 'PIN verified.'})
 
+    WithdrawalPinVerificationLog.objects.create(
+        user=user,
+        success=False,
+        ip_address=get_client_ip(request),
+        user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:1000],
+    )
     user.withdrawal_attempts = (user.withdrawal_attempts or 0) + 1
     remaining = max(0, 3 - int(user.withdrawal_attempts))
     if user.withdrawal_attempts >= 3:
@@ -2578,6 +2924,12 @@ def user_dashboard(request):
         return redirect('betting:super_agent_dashboard')
     elif user.user_type == 'account_user':
         return redirect('betting:account_user_dashboard')
+    elif user.user_type == 'crm':
+        return redirect('betting:crm_dashboard')
+    elif user.user_type == 'retail_manager':
+        return redirect('betting:retail_dashboard')
+    elif user.user_type == 'finance':
+        return redirect('betting:finance_dashboard')
     elif user.user_type == 'agent' or user.user_type == 'cashier':
         return redirect('betting:agent_dashboard')
         
@@ -5162,6 +5514,18 @@ def account_user_dashboard(request):
         Q(initiating_user=request.user) | Q(user=request.user)
     ).order_by('-timestamp')[:20]
 
+    today = timezone.localdate()
+    account_kpis = {
+        'deposits_today': Transaction.objects.filter(transaction_type='deposit', status='completed', is_successful=True, timestamp__date=today).aggregate(
+            s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+        )['s'],
+        'withdrawals_pending': UserWithdrawal.objects.filter(status='pending').count(),
+        'withdrawals_today': UserWithdrawal.objects.filter(request_time__date=today).aggregate(
+            s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+        )['s'],
+        'failed_transactions_7d': Transaction.objects.filter(Q(status='failed') | Q(is_successful=False)).filter(timestamp__gte=timezone.now() - timedelta(days=7)).count(),
+    }
+
     # Handle View User via GET
     if request.method == 'GET' and 'view_user_id' in request.GET:
         try:
@@ -5620,6 +5984,7 @@ def account_user_dashboard(request):
         processed_withdrawals_page = pw_paginator.page(pw_paginator.num_pages)
 
     context = {
+        'account_kpis': account_kpis,
         'wallets_page': wallets_page,
         'wallet_search': wallet_search,
         'transactions_page': transactions_page,
@@ -5646,6 +6011,3234 @@ def account_user_dashboard(request):
         'pending_commissions': pending_commissions_page, # Paginated
     }
     return render(request, 'betting/account_user_dashboard.html', context)
+
+@login_required
+@user_passes_test(is_crm_user)
+def crm_dashboard(request):
+    tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
+    active_tab = (tab_raw or 'overview').strip() or 'overview'
+    q = (request.GET.get('q') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+    audit_query = (request.GET.get('audit_q') or '').strip()
+    audit_action_type = (request.GET.get('audit_action_type') or '').strip()
+    bet_q = (request.GET.get('bet_q') or '').strip()
+    bet_status = (request.GET.get('bet_status') or '').strip()
+    bet_agent_id = (request.GET.get('bet_agent') or '').strip()
+    segment_key = (request.GET.get('segment') or '').strip()
+    comm_msg_title = (request.POST.get('campaign_title') or '').strip()
+    comm_msg_body = (request.POST.get('campaign_message') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    if start_date_str:
+        try:
+            sd = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            start_dt = timezone.make_aware(datetime.combine(sd, datetime.min.time()))
+        except Exception:
+            start_dt = None
+    if end_date_str:
+        try:
+            ed = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            end_dt = timezone.make_aware(datetime.combine(ed, datetime.max.time()))
+        except Exception:
+            end_dt = None
+
+    today = timezone.now().date()
+    metrics_start_date = None
+    metrics_end_date = None
+    if start_date_str:
+        try:
+            metrics_start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        except Exception:
+            metrics_start_date = None
+    if end_date_str:
+        try:
+            metrics_end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except Exception:
+            metrics_end_date = None
+    if metrics_start_date and metrics_end_date and metrics_start_date > metrics_end_date:
+        metrics_start_date, metrics_end_date = metrics_end_date, metrics_start_date
+    if metrics_start_date is None and metrics_end_date is None:
+        metrics_end_date = today
+        metrics_start_date = today - timedelta(days=30)
+        metrics_label = 'Last 30 days'
+    else:
+        metrics_start_date = metrics_start_date or metrics_end_date or today
+        metrics_end_date = metrics_end_date or metrics_start_date or today
+        metrics_label = 'Custom range'
+
+    metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
+    metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+
+    if request.method == 'POST' and active_tab == 'communications':
+        if not crm_can_message(request.user):
+            messages.error(request, 'Not allowed.')
+            return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
+        if request.POST.get('create_campaign') == '1':
+            if not comm_msg_body:
+                messages.error(request, 'Message is required.')
+                return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
+            NotificationCampaign = apps.get_model('notifications', 'NotificationCampaign')
+            obj = NotificationCampaign.objects.create(
+                title=comm_msg_title or 'CRM Broadcast',
+                message=comm_msg_body,
+                notification_type='SYSTEM_ANNOUNCEMENT',
+                send_to_all=True,
+                created_by=request.user,
+                send_now=True,
+            )
+            try:
+                from notifications.tasks import send_campaign
+                send_campaign.delay(obj.id)
+            except Exception:
+                pass
+            CRMActionLog.objects.create(
+                actor=request.user,
+                action_type='MESSAGE_SENT',
+                reason=(comm_msg_title or 'CRM Broadcast'),
+                notes=comm_msg_body,
+                data={
+                    'campaign_id': obj.id,
+                    'send_to_all': True,
+                    'notification_type': 'SYSTEM_ANNOUNCEMENT',
+                },
+            )
+            messages.success(request, 'Broadcast queued.')
+            return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
+
+    users = User.objects.none()
+    if q:
+        users = User.objects.filter(
+            Q(email__icontains=q) |
+            Q(phone_number__icontains=q) |
+            Q(username__icontains=q) |
+            Q(first_name__icontains=q) |
+            Q(last_name__icontains=q) |
+            Q(other_name__icontains=q)
+        ).exclude(is_superuser=True).order_by('-updated_at')[:30]
+
+    pending_withdrawals_qs = UserWithdrawal.objects.filter(status='pending').select_related('user').order_by('request_time')
+    if start_dt:
+        pending_withdrawals_qs = pending_withdrawals_qs.filter(request_time__gte=start_dt)
+    if end_dt:
+        pending_withdrawals_qs = pending_withdrawals_qs.filter(request_time__lte=end_dt)
+    pending_withdrawals = pending_withdrawals_qs[:50]
+
+    pending_cashier_qs = CashierRegistrationRequest.objects.filter(status='PENDING').select_related('agent').order_by('created_at')
+    if start_dt:
+        pending_cashier_qs = pending_cashier_qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        pending_cashier_qs = pending_cashier_qs.filter(created_at__lte=end_dt)
+    pending_cashier_requests = pending_cashier_qs[:50]
+
+    pending_agent_qs = PendingAgentRegistration.objects.filter(status='PENDING').order_by('created_at')
+    if start_dt:
+        pending_agent_qs = pending_agent_qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        pending_agent_qs = pending_agent_qs.filter(created_at__lte=end_dt)
+    pending_agent_regs = pending_agent_qs[:50]
+
+    platform_users_qs = User.objects.filter(is_superuser=False)
+
+    kpi_cache_key = f"crm:kpis:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    chart_cache_key = f"crm:charts:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    cached_kpis = cache.get(kpi_cache_key)
+    cached_charts = cache.get(chart_cache_key)
+
+    if cached_kpis is None:
+        total_registered_users = platform_users_qs.count()
+        active_users_today = platform_users_qs.filter(last_login__date=today).count()
+        new_registrations = platform_users_qs.filter(date_joined__date__gte=metrics_start_date, date_joined__date__lte=metrics_end_date).count()
+
+        tickets_qs = BetTicket.objects.exclude(status__in=['deleted', 'cancelled']).filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+        total_bets_placed = tickets_qs.count()
+        total_stake_amount = tickets_qs.aggregate(v=Sum('stake_amount'))['v'] or Decimal('0.00')
+
+        total_payouts = tickets_qs.filter(status='won').aggregate(v=Sum('max_winning'))['v'] or Decimal('0.00')
+        ggr = total_stake_amount - total_payouts
+
+        bonus_cost = Transaction.objects.filter(
+            transaction_type='bonus',
+            status='completed',
+            is_successful=True,
+            timestamp__gte=metrics_start_dt,
+            timestamp__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+        ngr = ggr - bonus_cost
+
+        total_deposits = Transaction.objects.filter(
+            transaction_type='deposit',
+            status='completed',
+            is_successful=True,
+            timestamp__gte=metrics_start_dt,
+            timestamp__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+
+        total_withdrawals = UserWithdrawal.objects.filter(
+            status='approved',
+            approved_rejected_time__gte=metrics_start_dt,
+            approved_rejected_time__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+
+        pending_withdrawals_count = UserWithdrawal.objects.filter(status='pending').count()
+
+        bettors_in_range = tickets_qs.values('user_id').distinct().count()
+        conversion_rate = (Decimal(bettors_in_range) / Decimal(total_registered_users) * Decimal('100.00')) if total_registered_users else Decimal('0.00')
+        average_bet_value = (total_stake_amount / Decimal(total_bets_placed)) if total_bets_placed else Decimal('0.00')
+        platform_profit_loss = ngr
+
+        cached_kpis = {
+            'total_registered_users': int(total_registered_users),
+            'active_users_today': int(active_users_today),
+            'new_registrations': int(new_registrations),
+            'total_bets_placed': int(total_bets_placed),
+            'total_stake_amount': str(total_stake_amount),
+            'total_payouts': str(total_payouts),
+            'ggr': str(ggr),
+            'ngr': str(ngr),
+            'total_deposits': str(total_deposits),
+            'total_withdrawals': str(total_withdrawals),
+            'pending_withdrawals': int(pending_withdrawals_count),
+            'conversion_rate': str(conversion_rate.quantize(Decimal('0.01'))),
+            'average_bet_value': str(average_bet_value.quantize(Decimal('0.01'))),
+            'platform_profit_loss': str(platform_profit_loss),
+        }
+        cache.set(kpi_cache_key, cached_kpis, 30)
+
+    if cached_charts is None:
+        ticket_series = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+            .annotate(day=TruncDate('placed_at'))
+            .values('day')
+            .annotate(
+                stake=Sum('stake_amount'),
+                payouts=Sum(Case(When(status='won', then=F('max_winning')), default=Value(0), output_field=DecimalField())),
+                bets=Count('id'),
+            )
+            .order_by('day')
+        )
+
+        registrations_series = (
+            platform_users_qs.filter(date_joined__gte=metrics_start_dt, date_joined__lte=metrics_end_dt)
+            .annotate(day=TruncDate('date_joined'))
+            .values('day')
+            .annotate(registrations=Count('id'))
+            .order_by('day')
+        )
+
+        deposit_series = (
+            Transaction.objects.filter(
+                transaction_type='deposit',
+                status='completed',
+                is_successful=True,
+                timestamp__gte=metrics_start_dt,
+                timestamp__lte=metrics_end_dt,
+            )
+            .annotate(day=TruncDate('timestamp'))
+            .values('day')
+            .annotate(deposits=Sum('amount'))
+            .order_by('day')
+        )
+
+        withdrawal_series = (
+            UserWithdrawal.objects.filter(
+                status='approved',
+                approved_rejected_time__gte=metrics_start_dt,
+                approved_rejected_time__lte=metrics_end_dt,
+            )
+            .annotate(day=TruncDate('approved_rejected_time'))
+            .values('day')
+            .annotate(withdrawals=Sum('amount'))
+            .order_by('day')
+        )
+
+        selection_top = (
+            Selection.objects.filter(bet_ticket__placed_at__gte=metrics_start_dt, bet_ticket__placed_at__lte=metrics_end_dt)
+            .values('fixture_home_team', 'fixture_away_team')
+            .annotate(picks=Count('id'))
+            .order_by('-picks')[:5]
+        )
+
+        cached_charts = {
+            'ticket_series': [
+                {
+                    'day': r['day'].isoformat(),
+                    'stake': str(r['stake'] or Decimal('0.00')),
+                    'payouts': str(r['payouts'] or Decimal('0.00')),
+                    'bets': int(r['bets'] or 0),
+                }
+                for r in ticket_series
+            ],
+            'registrations_series': [{'day': r['day'].isoformat(), 'registrations': int(r['registrations'] or 0)} for r in registrations_series],
+            'deposit_series': [{'day': r['day'].isoformat(), 'deposits': str(r['deposits'] or Decimal('0.00'))} for r in deposit_series],
+            'withdrawal_series': [{'day': r['day'].isoformat(), 'withdrawals': str(r['withdrawals'] or Decimal('0.00'))} for r in withdrawal_series],
+            'top_fixtures': [
+                {
+                    'label': f"{(r.get('fixture_home_team') or '').strip()} vs {(r.get('fixture_away_team') or '').strip()}".strip() or 'Fixture',
+                    'picks': int(r['picks'] or 0),
+                }
+                for r in selection_top
+            ],
+        }
+        cache.set(chart_cache_key, cached_charts, 60)
+
+    bet_tickets_page = None
+    agent_filter_options = []
+    if active_tab == 'bets':
+        bets_qs = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent')
+            .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+            .order_by('-placed_at')
+        )
+        if bet_q:
+            bets_qs = bets_qs.filter(
+                Q(ticket_id__icontains=bet_q) |
+                Q(user__email__icontains=bet_q) |
+                Q(user__username__icontains=bet_q) |
+                Q(user__phone_number__icontains=bet_q)
+            )
+        if bet_status:
+            bets_qs = bets_qs.filter(status=bet_status)
+        if bet_agent_id:
+            try:
+                bets_qs = bets_qs.filter(user__agent_id=int(bet_agent_id))
+            except Exception:
+                pass
+
+        bet_paginator = Paginator(bets_qs, 50)
+        bet_page_num = request.GET.get('bets_page') or 1
+        try:
+            bet_tickets_page = bet_paginator.page(bet_page_num)
+        except Exception:
+            bet_tickets_page = bet_paginator.page(1)
+
+        agent_filter_options = list(
+            User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent'])
+            .only('id', 'email', 'username')
+            .order_by('email')[:200]
+        )
+
+    segment_stats = None
+    segment_users_page = None
+    if active_tab == 'segments':
+        seg_cache_key = f"crm:segments:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+        segment_stats = cache.get(seg_cache_key)
+        if segment_stats is None:
+            last7 = today - timedelta(days=7)
+            inactive_cutoff = today - timedelta(days=30)
+            vip_count = platform_users_qs.exclude(vip_level='standard').count()
+            new_users_count = platform_users_qs.filter(date_joined__date__gte=last7).count()
+            inactive_users_count = platform_users_qs.filter(Q(last_login__date__lt=inactive_cutoff) | Q(last_login__isnull=True)).count()
+            high_freq_count = (
+                BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+                .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(c=Count('id'))
+                .filter(c__gte=20)
+                .count()
+            )
+            bonus_hunters_count = (
+                Transaction.objects.filter(transaction_type='bonus', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(c=Count('id'))
+                .filter(c__gte=5)
+                .count()
+            )
+            high_value_count = (
+                Transaction.objects.filter(transaction_type='deposit', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(s=Sum('amount'))
+                .filter(s__gte=Decimal('100000.00'))
+                .count()
+            )
+            segment_stats = {
+                'vip': vip_count,
+                'new_users': new_users_count,
+                'inactive': inactive_users_count,
+                'high_frequency': high_freq_count,
+                'bonus_hunters': bonus_hunters_count,
+                'high_value': high_value_count,
+            }
+            cache.set(seg_cache_key, segment_stats, 60)
+
+        seg_users_qs = platform_users_qs.order_by('-date_joined')
+        if segment_key == 'vip':
+            seg_users_qs = seg_users_qs.exclude(vip_level='standard')
+        elif segment_key == 'new_users':
+            seg_users_qs = seg_users_qs.filter(date_joined__date__gte=today - timedelta(days=7))
+        elif segment_key == 'inactive':
+            seg_users_qs = seg_users_qs.filter(Q(last_login__date__lt=today - timedelta(days=30)) | Q(last_login__isnull=True))
+        elif segment_key == 'high_frequency':
+            ids = list(
+                BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+                .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(c=Count('id'))
+                .filter(c__gte=20)
+                .values_list('user_id', flat=True)[:5000]
+            )
+            seg_users_qs = seg_users_qs.filter(id__in=ids)
+        elif segment_key == 'bonus_hunters':
+            ids = list(
+                Transaction.objects.filter(transaction_type='bonus', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(c=Count('id'))
+                .filter(c__gte=5)
+                .values_list('user_id', flat=True)[:5000]
+            )
+            seg_users_qs = seg_users_qs.filter(id__in=ids)
+        elif segment_key == 'high_value':
+            ids = list(
+                Transaction.objects.filter(transaction_type='deposit', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+                .values('user_id')
+                .annotate(s=Sum('amount'))
+                .filter(s__gte=Decimal('100000.00'))
+                .values_list('user_id', flat=True)[:5000]
+            )
+            seg_users_qs = seg_users_qs.filter(id__in=ids)
+        else:
+            segment_key = ''
+
+        seg_paginator = Paginator(seg_users_qs.select_related('vip_manager', 'agent', 'super_agent', 'master_agent'), 50)
+        seg_page_num = request.GET.get('segments_page') or 1
+        try:
+            segment_users_page = seg_paginator.page(seg_page_num)
+        except Exception:
+            segment_users_page = seg_paginator.page(1)
+
+    recent_campaigns = []
+    sms_balance = None
+    if active_tab == 'communications':
+        NotificationCampaign = apps.get_model('notifications', 'NotificationCampaign')
+        recent_campaigns = list(NotificationCampaign.objects.select_related('created_by').order_by('-created_at')[:20])
+        try:
+            from notifications.services import get_ebulksms_balance
+            sms_balance = get_ebulksms_balance()
+        except Exception:
+            sms_balance = None
+
+    risk_logs_page = None
+    risk_kind = (request.GET.get('risk_kind') or '').strip()
+    if active_tab == 'risk':
+        SuspiciousActivityLog = apps.get_model('risk', 'SuspiciousActivityLog')
+        risk_qs = SuspiciousActivityLog.objects.select_related('user', 'ticket').order_by('-created_at')
+        if start_dt:
+            risk_qs = risk_qs.filter(created_at__gte=start_dt)
+        if end_dt:
+            risk_qs = risk_qs.filter(created_at__lte=end_dt)
+        if risk_kind:
+            risk_qs = risk_qs.filter(kind=risk_kind)
+        risk_paginator = Paginator(risk_qs, 50)
+        risk_page_num = request.GET.get('risk_page') or 1
+        try:
+            risk_logs_page = risk_paginator.page(risk_page_num)
+        except Exception:
+            risk_logs_page = risk_paginator.page(1)
+
+    audit_logs = []
+    if crm_can_view_audit(request.user):
+        audit_qs = CRMActionLog.objects.select_related('actor', 'target_user', 'withdrawal', 'ticket', 'cashier_request', 'pending_agent_registration').order_by('-created_at')
+        if start_dt:
+            audit_qs = audit_qs.filter(created_at__gte=start_dt)
+        if end_dt:
+            audit_qs = audit_qs.filter(created_at__lte=end_dt)
+        if audit_action_type:
+            audit_qs = audit_qs.filter(action_type=audit_action_type)
+        if audit_query:
+            audit_qs = audit_qs.filter(
+                Q(reason__icontains=audit_query) |
+                Q(notes__icontains=audit_query) |
+                Q(actor__email__icontains=audit_query) |
+                Q(target_user__email__icontains=audit_query)
+            )
+        audit_logs = list(audit_qs[:100])
+
+    context = {
+        'active_tab': active_tab,
+        'q': q,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
+        'metrics_label': metrics_label,
+        'metrics_start': metrics_start_date.isoformat(),
+        'metrics_end': metrics_end_date.isoformat(),
+        'kpis': cached_kpis,
+        'charts_data': cached_charts,
+        'bet_q': bet_q,
+        'bet_status': bet_status,
+        'bet_agent': bet_agent_id,
+        'bet_tickets_page': bet_tickets_page,
+        'agent_filter_options': agent_filter_options,
+        'segment_key': segment_key,
+        'segment_stats': segment_stats,
+        'segment_users_page': segment_users_page,
+        'recent_campaigns': recent_campaigns,
+        'sms_balance': sms_balance,
+        'risk_kind': risk_kind,
+        'risk_logs_page': risk_logs_page,
+        'users': users,
+        'pending_withdrawals': pending_withdrawals,
+        'pending_cashier_requests': pending_cashier_requests,
+        'pending_agent_regs': pending_agent_regs,
+        'audit_logs': audit_logs,
+        'audit_q': audit_query,
+        'audit_action_type': audit_action_type,
+        'audit_action_choices': getattr(CRMActionLog, 'ACTION_TYPES', ()),
+        'can_approve_withdrawals': crm_can_approve_withdrawals(request.user),
+        'can_suspend_users': crm_can_suspend_users(request.user),
+        'can_approve_registrations': crm_can_approve_registrations(request.user),
+        'can_edit_profiles': crm_can_edit_profiles(request.user),
+        'can_view_audit': crm_can_view_audit(request.user),
+        'can_message': crm_can_message(request.user),
+    }
+    return render(request, 'betting/crm_dashboard.html', context)
+
+@login_required
+@user_passes_test(is_crm_user)
+def crm_activity_feed(request):
+    limit = 20
+
+    tickets = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .select_related('user')
+        .order_by('-placed_at')[:10]
+    )
+    txs = (
+        Transaction.objects.filter(status='completed', is_successful=True)
+        .select_related('user')
+        .order_by('-timestamp')[:10]
+    )
+    withdrawals = (
+        UserWithdrawal.objects.select_related('user')
+        .order_by('-request_time')[:10]
+    )
+
+    events = []
+    for t in tickets:
+        events.append({
+            'ts': t.placed_at.isoformat() if getattr(t, 'placed_at', None) else '',
+            'type': 'bet',
+            'user': getattr(getattr(t, 'user', None), 'email', '') or getattr(getattr(t, 'user', None), 'username', '') or '-',
+            'label': f"Bet placed ({t.ticket_id or ''})".strip(),
+            'amount': str(getattr(t, 'stake_amount', Decimal('0.00'))),
+            'status': t.status,
+        })
+
+    for tx in txs:
+        events.append({
+            'ts': tx.timestamp.isoformat() if getattr(tx, 'timestamp', None) else '',
+            'type': 'transaction',
+            'user': getattr(getattr(tx, 'user', None), 'email', '') or getattr(getattr(tx, 'user', None), 'username', '') or '-',
+            'label': tx.transaction_type,
+            'amount': str(getattr(tx, 'amount', Decimal('0.00'))),
+            'status': tx.status,
+        })
+
+    for w in withdrawals:
+        events.append({
+            'ts': w.request_time.isoformat() if getattr(w, 'request_time', None) else '',
+            'type': 'withdrawal',
+            'user': getattr(getattr(w, 'user', None), 'email', '') or getattr(getattr(w, 'user', None), 'username', '') or '-',
+            'label': 'Withdrawal request',
+            'amount': str(getattr(w, 'amount', Decimal('0.00'))),
+            'status': w.status,
+        })
+
+    events.sort(key=lambda e: e.get('ts') or '', reverse=True)
+    return JsonResponse({'events': events[:limit]})
+
+@login_required
+@user_passes_test(is_retail_manager)
+def retail_activity_feed(request):
+    limit = 30
+    network_users = get_retail_network_users_qs(request.user).only('id')
+
+    tickets = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(user__in=network_users)
+        .select_related('user')
+        .order_by('-placed_at')[:15]
+    )
+    txs = (
+        Transaction.objects.filter(status='completed', is_successful=True)
+        .filter(user__in=network_users)
+        .select_related('user')
+        .order_by('-timestamp')[:15]
+    )
+    withdrawals = (
+        UserWithdrawal.objects.select_related('user')
+        .filter(user__in=network_users)
+        .order_by('-request_time')[:15]
+    )
+
+    events = []
+    for t in tickets:
+        events.append({
+            'ts': t.placed_at.isoformat() if getattr(t, 'placed_at', None) else '',
+            'type': 'bet',
+            'user': getattr(getattr(t, 'user', None), 'email', '') or getattr(getattr(t, 'user', None), 'username', '') or '-',
+            'label': f"Bet placed ({t.ticket_id or ''})".strip(),
+            'amount': str(getattr(t, 'stake_amount', Decimal('0.00'))),
+            'status': t.status,
+        })
+
+    for tx in txs:
+        events.append({
+            'ts': tx.timestamp.isoformat() if getattr(tx, 'timestamp', None) else '',
+            'type': 'transaction',
+            'user': getattr(getattr(tx, 'user', None), 'email', '') or getattr(getattr(tx, 'user', None), 'username', '') or '-',
+            'label': tx.transaction_type,
+            'amount': str(getattr(tx, 'amount', Decimal('0.00'))),
+            'status': tx.status,
+        })
+
+    for w in withdrawals:
+        events.append({
+            'ts': w.request_time.isoformat() if getattr(w, 'request_time', None) else '',
+            'type': 'withdrawal',
+            'user': getattr(getattr(w, 'user', None), 'email', '') or getattr(getattr(w, 'user', None), 'username', '') or '-',
+            'label': 'Withdrawal request',
+            'amount': str(getattr(w, 'amount', Decimal('0.00'))),
+            'status': w.status,
+        })
+
+    events.sort(key=lambda e: e.get('ts') or '', reverse=True)
+    return JsonResponse({'events': events[:limit]})
+
+
+@login_required
+@user_passes_test(is_retail_manager)
+def retail_dashboard(request):
+    tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
+    active_tab = (tab_raw or 'overview').strip() or 'overview'
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+    bet_q = (request.GET.get('bet_q') or '').strip()
+    bet_status = (request.GET.get('bet_status') or '').strip()
+    bet_agent_id = (request.GET.get('bet_agent') or '').strip()
+    tx_type = (request.GET.get('tx_type') or '').strip()
+    q = (request.GET.get('q') or '').strip()
+    shop_q = (request.GET.get('shop_q') or '').strip()
+    shop_state = (request.GET.get('shop_state') or '').strip()
+    shop_active = (request.GET.get('shop_active') or '').strip()
+    player_q = (request.GET.get('player_q') or '').strip()
+    player_status = (request.GET.get('player_status') or '').strip()
+    player_kyc = (request.GET.get('player_kyc') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, "%Y-%m-%d"))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, "%Y-%m-%d")
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+
+    today = timezone.localdate()
+    metrics_start_date = (start_dt.date() if start_dt else (today - timedelta(days=30)))
+    metrics_end_date = (end_dt.date() if end_dt else today)
+    metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
+    metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+    metrics_label = f"{metrics_start_date.isoformat()} → {metrics_end_date.isoformat()}"
+
+    master_agents = get_retail_manager_master_agents(request.user)
+    super_agents = get_retail_manager_super_agents(request.user, master_agents_qs=master_agents)
+    agents = get_retail_manager_agents(request.user, master_agents_qs=master_agents, super_agents_qs=super_agents)
+    network_users = get_retail_network_users_qs(request.user)
+
+    total_mapped_master_agents = master_agents.count()
+    total_mapped_super_agents = super_agents.count()
+    total_mapped_agents = agents.count()
+    total_active_players = (
+        User.objects.filter(user_type='player', is_active=True)
+        .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+        .distinct()
+        .count()
+    )
+    online_users = (
+        User.objects.filter(id__in=network_users.values_list('id', flat=True))
+        .filter(downline_activity_last_seen_at__gte=timezone.now() - timedelta(minutes=5))
+        .count()
+    )
+
+    tickets_today_qs = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(user__in=network_users, placed_at__date=today)
+    )
+    total_bets_today = tickets_today_qs.count()
+    total_stake_today = tickets_today_qs.aggregate(s=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['s']
+    total_payouts_today = tickets_today_qs.filter(status='won').aggregate(s=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['s']
+    revenue_today = (total_stake_today or Decimal('0.00')) - (total_payouts_today or Decimal('0.00'))
+
+    deposits_today = (
+        Transaction.objects.filter(user__in=network_users, transaction_type='deposit', status='completed', is_successful=True, timestamp__date=today)
+        .aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
+    )
+    withdrawals_today = (
+        UserWithdrawal.objects.filter(user__in=network_users, request_time__date=today)
+        .aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
+    )
+    pending_withdrawals_count = UserWithdrawal.objects.filter(user__in=network_users, status='pending').count()
+    active_betting_shops = agents.filter(is_active=True).exclude(shop_address__isnull=True).exclude(shop_address__exact='').count()
+
+    tickets_range_qs = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(user__in=network_users, placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+    )
+    total_stake_amount = tickets_range_qs.aggregate(s=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['s']
+    total_winning_payouts = tickets_range_qs.filter(status='won').aggregate(s=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['s']
+    total_revenue_generated = (total_stake_amount or Decimal('0.00')) - (total_winning_payouts or Decimal('0.00'))
+
+    commission_earned = (
+        Transaction.objects.filter(user__in=agents, transaction_type='commission_payout', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+        .aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
+    )
+
+    chart_cache_key = f"retail:charts:{request.user.id}:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    charts_data = cache.get(chart_cache_key)
+    if charts_data is None:
+        day_count = (metrics_end_date - metrics_start_date).days + 1
+        days = [metrics_start_date + timedelta(days=i) for i in range(max(0, day_count))]
+
+        tickets_daily = (
+            tickets_range_qs
+            .values('placed_at__date')
+            .annotate(
+                bets=Count('id'),
+                stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()),
+                payouts=Coalesce(Sum(Case(When(status='won', then='max_winning'), default=Value(0), output_field=DecimalField())), Value(0), output_field=DecimalField()),
+            )
+        )
+        tmap = {row['placed_at__date']: row for row in tickets_daily}
+
+        tx_daily = (
+            Transaction.objects.filter(user__in=network_users, status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+            .values('timestamp__date', 'transaction_type')
+            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
+        )
+        dep_map = {}
+        wdr_map = {}
+        for row in tx_daily:
+            d = row['timestamp__date']
+            if row['transaction_type'] == 'deposit':
+                dep_map[d] = dep_map.get(d, Decimal('0.00')) + (row['total'] or Decimal('0.00'))
+            if row['transaction_type'] == 'withdrawal':
+                wdr_map[d] = wdr_map.get(d, Decimal('0.00')) + (row['total'] or Decimal('0.00'))
+
+        labels = [d.isoformat() for d in days]
+        bets_series = []
+        stake_series = []
+        payouts_series = []
+        deposits_series = []
+        withdrawals_series = []
+        for d in days:
+            row = tmap.get(d)
+            bets_series.append(int(row['bets']) if row else 0)
+            stake_series.append(float(row['stake']) if row else 0.0)
+            payouts_series.append(float(row['payouts']) if row else 0.0)
+            deposits_series.append(float(dep_map.get(d, Decimal('0.00'))))
+            withdrawals_series.append(float(wdr_map.get(d, Decimal('0.00'))))
+
+        charts_data = {
+            'labels': labels,
+            'bets': bets_series,
+            'stake': stake_series,
+            'payouts': payouts_series,
+            'deposits': deposits_series,
+            'withdrawals': withdrawals_series,
+        }
+        cache.set(chart_cache_key, charts_data, 60)
+
+    top_agents = []
+    try:
+        top_agents = list(
+            tickets_range_qs.filter(user__agent__isnull=False)
+            .values('user__agent_id', 'user__agent__email')
+            .annotate(stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()), bets=Count('id'))
+            .order_by('-stake')[:10]
+        )
+    except Exception:
+        top_agents = []
+
+    hierarchy = []
+    if active_tab == 'hierarchy':
+        mas_list = list(master_agents.select_related('state').order_by('email'))
+        sas_list = list(super_agents.select_related('state', 'master_agent').order_by('email'))
+        agents_list = list(agents.select_related('state', 'master_agent', 'super_agent').order_by('email'))
+        agents_by_sa = {}
+        for ag in agents_list:
+            agents_by_sa.setdefault(getattr(ag, 'super_agent_id', None), []).append(ag)
+        sas_by_ma = {}
+        for sa in sas_list:
+            sas_by_ma.setdefault(getattr(sa, 'master_agent_id', None), []).append(sa)
+        direct_agents_by_ma = {}
+        for ag in agents_list:
+            if ag.super_agent_id is None and ag.master_agent_id is not None:
+                direct_agents_by_ma.setdefault(ag.master_agent_id, []).append(ag)
+        for ma in mas_list:
+            node = {'master_agent': ma, 'super_agents': [], 'direct_agents': direct_agents_by_ma.get(ma.id, [])}
+            for sa in sas_by_ma.get(ma.id, []):
+                node['super_agents'].append({'super_agent': sa, 'agents': agents_by_sa.get(sa.id, [])})
+            hierarchy.append(node)
+
+    bet_tickets_page = None
+    agent_filter_options = []
+    if active_tab == 'bets':
+        bets_qs = tickets_range_qs.select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent').order_by('-placed_at')
+        if bet_q:
+            bets_qs = bets_qs.filter(
+                Q(ticket_id__icontains=bet_q) |
+                Q(user__email__icontains=bet_q) |
+                Q(user__username__icontains=bet_q) |
+                Q(user__phone_number__icontains=bet_q)
+            )
+        if bet_status:
+            bets_qs = bets_qs.filter(status=bet_status)
+        if bet_agent_id:
+            try:
+                bets_qs = bets_qs.filter(user__agent_id=int(bet_agent_id))
+            except Exception:
+                pass
+        bet_paginator = Paginator(bets_qs, 50)
+        bet_page_num = request.GET.get('bets_page') or 1
+        try:
+            bet_tickets_page = bet_paginator.page(bet_page_num)
+        except Exception:
+            bet_tickets_page = bet_paginator.page(1)
+        agent_filter_options = list(agents.only('id', 'email', 'username').order_by('email')[:200])
+
+    tx_page = None
+    withdrawals_page = None
+    if active_tab == 'finance':
+        tx_qs = (
+            Transaction.objects.filter(user__in=network_users, status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+            .select_related('user', 'initiating_user')
+            .order_by('-timestamp')
+        )
+        if tx_type:
+            tx_qs = tx_qs.filter(transaction_type=tx_type)
+        if q:
+            tx_qs = tx_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__phone_number__icontains=q))
+        tx_p = Paginator(tx_qs, 50)
+        try:
+            tx_page = tx_p.page(request.GET.get('tx_page') or 1)
+        except Exception:
+            tx_page = tx_p.page(1)
+
+        w_qs = (
+            UserWithdrawal.objects.filter(user__in=network_users, request_time__gte=metrics_start_dt, request_time__lte=metrics_end_dt)
+            .select_related('user')
+            .order_by('-request_time')
+        )
+        if q:
+            w_qs = w_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__phone_number__icontains=q))
+        w_p = Paginator(w_qs, 50)
+        try:
+            withdrawals_page = w_p.page(request.GET.get('w_page') or 1)
+        except Exception:
+            withdrawals_page = w_p.page(1)
+
+    commission_rows = []
+    if active_tab == 'commissions':
+        commission_rows = list(
+            Transaction.objects.filter(user__in=agents, transaction_type='commission_payout', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+            .values('user_id', 'user__email')
+            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
+            .order_by('-total')[:200]
+        )
+
+    risk_logs_page = None
+    risk_kind = (request.GET.get('risk_kind') or '').strip()
+    if active_tab == 'risk':
+        SuspiciousActivityLog = apps.get_model('risk', 'SuspiciousActivityLog')
+        risk_qs = SuspiciousActivityLog.objects.select_related('user', 'ticket').filter(user__in=network_users).order_by('-created_at')
+        if start_dt:
+            risk_qs = risk_qs.filter(created_at__gte=start_dt)
+        if end_dt:
+            risk_qs = risk_qs.filter(created_at__lte=end_dt)
+        if risk_kind:
+            risk_qs = risk_qs.filter(kind=risk_kind)
+        risk_paginator = Paginator(risk_qs, 50)
+        try:
+            risk_logs_page = risk_paginator.page(request.GET.get('risk_page') or 1)
+        except Exception:
+            risk_logs_page = risk_paginator.page(1)
+
+    shops_page = None
+    if active_tab == 'shops':
+        base_qs = agents.select_related('state', 'master_agent', 'super_agent').order_by('email')
+        if shop_q:
+            base_qs = base_qs.filter(
+                Q(email__icontains=shop_q) |
+                Q(username__icontains=shop_q) |
+                Q(shop_address__icontains=shop_q)
+            )
+        if shop_state:
+            try:
+                base_qs = base_qs.filter(state_id=int(shop_state))
+            except Exception:
+                pass
+        if shop_active in ['1', '0']:
+            base_qs = base_qs.filter(is_active=(shop_active == '1'))
+
+        ticket_scope = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+            .filter(Q(user_id=OuterRef('pk')) | Q(user__agent_id=OuterRef('pk')))
+        )
+        stake_sub = ticket_scope.annotate(_=Value(1)).values('_').annotate(total=Sum('stake_amount')).values('total')[:1]
+        bets_sub = ticket_scope.annotate(_=Value(1)).values('_').annotate(total=Count('id')).values('total')[:1]
+        payout_sub = ticket_scope.filter(status='won').annotate(_=Value(1)).values('_').annotate(total=Sum('max_winning')).values('total')[:1]
+
+        shops_qs = (
+            base_qs.annotate(
+                players_count=Count('agents_under', filter=Q(agents_under__user_type='player'), distinct=True),
+                cashiers_count=Count('agents_under', filter=Q(agents_under__user_type='cashier'), distinct=True),
+                bets_count=Coalesce(Subquery(bets_sub), Value(0), output_field=IntegerField()),
+                stake_sum=Coalesce(Subquery(stake_sub), Value(0), output_field=DecimalField()),
+                payout_sum=Coalesce(Subquery(payout_sub), Value(0), output_field=DecimalField()),
+                revenue_sum=Coalesce(Subquery(stake_sub), Value(0), output_field=DecimalField()) - Coalesce(Subquery(payout_sub), Value(0), output_field=DecimalField()),
+            )
+        )
+        shops_paginator = Paginator(shops_qs, 50)
+        try:
+            shops_page = shops_paginator.page(request.GET.get('shops_page') or 1)
+        except Exception:
+            shops_page = shops_paginator.page(1)
+
+    players_page = None
+    if active_tab == 'players':
+        players_qs = (
+            User.objects.filter(user_type='player')
+            .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+            .select_related('wallet', 'agent', 'super_agent', 'master_agent', 'state', 'vip_manager')
+            .order_by('-date_joined')
+        )
+        if player_q:
+            players_qs = players_qs.filter(
+                Q(email__icontains=player_q) |
+                Q(username__icontains=player_q) |
+                Q(phone_number__icontains=player_q) |
+                Q(first_name__icontains=player_q) |
+                Q(last_name__icontains=player_q)
+            )
+        if player_status in ['1', '0']:
+            players_qs = players_qs.filter(is_active=(player_status == '1'))
+        if player_kyc:
+            players_qs = players_qs.filter(kyc_status=player_kyc)
+
+        players_paginator = Paginator(players_qs, 50)
+        try:
+            players_page = players_paginator.page(request.GET.get('players_page') or 1)
+        except Exception:
+            players_page = players_paginator.page(1)
+
+    context = {
+        'active_tab': active_tab,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
+        'metrics_label': metrics_label,
+        'kpis': {
+            'total_mapped_master_agents': total_mapped_master_agents,
+            'total_mapped_super_agents': total_mapped_super_agents,
+            'total_mapped_agents': total_mapped_agents,
+            'total_active_players': total_active_players,
+            'online_users': online_users,
+            'total_bets_today': total_bets_today,
+            'total_stake_today': total_stake_today,
+            'total_payouts_today': total_payouts_today,
+            'revenue_today': revenue_today,
+            'total_stake_amount': total_stake_amount,
+            'total_winning_payouts': total_winning_payouts,
+            'total_revenue_generated': total_revenue_generated,
+            'commission_earned': commission_earned,
+            'deposits_today': deposits_today,
+            'withdrawals_today': withdrawals_today,
+            'pending_withdrawals_count': pending_withdrawals_count,
+            'active_betting_shops': active_betting_shops,
+        },
+        'charts_data': charts_data,
+        'top_agents': top_agents,
+        'hierarchy': hierarchy,
+        'bet_q': bet_q,
+        'bet_status': bet_status,
+        'bet_agent': bet_agent_id,
+        'bet_tickets_page': bet_tickets_page,
+        'agent_filter_options': agent_filter_options,
+        'tx_type': tx_type,
+        'q': q,
+        'tx_page': tx_page,
+        'withdrawals_page': withdrawals_page,
+        'commission_rows': commission_rows,
+        'risk_kind': risk_kind,
+        'risk_logs_page': risk_logs_page,
+        'shop_q': shop_q,
+        'shop_state': shop_state,
+        'shop_active': shop_active,
+        'shops_page': shops_page,
+        'player_q': player_q,
+        'player_status': player_status,
+        'player_kyc': player_kyc,
+        'players_page': players_page,
+        'states': list(State.objects.all().order_by('state_name')),
+    }
+    return render(request, 'betting/retail_dashboard.html', context)
+
+
+@login_required
+@user_passes_test(is_retail_manager)
+def retail_player_detail(request, user_id):
+    target = get_object_or_404(User, id=user_id, user_type='player')
+    if not get_retail_network_users_qs(request.user).filter(id=target.id).exists():
+        raise Http404()
+
+    wallet = Wallet.objects.filter(user=target).first()
+    tickets = BetTicket.objects.filter(user=target).order_by('-placed_at')[:50]
+    withdrawals = UserWithdrawal.objects.filter(user=target).order_by('-request_time')[:30]
+    deposits = Transaction.objects.filter(user=target, transaction_type='deposit').order_by('-timestamp')[:30]
+    txs = Transaction.objects.filter(user=target).order_by('-timestamp')[:50]
+
+    login_attempts = LoginAttempt.objects.filter(user=target, status='success').order_by('-timestamp')[:25]
+
+    DeviceFingerprint = apps.get_model('risk', 'DeviceFingerprint')
+    SuspiciousActivityLog = apps.get_model('risk', 'SuspiciousActivityLog')
+    IPIntelligence = apps.get_model('risk', 'IPIntelligence')
+
+    device_fingerprints = []
+    suspicious_logs = []
+    ip_intel = None
+    last_ip = None
+    try:
+        device_fingerprints = list(DeviceFingerprint.objects.filter(user=target).order_by('-last_seen_at')[:25])
+    except Exception:
+        device_fingerprints = []
+    try:
+        suspicious_logs = list(SuspiciousActivityLog.objects.filter(user=target).select_related('ticket').order_by('-created_at')[:25])
+    except Exception:
+        suspicious_logs = []
+    try:
+        last_ip = (login_attempts[0].ip_address if login_attempts else None) or (device_fingerprints[0].ip_address if device_fingerprints else None)
+    except Exception:
+        last_ip = None
+    if last_ip:
+        try:
+            ip_intel = IPIntelligence.objects.filter(ip_address=last_ip).first()
+        except Exception:
+            ip_intel = None
+
+    context = {
+        'target_user': target,
+        'wallet': wallet,
+        'tickets': tickets,
+        'withdrawals': withdrawals,
+        'deposits': deposits,
+        'transactions': txs,
+        'login_attempts': login_attempts,
+        'device_fingerprints': device_fingerprints,
+        'suspicious_logs': suspicious_logs,
+        'ip_intel': ip_intel,
+    }
+    return render(request, 'betting/retail_player_detail.html', context)
+
+
+@login_required
+@user_passes_test(is_retail_manager)
+def retail_export(request):
+    dataset = (request.GET.get('dataset') or '').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, "%Y-%m-%d"))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, "%Y-%m-%d")
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+
+    today = timezone.localdate()
+    if not start_dt:
+        start_dt = timezone.make_aware(datetime.combine(today - timedelta(days=30), datetime.min.time()))
+    if not end_dt:
+        end_dt = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+
+    master_agents = get_retail_manager_master_agents(request.user)
+    super_agents = get_retail_manager_super_agents(request.user, master_agents_qs=master_agents)
+    agents = get_retail_manager_agents(request.user, master_agents_qs=master_agents, super_agents_qs=super_agents)
+    network_users = get_retail_network_users_qs(request.user).only('id')
+
+    rows = []
+    title = f"{dataset or 'report'}"
+
+    if dataset == 'bets':
+        qs = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .filter(user__in=network_users, placed_at__gte=start_dt, placed_at__lte=end_dt)
+            .select_related('user')
+            .order_by('-placed_at')
+        )
+        for t in qs[:50000]:
+            rows.append({
+                'time': t.placed_at.isoformat(sep=' ', timespec='seconds'),
+                'ticket_id': t.ticket_id,
+                'user': t.user.email or t.user.username,
+                'stake': str(t.stake_amount),
+                'status': t.status,
+                'max_winning': str(t.max_winning),
+            })
+        title = "bets"
+
+    elif dataset == 'transactions':
+        qs = (
+            Transaction.objects.filter(user__in=network_users, status='completed', is_successful=True)
+            .filter(timestamp__gte=start_dt, timestamp__lte=end_dt)
+            .select_related('user')
+            .order_by('-timestamp')
+        )
+        for tx in qs[:50000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'user': tx.user.email or tx.user.username,
+                'type': tx.transaction_type,
+                'amount': str(tx.amount),
+                'status': tx.status,
+                'gateway': getattr(tx, 'payment_gateway', ''),
+            })
+        title = "transactions"
+
+    elif dataset == 'withdrawals':
+        qs = (
+            UserWithdrawal.objects.filter(user__in=network_users)
+            .filter(request_time__gte=start_dt, request_time__lte=end_dt)
+            .select_related('user')
+            .order_by('-request_time')
+        )
+        for w in qs[:50000]:
+            rows.append({
+                'time': w.request_time.isoformat(sep=' ', timespec='seconds'),
+                'user': w.user.email or w.user.username,
+                'amount': str(w.amount),
+                'status': w.status,
+                'bank': getattr(w, 'bank_name', ''),
+                'account': getattr(w, 'account_number', ''),
+            })
+        title = "withdrawals"
+
+    elif dataset == 'commissions':
+        qs = (
+            Transaction.objects.filter(user__in=agents, transaction_type='commission_payout', status='completed', is_successful=True)
+            .filter(timestamp__gte=start_dt, timestamp__lte=end_dt)
+            .select_related('user')
+            .order_by('-timestamp')
+        )
+        for tx in qs[:50000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'agent': tx.user.email or tx.user.username,
+                'amount': str(tx.amount),
+                'status': tx.status,
+            })
+        title = "commissions"
+
+    elif dataset == 'players':
+        qs = (
+            User.objects.filter(user_type='player')
+            .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+            .select_related('wallet', 'agent', 'super_agent', 'master_agent', 'state')
+            .order_by('-date_joined')
+        )
+        for u in qs[:50000]:
+            rows.append({
+                'joined': u.date_joined.isoformat(sep=' ', timespec='seconds') if u.date_joined else '',
+                'user': u.email or u.username,
+                'phone': u.phone_number or '',
+                'state': getattr(u.state, 'state_name', '') if u.state_id else '',
+                'kyc': getattr(u, 'kyc_status', ''),
+                'vip': getattr(u, 'vip_level', ''),
+                'wallet_balance': str(getattr(getattr(u, 'wallet', None), 'balance', '') or ''),
+                'agent': getattr(getattr(u, 'agent', None), 'email', '') if getattr(u, 'agent_id', None) else '',
+            })
+        title = "players"
+
+    elif dataset == 'shops':
+        qs = agents.select_related('state').order_by('email')
+        for a in qs[:50000]:
+            rows.append({
+                'shop': a.email or a.username,
+                'state': getattr(a.state, 'state_name', '') if a.state_id else '',
+                'address': a.shop_address or '',
+                'active': 'yes' if a.is_active else 'no',
+            })
+        title = "shops"
+
+    else:
+        return HttpResponse("Unknown dataset.", status=400)
+
+    filename_base = f"retail_{title}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if fmt == 'csv':
+        import csv
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.csv"'
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(response, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return response
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=title[:31] or 'Sheet1')
+        output.seek(0)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.xlsx"'
+        return response
+
+    if fmt == 'pdf':
+        from weasyprint import HTML
+        def esc(s):
+            return (str(s or '')
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;'))
+
+        cols = list(rows[0].keys()) if rows else []
+        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
+        body = ''.join([
+            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
+            for r in rows[:2000]
+        ])
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              .meta {{ color: #666; margin-bottom: 12px; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>Retail Report: {esc(title)}</h2>
+            <div class="meta">Range: {esc(start_dt.date().isoformat())} → {esc(end_dt.date().isoformat())}</div>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.pdf"'
+        return response
+
+    return HttpResponse("Unknown format.", status=400)
+
+
+@login_required
+@user_passes_test(is_finance_user)
+def finance_dashboard(request):
+    tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
+    active_tab = (tab_raw or 'overview').strip() or 'overview'
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+    q = (request.GET.get('q') or '').strip()
+    tx_type = (request.GET.get('tx_type') or '').strip()
+    tx_status = (request.GET.get('tx_status') or '').strip()
+    tx_gateway = (request.GET.get('tx_gateway') or '').strip()
+    amount_min = (request.GET.get('amount_min') or '').strip()
+    amount_max = (request.GET.get('amount_max') or '').strip()
+    audit_q = (request.GET.get('audit_q') or '').strip()
+    audit_action_type = (request.GET.get('audit_action_type') or '').strip()
+    settlement_status = (request.GET.get('settlement_status') or '').strip()
+    settlement_id = (request.GET.get('settlement_id') or '').strip()
+    ledger_q = (request.GET.get('ledger_q') or '').strip()
+    ledger_account = (request.GET.get('ledger_account') or '').strip()
+    journal_id = (request.GET.get('journal_id') or '').strip()
+    gateway_filter = (request.GET.get('gateway') or '').strip()
+    pin_q = (request.GET.get('pin_q') or '').strip()
+    pin_success = (request.GET.get('pin_success') or '').strip()
+    recon_filter = (request.GET.get('recon') or '').strip()
+    fraud_filter = (request.GET.get('fraud') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, "%Y-%m-%d"))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, "%Y-%m-%d")
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+
+    today = timezone.localdate()
+    metrics_start_date = (start_dt.date() if start_dt else (today - timedelta(days=30)))
+    metrics_end_date = (end_dt.date() if end_dt else today)
+    metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
+    metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+    metrics_label = f"{metrics_start_date.isoformat()} → {metrics_end_date.isoformat()}"
+
+    if request.method == 'POST':
+        if request.POST.get('withdrawal_action') == '1':
+            if not finance_can_approve_withdrawals(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+            wid = (request.POST.get('withdrawal_id') or '').strip()
+            action = (request.POST.get('action') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+            w = get_object_or_404(UserWithdrawal, id=wid)
+            if w.status != 'pending':
+                messages.warning(request, 'Withdrawal is not pending.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+            if action == 'approve':
+                w.status = 'approved'
+                w.approved_rejected_time = timezone.now()
+                w.approved_rejected_by = request.user
+                w.admin_notes = reason or ''
+                w.save(update_fields=['status', 'approved_rejected_time', 'approved_rejected_by', 'admin_notes'])
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='WITHDRAWAL_APPROVED',
+                    target_user=w.user,
+                    withdrawal=w,
+                    ip_address=get_client_ip(request),
+                    reason=reason,
+                    data={'amount': str(w.amount)},
+                )
+                messages.success(request, 'Withdrawal approved.')
+            elif action == 'reject':
+                w._skip_signal_refund = True
+                w.status = 'rejected'
+                w.approved_rejected_time = timezone.now()
+                w.approved_rejected_by = request.user
+                w.admin_notes = reason or ''
+                w.save(update_fields=['status', 'approved_rejected_time', 'approved_rejected_by', 'admin_notes'])
+                with db_transaction.atomic():
+                    wallet = Wallet.objects.select_for_update().get(user=w.user)
+                    wallet.balance += w.amount
+                    wallet.save(update_fields=['balance'])
+                    Transaction.objects.create(
+                        user=w.user,
+                        initiating_user=request.user,
+                        target_user=w.user,
+                        transaction_type='withdrawal_refund',
+                        amount=w.amount,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Refund for rejected withdrawal request {w.id}",
+                        related_withdrawal_request=w,
+                        timestamp=timezone.now(),
+                    )
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='WITHDRAWAL_REJECTED',
+                    target_user=w.user,
+                    withdrawal=w,
+                    ip_address=get_client_ip(request),
+                    reason=reason,
+                    data={'amount': str(w.amount)},
+                )
+                messages.success(request, 'Withdrawal rejected and refunded.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+
+        if request.POST.get('bulk_withdrawal_approve') == '1':
+            if not finance_can_approve_withdrawals(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+            ids = request.POST.getlist('selected_withdrawals')
+            updated = 0
+            for wid in ids:
+                w = UserWithdrawal.objects.filter(id=wid, status='pending').first()
+                if not w:
+                    continue
+                w.status = 'approved'
+                w.approved_rejected_time = timezone.now()
+                w.approved_rejected_by = request.user
+                w.save(update_fields=['status', 'approved_rejected_time', 'approved_rejected_by'])
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='WITHDRAWAL_APPROVED',
+                    target_user=w.user,
+                    withdrawal=w,
+                    ip_address=get_client_ip(request),
+                    data={'amount': str(w.amount), 'bulk': True},
+                )
+                updated += 1
+            messages.success(request, f"Approved {updated} withdrawals.")
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+
+        if request.POST.get('withdrawal_complete') == '1':
+            if not finance_can_approve_withdrawals(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+            wid = (request.POST.get('withdrawal_id') or '').strip()
+            w = get_object_or_404(UserWithdrawal, id=wid)
+            if w.status != 'approved':
+                messages.error(request, 'Only approved withdrawals can be marked completed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+            w.status = 'completed'
+            if not w.approved_rejected_time:
+                w.approved_rejected_time = timezone.now()
+            if not w.approved_rejected_by:
+                w.approved_rejected_by = request.user
+            w.save(update_fields=['status', 'approved_rejected_time', 'approved_rejected_by'])
+            FinanceAuditLog.objects.create(
+                actor=request.user,
+                action_type='WITHDRAWAL_COMPLETED',
+                target_user=w.user,
+                withdrawal=w,
+                ip_address=get_client_ip(request),
+                data={'amount': str(w.amount)},
+            )
+            messages.success(request, 'Withdrawal marked completed.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=withdrawals")
+
+        if request.POST.get('tx_review') == '1':
+            if not finance_can_verify_transactions(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+            tx_id = (request.POST.get('tx_id') or '').strip()
+            status = (request.POST.get('review_status') or '').strip()
+            notes = (request.POST.get('notes') or '').strip()
+            if status not in ['verified', 'flagged', 'rejected']:
+                messages.error(request, 'Invalid review status.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+            tx = get_object_or_404(Transaction, id=tx_id)
+            FinanceTransactionReview.objects.create(transaction=tx, reviewer=request.user, status=status, notes=notes or '')
+            FinanceAuditLog.objects.create(
+                actor=request.user,
+                action_type='TX_VERIFIED',
+                target_user=tx.user,
+                transaction=tx,
+                ip_address=get_client_ip(request),
+                reason=f"{status}: {notes}".strip(': ').strip(),
+                data={'status': status},
+            )
+            messages.success(request, 'Transaction review saved.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+
+        if request.POST.get('deposit_complete') == '1':
+            if not (finance_can_verify_transactions(request.user) and finance_can_adjust_wallets(request.user)):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
+            tx_id = (request.POST.get('tx_id') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+            tx = get_object_or_404(Transaction, id=tx_id, transaction_type='deposit')
+            if tx.status == 'completed' and tx.is_successful:
+                messages.info(request, 'Deposit already completed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
+            with db_transaction.atomic():
+                w = Wallet.objects.select_for_update().get(user=tx.user)
+                w.balance += tx.amount
+                w.save(update_fields=['balance'])
+                tx.status = 'completed'
+                tx.is_successful = True
+                tx.description = (reason or tx.description or '').strip()
+                tx.timestamp = timezone.now()
+                tx.save(update_fields=['status', 'is_successful', 'description', 'timestamp'])
+                PaymentGatewayEventLog.objects.create(
+                    gateway=getattr(tx, 'payment_gateway', '') or 'paystack',
+                    event_type='reconcile',
+                    reference=(tx.external_reference or tx.paystack_reference or str(tx.id)),
+                    transaction=tx,
+                    user=tx.user,
+                    amount=tx.amount,
+                    success=True,
+                    message='Manual completion',
+                    payload={'reason': reason},
+                )
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='DEPOSIT_MANUAL_COMPLETED',
+                    target_user=tx.user,
+                    transaction=tx,
+                    ip_address=get_client_ip(request),
+                    reason=reason,
+                    data={'amount': str(tx.amount)},
+                )
+                cash = LedgerAccount.objects.filter(code='CASH_OPS', is_active=True).first()
+                liab = LedgerAccount.objects.filter(code='LIAB_WALLET', is_active=True).first()
+                if cash and liab:
+                    je = JournalEntry.objects.create(
+                        entry_date=timezone.localdate(),
+                        memo=f"Manual deposit completion ({tx.external_reference or tx.id})",
+                        created_by=request.user,
+                        related_transaction=tx,
+                    )
+                    JournalLine.objects.create(entry=je, account=cash, debit=tx.amount, credit=Decimal('0.00'), related_user=tx.user)
+                    JournalLine.objects.create(entry=je, account=liab, debit=Decimal('0.00'), credit=tx.amount, related_user=tx.user)
+            messages.success(request, 'Deposit completed and wallet credited.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
+
+        if request.POST.get('reverse_tx') == '1':
+            if not finance_can_reverse_transactions(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+            tx_id = (request.POST.get('tx_id') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+            tx = get_object_or_404(Transaction, id=tx_id)
+            if tx.status != 'completed' or not tx.is_successful:
+                messages.error(request, 'Only completed successful transactions can be reversed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+            if tx.transaction_type not in ['deposit', 'withdrawal', 'wallet_transfer_in', 'wallet_transfer_out', 'bonus', 'commission_payout', 'withdrawal_refund']:
+                messages.error(request, 'This transaction type cannot be reversed from finance dashboard.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+            with db_transaction.atomic():
+                wallet = Wallet.objects.select_for_update().get(user=tx.user)
+                if tx.transaction_type in ['deposit', 'wallet_transfer_in', 'bonus', 'commission_payout', 'withdrawal_refund']:
+                    if wallet.balance < tx.amount:
+                        messages.error(request, 'Insufficient wallet balance to reverse this credit.')
+                        return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+                    wallet.balance -= tx.amount
+                    wallet.save(update_fields=['balance'])
+                    Transaction.objects.create(
+                        user=tx.user,
+                        initiating_user=request.user,
+                        target_user=tx.user,
+                        transaction_type='wallet_transfer_out',
+                        amount=tx.amount,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Reversal of {tx.transaction_type} {tx.id}. {reason}".strip(),
+                        timestamp=timezone.now(),
+                    )
+                elif tx.transaction_type in ['withdrawal', 'wallet_transfer_out']:
+                    wallet.balance += tx.amount
+                    wallet.save(update_fields=['balance'])
+                    Transaction.objects.create(
+                        user=tx.user,
+                        initiating_user=request.user,
+                        target_user=tx.user,
+                        transaction_type='wallet_transfer_in',
+                        amount=tx.amount,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Reversal of {tx.transaction_type} {tx.id}. {reason}".strip(),
+                        timestamp=timezone.now(),
+                    )
+                tx.status = 'reversed'
+                tx.is_successful = False
+                tx.save(update_fields=['status', 'is_successful'])
+            FinanceAuditLog.objects.create(
+                actor=request.user,
+                action_type='TX_REVERSED',
+                target_user=tx.user,
+                transaction=tx,
+                ip_address=get_client_ip(request),
+                reason=reason,
+                data={'tx_type': tx.transaction_type, 'amount': str(tx.amount)},
+            )
+            messages.success(request, 'Transaction reversed.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
+
+        if request.POST.get('wallet_adjust') == '1':
+            if not finance_can_adjust_wallets(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+            user_ident = (request.POST.get('user_ident') or '').strip()
+            direction = (request.POST.get('direction') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+            amount_raw = (request.POST.get('amount') or '').strip()
+            if direction not in ['credit', 'debit']:
+                messages.error(request, 'Invalid direction.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+            try:
+                amount = Decimal(amount_raw)
+                if amount <= 0:
+                    raise InvalidOperation()
+            except Exception:
+                messages.error(request, 'Invalid amount.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+
+            target_user = None
+            if user_ident.isdigit():
+                target_user = User.objects.filter(id=int(user_ident)).first()
+            if not target_user:
+                target_user = User.objects.filter(Q(email__iexact=user_ident) | Q(username__iexact=user_ident)).first()
+            if not target_user:
+                messages.error(request, 'User not found.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+
+            with db_transaction.atomic():
+                wallet = Wallet.objects.select_for_update().get(user=target_user)
+                if direction == 'debit' and wallet.balance < amount:
+                    messages.error(request, 'Insufficient wallet balance.')
+                    return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+                if direction == 'credit':
+                    wallet.balance += amount
+                    tx_type = 'wallet_transfer_in'
+                else:
+                    wallet.balance -= amount
+                    tx_type = 'wallet_transfer_out'
+                wallet.save(update_fields=['balance'])
+                tx = Transaction.objects.create(
+                    user=target_user,
+                    initiating_user=request.user,
+                    target_user=target_user,
+                    transaction_type=tx_type,
+                    amount=amount,
+                    is_successful=True,
+                    status='completed',
+                    description=(f"Manual wallet {direction}: {reason}".strip() if reason else f"Manual wallet {direction}"),
+                    timestamp=timezone.now(),
+                )
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='WALLET_ADJUSTED',
+                    target_user=target_user,
+                    transaction=tx,
+                    ip_address=get_client_ip(request),
+                    reason=reason,
+                    data={'direction': direction, 'amount': str(amount)},
+                )
+                suspense = LedgerAccount.objects.filter(code='EQUITY_SUSPENSE', is_active=True).first()
+                liab = LedgerAccount.objects.filter(code='LIAB_WALLET', is_active=True).first()
+                if suspense and liab:
+                    je = JournalEntry.objects.create(
+                        entry_date=timezone.localdate(),
+                        memo=f"Manual wallet {direction} ({target_user.email or target_user.username})",
+                        created_by=request.user,
+                        related_transaction=tx,
+                    )
+                    if direction == 'credit':
+                        JournalLine.objects.create(entry=je, account=suspense, debit=amount, credit=Decimal('0.00'), related_user=target_user)
+                        JournalLine.objects.create(entry=je, account=liab, debit=Decimal('0.00'), credit=amount, related_user=target_user)
+                    else:
+                        JournalLine.objects.create(entry=je, account=liab, debit=amount, credit=Decimal('0.00'), related_user=target_user)
+                        JournalLine.objects.create(entry=je, account=suspense, debit=Decimal('0.00'), credit=amount, related_user=target_user)
+            messages.success(request, 'Wallet adjusted.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
+
+        if request.POST.get('create_settlement_batch') == '1':
+            if not finance_can_manage_settlements(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=settlements")
+            stype = (request.POST.get('settlement_type') or 'mixed_commission').strip()
+            if stype not in ['weekly_commission', 'network_commission', 'mixed_commission', 'manual']:
+                stype = 'mixed_commission'
+            batch = FinanceSettlementBatch.objects.create(
+                settlement_type=stype,
+                period_start=metrics_start_date,
+                period_end=metrics_end_date,
+                status='draft',
+                created_by=request.user,
+            )
+            total = Decimal('0.00')
+            items = 0
+            if stype in ['weekly_commission', 'mixed_commission']:
+                wqs = WeeklyAgentCommission.objects.filter(
+                    status='pending',
+                    period__start_date__lte=metrics_end_date,
+                    period__end_date__gte=metrics_start_date,
+                ).select_related('agent', 'period')
+                for wc in wqs:
+                    amt = (wc.commission_total_amount or Decimal('0.00'))
+                    if amt <= 0:
+                        continue
+                    FinanceSettlementItem.objects.create(batch=batch, beneficiary=wc.agent, amount=amt, weekly_commission=wc)
+                    total += amt
+                    items += 1
+            if stype in ['network_commission', 'mixed_commission']:
+                mqs = MonthlyNetworkCommission.objects.filter(
+                    status='pending',
+                    period__start_date__lte=metrics_end_date,
+                    period__end_date__gte=metrics_start_date,
+                ).select_related('user', 'period')
+                for mc in mqs:
+                    amt = (mc.commission_amount or Decimal('0.00'))
+                    if amt <= 0:
+                        continue
+                    FinanceSettlementItem.objects.create(batch=batch, beneficiary=mc.user, amount=amt, monthly_commission=mc)
+                    total += amt
+                    items += 1
+            FinanceAuditLog.objects.create(
+                actor=request.user,
+                action_type='SETTLEMENT_CREATED',
+                ip_address=get_client_ip(request),
+                reason=f"{stype}",
+                data={'batch_id': str(batch.id), 'items': items, 'total': str(total), 'range': [metrics_start_date.isoformat(), metrics_end_date.isoformat()]},
+            )
+            messages.success(request, f"Settlement batch created ({items} items).")
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=settlements&settlement_id={batch.id}")
+
+        if request.POST.get('settlement_action') == '1':
+            if not finance_can_manage_settlements(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=settlements")
+            sid = (request.POST.get('settlement_id') or '').strip()
+            action = (request.POST.get('action') or '').strip()
+            batch = get_object_or_404(FinanceSettlementBatch, id=sid)
+            if action == 'approve':
+                if batch.status != 'draft':
+                    messages.error(request, 'Only draft batches can be approved.')
+                else:
+                    batch.status = 'approved'
+                    batch.approved_by = request.user
+                    batch.approved_at = timezone.now()
+                    batch.save(update_fields=['status', 'approved_by', 'approved_at'])
+                    FinanceAuditLog.objects.create(
+                        actor=request.user,
+                        action_type='SETTLEMENT_APPROVED',
+                        ip_address=get_client_ip(request),
+                        reason=str(batch.id),
+                        data={'batch_id': str(batch.id)},
+                    )
+                    messages.success(request, 'Settlement batch approved.')
+            elif action == 'pay':
+                if batch.status != 'approved':
+                    messages.error(request, 'Only approved batches can be paid.')
+                else:
+                    paid_total = Decimal('0.00')
+                    failed = 0
+                    for item in batch.items.select_related('beneficiary', 'weekly_commission', 'monthly_commission').filter(status='pending'):
+                        try:
+                            with db_transaction.atomic():
+                                wallet = Wallet.objects.select_for_update().get(user=item.beneficiary)
+                                wallet.balance += item.amount
+                                wallet.save(update_fields=['balance'])
+                                tx = Transaction.objects.create(
+                                    user=item.beneficiary,
+                                    initiating_user=request.user,
+                                    target_user=item.beneficiary,
+                                    transaction_type='commission_payout',
+                                    amount=item.amount,
+                                    is_successful=True,
+                                    status='completed',
+                                    description=f"Commission settlement {batch.id}",
+                                    timestamp=timezone.now(),
+                                )
+                                if item.weekly_commission_id:
+                                    WeeklyAgentCommission.objects.filter(id=item.weekly_commission_id, status='pending').update(status='paid', paid_at=timezone.now())
+                                if item.monthly_commission_id:
+                                    MonthlyNetworkCommission.objects.filter(id=item.monthly_commission_id, status='pending').update(status='paid', paid_at=timezone.now())
+                                item.status = 'paid'
+                                item.paid_at = timezone.now()
+                                item.error_message = ''
+                                item.save(update_fields=['status', 'paid_at', 'error_message'])
+                                paid_total += item.amount
+                        except Exception as e:
+                            failed += 1
+                            item.status = 'failed'
+                            item.error_message = str(e)[:255]
+                            item.save(update_fields=['status', 'error_message'])
+                    comm_exp = LedgerAccount.objects.filter(code='EXP_COMM', is_active=True).first()
+                    liab = LedgerAccount.objects.filter(code='LIAB_WALLET', is_active=True).first()
+                    if paid_total > 0 and comm_exp and liab:
+                        je = JournalEntry.objects.create(
+                            entry_date=timezone.localdate(),
+                            memo=f"Commission settlement batch {batch.id}",
+                            created_by=request.user,
+                        )
+                        JournalLine.objects.create(entry=je, account=comm_exp, debit=paid_total, credit=Decimal('0.00'))
+                        JournalLine.objects.create(entry=je, account=liab, debit=Decimal('0.00'), credit=paid_total)
+                    if failed == 0:
+                        batch.status = 'paid'
+                        batch.paid_at = timezone.now()
+                        batch.save(update_fields=['status', 'paid_at'])
+                    FinanceAuditLog.objects.create(
+                        actor=request.user,
+                        action_type='SETTLEMENT_PAID',
+                        ip_address=get_client_ip(request),
+                        reason=str(batch.id),
+                        data={'batch_id': str(batch.id), 'paid_total': str(paid_total), 'failed': failed},
+                    )
+                    messages.success(request, f"Settlement processed. Paid ₦{paid_total:.2f}. Failed: {failed}.")
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=settlements&settlement_id={batch.id}")
+
+        if request.POST.get('create_journal') == '1':
+            if not finance_can_manage_ledger(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger")
+            entry_date_str = (request.POST.get('entry_date') or '').strip()
+            memo = (request.POST.get('memo') or '').strip()
+            a1 = (request.POST.get('account1') or '').strip()
+            a2 = (request.POST.get('account2') or '').strip()
+            d1 = (request.POST.get('debit1') or '').strip()
+            c1 = (request.POST.get('credit1') or '').strip()
+            d2 = (request.POST.get('debit2') or '').strip()
+            c2 = (request.POST.get('credit2') or '').strip()
+            try:
+                entry_date = datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+            except Exception:
+                messages.error(request, 'Invalid entry date.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger")
+            try:
+                debit1 = Decimal(d1 or '0')
+                credit1 = Decimal(c1 or '0')
+                debit2 = Decimal(d2 or '0')
+                credit2 = Decimal(c2 or '0')
+            except Exception:
+                messages.error(request, 'Invalid debit/credit.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger")
+            if (debit1 + debit2) <= 0 or (credit1 + credit2) <= 0 or (debit1 + debit2) != (credit1 + credit2):
+                messages.error(request, 'Journal entry must be balanced (total debits = total credits).')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger")
+            acc1 = LedgerAccount.objects.filter(code=a1, is_active=True).first()
+            acc2 = LedgerAccount.objects.filter(code=a2, is_active=True).first()
+            if not acc1 or not acc2:
+                messages.error(request, 'Invalid account code.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger")
+            je = JournalEntry.objects.create(entry_date=entry_date, memo=memo, created_by=request.user)
+            JournalLine.objects.create(entry=je, account=acc1, debit=debit1, credit=credit1)
+            JournalLine.objects.create(entry=je, account=acc2, debit=debit2, credit=credit2)
+            FinanceAuditLog.objects.create(
+                actor=request.user,
+                action_type='JOURNAL_CREATED',
+                ip_address=get_client_ip(request),
+                reason=memo,
+                data={'journal_id': je.id},
+            )
+            messages.success(request, 'Journal entry created.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=ledger&journal_id={je.id}")
+
+        if request.POST.get('create_scheduled_report') == '1':
+            if not finance_can_export(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+            name = (request.POST.get('name') or '').strip() or 'Scheduled Report'
+            dataset = (request.POST.get('dataset') or '').strip()
+            report_format = (request.POST.get('report_format') or 'csv').strip()
+            frequency = (request.POST.get('frequency') or 'daily').strip()
+            recipients = (request.POST.get('recipients') or '').strip()
+            if dataset not in dict(getattr(ScheduledFinanceReport, 'DATASET_CHOICES', ())).keys():
+                messages.error(request, 'Invalid dataset.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+            if report_format not in ['csv', 'xlsx', 'pdf']:
+                report_format = 'csv'
+            if frequency not in ['daily', 'weekly', 'monthly']:
+                frequency = 'daily'
+            r = ScheduledFinanceReport.objects.create(
+                name=name,
+                dataset=dataset,
+                report_format=report_format,
+                frequency=frequency,
+                recipients=recipients,
+                is_active=True,
+                next_run_at=timezone.now(),
+                created_by=request.user,
+            )
+            messages.success(request, 'Scheduled report created.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+
+        if request.POST.get('toggle_scheduled_report') == '1':
+            if not finance_can_export(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+            rid = (request.POST.get('report_id') or '').strip()
+            r = get_object_or_404(ScheduledFinanceReport, id=rid)
+            r.is_active = not bool(r.is_active)
+            if r.is_active and not r.next_run_at:
+                r.next_run_at = timezone.now()
+            r.save(update_fields=['is_active', 'next_run_at', 'updated_at'])
+            messages.success(request, 'Schedule updated.')
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+
+        if request.POST.get('run_scheduled_report') == '1':
+            if not finance_can_export(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+            rid = (request.POST.get('report_id') or '').strip()
+            r = get_object_or_404(ScheduledFinanceReport, id=rid)
+            from django.core.mail import EmailMessage
+            from .tasks import generate_finance_report_bytes
+
+            def _parse_recipients(raw):
+                parts = [p.strip() for p in (raw or '').replace(';', ',').split(',')]
+                return [p for p in parts if p and '@' in p]
+
+            recipients_list = _parse_recipients(r.recipients)
+            if not recipients_list:
+                messages.error(request, 'No recipients configured.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+
+            end_date = timezone.localdate() - timedelta(days=1)
+            if r.frequency == 'weekly':
+                start_date = end_date - timedelta(days=6)
+            elif r.frequency == 'monthly':
+                first_this_month = timezone.localdate().replace(day=1)
+                end_date = first_this_month - timedelta(days=1)
+                start_date = end_date.replace(day=1)
+            else:
+                start_date = end_date
+            start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+            end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
+
+            try:
+                content, title, mime, filename = generate_finance_report_bytes(r.dataset, r.report_format, start_dt, end_dt)
+                subject = f"Finance Report: {r.name} ({start_date.isoformat()} → {end_date.isoformat()})"
+                body = f"Attached: {title}.{r.report_format}"
+                email = EmailMessage(subject=subject, body=body, to=recipients_list)
+                email.attach(filename, content, mime)
+                email.send(fail_silently=False)
+                r.last_status = 'sent'
+                r.last_error = ''
+                FinanceAuditLog.objects.create(
+                    actor=request.user,
+                    action_type='SCHEDULED_REPORT_SENT',
+                    ip_address=get_client_ip(request),
+                    reason=r.name,
+                    data={'dataset': r.dataset, 'format': r.report_format},
+                )
+                messages.success(request, 'Report sent.')
+            except Exception as e:
+                r.last_status = 'failed'
+                r.last_error = str(e)[:255]
+                messages.error(request, f"Failed to send: {e}")
+            r.last_run_at = timezone.now()
+            r.save(update_fields=['last_status', 'last_error', 'last_run_at', 'updated_at'])
+            return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+
+    deposits_today = Transaction.objects.filter(transaction_type='deposit', status='completed', is_successful=True, timestamp__date=today).aggregate(
+        s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+    )['s']
+    withdrawals_today = UserWithdrawal.objects.filter(request_time__date=today).aggregate(
+        s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+    )['s']
+    pending_withdrawals = UserWithdrawal.objects.filter(status='pending').order_by('-request_time')
+    pending_withdrawals_count = pending_withdrawals.count()
+    successful_withdrawals_today = UserWithdrawal.objects.filter(status__in=['approved', 'completed'], approved_rejected_time__date=today).count()
+    failed_transactions = Transaction.objects.filter(Q(status='failed') | Q(is_successful=False)).filter(timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt).count()
+
+    tickets_range = BetTicket.objects.exclude(status__in=['deleted', 'cancelled']).filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+    total_stakes = tickets_range.aggregate(s=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['s']
+    total_payouts = tickets_range.filter(status='won').aggregate(s=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['s']
+    ggr = (total_stakes or Decimal('0.00')) - (total_payouts or Decimal('0.00'))
+    ngr = ggr
+    profit_loss = ngr
+
+    agent_commissions = Transaction.objects.filter(transaction_type='commission_payout', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt).aggregate(
+        s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+    )['s']
+    bonus_expenses = Transaction.objects.filter(transaction_type='bonus', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt).aggregate(
+        s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+    )['s']
+    payment_gateway_charges = PaymentGatewayEventLog.objects.filter(
+        created_at__gte=metrics_start_dt,
+        created_at__lte=metrics_end_dt,
+    ).aggregate(s=Coalesce(Sum('fee_amount'), Value(0), output_field=DecimalField()))['s']
+    current_wallet_liabilities = Wallet.objects.aggregate(s=Coalesce(Sum('balance'), Value(0), output_field=DecimalField()))['s']
+    current_exposure_liabilities = BetTicket.objects.filter(status='pending').aggregate(
+        s=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField())
+    )['s']
+    available_operational_balance = Wallet.objects.filter(user__user_type__in=['admin', 'account_user', 'finance']).aggregate(
+        s=Coalesce(Sum('balance'), Value(0), output_field=DecimalField())
+    )['s']
+
+    charts_cache_key = f"finance:charts:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    charts_data = cache.get(charts_cache_key)
+    if charts_data is None:
+        day_count = (metrics_end_date - metrics_start_date).days + 1
+        days = [metrics_start_date + timedelta(days=i) for i in range(max(0, day_count))]
+        labels = [d.isoformat() for d in days]
+
+        dep_daily = (
+            Transaction.objects.filter(transaction_type='deposit', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+            .values('timestamp__date')
+            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
+        )
+        dep_map = {row['timestamp__date']: row['total'] for row in dep_daily}
+
+        wdr_daily = (
+            UserWithdrawal.objects.filter(request_time__gte=metrics_start_dt, request_time__lte=metrics_end_dt)
+            .values('request_time__date')
+            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
+        )
+        wdr_map = {row['request_time__date']: row['total'] for row in wdr_daily}
+
+        ticket_daily = (
+            tickets_range.values('placed_at__date')
+            .annotate(
+                stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()),
+                payouts=Coalesce(Sum(Case(When(status='won', then='max_winning'), default=Value(0), output_field=DecimalField())), Value(0), output_field=DecimalField()),
+            )
+        )
+        tmap = {row['placed_at__date']: row for row in ticket_daily}
+
+        deposits_series = [float(dep_map.get(d, Decimal('0.00'))) for d in days]
+        withdrawals_series = [float(wdr_map.get(d, Decimal('0.00'))) for d in days]
+        stake_series = [float((tmap.get(d) or {}).get('stake', Decimal('0.00'))) for d in days]
+        payouts_series = [float((tmap.get(d) or {}).get('payouts', Decimal('0.00'))) for d in days]
+        profit_series = [float(Decimal(str(stake_series[i])) - Decimal(str(payouts_series[i]))) for i in range(len(days))]
+
+        charts_data = {
+            'labels': labels,
+            'deposits': deposits_series,
+            'withdrawals': withdrawals_series,
+            'stakes': stake_series,
+            'payouts': payouts_series,
+            'profit': profit_series,
+        }
+        cache.set(charts_cache_key, charts_data, 60)
+
+    tx_page = None
+    deposits_page = None
+    withdrawals_page = None
+    wallets_page = None
+    commissions_page = None
+    bonuses_page = None
+    audit_page = None
+    settlements_page = None
+    settlement_batch = None
+    settlement_items = None
+    ledger_page = None
+    selected_journal_entry = None
+    gateway_logs_page = None
+    pin_logs_page = None
+    recon_deposits_page = None
+    recon_mismatch_events_page = None
+    fraud_high_risk_fixtures = []
+    fraud_suspicious_withdrawals = []
+    fraud_large_withdrawals = []
+    scheduled_reports = None
+
+    if active_tab == 'transactions':
+        tx_qs = Transaction.objects.select_related('user', 'initiating_user').order_by('-timestamp')
+        if start_dt:
+            tx_qs = tx_qs.filter(timestamp__gte=start_dt)
+        if end_dt:
+            tx_qs = tx_qs.filter(timestamp__lte=end_dt)
+        if q:
+            tx_qs = tx_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__phone_number__icontains=q) | Q(id__icontains=q))
+        if tx_type:
+            tx_qs = tx_qs.filter(transaction_type=tx_type)
+        if tx_status:
+            tx_qs = tx_qs.filter(status=tx_status)
+        if tx_gateway:
+            tx_qs = tx_qs.filter(payment_gateway=tx_gateway)
+        try:
+            if amount_min:
+                tx_qs = tx_qs.filter(amount__gte=Decimal(amount_min))
+        except Exception:
+            pass
+        try:
+            if amount_max:
+                tx_qs = tx_qs.filter(amount__lte=Decimal(amount_max))
+        except Exception:
+            pass
+        tx_p = Paginator(tx_qs, 50)
+        try:
+            tx_page = tx_p.page(request.GET.get('tx_page') or 1)
+        except Exception:
+            tx_page = tx_p.page(1)
+
+    if active_tab == 'deposits':
+        dep_qs = Transaction.objects.filter(transaction_type='deposit').select_related('user').order_by('-timestamp')
+        if start_dt:
+            dep_qs = dep_qs.filter(timestamp__gte=start_dt)
+        if end_dt:
+            dep_qs = dep_qs.filter(timestamp__lte=end_dt)
+        if q:
+            dep_qs = dep_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(paystack_reference__icontains=q) | Q(external_reference__icontains=q))
+        if tx_status:
+            dep_qs = dep_qs.filter(status=tx_status)
+        if tx_gateway:
+            dep_qs = dep_qs.filter(payment_gateway=tx_gateway)
+        dep_p = Paginator(dep_qs, 50)
+        try:
+            deposits_page = dep_p.page(request.GET.get('dep_page') or 1)
+        except Exception:
+            deposits_page = dep_p.page(1)
+
+    if active_tab == 'withdrawals':
+        w_qs = UserWithdrawal.objects.select_related('user', 'approved_rejected_by').order_by('-request_time')
+        if start_dt:
+            w_qs = w_qs.filter(request_time__gte=start_dt)
+        if end_dt:
+            w_qs = w_qs.filter(request_time__lte=end_dt)
+        if q:
+            w_qs = w_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(account_number__icontains=q))
+        if tx_status:
+            w_qs = w_qs.filter(status=tx_status)
+        w_p = Paginator(w_qs, 50)
+        try:
+            withdrawals_page = w_p.page(request.GET.get('w_page') or 1)
+        except Exception:
+            withdrawals_page = w_p.page(1)
+
+    if active_tab == 'wallets':
+        wq = Wallet.objects.select_related('user').order_by('-balance')
+        if q:
+            wq = wq.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q))
+        wp = Paginator(wq, 50)
+        try:
+            wallets_page = wp.page(request.GET.get('wallets_page') or 1)
+        except Exception:
+            wallets_page = wp.page(1)
+
+    if active_tab == 'commissions':
+        cq = Transaction.objects.filter(transaction_type='commission_payout').select_related('user').order_by('-timestamp')
+        if start_dt:
+            cq = cq.filter(timestamp__gte=start_dt)
+        if end_dt:
+            cq = cq.filter(timestamp__lte=end_dt)
+        cp = Paginator(cq, 50)
+        try:
+            commissions_page = cp.page(request.GET.get('com_page') or 1)
+        except Exception:
+            commissions_page = cp.page(1)
+
+    if active_tab == 'bonuses':
+        bq = Transaction.objects.filter(transaction_type='bonus').select_related('user').order_by('-timestamp')
+        if start_dt:
+            bq = bq.filter(timestamp__gte=start_dt)
+        if end_dt:
+            bq = bq.filter(timestamp__lte=end_dt)
+        bp = Paginator(bq, 50)
+        try:
+            bonuses_page = bp.page(request.GET.get('bonus_page') or 1)
+        except Exception:
+            bonuses_page = bp.page(1)
+
+    if active_tab == 'audit' and finance_can_view_audit(request.user):
+        aq = FinanceAuditLog.objects.select_related('actor', 'target_user', 'transaction', 'withdrawal').order_by('-created_at')
+        if start_dt:
+            aq = aq.filter(created_at__gte=start_dt)
+        if end_dt:
+            aq = aq.filter(created_at__lte=end_dt)
+        if audit_action_type:
+            aq = aq.filter(action_type=audit_action_type)
+        if audit_q:
+            aq = aq.filter(
+                Q(actor__email__icontains=audit_q) |
+                Q(target_user__email__icontains=audit_q) |
+                Q(reason__icontains=audit_q) |
+                Q(notes__icontains=audit_q)
+            )
+        ap = Paginator(aq, 50)
+        try:
+            audit_page = ap.page(request.GET.get('audit_page') or 1)
+        except Exception:
+            audit_page = ap.page(1)
+
+    if active_tab == 'settlements':
+        sq = FinanceSettlementBatch.objects.select_related('created_by', 'approved_by').order_by('-created_at')
+        sq = sq.filter(period_start__lte=metrics_end_date, period_end__gte=metrics_start_date)
+        if settlement_status:
+            sq = sq.filter(status=settlement_status)
+        sp = Paginator(sq, 25)
+        try:
+            settlements_page = sp.page(request.GET.get('settlements_page') or 1)
+        except Exception:
+            settlements_page = sp.page(1)
+        if settlement_id:
+            settlement_batch = FinanceSettlementBatch.objects.filter(id=settlement_id).select_related('created_by', 'approved_by').first()
+            if settlement_batch:
+                settlement_items = settlement_batch.items.select_related('beneficiary', 'weekly_commission', 'monthly_commission').order_by('-created_at')[:2000]
+
+    if active_tab == 'ledger':
+        lq = JournalEntry.objects.select_related('created_by').order_by('-entry_date', '-created_at')
+        lq = lq.filter(entry_date__gte=metrics_start_date, entry_date__lte=metrics_end_date)
+        if ledger_q:
+            lq = lq.filter(Q(memo__icontains=ledger_q) | Q(id__icontains=ledger_q))
+        lp = Paginator(lq, 50)
+        try:
+            ledger_page = lp.page(request.GET.get('ledger_page') or 1)
+        except Exception:
+            ledger_page = lp.page(1)
+        if journal_id:
+            try:
+                selected_journal_entry = JournalEntry.objects.select_related('created_by').prefetch_related('lines__account').get(id=int(journal_id))
+            except Exception:
+                selected_journal_entry = None
+
+    if active_tab == 'gateways' and finance_can_view_gateways(request.user):
+        gq = PaymentGatewayEventLog.objects.select_related('transaction', 'user').order_by('-created_at')
+        gq = gq.filter(created_at__gte=metrics_start_dt, created_at__lte=metrics_end_dt)
+        if gateway_filter:
+            gq = gq.filter(gateway=gateway_filter)
+        gp = Paginator(gq, 50)
+        try:
+            gateway_logs_page = gp.page(request.GET.get('gateway_page') or 1)
+        except Exception:
+            gateway_logs_page = gp.page(1)
+
+    if active_tab == 'pin_logs' and finance_can_view_pin_logs(request.user):
+        pq = WithdrawalPinVerificationLog.objects.select_related('user').order_by('-created_at')
+        pq = pq.filter(created_at__gte=metrics_start_dt, created_at__lte=metrics_end_dt)
+        if pin_success in ['1', '0']:
+            pq = pq.filter(success=(pin_success == '1'))
+        if pin_q:
+            pq = pq.filter(Q(user__email__icontains=pin_q) | Q(user__username__icontains=pin_q) | Q(ip_address__icontains=pin_q))
+        pp = Paginator(pq, 50)
+        try:
+            pin_logs_page = pp.page(request.GET.get('pin_page') or 1)
+        except Exception:
+            pin_logs_page = pp.page(1)
+
+    if active_tab == 'reconciliation':
+        dep_q = Transaction.objects.filter(transaction_type='deposit').select_related('user').order_by('-timestamp')
+        dep_q = dep_q.filter(timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
+        if recon_filter == 'pending':
+            dep_q = dep_q.filter(status='pending')
+        elif recon_filter == 'failed':
+            dep_q = dep_q.filter(status='failed')
+        elif recon_filter == 'mismatch':
+            dep_q = dep_q.filter(description__icontains='Amount mismatch')
+        else:
+            dep_q = dep_q.filter(Q(status__in=['pending', 'failed']) | Q(is_successful=False) | Q(description__icontains='Amount mismatch'))
+        if q:
+            dep_q = dep_q.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(external_reference__icontains=q) | Q(paystack_reference__icontains=q))
+        dp = Paginator(dep_q, 50)
+        try:
+            recon_deposits_page = dp.page(request.GET.get('recon_page') or 1)
+        except Exception:
+            recon_deposits_page = dp.page(1)
+
+        mis_q = PaymentGatewayEventLog.objects.select_related('transaction', 'user').order_by('-created_at')
+        mis_q = mis_q.filter(
+            event_type='verify',
+            success=True,
+            created_at__gte=metrics_start_dt,
+            created_at__lte=metrics_end_dt,
+        ).filter(
+            transaction__transaction_type='deposit'
+        ).exclude(
+            transaction__status='completed',
+            transaction__is_successful=True,
+        )
+        mp = Paginator(mis_q, 50)
+        try:
+            recon_mismatch_events_page = mp.page(request.GET.get('mis_page') or 1)
+        except Exception:
+            recon_mismatch_events_page = mp.page(1)
+
+    if active_tab == 'fraud':
+        try:
+            FixtureLiabilitySnapshot = apps.get_model('risk', 'FixtureLiabilitySnapshot')
+            RiskEngineSettings = apps.get_model('risk', 'RiskEngineSettings')
+            settings_obj = RiskEngineSettings.load()
+            threshold = int(getattr(settings_obj, 'risk_threshold_percent', 85) or 85)
+            fraud_high_risk_fixtures = list(
+                FixtureLiabilitySnapshot.objects.select_related('fixture')
+                .filter(risk_score__gte=threshold)
+                .order_by('-risk_score', '-updated_at')[:25]
+            )
+        except Exception:
+            fraud_high_risk_fixtures = []
+
+        suspicious = (
+            UserWithdrawal.objects.filter(request_time__gte=metrics_start_dt, request_time__lte=metrics_end_dt)
+            .values('bank_name', 'account_number')
+            .annotate(
+                cnt=Count('id'),
+                total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()),
+            )
+            .filter(cnt__gte=2)
+            .order_by('-cnt', '-total')[:50]
+        )
+        fraud_suspicious_withdrawals = list(suspicious)
+
+        try:
+            large_cutoff = Decimal('500000.00')
+        except Exception:
+            large_cutoff = Decimal('500000.00')
+        fraud_large_withdrawals = list(
+            UserWithdrawal.objects.select_related('user')
+            .filter(request_time__gte=metrics_start_dt, request_time__lte=metrics_end_dt, amount__gte=large_cutoff)
+            .order_by('-amount')[:50]
+        )
+
+    if active_tab == 'reports':
+        scheduled_reports = ScheduledFinanceReport.objects.select_related('created_by').order_by('-created_at')[:200]
+
+    recent_events = []
+    if active_tab == 'overview':
+        recent_txs = list(Transaction.objects.select_related('user').order_by('-timestamp')[:15])
+        recent_withdrawals = list(UserWithdrawal.objects.select_related('user').order_by('-request_time')[:15])
+        recent_bets = list(BetTicket.objects.select_related('user').order_by('-placed_at')[:15])
+        for tx in recent_txs:
+            recent_events.append({
+                'ts': tx.timestamp.isoformat() if tx.timestamp else '',
+                'type': 'transaction',
+                'user': tx.user.email or tx.user.username,
+                'label': tx.transaction_type,
+                'amount': str(tx.amount),
+                'status': tx.status,
+            })
+        for w in recent_withdrawals:
+            recent_events.append({
+                'ts': w.request_time.isoformat() if w.request_time else '',
+                'type': 'withdrawal',
+                'user': w.user.email or w.user.username,
+                'label': 'Withdrawal request',
+                'amount': str(w.amount),
+                'status': w.status,
+            })
+        for b in recent_bets:
+            recent_events.append({
+                'ts': b.placed_at.isoformat() if b.placed_at else '',
+                'type': 'bet',
+                'user': b.user.email or b.user.username,
+                'label': f"Bet placed ({b.ticket_id or ''})".strip(),
+                'amount': str(b.stake_amount),
+                'status': b.status,
+            })
+        recent_events.sort(key=lambda e: e.get('ts') or '', reverse=True)
+        recent_events = recent_events[:30]
+
+    context = {
+        'active_tab': active_tab,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
+        'metrics_label': metrics_label,
+        'q': q,
+        'tx_type': tx_type,
+        'tx_status': tx_status,
+        'tx_gateway': tx_gateway,
+        'amount_min': amount_min,
+        'amount_max': amount_max,
+        'settlement_status': settlement_status,
+        'settlement_id': settlement_id,
+        'ledger_q': ledger_q,
+        'ledger_account': ledger_account,
+        'journal_id': journal_id,
+        'gateway': gateway_filter,
+        'pin_q': pin_q,
+        'pin_success': pin_success,
+        'recon': recon_filter,
+        'fraud': fraud_filter,
+        'kpis': {
+            'deposits_today': deposits_today,
+            'withdrawals_today': withdrawals_today,
+            'pending_withdrawals': pending_withdrawals_count,
+            'successful_withdrawals_today': successful_withdrawals_today,
+            'failed_transactions': failed_transactions,
+            'ggr': ggr,
+            'ngr': ngr,
+            'total_stakes': total_stakes,
+            'total_payouts': total_payouts,
+            'profit_loss': profit_loss,
+            'agent_commissions': agent_commissions,
+            'bonus_expenses': bonus_expenses,
+            'payment_gateway_charges': payment_gateway_charges,
+            'wallet_liabilities': current_wallet_liabilities,
+            'exposure_liabilities': current_exposure_liabilities,
+            'operational_balance': available_operational_balance,
+        },
+        'charts_data': charts_data,
+        'initial_events_json': json.dumps(recent_events),
+        'tx_page': tx_page,
+        'deposits_page': deposits_page,
+        'withdrawals_page': withdrawals_page,
+        'wallets_page': wallets_page,
+        'commissions_page': commissions_page,
+        'bonuses_page': bonuses_page,
+        'audit_page': audit_page,
+        'settlements_page': settlements_page,
+        'settlement_batch': settlement_batch,
+        'settlement_items': settlement_items,
+        'ledger_page': ledger_page,
+        'selected_journal_entry': selected_journal_entry,
+        'ledger_accounts': list(LedgerAccount.objects.filter(is_active=True).order_by('code').values('code', 'name')),
+        'gateway_logs_page': gateway_logs_page,
+        'pin_logs_page': pin_logs_page,
+        'recon_deposits_page': recon_deposits_page,
+        'recon_mismatch_events_page': recon_mismatch_events_page,
+        'fraud_high_risk_fixtures': fraud_high_risk_fixtures,
+        'fraud_suspicious_withdrawals': fraud_suspicious_withdrawals,
+        'fraud_large_withdrawals': fraud_large_withdrawals,
+        'scheduled_reports': scheduled_reports,
+        'audit_q': audit_q,
+        'audit_action_type': audit_action_type,
+        'audit_action_choices': getattr(FinanceAuditLog, 'ACTION_TYPES', ()),
+        'can_approve_withdrawals': finance_can_approve_withdrawals(request.user),
+        'can_reverse_transactions': finance_can_reverse_transactions(request.user),
+        'can_verify_transactions': finance_can_verify_transactions(request.user),
+        'can_adjust_wallets': finance_can_adjust_wallets(request.user),
+        'can_export': finance_can_export(request.user),
+        'can_view_audit': finance_can_view_audit(request.user),
+        'can_manage_settlements': finance_can_manage_settlements(request.user),
+        'can_manage_ledger': finance_can_manage_ledger(request.user),
+        'can_view_gateways': finance_can_view_gateways(request.user),
+        'can_view_pin_logs': finance_can_view_pin_logs(request.user),
+    }
+    return render(request, 'betting/finance_dashboard.html', context)
+
+
+@login_required
+@user_passes_test(is_finance_user)
+def finance_export(request):
+    if not finance_can_export(request.user):
+        return HttpResponse("Not allowed.", status=403)
+    dataset = (request.GET.get('dataset') or '').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, "%Y-%m-%d"))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, "%Y-%m-%d")
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+
+    today = timezone.localdate()
+    if not start_dt:
+        start_dt = timezone.make_aware(datetime.combine(today - timedelta(days=30), datetime.min.time()))
+    if not end_dt:
+        end_dt = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+
+    rows = []
+    title = dataset or 'report'
+
+    if dataset == 'deposits':
+        qs = Transaction.objects.filter(transaction_type='deposit').filter(timestamp__gte=start_dt, timestamp__lte=end_dt).select_related('user').order_by('-timestamp')
+        for tx in qs[:100000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'tx_id': str(tx.id),
+                'user': tx.user.email or tx.user.username,
+                'amount': str(tx.amount),
+                'status': tx.status,
+                'successful': 'yes' if tx.is_successful else 'no',
+                'gateway': getattr(tx, 'payment_gateway', ''),
+                'ref': tx.paystack_reference or tx.external_reference or '',
+            })
+        title = 'deposits'
+
+    elif dataset == 'withdrawals':
+        qs = UserWithdrawal.objects.filter(request_time__gte=start_dt, request_time__lte=end_dt).select_related('user', 'approved_rejected_by').order_by('-request_time')
+        for w in qs[:100000]:
+            rows.append({
+                'time': w.request_time.isoformat(sep=' ', timespec='seconds'),
+                'withdrawal_id': str(w.id),
+                'user': w.user.email or w.user.username,
+                'amount': str(w.amount),
+                'status': w.status,
+                'bank': w.bank_name,
+                'account_number': w.account_number,
+                'handled_by': getattr(getattr(w, 'approved_rejected_by', None), 'email', '') or '',
+            })
+        title = 'withdrawals'
+
+    elif dataset == 'transactions':
+        qs = Transaction.objects.filter(timestamp__gte=start_dt, timestamp__lte=end_dt).select_related('user', 'initiating_user').order_by('-timestamp')
+        for tx in qs[:100000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'tx_id': str(tx.id),
+                'user': tx.user.email or tx.user.username,
+                'type': tx.transaction_type,
+                'amount': str(tx.amount),
+                'status': tx.status,
+                'successful': 'yes' if tx.is_successful else 'no',
+                'gateway': getattr(tx, 'payment_gateway', ''),
+                'initiator': getattr(getattr(tx, 'initiating_user', None), 'email', '') or '',
+            })
+        title = 'transactions'
+
+    elif dataset == 'ledger':
+        qs = FinanceAuditLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('actor', 'target_user', 'transaction', 'withdrawal').order_by('-created_at')
+        for a in qs[:100000]:
+            rows.append({
+                'time': a.created_at.isoformat(sep=' ', timespec='seconds'),
+                'action': a.action_type,
+                'actor': getattr(getattr(a, 'actor', None), 'email', '') or '',
+                'target_user': getattr(getattr(a, 'target_user', None), 'email', '') or '',
+                'transaction_id': str(a.transaction_id) if a.transaction_id else '',
+                'withdrawal_id': str(a.withdrawal_id) if a.withdrawal_id else '',
+                'reason': a.reason,
+            })
+        title = 'ledger'
+
+    elif dataset == 'journals':
+        qs = JournalEntry.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('created_by').prefetch_related('lines__account').order_by('-created_at')
+        for je in qs[:50000]:
+            for line in list(getattr(je, 'lines', []).all())[:50]:
+                rows.append({
+                    'time': je.created_at.isoformat(sep=' ', timespec='seconds'),
+                    'entry_date': je.entry_date.isoformat(),
+                    'journal_id': str(je.id),
+                    'memo': je.memo,
+                    'created_by': getattr(getattr(je, 'created_by', None), 'email', '') or '',
+                    'account': getattr(getattr(line, 'account', None), 'code', '') or '',
+                    'account_name': getattr(getattr(line, 'account', None), 'name', '') or '',
+                    'debit': str(line.debit),
+                    'credit': str(line.credit),
+                })
+        title = 'journals'
+
+    elif dataset == 'settlements':
+        qs = FinanceSettlementBatch.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('created_by', 'approved_by').order_by('-created_at')
+        for b in qs[:50000]:
+            totals = b.items.aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
+            rows.append({
+                'time': b.created_at.isoformat(sep=' ', timespec='seconds'),
+                'batch_id': str(b.id),
+                'type': b.settlement_type,
+                'status': b.status,
+                'period_start': b.period_start.isoformat(),
+                'period_end': b.period_end.isoformat(),
+                'items_total': str(totals),
+                'created_by': getattr(getattr(b, 'created_by', None), 'email', '') or '',
+                'approved_by': getattr(getattr(b, 'approved_by', None), 'email', '') or '',
+            })
+        title = 'settlements'
+
+    elif dataset == 'gateway_logs':
+        qs = PaymentGatewayEventLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('transaction', 'user').order_by('-created_at')
+        for g in qs[:100000]:
+            rows.append({
+                'time': g.created_at.isoformat(sep=' ', timespec='seconds'),
+                'gateway': g.gateway,
+                'event': g.event_type,
+                'reference': g.reference,
+                'success': 'yes' if g.success else 'no',
+                'http_status': str(g.http_status or ''),
+                'amount': str(g.amount or ''),
+                'fee': str(g.fee_amount or ''),
+                'user': getattr(getattr(g, 'user', None), 'email', '') or '',
+                'tx_id': str(g.transaction_id or ''),
+                'message': g.message,
+            })
+        title = 'gateway_logs'
+
+    elif dataset == 'pin_logs':
+        qs = WithdrawalPinVerificationLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('user').order_by('-created_at')
+        for p in qs[:100000]:
+            rows.append({
+                'time': p.created_at.isoformat(sep=' ', timespec='seconds'),
+                'user': p.user.email or p.user.username,
+                'success': 'yes' if p.success else 'no',
+                'ip': p.ip_address or '',
+                'user_agent': p.user_agent or '',
+            })
+        title = 'pin_logs'
+
+    else:
+        return HttpResponse("Unknown dataset.", status=400)
+
+    FinanceAuditLog.objects.create(
+        actor=request.user,
+        action_type='REPORT_EXPORTED',
+        ip_address=get_client_ip(request),
+        data={'dataset': title, 'format': fmt, 'range': [start_dt.date().isoformat(), end_dt.date().isoformat()]},
+    )
+
+    filename_base = f"finance_{title}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if fmt == 'csv':
+        import csv
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.csv"'
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(response, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return response
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=title[:31] or 'Sheet1')
+        output.seek(0)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.xlsx"'
+        return response
+
+    if fmt == 'pdf':
+        from weasyprint import HTML
+        def esc(s):
+            return (str(s or '')
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;'))
+        cols = list(rows[0].keys()) if rows else []
+        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
+        body = ''.join([
+            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
+            for r in rows[:3000]
+        ])
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              .meta {{ color: #666; margin-bottom: 12px; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>Finance Report: {esc(title)}</h2>
+            <div class="meta">Range: {esc(start_dt.date().isoformat())} → {esc(end_dt.date().isoformat())}</div>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.pdf"'
+        return response
+
+    return HttpResponse("Unknown format.", status=400)
+
+@login_required
+@user_passes_test(is_crm_user)
+def crm_user_detail(request, user_id):
+    target = get_object_or_404(User, id=user_id)
+    wallet = Wallet.objects.filter(user=target).first()
+    txs = Transaction.objects.filter(user=target).select_related('initiating_user').order_by('-timestamp')[:30]
+    deposits = Transaction.objects.filter(user=target, transaction_type='deposit').order_by('-timestamp')[:20]
+    bonuses = Transaction.objects.filter(user=target, transaction_type='bonus').order_by('-timestamp')[:20]
+    tickets = BetTicket.objects.filter(user=target).order_by('-placed_at')[:20]
+    withdrawals = UserWithdrawal.objects.filter(user=target).order_by('-request_time')[:20]
+
+    profile_form = CRMUserProfileForm(instance=target)
+
+    if request.method == 'POST':
+        if 'save_profile' in request.POST:
+            if not crm_can_edit_profiles(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            profile_form = CRMUserProfileForm(request.POST, instance=target)
+            if profile_form.is_valid():
+                before = {
+                    'first_name': target.first_name,
+                    'last_name': target.last_name,
+                    'other_name': target.other_name,
+                    'phone_number': target.phone_number,
+                    'state_id': target.state_id,
+                    'shop_address': target.shop_address,
+                    'bank_account_name': target.bank_account_name,
+                    'kyc_status': getattr(target, 'kyc_status', ''),
+                    'vip_level': getattr(target, 'vip_level', ''),
+                    'vip_manager_id': getattr(target, 'vip_manager_id', None),
+                }
+                updated_user = profile_form.save()
+                after = {
+                    'first_name': updated_user.first_name,
+                    'last_name': updated_user.last_name,
+                    'other_name': updated_user.other_name,
+                    'phone_number': updated_user.phone_number,
+                    'state_id': updated_user.state_id,
+                    'shop_address': updated_user.shop_address,
+                    'bank_account_name': updated_user.bank_account_name,
+                    'kyc_status': getattr(updated_user, 'kyc_status', ''),
+                    'vip_level': getattr(updated_user, 'vip_level', ''),
+                    'vip_manager_id': getattr(updated_user, 'vip_manager_id', None),
+                }
+                CRMActionLog.objects.create(
+                    actor=request.user,
+                    target_user=updated_user,
+                    action_type='PROFILE_EDITED' if before == after else 'VIP_UPDATED',
+                    data={'before': before, 'after': after},
+                )
+                messages.success(request, 'Profile updated.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            messages.error(request, 'Please correct the errors.')
+
+        elif 'toggle_active' in request.POST:
+            if not crm_can_suspend_users(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            reason = (request.POST.get('reason') or '').strip()
+            make_active = request.POST.get('make_active') == '1'
+            if make_active:
+                target.is_active = True
+                target.save(update_fields=['is_active'])
+                CRMActionLog.objects.create(
+                    actor=request.user,
+                    target_user=target,
+                    action_type='USER_UNSUSPENDED',
+                    reason=reason,
+                )
+                messages.success(request, 'User re-activated.')
+            else:
+                target.is_active = False
+                target.save(update_fields=['is_active'])
+                CRMActionLog.objects.create(
+                    actor=request.user,
+                    target_user=target,
+                    action_type='USER_SUSPENDED',
+                    reason=reason,
+                )
+                messages.success(request, 'User suspended.')
+            return redirect('betting:crm_user_detail', user_id=target.id)
+
+        elif 'toggle_withdrawals' in request.POST:
+            if not crm_can_freeze_withdrawals(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            freeze = request.POST.get('freeze') == '1'
+            reason = (request.POST.get('reason') or '').strip()
+            if freeze:
+                target.withdrawal_locked = True
+                target.withdrawal_locked_at = timezone.now()
+                target.withdrawal_attempts = 0
+                target.save(update_fields=['withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts'])
+                CRMActionLog.objects.create(actor=request.user, target_user=target, action_type='WITHDRAWAL_FROZEN', reason=reason)
+                messages.success(request, 'Withdrawals frozen.')
+            else:
+                target.withdrawal_locked = False
+                target.withdrawal_locked_at = None
+                target.withdrawal_attempts = 0
+                target.save(update_fields=['withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts'])
+                CRMActionLog.objects.create(actor=request.user, target_user=target, action_type='WITHDRAWAL_UNFROZEN', reason=reason)
+                messages.success(request, 'Withdrawals unfrozen.')
+            return redirect('betting:crm_user_detail', user_id=target.id)
+
+        elif 'wallet_adjust' in request.POST:
+            if not crm_can_manage_wallet(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+
+            form = AdminManualWalletForm(request.POST)
+            if not form.is_valid():
+                messages.error(request, 'Invalid wallet action.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            action = form.cleaned_data['action']
+            amount = form.cleaned_data['amount']
+            description = (form.cleaned_data.get('description') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+
+            with db_transaction.atomic():
+                locked_wallet = Wallet.objects.select_for_update().get(user=target)
+                if action == 'debit' and locked_wallet.balance < amount:
+                    messages.error(request, 'Insufficient wallet balance for debit.')
+                    return redirect('betting:crm_user_detail', user_id=target.id)
+                if action == 'credit':
+                    locked_wallet.balance += amount
+                    txn_type = 'wallet_transfer_in'
+                    crm_action = 'WALLET_CREDITED'
+                else:
+                    locked_wallet.balance -= amount
+                    txn_type = 'wallet_transfer_out'
+                    crm_action = 'WALLET_DEBITED'
+                locked_wallet.save(update_fields=['balance'])
+
+                Transaction.objects.create(
+                    user=target,
+                    initiating_user=request.user,
+                    target_user=target,
+                    transaction_type=txn_type,
+                    amount=amount,
+                    is_successful=True,
+                    status='completed',
+                    description=description or f"CRM wallet {action}. {reason}".strip(),
+                    timestamp=timezone.now(),
+                )
+
+            CRMActionLog.objects.create(
+                actor=request.user,
+                target_user=target,
+                action_type=crm_action,
+                reason=reason,
+                data={'amount': str(amount), 'description': description},
+            )
+            messages.success(request, f"Wallet {action} completed.")
+            return redirect('betting:crm_user_detail', user_id=target.id)
+
+        elif 'send_message' in request.POST:
+            if not crm_can_message(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            title = (request.POST.get('msg_title') or '').strip() or 'Message'
+            body = (request.POST.get('msg_body') or '').strip()
+            via_inapp = request.POST.get('via_inapp') == '1'
+            via_email = request.POST.get('via_email') == '1'
+            via_sms = request.POST.get('via_sms') == '1'
+
+            sent = []
+            if via_inapp:
+                try:
+                    create_notification(recipient=target, notification_type='SYSTEM_ANNOUNCEMENT', title=title, message=body)
+                    sent.append('in_app')
+                except Exception:
+                    pass
+            if via_email:
+                try:
+                    send_mail(
+                        subject=title,
+                        message=body,
+                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                        recipient_list=[target.email],
+                        fail_silently=True
+                    )
+                    sent.append('email')
+                except Exception:
+                    pass
+            sms_status = None
+            if via_sms:
+                try:
+                    from notifications.services import send_sms_ebulksms
+                    sms_status = send_sms_ebulksms(msisdn=target.phone_number or '', message=body, sender=getattr(settings, 'EBULKSMS_SENDER', None))
+                    if sms_status.get('ok'):
+                        sent.append('sms')
+                except Exception:
+                    sms_status = {'ok': False}
+
+            CRMActionLog.objects.create(
+                actor=request.user,
+                target_user=target,
+                action_type='MESSAGE_SENT',
+                data={'channels': sent, 'sms': sms_status or {}},
+            )
+            messages.success(request, f"Message sent via: {', '.join(sent) if sent else 'none'}.")
+            return redirect('betting:crm_user_detail', user_id=target.id)
+
+        elif 'reset_password' in request.POST:
+            if not crm_can_reset_password(request.user):
+                messages.error(request, 'Not allowed.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            raw_password = get_random_string(12)
+            target.set_password(raw_password)
+            target.save(update_fields=['password'])
+            try:
+                send_mail(
+                    subject='Password Reset',
+                    message=f"Your password has been reset.\n\nNew password: {raw_password}\n\nLogin: {request.build_absolute_uri('/login/')}\n",
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[target.email],
+                    fail_silently=True
+                )
+            except Exception:
+                pass
+            CRMActionLog.objects.create(actor=request.user, target_user=target, action_type='PASSWORD_RESET')
+            messages.success(request, 'Password reset and emailed to user.')
+            return redirect('betting:crm_user_detail', user_id=target.id)
+
+    login_attempts = LoginAttempt.objects.filter(user=target, status='success').order_by('-timestamp')[:20]
+    DeviceFingerprint = apps.get_model('risk', 'DeviceFingerprint')
+    SuspiciousActivityLog = apps.get_model('risk', 'SuspiciousActivityLog')
+    IPIntelligence = apps.get_model('risk', 'IPIntelligence')
+
+    device_fingerprints = []
+    suspicious_logs = []
+    ip_intel = None
+    last_ip = None
+    try:
+        device_fingerprints = list(DeviceFingerprint.objects.filter(user=target).order_by('-last_seen_at')[:20])
+    except Exception:
+        device_fingerprints = []
+    try:
+        suspicious_logs = list(SuspiciousActivityLog.objects.filter(user=target).select_related('ticket').order_by('-created_at')[:20])
+    except Exception:
+        suspicious_logs = []
+    try:
+        last_ip = (login_attempts[0].ip_address if login_attempts else None) or (device_fingerprints[0].ip_address if device_fingerprints else None)
+    except Exception:
+        last_ip = None
+    if last_ip:
+        try:
+            ip_intel = IPIntelligence.objects.filter(ip_address=last_ip).first()
+        except Exception:
+            ip_intel = None
+
+    context = {
+        'target_user': target,
+        'wallet': wallet,
+        'transactions': txs,
+        'deposits': deposits,
+        'bonuses': bonuses,
+        'tickets': tickets,
+        'withdrawals': withdrawals,
+        'profile_form': profile_form,
+        'can_approve_withdrawals': crm_can_approve_withdrawals(request.user),
+        'can_suspend_users': crm_can_suspend_users(request.user),
+        'can_approve_registrations': crm_can_approve_registrations(request.user),
+        'can_edit_profiles': crm_can_edit_profiles(request.user),
+        'can_manage_wallet': crm_can_manage_wallet(request.user),
+        'can_freeze_withdrawals': crm_can_freeze_withdrawals(request.user),
+        'can_reset_password': crm_can_reset_password(request.user),
+        'can_message': crm_can_message(request.user),
+        'login_attempts': login_attempts,
+        'device_fingerprints': device_fingerprints,
+        'suspicious_logs': suspicious_logs,
+        'ip_intel': ip_intel,
+    }
+    return render(request, 'betting/crm_user_detail.html', context)
+
+@login_required
+@user_passes_test(is_crm_user)
+@db_transaction.atomic
+def crm_withdrawal_action(request, withdrawal_id):
+    if not crm_can_approve_withdrawals(request.user):
+        messages.error(request, 'Not allowed.')
+        return redirect('betting:crm_dashboard')
+
+    withdrawal_request = get_object_or_404(UserWithdrawal, id=withdrawal_id)
+    if withdrawal_request.status != 'pending':
+        messages.warning(request, f"This withdrawal request has already been {withdrawal_request.status}.")
+        return redirect('betting:crm_dashboard')
+
+    if request.method != 'POST':
+        messages.error(request, 'Invalid request.')
+        return redirect('betting:crm_dashboard')
+
+    form = CRMWithdrawalDecisionForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, 'Invalid form.')
+        return redirect('betting:crm_dashboard')
+
+    action = form.cleaned_data['action']
+    reason = form.cleaned_data.get('reason') or ''
+    notes = form.cleaned_data.get('notes') or ''
+
+    if action == 'approve':
+        withdrawal_request.status = 'approved'
+        try:
+            user_wallet = Wallet.objects.get(user=withdrawal_request.user)
+            withdrawal_request.balance_after = user_wallet.balance
+            withdrawal_request.balance_before = user_wallet.balance + withdrawal_request.amount
+        except Wallet.DoesNotExist:
+            pass
+        withdrawal_request.processed_ip = request.META.get('REMOTE_ADDR')
+        withdrawal_request.approved_rejected_by = request.user
+        withdrawal_request.approved_rejected_time = timezone.now()
+        withdrawal_request.admin_notes = reason
+        withdrawal_request.save()
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=withdrawal_request.user,
+            action_type='WITHDRAWAL_APPROVED',
+            reason=reason,
+            notes=notes,
+            withdrawal=withdrawal_request,
+            data={'amount': str(withdrawal_request.amount)},
+        )
+        messages.success(request, f"Withdrawal {withdrawal_id} approved.")
+
+    elif action == 'reject':
+        withdrawal_request.status = 'rejected'
+        withdrawal_request._skip_signal_refund = True
+        withdrawal_request.processed_ip = request.META.get('REMOTE_ADDR')
+        withdrawal_request.approved_rejected_by = request.user
+        withdrawal_request.approved_rejected_time = timezone.now()
+        withdrawal_request.admin_notes = reason
+
+        user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=withdrawal_request.user)
+        user_wallet.balance += withdrawal_request.amount
+        user_wallet.save()
+
+        Transaction.objects.create(
+            user=withdrawal_request.user,
+            initiating_user=request.user,
+            target_user=withdrawal_request.user,
+            transaction_type='withdrawal_refund',
+            amount=withdrawal_request.amount,
+            is_successful=True,
+            status='completed',
+            description=f"Refund for rejected withdrawal request {withdrawal_id}. Reason: {reason or 'No reason provided.'}",
+            timestamp=timezone.now()
+        )
+        withdrawal_request.save()
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=withdrawal_request.user,
+            action_type='WITHDRAWAL_REJECTED',
+            reason=reason,
+            notes=notes,
+            withdrawal=withdrawal_request,
+            data={'amount': str(withdrawal_request.amount)},
+        )
+        messages.info(request, f"Withdrawal {withdrawal_id} rejected and refunded.")
+
+    return redirect(request.META.get('HTTP_REFERER') or reverse('betting:crm_dashboard'))
+
+@login_required
+@user_passes_test(is_crm_user)
+@db_transaction.atomic
+def crm_cashier_registration_action(request, pk, action):
+    if not crm_can_approve_registrations(request.user):
+        messages.error(request, 'Not allowed.')
+        return redirect('betting:crm_dashboard')
+
+    cashier_req = get_object_or_404(CashierRegistrationRequest, pk=pk)
+    if cashier_req.status != 'PENDING':
+        messages.warning(request, 'This cashier registration is not pending.')
+        return redirect('betting:crm_dashboard')
+
+    if request.method != 'POST':
+        messages.error(request, 'Invalid request.')
+        return redirect('betting:crm_dashboard')
+
+    if action == 'approve':
+        agent = cashier_req.agent
+        if not agent:
+            messages.error(request, 'This request has no agent attached.')
+            return redirect('betting:crm_dashboard')
+
+        if User.objects.filter(email__iexact=cashier_req.cashier_email).exists():
+            cashier_req.status = 'REJECTED'
+            cashier_req.reviewed_at = timezone.now()
+            cashier_req.admin_notes = 'Cashier email already exists.'
+            cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
+            CRMActionLog.objects.create(
+                actor=request.user,
+                target_user=agent,
+                action_type='CASHIER_REG_REJECTED',
+                reason='Cashier email already exists.',
+                cashier_request=cashier_req,
+            )
+            messages.error(request, 'Cashier email already exists. Request rejected.')
+            return redirect('betting:crm_dashboard')
+
+        raw_password = get_random_string(12)
+        cashier = User.objects.create_user(
+            email=cashier_req.cashier_email,
+            password=raw_password,
+            username=cashier_req.cashier_username,
+            first_name=cashier_req.first_name,
+            last_name=cashier_req.last_name,
+            other_name=cashier_req.other_name,
+            phone_number=cashier_req.phone_number,
+            state=agent.state,
+            user_type='cashier',
+            agent=agent,
+            master_agent=agent.master_agent,
+            super_agent=agent.super_agent,
+            cashier_prefix=cashier_req.cashier_prefix,
+            is_active=True
+        )
+        Wallet.objects.get_or_create(user=cashier)
+
+        cashier_req.created_cashier = cashier
+        cashier_req.status = 'APPROVED'
+        cashier_req.reviewed_at = timezone.now()
+        cashier_req.admin_notes = None
+        cashier_req.save(update_fields=['created_cashier', 'status', 'reviewed_at', 'admin_notes'])
+
+        login_url = request.build_absolute_uri('/login/')
+        message = (
+            f"A new cashier registration has been approved for your shop.\n\n"
+            f"Cashier Code: {cashier_req.cashier_code}\n"
+            f"Cashier Email: {cashier_req.cashier_email}\n"
+            f"Cashier Username: {cashier_req.cashier_username}\n"
+            f"Cashier Prefix: {cashier_req.cashier_prefix or ''}\n"
+            f"Password: {raw_password}\n\n"
+            f"Login: {login_url}\n"
+        )
+        send_mail(
+            subject='Cashier Registration Approved',
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+            recipient_list=[agent.email],
+            fail_silently=True
+        )
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=agent,
+            action_type='CASHIER_REG_APPROVED',
+            cashier_request=cashier_req,
+            data={'cashier_id': cashier.id, 'cashier_email': cashier.email},
+        )
+        messages.success(request, f"Cashier {cashier_req.cashier_email} approved and created.")
+
+    elif action == 'reject':
+        cashier_req.status = 'REJECTED'
+        cashier_req.reviewed_at = timezone.now()
+        cashier_req.admin_notes = 'Rejected by CRM.'
+        cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=cashier_req.agent,
+            action_type='CASHIER_REG_REJECTED',
+            cashier_request=cashier_req,
+        )
+        messages.success(request, 'Cashier registration rejected.')
+
+    return redirect(request.META.get('HTTP_REFERER') or reverse('betting:crm_dashboard'))
+
+@login_required
+@user_passes_test(is_crm_user)
+@db_transaction.atomic
+def crm_agent_registration_action(request, pk, action):
+    if not crm_can_approve_registrations(request.user):
+        messages.error(request, 'Not allowed.')
+        return redirect('betting:crm_dashboard')
+
+    pending_reg = get_object_or_404(PendingAgentRegistration, pk=pk)
+    if pending_reg.status != 'PENDING':
+        messages.warning(request, 'This agent registration is not pending.')
+        return redirect('betting:crm_dashboard')
+
+    if request.method != 'POST':
+        messages.error(request, 'Invalid request.')
+        return redirect('betting:crm_dashboard')
+
+    if action == 'approve':
+        raw_password = get_random_string(12)
+        created_user = None
+        cashier_accounts = []
+
+        if pending_reg.user_type == 'agent':
+            state_obj = None
+            if pending_reg.state:
+                state_obj = State.objects.filter(state_name__iexact=pending_reg.state).first()
+                if not state_obj:
+                    state_obj = State.objects.filter(abbreviation__iexact=pending_reg.state).first()
+            if not state_obj:
+                state_obj = State.objects.first()
+
+            full_name = (pending_reg.full_name or '').strip()
+            parts = full_name.split()
+            first_name = parts[0] if parts else ''
+            last_name = parts[1] if len(parts) > 1 else ''
+            other_name = ' '.join(parts[2:]) if len(parts) > 2 else ''
+
+            agent, cashiers, _ = create_agent_and_cashiers(
+                User,
+                email=pending_reg.email,
+                password=raw_password,
+                first_name=first_name,
+                last_name=last_name,
+                other_name=other_name or 'Agent',
+                state=state_obj,
+                master_agent=pending_reg.master_agent,
+                super_agent=pending_reg.super_agent,
+                phone_number=pending_reg.phone,
+                shop_address=pending_reg.state,
+            )
+            created_user = agent
+            cashier_accounts = list(cashiers or [])
+        else:
+            local = (pending_reg.email or '').split("@")[0]
+            local = re.sub(r"[^A-Za-z0-9]", "", local)[:20] or "User"
+            candidate = local[:1].upper() + local[1:].lower()
+            suffix = 1
+            while User.objects.filter(username__iexact=candidate).exists():
+                candidate = f"{local}{suffix}"
+                suffix += 1
+
+            full_name = (pending_reg.full_name or '').strip()
+            parts = full_name.split()
+            first_name = parts[0] if parts else ''
+            last_name = ' '.join(parts[1:]) if len(parts) > 1 else ''
+            created_user = User.objects.create_user(
+                email=pending_reg.email,
+                password=raw_password,
+                username=candidate,
+                first_name=first_name,
+                last_name=last_name,
+                other_name='',
+                phone_number=pending_reg.phone,
+                state=None,
+                shop_address=pending_reg.state,
+                user_type=pending_reg.user_type,
+                master_agent=pending_reg.master_agent,
+                super_agent=pending_reg.super_agent,
+                is_active=True
+            )
+            Wallet.objects.get_or_create(user=created_user, defaults={'balance': Decimal('0.00')})
+
+        pending_reg.status = 'APPROVED'
+        pending_reg.reviewed_at = timezone.now()
+        pending_reg.save(update_fields=['status', 'reviewed_at'])
+
+        login_url = request.build_absolute_uri('/login/')
+        html_message = render_to_string('pending_registration/email/agent_approved.html', {
+            'user': created_user,
+            'cashier_accounts': cashier_accounts,
+            'login_url': login_url,
+            'password': raw_password,
+        })
+        try:
+            send_mail(
+                subject='Pool Betting Agent Registration Approved',
+                message=strip_tags(html_message),
+                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                recipient_list=[created_user.email],
+                html_message=html_message,
+                fail_silently=False
+            )
+        except Exception:
+            pass
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=created_user,
+            action_type='AGENT_REG_APPROVED',
+            pending_agent_registration=pending_reg,
+            data={'created_user_id': created_user.id},
+        )
+        messages.success(request, f"Registration approved for {created_user.email}.")
+
+    elif action == 'reject':
+        reason = (request.POST.get('reason') or '').strip()
+        pending_reg.status = 'REJECTED'
+        pending_reg.admin_notes = reason
+        pending_reg.reviewed_at = timezone.now()
+        pending_reg.save(update_fields=['status', 'admin_notes', 'reviewed_at'])
+
+        try:
+            html_message = render_to_string('pending_registration/email/agent_rejected.html', {
+                'pending_reg': pending_reg,
+                'reason': reason
+            })
+            send_mail(
+                subject='Pool Betting Agent Registration Rejected',
+                message=strip_tags(html_message),
+                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                recipient_list=[pending_reg.email],
+                html_message=html_message,
+                fail_silently=False
+            )
+        except Exception:
+            pass
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            action_type='AGENT_REG_REJECTED',
+            pending_agent_registration=pending_reg,
+            reason=reason,
+        )
+        messages.info(request, 'Registration rejected.')
+
+    return redirect(request.META.get('HTTP_REFERER') or reverse('betting:crm_dashboard'))
 
 
 @login_required

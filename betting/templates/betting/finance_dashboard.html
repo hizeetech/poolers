@@ -1,0 +1,1440 @@
+{% extends 'betting/base.html' %}
+{% block title %}Finance Dashboard{% endblock %}
+
+{% block content %}
+<style>
+  .fin-tabs.nav-tabs {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    gap: 6px;
+  }
+  .fin-tabs.nav-tabs .nav-link {
+    border: 1px solid rgba(0,0,0,0.08);
+    color: #132C46;
+    background: #ffffff;
+    font-weight: 700;
+    border-radius: 10px 10px 0 0;
+    padding: 10px 14px;
+    transition: background-color 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+  }
+  .fin-tabs.nav-tabs .nav-link:hover {
+    background: rgba(19, 44, 70, 0.06);
+    color: #0B3D2E;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+  }
+  .fin-tabs.nav-tabs .nav-link.active {
+    background: linear-gradient(135deg, #0B3D2E, #062E21);
+    color: #ffffff;
+    border-color: rgba(0,0,0,0.08);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+  }
+  .kpi-card {
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  }
+  .kpi-label { color: #6c757d; font-size: 0.82rem; }
+  .kpi-value { font-weight: 800; font-size: 1.25rem; color: #132C46; }
+  .feed-item { border-bottom: 1px solid rgba(0,0,0,0.06); padding: 10px 0; }
+  .feed-item:last-child { border-bottom: none; }
+</style>
+
+<div class="container py-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Finance Dashboard</h2>
+      <div class="text-muted small">Financial operations, analytics, and auditing</div>
+      <div class="text-muted small">Range: {{ metrics_label }}</div>
+    </div>
+
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
+      <div>
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
+      </div>
+      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+      <a class="btn btn-sm btn-outline-secondary" href="?tab={{ active_tab }}">Reset</a>
+    </form>
+  </div>
+
+  <ul class="nav nav-tabs fin-tabs mb-3">
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'transactions' %}active{% endif %}" href="?tab=transactions&start_date={{ start_date }}&end_date={{ end_date }}">Transactions</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'deposits' %}active{% endif %}" href="?tab=deposits&start_date={{ start_date }}&end_date={{ end_date }}">Deposits</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'withdrawals' %}active{% endif %}" href="?tab=withdrawals&start_date={{ start_date }}&end_date={{ end_date }}">Withdrawals</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'wallets' %}active{% endif %}" href="?tab=wallets&start_date={{ start_date }}&end_date={{ end_date }}">Wallets</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'commissions' %}active{% endif %}" href="?tab=commissions&start_date={{ start_date }}&end_date={{ end_date }}">Commissions</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'bonuses' %}active{% endif %}" href="?tab=bonuses&start_date={{ start_date }}&end_date={{ end_date }}">Bonuses</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'reconciliation' %}active{% endif %}" href="?tab=reconciliation&start_date={{ start_date }}&end_date={{ end_date }}">Reconciliation</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'fraud' %}active{% endif %}" href="?tab=fraud&start_date={{ start_date }}&end_date={{ end_date }}">Fraud</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'settlements' %}active{% endif %}" href="?tab=settlements&start_date={{ start_date }}&end_date={{ end_date }}">Settlements</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'ledger' %}active{% endif %}" href="?tab=ledger&start_date={{ start_date }}&end_date={{ end_date }}">Ledger</a></li>
+    {% if can_view_gateways %}
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'gateways' %}active{% endif %}" href="?tab=gateways&start_date={{ start_date }}&end_date={{ end_date }}">Gateways</a></li>
+    {% endif %}
+    {% if can_view_pin_logs %}
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'pin_logs' %}active{% endif %}" href="?tab=pin_logs&start_date={{ start_date }}&end_date={{ end_date }}">PIN Logs</a></li>
+    {% endif %}
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
+    {% if can_view_audit %}
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'audit' %}active{% endif %}" href="?tab=audit&start_date={{ start_date }}&end_date={{ end_date }}">Audit Logs</a></li>
+    {% endif %}
+  </ul>
+
+  {% if active_tab == 'overview' %}
+  <div class="row g-3">
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Deposits Today</div><div class="kpi-value" id="kpiDepositsToday">₦{{ kpis.deposits_today|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Withdrawals Today</div><div class="kpi-value" id="kpiWithdrawalsToday">₦{{ kpis.withdrawals_today|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Pending Withdrawals</div><div class="kpi-value" id="kpiPendingWithdrawals">{{ kpis.pending_withdrawals }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Failed Transactions</div><div class="kpi-value" id="kpiFailedTx">{{ kpis.failed_transactions }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">GGR</div><div class="kpi-value">₦{{ kpis.ggr|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">NGR</div><div class="kpi-value">₦{{ kpis.ngr|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Stakes</div><div class="kpi-value">₦{{ kpis.total_stakes|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Payouts</div><div class="kpi-value">₦{{ kpis.total_payouts|floatformat:2 }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Profit/Loss</div><div class="kpi-value">₦{{ kpis.profit_loss|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Agent Commissions</div><div class="kpi-value">₦{{ kpis.agent_commissions|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Bonus Expenses</div><div class="kpi-value">₦{{ kpis.bonus_expenses|floatformat:2 }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Wallet Liabilities</div><div class="kpi-value">₦{{ kpis.wallet_liabilities|floatformat:2 }}</div></div></div>
+
+    <div class="col-12 col-lg-7">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light fw-semibold">Deposit / Withdrawal Trends</div>
+        <div class="card-body">
+          <canvas id="finCashflowChart" height="90"></canvas>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Revenue & Profit/Loss</div>
+        <div class="card-body">
+          <canvas id="finRevenueChart" height="90"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Real-time Financial Activity</div>
+          <a href="#" id="finFeedToggle" class="small text-decoration-none" style="display:none;">See All</a>
+        </div>
+        <div class="card-body">
+          <div id="finFeed" class="text-muted">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'transactions' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Transaction Management</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="transactions">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Tx/User/Phone">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Type</label>
+            <input type="text" name="tx_type" value="{{ tx_type }}" class="form-control form-control-sm" placeholder="deposit/withdrawal/...">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <input type="text" name="tx_status" value="{{ tx_status }}" class="form-control form-control-sm" placeholder="completed/failed/...">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Gateway</label>
+            <input type="text" name="tx_gateway" value="{{ tx_gateway }}" class="form-control form-control-sm" placeholder="paystack/monnify/kora">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Min</label>
+            <input type="text" name="amount_min" value="{{ amount_min }}" class="form-control form-control-sm" style="width: 110px;">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Max</label>
+            <input type="text" name="amount_max" value="{{ amount_max }}" class="form-control form-control-sm" style="width: 110px;">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Tx ID</th>
+              <th>User</th>
+              <th>Type</th>
+              <th>Gateway</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in tx_page %}
+            <tr>
+              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ tx.id }}</td>
+              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-uppercase small">{{ tx.transaction_type }}</td>
+              <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ tx.status }}</td>
+              <td class="text-end">
+                {% if can_verify_transactions %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="transactions">
+                  <input type="hidden" name="tx_review" value="1">
+                  <input type="hidden" name="tx_id" value="{{ tx.id }}">
+                  <input type="hidden" name="review_status" value="verified">
+                  <input type="hidden" name="notes" value="">
+                  <button type="submit" class="btn btn-sm btn-outline-success">Verify</button>
+                </form>
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="transactions">
+                  <input type="hidden" name="tx_review" value="1">
+                  <input type="hidden" name="tx_id" value="{{ tx.id }}">
+                  <input type="hidden" name="review_status" value="flagged">
+                  <input type="hidden" name="notes" value="Flagged by Finance">
+                  <button type="submit" class="btn btn-sm btn-outline-warning">Flag</button>
+                </form>
+                {% endif %}
+                {% if can_reverse_transactions and tx.status == 'completed' and tx.is_successful %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="transactions">
+                  <input type="hidden" name="reverse_tx" value="1">
+                  <input type="hidden" name="tx_id" value="{{ tx.id }}">
+                  <input type="text" name="reason" class="form-control form-control-sm d-inline-block" style="width: 160px;" placeholder="Reason">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Reverse this transaction?');">Reverse</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" class="text-center text-muted py-4">No transactions.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'deposits' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Deposits</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th>Gateway</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in deposits_page %}
+            <tr>
+              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ tx.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No deposits.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'withdrawals' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+      <div class="fw-semibold">Withdrawals</div>
+      {% if can_approve_withdrawals %}
+      <form method="post" class="d-flex gap-2 align-items-center">
+        {% csrf_token %}
+        <input type="hidden" name="tab" value="withdrawals">
+        <input type="hidden" name="bulk_withdrawal_approve" value="1">
+        <button class="btn btn-sm btn-success" type="submit" onclick="return confirm('Approve selected withdrawals?');">Bulk Approve</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="withdrawals">
+          <input type="hidden" name="bulk_withdrawal_approve" value="1">
+          <table class="table table-sm mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width: 34px;"></th>
+                <th>Time</th>
+                <th>User</th>
+                <th class="text-end">Amount</th>
+                <th>Status</th>
+                <th>Bank</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for w in withdrawals_page %}
+              <tr>
+                <td>
+                  {% if can_approve_withdrawals and w.status == 'pending' %}
+                  <input type="checkbox" name="selected_withdrawals" value="{{ w.id }}" class="form-check-input">
+                  {% endif %}
+                </td>
+                <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+                <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                <td class="text-uppercase small">{{ w.status }}</td>
+                <td class="text-muted small">{{ w.bank_name }} • {{ w.account_number }}</td>
+                <td class="text-end">
+                  {% if can_approve_withdrawals and w.status == 'pending' %}
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="withdrawals">
+                    <input type="hidden" name="withdrawal_action" value="1">
+                    <input type="hidden" name="withdrawal_id" value="{{ w.id }}">
+                    <input type="hidden" name="action" value="approve">
+                    <button class="btn btn-sm btn-success" type="submit" onclick="return confirm('Approve this withdrawal?');">Approve</button>
+                  </form>
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="withdrawals">
+                    <input type="hidden" name="withdrawal_action" value="1">
+                    <input type="hidden" name="withdrawal_id" value="{{ w.id }}">
+                    <input type="hidden" name="action" value="reject">
+                    <input type="hidden" name="reason" value="Rejected by Finance">
+                    <button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('Reject this withdrawal?');">Reject</button>
+                  </form>
+                  {% endif %}
+                  {% if can_approve_withdrawals and w.status == 'approved' %}
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="withdrawals">
+                    <input type="hidden" name="withdrawal_complete" value="1">
+                    <input type="hidden" name="withdrawal_id" value="{{ w.id }}">
+                    <button class="btn btn-sm btn-primary" type="submit" onclick="return confirm('Mark this withdrawal as completed (paid)?');">Mark Completed</button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="7" class="text-center text-muted py-4">No withdrawals.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if can_approve_withdrawals %}
+          <div class="p-2 border-top d-flex justify-content-between align-items-center">
+            <div class="text-muted small">Select pending withdrawals and use Bulk Approve.</div>
+            <button class="btn btn-sm btn-success" type="submit" onclick="return confirm('Approve selected withdrawals?');">Bulk Approve</button>
+          </div>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'wallets' %}
+  {% if can_adjust_wallets %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold">Manual Wallet Adjustment</div>
+    <div class="card-body">
+      <form method="post" class="row g-2 align-items-end">
+        {% csrf_token %}
+        <input type="hidden" name="tab" value="wallets">
+        <input type="hidden" name="wallet_adjust" value="1">
+        <div class="col-12 col-lg-3">
+          <label class="form-label small text-muted mb-1">User (ID/Email/Username)</label>
+          <input type="text" name="user_ident" class="form-control form-control-sm" placeholder="e.g. 25 or user@email.com" required>
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label small text-muted mb-1">Direction</label>
+          <select name="direction" class="form-select form-select-sm">
+            <option value="credit">Credit</option>
+            <option value="debit">Debit</option>
+          </select>
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label small text-muted mb-1">Amount</label>
+          <input type="text" name="amount" class="form-control form-control-sm" placeholder="0.00" required>
+        </div>
+        <div class="col-12 col-lg-4">
+          <label class="form-label small text-muted mb-1">Reason</label>
+          <input type="text" name="reason" class="form-control form-control-sm" placeholder="Required for audit trail">
+        </div>
+        <div class="col-12 col-lg-1 d-grid">
+          <button class="btn btn-sm btn-primary" type="submit" onclick="return confirm('Apply this wallet adjustment?');">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Wallets (Liability View)</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>User</th>
+              <th>Type</th>
+              <th class="text-end">Balance</th>
+              <th>Last Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for w in wallets_page %}
+            <tr>
+              <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+              <td class="text-uppercase small">{{ w.user.user_type }}</td>
+              <td class="text-end fw-semibold">₦{{ w.balance|floatformat:2 }}</td>
+              <td class="text-muted small text-nowrap">{{ w.last_updated|date:"Y-m-d H:i" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-center text-muted py-4">No wallets.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'commissions' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Commission Payouts</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Agent</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in commissions_page %}
+            <tr>
+              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ tx.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-center text-muted py-4">No commissions.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'bonuses' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Bonus Expenses</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in bonuses_page %}
+            <tr>
+              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ tx.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-center text-muted py-4">No bonuses.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'reconciliation' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Deposit Reconciliation</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="reconciliation">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Filter</label>
+            <select name="recon" class="form-select form-select-sm">
+              <option value="" {% if not recon %}selected{% endif %}>Issues</option>
+              <option value="pending" {% if recon == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="failed" {% if recon == 'failed' %}selected{% endif %}>Failed</option>
+              <option value="mismatch" {% if recon == 'mismatch' %}selected{% endif %}>Amount Mismatch</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="User/Ref">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th>Gateway</th>
+              <th>Reference</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in recon_deposits_page %}
+            <tr>
+              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
+              <td class="text-muted small">{{ tx.external_reference|default:tx.paystack_reference }}</td>
+              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ tx.status }}</td>
+              <td class="text-end">
+                {% if can_verify_transactions and can_adjust_wallets %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="reconciliation">
+                  <input type="hidden" name="deposit_complete" value="1">
+                  <input type="hidden" name="tx_id" value="{{ tx.id }}">
+                  <input type="text" name="reason" class="form-control form-control-sm d-inline-block" style="width: 160px;" placeholder="Reason">
+                  <button class="btn btn-sm btn-success" type="submit" onclick="return confirm('Complete this deposit and credit wallet?');">Complete</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-center text-muted py-4">No reconciliation items.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Verified at Gateway but Not Completed in Wallet</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Gateway</th>
+              <th>Reference</th>
+              <th>User</th>
+              <th class="text-end">Amount</th>
+              <th>Tx Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ev in recon_mismatch_events_page %}
+            <tr>
+              <td class="text-nowrap">{{ ev.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ ev.gateway }}</td>
+              <td class="text-muted small">{{ ev.reference }}</td>
+              <td class="text-muted small">{{ ev.user.email|default:ev.user.username }}</td>
+              <td class="text-end fw-semibold">{{ ev.amount|default_if_none:"" }}</td>
+              <td class="text-uppercase small">{{ ev.transaction.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">No mismatches detected.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'fraud' %}
+  <div class="row g-3">
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">High-Risk Fixtures (Risk Engine)</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Fixture</th>
+                  <th class="text-end">Stake</th>
+                  <th class="text-end">Payout</th>
+                  <th class="text-end">Risk</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in fraud_high_risk_fixtures %}
+                <tr>
+                  <td class="text-muted small">{{ r.fixture.home_team }} vs {{ r.fixture.away_team }}</td>
+                  <td class="text-end">{{ r.total_stake|floatformat:2 }}</td>
+                  <td class="text-end">{{ r.total_potential_payout|floatformat:2 }}</td>
+                  <td class="text-end fw-semibold">{{ r.risk_score }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No high-risk fixtures in range.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Duplicate Bank Account Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Bank</th>
+                  <th>Account</th>
+                  <th class="text-end">Count</th>
+                  <th class="text-end">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in fraud_suspicious_withdrawals %}
+                <tr>
+                  <td class="text-muted small">{{ row.bank_name }}</td>
+                  <td class="text-muted small">{{ row.account_number }}</td>
+                  <td class="text-end fw-semibold">{{ row.cnt }}</td>
+                  <td class="text-end fw-semibold">₦{{ row.total|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No duplicates detected.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Large Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th class="text-end">Amount</th>
+                  <th>Status</th>
+                  <th>Bank</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in fraud_large_withdrawals %}
+                <tr>
+                  <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+                  <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ w.status }}</td>
+                  <td class="text-muted small">{{ w.bank_name }} • {{ w.account_number }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No large withdrawals detected.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'settlements' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+      <div class="fw-semibold">Settlement Management</div>
+      {% if can_manage_settlements %}
+      <form method="post" class="d-flex gap-2 align-items-center">
+        {% csrf_token %}
+        <input type="hidden" name="tab" value="settlements">
+        <input type="hidden" name="create_settlement_batch" value="1">
+        <select name="settlement_type" class="form-select form-select-sm">
+          <option value="mixed_commission">Mixed Commissions</option>
+          <option value="weekly_commission">Weekly Commissions</option>
+          <option value="network_commission">Network Commissions</option>
+        </select>
+        <button class="btn btn-sm btn-primary" type="submit" onclick="return confirm('Create a settlement batch for this date range?');">Create Batch</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Created</th>
+              <th>Batch ID</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Period</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in settlements_page %}
+            <tr>
+              <td class="text-nowrap">{{ b.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ b.id }}</td>
+              <td class="text-muted small">{{ b.settlement_type }}</td>
+              <td class="text-uppercase small">{{ b.status }}</td>
+              <td class="text-muted small">{{ b.period_start }} → {{ b.period_end }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary" href="?tab=settlements&settlement_id={{ b.id }}&start_date={{ start_date }}&end_date={{ end_date }}">View</a>
+                {% if can_manage_settlements and b.status == 'draft' %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="settlements">
+                  <input type="hidden" name="settlement_action" value="1">
+                  <input type="hidden" name="settlement_id" value="{{ b.id }}">
+                  <input type="hidden" name="action" value="approve">
+                  <button class="btn btn-sm btn-success" type="submit" onclick="return confirm('Approve this batch?');">Approve</button>
+                </form>
+                {% endif %}
+                {% if can_manage_settlements and b.status == 'approved' %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="tab" value="settlements">
+                  <input type="hidden" name="settlement_action" value="1">
+                  <input type="hidden" name="settlement_id" value="{{ b.id }}">
+                  <input type="hidden" name="action" value="pay">
+                  <button class="btn btn-sm btn-primary" type="submit" onclick="return confirm('Pay this batch (credit beneficiaries wallets)?');">Pay</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">No settlement batches.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {% if settlement_batch %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Batch Items: {{ settlement_batch.id }}</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Beneficiary</th>
+              <th class="text-end">Amount</th>
+              <th>Status</th>
+              <th>Source</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in settlement_items %}
+            <tr>
+              <td class="text-muted small">{{ it.beneficiary.email|default:it.beneficiary.username }}</td>
+              <td class="text-end fw-semibold">₦{{ it.amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ it.status }}</td>
+              <td class="text-muted small">
+                {% if it.weekly_commission_id %}Weekly{% elif it.monthly_commission_id %}Monthly{% elif it.agent_payout_id %}Payout{% else %}-{% endif %}
+              </td>
+              <td class="text-muted small">{{ it.error_message|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No items.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if active_tab == 'ledger' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold">Double-entry Ledger</div>
+    <div class="card-body">
+      {% if can_manage_ledger %}
+      <form method="post" class="row g-2 align-items-end">
+        {% csrf_token %}
+        <input type="hidden" name="tab" value="ledger">
+        <input type="hidden" name="create_journal" value="1">
+        <div class="col-12 col-lg-2">
+          <label class="form-label small text-muted mb-1">Entry Date</label>
+          <input type="date" name="entry_date" class="form-control form-control-sm" required>
+        </div>
+        <div class="col-12 col-lg-4">
+          <label class="form-label small text-muted mb-1">Memo</label>
+          <input type="text" name="memo" class="form-control form-control-sm" placeholder="Description" required>
+        </div>
+        <div class="col-12 col-lg-3">
+          <label class="form-label small text-muted mb-1">Account 1</label>
+          <select name="account1" class="form-select form-select-sm" required>
+            {% for a in ledger_accounts %}
+            <option value="{{ a.code }}">{{ a.code }} - {{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-lg-1">
+          <label class="form-label small text-muted mb-1">D1</label>
+          <input type="text" name="debit1" class="form-control form-control-sm" value="0">
+        </div>
+        <div class="col-6 col-lg-1">
+          <label class="form-label small text-muted mb-1">C1</label>
+          <input type="text" name="credit1" class="form-control form-control-sm" value="0">
+        </div>
+        <div class="col-12 col-lg-3">
+          <label class="form-label small text-muted mb-1">Account 2</label>
+          <select name="account2" class="form-select form-select-sm" required>
+            {% for a in ledger_accounts %}
+            <option value="{{ a.code }}">{{ a.code }} - {{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-lg-1">
+          <label class="form-label small text-muted mb-1">D2</label>
+          <input type="text" name="debit2" class="form-control form-control-sm" value="0">
+        </div>
+        <div class="col-6 col-lg-1">
+          <label class="form-label small text-muted mb-1">C2</label>
+          <input type="text" name="credit2" class="form-control form-control-sm" value="0">
+        </div>
+        <div class="col-12 col-lg-1 d-grid">
+          <button class="btn btn-sm btn-primary" type="submit">Post</button>
+        </div>
+      </form>
+      {% else %}
+      <div class="alert alert-warning mb-0">You don’t have permission to post journal entries.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Journal Entries</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Date</th>
+                  <th>ID</th>
+                  <th>Memo</th>
+                  <th class="text-end"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for je in ledger_page %}
+                <tr>
+                  <td class="text-nowrap">{{ je.entry_date }}</td>
+                  <td class="text-muted small">{{ je.id }}</td>
+                  <td class="text-muted small">{{ je.memo }}</td>
+                  <td class="text-end">
+                    <a class="btn btn-sm btn-outline-secondary" href="?tab=ledger&journal_id={{ je.id }}&start_date={{ start_date }}&end_date={{ end_date }}">View</a>
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No journal entries.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Entry Details</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Account</th>
+                  <th class="text-end">Debit</th>
+                  <th class="text-end">Credit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if selected_journal_entry %}
+                  {% for ln in selected_journal_entry.lines.all %}
+                  <tr>
+                    <td class="text-muted small">{{ ln.account.code }} - {{ ln.account.name }}</td>
+                    <td class="text-end">{{ ln.debit|floatformat:2 }}</td>
+                    <td class="text-end">{{ ln.credit|floatformat:2 }}</td>
+                  </tr>
+                  {% endfor %}
+                {% else %}
+                <tr><td colspan="3" class="text-center text-muted py-4">Select an entry to view lines.</td></tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'gateways' and can_view_gateways %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Payment Gateway Monitoring</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="gateways">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Gateway</label>
+            <select name="gateway" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="paystack" {% if gateway == 'paystack' %}selected{% endif %}>Paystack</option>
+              <option value="monnify" {% if gateway == 'monnify' %}selected{% endif %}>Monnify</option>
+              <option value="kora" {% if gateway == 'kora' %}selected{% endif %}>Korapay</option>
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Gateway</th>
+              <th>Event</th>
+              <th>Reference</th>
+              <th>Status</th>
+              <th class="text-end">Amount</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for g in gateway_logs_page %}
+            <tr>
+              <td class="text-nowrap">{{ g.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ g.gateway }}</td>
+              <td class="text-muted small">{{ g.event_type }}</td>
+              <td class="text-muted small">{{ g.reference|default:"-" }}</td>
+              <td class="text-uppercase small">{% if g.success %}success{% else %}fail{% endif %}</td>
+              <td class="text-end">{{ g.amount|default_if_none:"" }}</td>
+              <td class="text-muted small">{{ g.message|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-center text-muted py-4">No gateway logs.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'pin_logs' and can_view_pin_logs %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Withdrawal PIN Verification Logs</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="pin_logs">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Success</label>
+            <select name="pin_success" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="1" {% if pin_success == '1' %}selected{% endif %}>Success</option>
+              <option value="0" {% if pin_success == '0' %}selected{% endif %}>Failed</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="pin_q" value="{{ pin_q }}" class="form-control form-control-sm" placeholder="User/IP">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th>Status</th>
+              <th>IP</th>
+              <th>User Agent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in pin_logs_page %}
+            <tr>
+              <td class="text-nowrap">{{ p.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{{ p.user.email|default:p.user.username }}</td>
+              <td class="text-uppercase small">{% if p.success %}success{% else %}failed{% endif %}</td>
+              <td class="text-muted small">{{ p.ip_address|default:"-" }}</td>
+              <td class="text-muted small">{{ p.user_agent|default:"-"|truncatechars:60 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No PIN logs.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'reports' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Reports & Exports</div>
+    <div class="card-body">
+      {% if not can_export %}
+      <div class="alert alert-warning mb-0">You don’t have export permission.</div>
+      {% else %}
+      <div class="text-muted small mb-2">Range: {{ metrics_label }}</div>
+      <div class="row g-2">
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Transactions</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=transactions&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=transactions&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=transactions&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Deposits</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=deposits&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=deposits&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=deposits&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Withdrawals</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=withdrawals&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=withdrawals&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=withdrawals&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Ledger (Finance Audit)</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=ledger&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=ledger&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=ledger&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Journal Entries</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=journals&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=journals&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=journals&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Settlements</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=settlements&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=settlements&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=settlements&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Gateway Logs</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=gateway_logs&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=gateway_logs&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=gateway_logs&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Withdrawal PIN Logs</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=pin_logs&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=pin_logs&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:finance_export' %}?dataset=pin_logs&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4">
+        <div class="fw-semibold mb-2">Scheduled Reports (Email)</div>
+        <form method="post" class="row g-2 align-items-end mb-3">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="reports">
+          <input type="hidden" name="create_scheduled_report" value="1">
+          <div class="col-12 col-lg-3">
+            <label class="form-label small text-muted mb-1">Name</label>
+            <input type="text" name="name" class="form-control form-control-sm" placeholder="e.g. Daily Finance Summary" required>
+          </div>
+          <div class="col-6 col-lg-2">
+            <label class="form-label small text-muted mb-1">Dataset</label>
+            <select name="dataset" class="form-select form-select-sm">
+              <option value="transactions">Transactions</option>
+              <option value="deposits">Deposits</option>
+              <option value="withdrawals">Withdrawals</option>
+              <option value="ledger">Finance Audit</option>
+              <option value="journals">Journals</option>
+              <option value="settlements">Settlements</option>
+              <option value="gateway_logs">Gateway Logs</option>
+              <option value="pin_logs">PIN Logs</option>
+            </select>
+          </div>
+          <div class="col-6 col-lg-1">
+            <label class="form-label small text-muted mb-1">Format</label>
+            <select name="report_format" class="form-select form-select-sm">
+              <option value="csv">CSV</option>
+              <option value="xlsx">Excel</option>
+              <option value="pdf">PDF</option>
+            </select>
+          </div>
+          <div class="col-6 col-lg-2">
+            <label class="form-label small text-muted mb-1">Frequency</label>
+            <select name="frequency" class="form-select form-select-sm">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="col-12 col-lg-3">
+            <label class="form-label small text-muted mb-1">Recipients</label>
+            <input type="text" name="recipients" class="form-control form-control-sm" placeholder="a@x.com, b@y.com" required>
+          </div>
+          <div class="col-12 col-lg-1 d-grid">
+            <button class="btn btn-sm btn-primary" type="submit">Add</button>
+          </div>
+        </form>
+
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Name</th>
+                <th>Dataset</th>
+                <th>Format</th>
+                <th>Frequency</th>
+                <th>Active</th>
+                <th>Last Status</th>
+                <th>Last Run</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in scheduled_reports %}
+              <tr>
+                <td class="text-muted small">{{ r.name }}</td>
+                <td class="text-muted small">{{ r.dataset }}</td>
+                <td class="text-muted small">{{ r.report_format }}</td>
+                <td class="text-muted small">{{ r.frequency }}</td>
+                <td class="text-uppercase small">{% if r.is_active %}yes{% else %}no{% endif %}</td>
+                <td class="text-muted small">{{ r.last_status|default:"-" }}</td>
+                <td class="text-muted small">{{ r.last_run_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-end">
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="reports">
+                    <input type="hidden" name="toggle_scheduled_report" value="1">
+                    <input type="hidden" name="report_id" value="{{ r.id }}">
+                    <button class="btn btn-sm btn-outline-secondary" type="submit">{% if r.is_active %}Disable{% else %}Enable{% endif %}</button>
+                  </form>
+                  <form method="post" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="reports">
+                    <input type="hidden" name="run_scheduled_report" value="1">
+                    <input type="hidden" name="report_id" value="{{ r.id }}">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Send Now</button>
+                  </form>
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="8" class="text-center text-muted py-3">No scheduled reports.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="text-muted small mt-3">PDF exports are capped to the first 3,000 rows.</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'audit' and can_view_audit %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Finance Audit Logs</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="audit">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Action</label>
+            <select name="audit_action_type" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for val,label in audit_action_choices %}
+              <option value="{{ val }}" {% if audit_action_type == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="audit_q" value="{{ audit_q }}" class="form-control form-control-sm" placeholder="Actor/Target/Reason">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Actor</th>
+              <th>Target</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in audit_page %}
+            <tr>
+              <td class="text-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-uppercase small">{{ a.action_type }}</td>
+              <td class="text-muted small">{{ a.actor.email|default:"-" }}</td>
+              <td class="text-muted small">{{ a.target_user.email|default:"-" }}</td>
+              <td class="text-muted small">{{ a.reason|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No audit logs.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if active_tab == 'overview' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    const eventsState = Array.isArray({{ initial_events_json|safe }}) ? {{ initial_events_json|safe }} : [];
+    const feedEl = document.getElementById('finFeed');
+    const feedToggleEl = document.getElementById('finFeedToggle');
+    let feedExpanded = false;
+
+    const parseNumber = (text) => {
+      const s = String(text || '').replace(/[₦,]/g, '').trim();
+      const n = Number(s);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const setCurrency = (el, value) => {
+      if (!el) return;
+      const n = Number(value || 0);
+      el.textContent = `₦${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    const setInt = (el, value) => {
+      if (!el) return;
+      el.textContent = `${parseInt(value || 0, 10) || 0}`;
+    };
+
+    const applyKpiDeltas = (deltas) => {
+      if (!deltas) return;
+      if (typeof deltas.deposits_today === 'number') {
+        const el = document.getElementById('kpiDepositsToday');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.deposits_today);
+      }
+      if (typeof deltas.withdrawals_today === 'number') {
+        const el = document.getElementById('kpiWithdrawalsToday');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.withdrawals_today);
+      }
+      if (typeof deltas.pending_withdrawals === 'number') {
+        const el = document.getElementById('kpiPendingWithdrawals');
+        setInt(el, parseNumber(el && el.textContent) + deltas.pending_withdrawals);
+      }
+    };
+
+    const renderFeed = () => {
+      if (!feedEl) return;
+      if (!eventsState.length) {
+        feedEl.innerHTML = '<div class="text-muted">No activity.</div>';
+        if (feedToggleEl) feedToggleEl.style.display = 'none';
+        return;
+      }
+      const limit = feedExpanded ? eventsState.length : 6;
+      feedEl.innerHTML = eventsState.slice(0, limit).map(e => {
+        const ts = e.ts ? new Date(e.ts).toLocaleString() : '';
+        const amount = e.amount ? `₦${Number(e.amount).toLocaleString()}` : '';
+        return `<div class="feed-item">
+          <div class="d-flex justify-content-between align-items-center">
+            <div class="fw-semibold">${e.label || e.type}</div>
+            <div class="text-muted small">${ts}</div>
+          </div>
+          <div class="text-muted small">${e.user || '-'} · ${amount} · ${e.status || ''}</div>
+        </div>`;
+      }).join('');
+      if (feedToggleEl) {
+        feedToggleEl.style.display = eventsState.length > 6 ? 'inline' : 'none';
+        feedToggleEl.textContent = feedExpanded ? 'Hide All' : 'See All';
+      }
+    };
+
+    renderFeed();
+    if (feedToggleEl) {
+      feedToggleEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        feedExpanded = !feedExpanded;
+        renderFeed();
+      });
+    }
+
+    const labels = {{ charts_data.labels|safe }};
+    const deposits = {{ charts_data.deposits|safe }};
+    const withdrawals = {{ charts_data.withdrawals|safe }};
+    const stakes = {{ charts_data.stakes|safe }};
+    const payouts = {{ charts_data.payouts|safe }};
+    const profit = {{ charts_data.profit|safe }};
+
+    const cashflowCtx = document.getElementById('finCashflowChart');
+    if (cashflowCtx) {
+      new Chart(cashflowCtx, {
+        type: 'bar',
+        data: { labels, datasets: [
+          { label: 'Deposits', data: deposits, backgroundColor: 'rgba(0,200,83,0.35)' },
+          { label: 'Withdrawals', data: withdrawals, backgroundColor: 'rgba(255,82,82,0.35)' }
+        ]},
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const revCtx = document.getElementById('finRevenueChart');
+    if (revCtx) {
+      new Chart(revCtx, {
+        type: 'line',
+        data: { labels, datasets: [
+          { label: 'Stakes', data: stakes, borderColor: '#00C853', backgroundColor: 'rgba(0,200,83,0.10)', tension: 0.25 },
+          { label: 'Payouts', data: payouts, borderColor: '#FF5252', backgroundColor: 'rgba(255,82,82,0.10)', tension: 0.25 },
+          { label: 'Profit/Loss', data: profit, borderColor: '#132C46', backgroundColor: 'rgba(19,44,70,0.08)', tension: 0.25 }
+        ]},
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
+    let socket;
+    const connect = () => {
+      socket = new WebSocket(wsUrl);
+      socket.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type !== 'finance_event') return;
+          const p = msg.payload || {};
+          const evObj = {
+            ts: p.ts || '',
+            type: p.event_type || 'event',
+            user: p.user || '-',
+            label: p.label || p.event_type || 'event',
+            amount: p.amount || '',
+            status: p.status || '',
+          };
+          eventsState.unshift(evObj);
+          if (eventsState.length > 30) eventsState.length = 30;
+          renderFeed();
+          applyKpiDeltas(p.kpi_deltas || {});
+        } catch (e) {}
+      };
+      socket.onclose = () => setTimeout(connect, 2500);
+    };
+    connect();
+  })();
+</script>
+{% endif %}
+{% endblock %}

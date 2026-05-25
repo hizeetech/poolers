@@ -4,6 +4,9 @@ from django.utils import timezone
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+import requests
+from django.conf import settings
+from django.utils import timezone
 
 
 @dataclass(frozen=True)
@@ -88,3 +91,58 @@ def _broadcast_to_user(*, recipient_id, notification):
         f"notifications_user_{recipient_id}",
         {"type": "notifications.push", "payload": payload},
     )
+
+
+def send_sms_ebulksms(*, msisdn, message, sender=None):
+    enabled = bool(getattr(settings, "EBULKSMS_ENABLED", False))
+    if not enabled:
+        return {"ok": False, "error": "disabled"}
+    username = (getattr(settings, "EBULKSMS_USERNAME", None) or "").strip()
+    apikey = (getattr(settings, "EBULKSMS_API_KEY", None) or "").strip()
+    sender = (sender or getattr(settings, "EBULKSMS_SENDER", None) or "").strip()
+    msisdn = (msisdn or "").strip()
+    message = (message or "").strip()
+    if not username or not apikey:
+        return {"ok": False, "error": "missing_credentials"}
+    if not sender:
+        return {"ok": False, "error": "missing_sender"}
+    if not msisdn:
+        return {"ok": False, "error": "missing_recipient"}
+    if not message:
+        return {"ok": False, "error": "missing_message"}
+
+    url = "https://api.ebulksms.com/sendsms.json"
+    payload = {
+        "SMS": {
+            "auth": {"username": username, "apikey": apikey},
+            "message": {"sender": sender[:14], "messagetext": message[:612], "flash": "0"},
+            "recipients": {"gsm": [{"msidn": msisdn, "msgid": str(int(timezone.now().timestamp()))}]},
+            "dndsender": "0",
+        }
+    }
+    try:
+        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
+        data = res.json() if res.content else {}
+        status = (((data or {}).get("response") or {}).get("status") or "").upper()
+        ok = (res.status_code == 200) and (status == "SUCCESS")
+        return {"ok": ok, "status_code": res.status_code, "status": status, "raw": data}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def get_ebulksms_balance():
+    enabled = bool(getattr(settings, "EBULKSMS_ENABLED", False))
+    if not enabled:
+        return {"ok": False, "error": "disabled"}
+    username = (getattr(settings, "EBULKSMS_USERNAME", None) or "").strip()
+    apikey = (getattr(settings, "EBULKSMS_API_KEY", None) or "").strip()
+    if not username or not apikey:
+        return {"ok": False, "error": "missing_credentials"}
+    url = f"https://api.ebulksms.com/balance/{username}/{apikey}"
+    try:
+        res = requests.get(url, timeout=20)
+        if res.status_code != 200:
+            return {"ok": False, "status_code": res.status_code, "text": res.text}
+        return {"ok": True, "status_code": res.status_code, "text": (res.text or "").strip()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

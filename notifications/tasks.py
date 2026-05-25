@@ -46,7 +46,12 @@ def send_deposit_reminders():
         return 0
 
     today = timezone.localdate().isoformat()
-    qs = Wallet.objects.filter(balance__lte=threshold, user__is_active=True).select_related("user").only("id", "balance", "user_id")
+    qs = (
+        Wallet.objects.filter(balance__lte=threshold, user__is_active=True)
+        .filter(user__user_type__in=['player', 'cashier', 'agent', ''])
+        .select_related("user")
+        .only("id", "balance", "user_id")
+    )
 
     sent = 0
     for w in qs.iterator():

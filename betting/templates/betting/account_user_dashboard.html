@@ -65,6 +65,41 @@ $(document).ready(function() {
         </div>
     </div>
 
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Total Deposits Today</div>
+                    <div class="fw-bold fs-5">₦{{ account_kpis.deposits_today|floatformat:2 }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Total Withdrawals Today</div>
+                    <div class="fw-bold fs-5">₦{{ account_kpis.withdrawals_today|floatformat:2 }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Pending Withdrawals</div>
+                    <div class="fw-bold fs-5">{{ account_kpis.withdrawals_pending }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Failed Transactions (7d)</div>
+                    <div class="fw-bold fs-5">{{ account_kpis.failed_transactions_7d }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row">
         <!-- User Search and Action Column -->
         <div class="col-md-6">

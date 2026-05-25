@@ -13,16 +13,20 @@ def notifications_context(request):
 
     unread = Notification.objects.filter(recipient=user, is_read=False).count()
     recent_system = list(Notification.objects.filter(recipient=user).order_by("-created_at")[:10])
-    
+
+    user_type = getattr(user, "user_type", "") or ""
+    allow_deposit_reminder = user_type in ['player', 'cashier', 'agent', '']
     reminder = (
         Notification.objects.filter(recipient=user, is_read=False, notification_type="DEPOSIT_REMINDER")
         .order_by("-created_at")
         .values("id", "title", "message", "data")
         .first()
     )
-    if reminder:
+    if reminder and allow_deposit_reminder:
         data = reminder.get("data") or {}
         reminder["url"] = (data.get("url") or "/wallet/") if isinstance(data, dict) else "/wallet/"
+    if reminder and not allow_deposit_reminder:
+        reminder = None
 
     return {
         "notifications_unread_count": unread,

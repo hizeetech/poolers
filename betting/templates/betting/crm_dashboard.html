@@ -1,0 +1,1006 @@
+{% extends 'betting/base.html' %}
+{% block title %}CRM Dashboard{% endblock %}
+{% block content %}
+<style>
+  .crm-tabs.nav-tabs .nav-link {
+    color: #0b2e13;
+    font-weight: 700;
+    background-color: #e9f5ee;
+    border-color: #cfe8d8;
+    transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease;
+  }
+  .crm-tabs.nav-tabs .nav-link:not(.active):hover {
+    color: #fff;
+    background-color: #157347;
+    border-color: #157347;
+    box-shadow: 0 6px 18px rgba(21, 115, 71, .22);
+    transform: translateY(-1px);
+  }
+  .crm-tabs.nav-tabs .nav-link.active {
+    color: #fff;
+    background-color: #198754;
+    border-color: #198754 #198754 transparent;
+    box-shadow: 0 8px 22px rgba(25, 135, 84, .28);
+  }
+</style>
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">CRM Dashboard</h2>
+      <div class="text-muted small">Withdrawals, registrations, and customer lookup</div>
+    </div>
+    <form method="get" class="d-flex flex-wrap gap-2 w-100 w-md-auto align-items-end">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
+      <input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Search username, name, email or phone" style="min-width: 220px;">
+      <div>
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ start_date }}" class="form-control">
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control">
+      </div>
+      <input type="hidden" name="audit_action_type" value="{{ audit_action_type }}">
+      <input type="hidden" name="audit_q" value="{{ audit_q }}">
+      <button class="btn btn-primary" type="submit">Apply</button>
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_dashboard' %}">Reset</a>
+    </form>
+  </div>
+
+  {% if q %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+      <div class="fw-semibold">Search Results</div>
+      <div class="text-muted small">{{ users|length }} result(s)</div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>User</th>
+              <th>Type</th>
+              <th>Phone</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in users %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ u.get_full_name|default:u.email }}</div>
+                <div class="text-muted small">{{ u.email }}</div>
+              </td>
+              <td class="text-uppercase small">{{ u.user_type }}</td>
+              <td>{{ u.phone_number|default:"-" }}</td>
+              <td>
+                {% if u.is_active %}
+                  <span class="badge bg-success">Active</span>
+                {% else %}
+                  <span class="badge bg-danger">Suspended</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_user_detail' u.id %}">Open</a>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No users found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <ul class="nav nav-tabs crm-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'overview' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab">Overview</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'bets' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#bets" type="button" role="tab">Bets</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'segments' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#segments" type="button" role="tab">Segments</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'communications' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#communications" type="button" role="tab">Communications</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'risk' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#risk" type="button" role="tab">Risk</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'withdrawals' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#withdrawals" type="button" role="tab">Pending Withdrawals</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'cashiers' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#cashiers" type="button" role="tab">Pending Cashiers</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'agents' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">Pending Agents</button>
+    </li>
+    {% if can_view_audit %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'audit' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#audit" type="button" role="tab">Audit Log</button>
+    </li>
+    {% endif %}
+  </ul>
+
+  <div class="tab-content">
+    <div class="tab-pane fade {% if active_tab == 'overview' %}show active{% endif %}" id="overview" role="tabpanel">
+      <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mb-3">
+        <div>
+          <div class="fw-semibold">Executive Overview</div>
+          <div class="text-muted small">{{ metrics_label }} ({{ metrics_start }} → {{ metrics_end }})</div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Registered Users</div>
+              <div class="fs-4 fw-bold">{{ kpis.total_registered_users }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Active Users Today</div>
+              <div class="fs-4 fw-bold">{{ kpis.active_users_today }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">New Registrations</div>
+              <div class="fs-4 fw-bold">{{ kpis.new_registrations }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Bets Placed</div>
+              <div class="fs-4 fw-bold">{{ kpis.total_bets_placed }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Stake Amount</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.total_stake_amount|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Payouts</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.total_payouts|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Gross Gaming Revenue (GGR)</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.ggr|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Net Gaming Revenue (NGR)</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.ngr|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Deposits</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.total_deposits|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Total Withdrawals</div>
+              <div class="fs-5 fw-bold">₦{{ kpis.total_withdrawals|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Pending Withdrawals</div>
+              <div class="fs-4 fw-bold">{{ kpis.pending_withdrawals }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="text-muted small">Conversion Rate</div>
+              <div class="fs-4 fw-bold">{{ kpis.conversion_rate }}%</div>
+              <div class="text-muted small">Avg Bet ₦{{ kpis.average_bet_value|floatformat:2 }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-lg-8">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">Revenue & Betting Trends</div>
+            <div class="card-body">
+              <canvas id="crmRevenueChart" height="110"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-4">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">Deposit vs Withdrawal</div>
+            <div class="card-body">
+              <canvas id="crmCashflowChart" height="110"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-12 col-lg-7">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">User Growth</div>
+            <div class="card-body">
+              <canvas id="crmUserGrowthChart" height="110"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-5">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">Top Performing Games/Events</div>
+            <div class="card-body p-0">
+              <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Fixture</th>
+                      <th class="text-end">Picks</th>
+                    </tr>
+                  </thead>
+                  <tbody id="crmTopFixturesBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+              <div class="fw-semibold">Real-time Activity Feed</div>
+              <div class="d-flex align-items-center gap-2">
+                <a href="#" id="crmFeedToggle" class="small text-decoration-none" style="display:none;">See All</a>
+                <div class="text-muted small" id="crmActivityUpdatedAt"></div>
+              </div>
+            </div>
+            <div class="card-body p-0">
+              <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Time</th>
+                      <th>Type</th>
+                      <th>User</th>
+                      <th class="text-end">Amount</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="crmActivityFeedBody">
+                    <tr><td colspan="5" class="text-center text-muted py-4">Loading...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'bets' %}show active{% endif %}" id="bets" role="tabpanel">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light">
+          <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+            <div class="fw-semibold">Betting Intelligence</div>
+            <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+              <input type="hidden" name="tab" value="bets">
+              <input type="hidden" name="start_date" value="{{ start_date }}">
+              <input type="hidden" name="end_date" value="{{ end_date }}">
+              <div>
+                <label class="form-label small text-muted mb-1">Search</label>
+                <input type="text" name="bet_q" value="{{ bet_q }}" class="form-control form-control-sm" placeholder="Ticket/User/Phone">
+              </div>
+              <div>
+                <label class="form-label small text-muted mb-1">Status</label>
+                <select name="bet_status" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="pending" {% if bet_status == 'pending' %}selected{% endif %}>Pending</option>
+                  <option value="won" {% if bet_status == 'won' %}selected{% endif %}>Won</option>
+                  <option value="lost" {% if bet_status == 'lost' %}selected{% endif %}>Lost</option>
+                  <option value="cashed_out" {% if bet_status == 'cashed_out' %}selected{% endif %}>Cashed Out</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label small text-muted mb-1">Agent</label>
+                <select name="bet_agent" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  {% for ag in agent_filter_options %}
+                  <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Ticket</th>
+                  <th>User</th>
+                  <th class="text-end">Stake</th>
+                  <th>Status</th>
+                  <th>Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for t in bet_tickets_page %}
+                <tr>
+                  <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+                  <td class="fw-semibold">{{ t.ticket_id }}</td>
+                  <td class="text-muted small">
+                    <div class="fw-semibold text-dark">{{ t.user.email|default:t.user.username }}</div>
+                    <a href="{% url 'betting:crm_user_detail' t.user.id %}">Open</a>
+                  </td>
+                  <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ t.status }}</td>
+                  <td class="text-muted small">{{ t.user.agent.email|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No bets found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% if bet_tickets_page %}
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="text-muted small">Page {{ bet_tickets_page.number }} of {{ bet_tickets_page.paginator.num_pages }}</div>
+        <div class="d-flex gap-2">
+          {% if bet_tickets_page.has_previous %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
+          {% endif %}
+          {% if bet_tickets_page.has_next %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'segments' %}show active{% endif %}" id="segments" role="tabpanel">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light fw-semibold">Customer Segmentation</div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=vip&start_date={{ start_date }}&end_date={{ end_date }}">VIP Players ({{ segment_stats.vip|default:0 }})</a></div>
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=new_users&start_date={{ start_date }}&end_date={{ end_date }}">New Users ({{ segment_stats.new_users|default:0 }})</a></div>
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=inactive&start_date={{ start_date }}&end_date={{ end_date }}">Inactive Users ({{ segment_stats.inactive|default:0 }})</a></div>
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=high_frequency&start_date={{ start_date }}&end_date={{ end_date }}">High-frequency Bettors ({{ segment_stats.high_frequency|default:0 }})</a></div>
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=bonus_hunters&start_date={{ start_date }}&end_date={{ end_date }}">Bonus Hunters ({{ segment_stats.bonus_hunters|default:0 }})</a></div>
+            <div class="col-6 col-lg-4"><a class="btn btn-sm btn-outline-primary w-100" href="?tab=segments&segment=high_value&start_date={{ start_date }}&end_date={{ end_date }}">High-value Depositors ({{ segment_stats.high_value|default:0 }})</a></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Segment Users</div>
+          <div class="text-muted small">{% if segment_key %}{{ segment_key }}{% else %}Select a segment{% endif %}</div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>User</th>
+                  <th>Type</th>
+                  <th>KYC</th>
+                  <th>VIP</th>
+                  <th>Last Login</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for u in segment_users_page %}
+                <tr>
+                  <td>
+                    <div class="fw-semibold">{{ u.get_full_name|default:u.email }}</div>
+                    <div class="text-muted small">{{ u.email }}</div>
+                  </td>
+                  <td class="text-uppercase small">{{ u.user_type }}</td>
+                  <td class="text-muted small">{{ u.get_kyc_status_display|default:"-" }}</td>
+                  <td class="text-muted small">{{ u.get_vip_level_display|default:"-" }}</td>
+                  <td class="text-nowrap text-muted small">{{ u.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
+                  <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_user_detail' u.id %}">Open</a></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No users.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% if segment_users_page %}
+      <div class="d-flex justify-content-between align-items-center mt-2">
+        <div class="text-muted small">Page {{ segment_users_page.number }} of {{ segment_users_page.paginator.num_pages }}</div>
+        <div class="d-flex gap-2">
+          {% if segment_users_page.has_previous %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=segments&segment={{ segment_key }}&start_date={{ start_date }}&end_date={{ end_date }}&segments_page={{ segment_users_page.previous_page_number }}">Prev</a>
+          {% endif %}
+          {% if segment_users_page.has_next %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=segments&segment={{ segment_key }}&start_date={{ start_date }}&end_date={{ end_date }}&segments_page={{ segment_users_page.next_page_number }}">Next</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'communications' %}show active{% endif %}" id="communications" role="tabpanel">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">Broadcast (In-app)</div>
+            <div class="card-body">
+              {% if can_message %}
+              <form method="post" class="row g-2">
+                {% csrf_token %}
+                <input type="hidden" name="tab" value="communications">
+                <input type="hidden" name="create_campaign" value="1">
+                <div class="col-12">
+                  <label class="form-label small text-muted mb-1">Title</label>
+                  <input type="text" name="campaign_title" class="form-control form-control-sm" placeholder="Title">
+                </div>
+                <div class="col-12">
+                  <label class="form-label small text-muted mb-1">Message</label>
+                  <textarea name="campaign_message" class="form-control form-control-sm" rows="4" required></textarea>
+                </div>
+                <div class="col-12">
+                  <button class="btn btn-sm btn-primary" type="submit">Queue Broadcast</button>
+                </div>
+              </form>
+              {% else %}
+              <div class="text-muted">No permission.</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-light fw-semibold">SMS (eBulkSMS)</div>
+            <div class="card-body">
+              {% if sms_balance %}
+                {% if sms_balance.ok %}
+                  <div class="fw-semibold">Balance</div>
+                  <div class="text-muted small">{{ sms_balance.text }}</div>
+                {% else %}
+                  <div class="text-muted small">SMS not configured: {{ sms_balance.error|default:sms_balance.text|default:"-" }}</div>
+                {% endif %}
+              {% else %}
+                <div class="text-muted small">SMS balance unavailable.</div>
+              {% endif %}
+              <div class="text-muted small mt-2">Set EBULKSMS_USERNAME / EBULKSMS_API_KEY / EBULKSMS_SENDER in .env.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-light fw-semibold">Recent Campaigns</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Title</th>
+                  <th>Creator</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in recent_campaigns %}
+                <tr>
+                  <td class="text-nowrap">{{ c.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="fw-semibold">{{ c.title }}</td>
+                  <td class="text-muted small">{{ c.created_by.email|default:"-" }}</td>
+                  <td class="text-muted small">{% if c.sent_at %}Sent{% else %}Queued{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No campaigns.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'risk' %}show active{% endif %}" id="risk" role="tabpanel">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light">
+          <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+            <div class="fw-semibold">Fraud & Risk Monitoring</div>
+            <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+              <input type="hidden" name="tab" value="risk">
+              <input type="hidden" name="q" value="{{ q }}">
+              <input type="hidden" name="start_date" value="{{ start_date }}">
+              <input type="hidden" name="end_date" value="{{ end_date }}">
+              <div>
+                <label class="form-label small text-muted mb-1">Kind</label>
+                <select name="risk_kind" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="DUPLICATE_TICKET" {% if risk_kind == 'DUPLICATE_TICKET' %}selected{% endif %}>Duplicate Ticket</option>
+                  <option value="RAPID_BETTING" {% if risk_kind == 'RAPID_BETTING' %}selected{% endif %}>Rapid Betting</option>
+                  <option value="COORDINATED_BETTING" {% if risk_kind == 'COORDINATED_BETTING' %}selected{% endif %}>Coordinated Betting</option>
+                  <option value="LATE_BETTING" {% if risk_kind == 'LATE_BETTING' %}selected{% endif %}>Late Betting</option>
+                  <option value="ODDS_TARGETING" {% if risk_kind == 'ODDS_TARGETING' %}selected{% endif %}>Odds Targeting</option>
+                  <option value="HIGH_ROI" {% if risk_kind == 'HIGH_ROI' %}selected{% endif %}>High ROI</option>
+                  <option value="ARBITRAGE" {% if risk_kind == 'ARBITRAGE' %}selected{% endif %}>Arbitrage</option>
+                  <option value="MULTI_ACCOUNTING" {% if risk_kind == 'MULTI_ACCOUNTING' %}selected{% endif %}>Multi Accounting</option>
+                </select>
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Kind</th>
+                  <th>Risk</th>
+                  <th>User</th>
+                  <th>IP</th>
+                  <th>Ticket</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in risk_logs_page %}
+                <tr>
+                  <td class="text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ r.kind }}</td>
+                  <td class="fw-semibold">{{ r.risk_score }}</td>
+                  <td class="text-muted small"><a href="{% url 'betting:crm_user_detail' r.user.id %}">{{ r.user.email|default:r.user.username }}</a></td>
+                  <td class="text-muted small">{{ r.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ r.ticket.ticket_id|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No risk logs.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% if risk_logs_page %}
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="text-muted small">Page {{ risk_logs_page.number }} of {{ risk_logs_page.paginator.num_pages }}</div>
+        <div class="d-flex gap-2">
+          {% if risk_logs_page.has_previous %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}&risk_kind={{ risk_kind }}&risk_page={{ risk_logs_page.previous_page_number }}">Prev</a>
+          {% endif %}
+          {% if risk_logs_page.has_next %}
+          <a class="btn btn-sm btn-outline-secondary" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}&risk_kind={{ risk_kind }}&risk_page={{ risk_logs_page.next_page_number }}">Next</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'withdrawals' %}show active{% endif %}" id="withdrawals" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Pending Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Requested</th>
+                  <th>User</th>
+                  <th class="text-end">Amount</th>
+                  <th>Bank</th>
+                  <th>Status</th>
+                  <th class="text-end">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in pending_withdrawals %}
+                <tr>
+                  <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  <td>
+                    <div class="fw-semibold">{{ w.user.get_full_name|default:w.user.email }}</div>
+                    <div class="text-muted small">{{ w.user.email }}</div>
+                  </td>
+                  <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                  <td>
+                    <div class="small">{{ w.bank_name }}</div>
+                    <div class="text-muted small">{{ w.account_number }}</div>
+                  </td>
+                  <td><span class="badge bg-warning text-dark">Pending</span></td>
+                  <td class="text-end">
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_user_detail' w.user.id %}">Review</a>
+                    {% if can_approve_withdrawals %}
+                    <form method="post" action="{% url 'betting:crm_withdrawal_action' w.id %}" class="d-inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="approve">
+                      <button class="btn btn-sm btn-success" type="submit">Approve</button>
+                    </form>
+                    <form method="post" action="{% url 'betting:crm_withdrawal_action' w.id %}" class="d-inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="reject">
+                      <input type="text" name="reason" class="form-control form-control-sm d-inline-block" style="width: 160px;" placeholder="Reason">
+                      <button class="btn btn-sm btn-danger" type="submit">Reject</button>
+                    </form>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No pending withdrawals.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'cashiers' %}show active{% endif %}" id="cashiers" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Pending Cashier Registrations</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Created</th>
+                  <th>Agent</th>
+                  <th>Cashier</th>
+                  <th>Status</th>
+                  <th class="text-end">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in pending_cashier_requests %}
+                <tr>
+                  <td class="text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                  <td>
+                    <div class="fw-semibold">{{ r.agent.email }}</div>
+                    <div class="text-muted small">{{ r.agent.get_full_name|default:"" }}</div>
+                  </td>
+                  <td>
+                    <div class="fw-semibold">{{ r.cashier_code }} — {{ r.cashier_username }}</div>
+                    <div class="text-muted small">{{ r.cashier_email }}</div>
+                  </td>
+                  <td><span class="badge bg-warning text-dark">Pending</span></td>
+                  <td class="text-end">
+                    {% if can_approve_registrations %}
+                    <form method="post" action="{% url 'betting:crm_cashier_registration_action' r.id 'approve' %}" class="d-inline">
+                      {% csrf_token %}
+                      <button class="btn btn-sm btn-success" type="submit">Approve</button>
+                    </form>
+                    <form method="post" action="{% url 'betting:crm_cashier_registration_action' r.id 'reject' %}" class="d-inline">
+                      {% csrf_token %}
+                      <button class="btn btn-sm btn-danger" type="submit">Reject</button>
+                    </form>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No pending cashier registrations.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'agents' %}show active{% endif %}" id="agents" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Pending Agent Registrations</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Created</th>
+                  <th>Full Name</th>
+                  <th>Email</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th class="text-end">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in pending_agent_regs %}
+                <tr>
+                  <td class="text-nowrap">{{ p.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="fw-semibold">{{ p.full_name }}</td>
+                  <td>{{ p.email }}</td>
+                  <td class="text-uppercase small">{{ p.user_type }}</td>
+                  <td><span class="badge bg-warning text-dark">Pending</span></td>
+                  <td class="text-end">
+                    {% if can_approve_registrations %}
+                    <form method="post" action="{% url 'betting:crm_agent_registration_action' p.id 'approve' %}" class="d-inline">
+                      {% csrf_token %}
+                      <button class="btn btn-sm btn-success" type="submit">Approve</button>
+                    </form>
+                    <form method="post" action="{% url 'betting:crm_agent_registration_action' p.id 'reject' %}" class="d-inline">
+                      {% csrf_token %}
+                      <input type="text" name="reason" class="form-control form-control-sm d-inline-block" style="width: 160px;" placeholder="Reason">
+                      <button class="btn btn-sm btn-danger" type="submit">Reject</button>
+                    </form>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No pending agent registrations.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% if can_view_audit %}
+    <div class="tab-pane fade {% if active_tab == 'audit' %}show active{% endif %}" id="audit" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light">
+          <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+            <div class="fw-semibold">CRM Audit Log</div>
+            <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+              <input type="hidden" name="tab" value="audit">
+              <input type="hidden" name="q" value="{{ q }}">
+              <input type="hidden" name="start_date" value="{{ start_date }}">
+              <input type="hidden" name="end_date" value="{{ end_date }}">
+              <div>
+                <label class="form-label small text-muted mb-1">Action</label>
+                <select name="audit_action_type" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  {% for value,label in audit_action_choices %}
+                  <option value="{{ value }}" {% if value == audit_action_type %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label class="form-label small text-muted mb-1">Search</label>
+                <input type="text" name="audit_q" value="{{ audit_q }}" class="form-control form-control-sm" placeholder="Actor/Target/Reason">
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Actor</th>
+                  <th>Target</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for a in audit_logs %}
+                <tr>
+                  <td class="text-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ a.action_type }}</td>
+                  <td class="text-muted small">{{ a.actor.email|default:"-" }}</td>
+                  <td class="text-muted small">{{ a.target_user.email|default:"-" }}</td>
+                  <td class="text-muted small">{{ a.reason|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No audit logs found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{{ charts_data|json_script:"crm-charts-data" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    const tabButtons = document.querySelectorAll('.crm-tabs [data-bs-toggle="tab"]');
+    tabButtons.forEach(btn => {
+      btn.addEventListener('shown.bs.tab', (e) => {
+        const target = e.target.getAttribute('data-bs-target') || '';
+        const tab = target.startsWith('#') ? target.slice(1) : (target || 'overview');
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set('tab', tab);
+          window.history.replaceState({}, '', url.toString());
+        } catch (err) {}
+        document.querySelectorAll('input[name="tab"]').forEach(i => { i.value = tab; });
+      });
+    });
+
+    const chartsData = JSON.parse(document.getElementById('crm-charts-data').textContent || '{}');
+    const ticketSeries = chartsData.ticket_series || [];
+    const labels = ticketSeries.map(r => r.day);
+    const stakes = ticketSeries.map(r => Number(r.stake || 0));
+    const payouts = ticketSeries.map(r => Number(r.payouts || 0));
+    const bets = ticketSeries.map(r => Number(r.bets || 0));
+
+    const revenueCtx = document.getElementById('crmRevenueChart');
+    if (revenueCtx) {
+      new Chart(revenueCtx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Stake', data: stakes, borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.15)', tension: 0.25 },
+            { label: 'Payouts', data: payouts, borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.15)', tension: 0.25 },
+            { label: 'Bets', data: bets, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.12)', tension: 0.25, yAxisID: 'y2' },
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true },
+            y2: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+          }
+        }
+      });
+    }
+
+    const depositSeries = chartsData.deposit_series || [];
+    const withdrawalSeries = chartsData.withdrawal_series || [];
+    const cashflowDays = Array.from(new Set([...(depositSeries.map(r => r.day)), ...(withdrawalSeries.map(r => r.day))])).sort();
+    const depositsByDay = Object.fromEntries(depositSeries.map(r => [r.day, Number(r.deposits || 0)]));
+    const withdrawalsByDay = Object.fromEntries(withdrawalSeries.map(r => [r.day, Number(r.withdrawals || 0)]));
+    const cashDeposits = cashflowDays.map(d => depositsByDay[d] || 0);
+    const cashWithdrawals = cashflowDays.map(d => withdrawalsByDay[d] || 0);
+
+    const cashflowCtx = document.getElementById('crmCashflowChart');
+    if (cashflowCtx) {
+      new Chart(cashflowCtx, {
+        type: 'bar',
+        data: {
+          labels: cashflowDays,
+          datasets: [
+            { label: 'Deposits', data: cashDeposits, backgroundColor: 'rgba(25,135,84,0.6)' },
+            { label: 'Withdrawals', data: cashWithdrawals, backgroundColor: 'rgba(220,53,69,0.6)' },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const regSeries = chartsData.registrations_series || [];
+    const regLabels = regSeries.map(r => r.day);
+    const regCounts = regSeries.map(r => Number(r.registrations || 0));
+    const growthCtx = document.getElementById('crmUserGrowthChart');
+    if (growthCtx) {
+      new Chart(growthCtx, {
+        type: 'line',
+        data: { labels: regLabels, datasets: [{ label: 'Registrations', data: regCounts, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.15)', tension: 0.25 }] },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const topFixtures = chartsData.top_fixtures || [];
+    const topBody = document.getElementById('crmTopFixturesBody');
+    if (topBody) {
+      if (!topFixtures.length) {
+        topBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">No data.</td></tr>';
+      } else {
+        topBody.innerHTML = topFixtures.map(r => `<tr><td>${(r.label || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td><td class="text-end fw-semibold">${r.picks || 0}</td></tr>`).join('');
+      }
+    }
+
+    const feedUrl = "{% url 'betting:crm_activity_feed' %}";
+    const feedBody = document.getElementById('crmActivityFeedBody');
+    const updatedAt = document.getElementById('crmActivityUpdatedAt');
+    const feedToggleEl = document.getElementById('crmFeedToggle');
+    let feedExpanded = false;
+    let feedEventsState = [];
+
+    function fmtTime(ts) {
+      if (!ts) return '-';
+      try { return new Date(ts).toLocaleString(); } catch (e) { return ts; }
+    }
+
+    function renderFeed() {
+      if (!feedBody) return;
+      const limit = feedExpanded ? feedEventsState.length : 6;
+      const rows = (feedEventsState || []).slice(0, limit);
+      if (!rows.length) {
+        feedBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No activity yet.</td></tr>';
+      } else {
+        feedBody.innerHTML = rows.map(e => `
+          <tr>
+            <td class="text-nowrap">${fmtTime(e.ts)}</td>
+            <td class="text-uppercase small">${(e.type || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+            <td class="text-muted small">${(e.user || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+            <td class="text-end fw-semibold">₦${Number(e.amount || 0).toFixed(2)}</td>
+            <td class="text-uppercase small">${(e.status || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+          </tr>
+        `).join('');
+      }
+      if (feedToggleEl) {
+        feedToggleEl.style.display = (feedEventsState || []).length > 6 ? 'inline' : 'none';
+        feedToggleEl.textContent = feedExpanded ? 'Hide All' : 'See All';
+      }
+    }
+
+    async function refreshFeed() {
+      if (!feedBody) return;
+      try {
+        const res = await fetch(feedUrl, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) throw new Error('Bad response');
+        const data = await res.json();
+        feedEventsState = (data.events || []).slice(0, 20);
+        renderFeed();
+        if (updatedAt) updatedAt.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        feedBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Failed to load activity.</td></tr>';
+        if (feedToggleEl) feedToggleEl.style.display = 'none';
+      }
+    }
+
+    refreshFeed();
+    setInterval(refreshFeed, 10000);
+    if (feedToggleEl) {
+      feedToggleEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        feedExpanded = !feedExpanded;
+        renderFeed();
+      });
+    }
+  })();
+</script>
+{% endblock %}

@@ -133,6 +133,9 @@ class LowBalanceDepositReminderMiddleware:
     def __call__(self, request):
         user = getattr(request, "user", None)
         if user and getattr(user, "is_authenticated", False):
+            user_type = getattr(user, "user_type", "") or ""
+            if user_type not in ['player', 'cashier', 'agent', '']:
+                return self.get_response(request)
             path = request.path or ""
             if not (path.startswith("/admin/") or path.startswith("/static/") or path.startswith("/media/")):
                 try:

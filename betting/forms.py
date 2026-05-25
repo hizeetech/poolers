@@ -755,7 +755,10 @@ class AdminUserCreationForm(DjangoUserCreationForm):
         ('agent', 'Agent'),
         ('super_agent', 'Super Agent'),
         ('master_agent', 'Master Agent'),
+        ('retail_manager', 'Retail Manager'),
+        ('finance', 'Finance'),
         ('account_user', 'Account User'),
+        ('crm', 'CRM'),
         ('admin', 'Admin'), 
     ]
     user_type = forms.ChoiceField(choices=USER_TYPE_ADMIN_CHOICES, initial='player',
@@ -774,6 +777,17 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     last_name = forms.CharField(max_length=100, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
     phone_number = forms.CharField(max_length=20, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
     shop_address = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
+    crm_role = forms.ChoiceField(
+        choices=getattr(User, 'CRM_ROLE_CHOICES', ()),
+        required=False,
+        initial='viewer',
+        widget=forms.Select(attrs={'class': 'form-control'})
+    )
+    finance_role = forms.ChoiceField(
+        choices=getattr(User, 'FINANCE_ROLE_CHOICES', ()),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-control'})
+    )
 
     can_manage_downline_wallets = forms.BooleanField(
         required=False, 
@@ -788,6 +802,8 @@ class AdminUserCreationForm(DjangoUserCreationForm):
         fields = (
             'email', 'username', 'password', 'password2',
             'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'user_type',
+            'crm_role',
+            'finance_role',
             'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets',
             'groups', 'user_permissions',
             'master_agent', 'super_agent', 'agent', 'cashier_prefix'
@@ -871,7 +887,9 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             user.agent = None
             user.cashier_prefix = None
 
-        user.is_staff = user.user_type in ['admin', 'master_agent', 'super_agent', 'agent', 'cashier', 'account_user']
+        user.crm_role = self.cleaned_data.get('crm_role') or user.crm_role
+        user.finance_role = self.cleaned_data.get('finance_role') or user.finance_role
+        user.is_staff = user.user_type in ['admin', 'master_agent', 'super_agent', 'agent', 'cashier', 'account_user', 'crm', 'retail_manager', 'finance']
         user.is_superuser = user.user_type == 'admin'
 
         if commit:
@@ -1405,6 +1423,56 @@ class AccountUserWalletActionForm(forms.Form):
         amount = cleaned_data.get('amount')
         if amount and amount <= 0:
             raise ValidationError("Amount must be greater than zero.")
+        return cleaned_data
+
+class CRMUserProfileForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'vip_manager' in self.fields:
+            self.fields['vip_manager'].queryset = User.objects.filter(user_type='crm').order_by('email')
+
+    class Meta:
+        model = User
+        fields = (
+            'first_name',
+            'last_name',
+            'other_name',
+            'phone_number',
+            'state',
+            'shop_address',
+            'bank_account_name',
+            'kyc_status',
+            'vip_level',
+            'vip_manager',
+        )
+        widgets = {
+            'first_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'last_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'other_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'phone_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'state': forms.Select(attrs={'class': 'form-control'}),
+            'shop_address': forms.TextInput(attrs={'class': 'form-control'}),
+            'bank_account_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'kyc_status': forms.Select(attrs={'class': 'form-control'}),
+            'vip_level': forms.Select(attrs={'class': 'form-control'}),
+            'vip_manager': forms.Select(attrs={'class': 'form-control'}),
+        }
+
+class CRMWithdrawalDecisionForm(forms.Form):
+    ACTION_CHOICES = (
+        ('approve', 'Approve'),
+        ('reject', 'Reject'),
+    )
+    action = forms.ChoiceField(choices=ACTION_CHOICES, widget=forms.Select(attrs={'class': 'form-control'}))
+    reason = forms.CharField(required=False, max_length=255, widget=forms.TextInput(attrs={'class': 'form-control'}))
+    notes = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        action = cleaned_data.get('action')
+        reason = (cleaned_data.get('reason') or '').strip()
+        if action == 'reject' and not reason:
+            self.add_error('reason', 'Reason is required when rejecting a withdrawal.')
         return cleaned_data
 
 class AdminManualWalletForm(forms.Form):

@@ -216,8 +216,36 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('agent', 'Agent'),
         ('super_agent', 'Super Agent'),
         ('master_agent', 'Master Agent'),
+        ('retail_manager', 'Retail Manager'),
+        ('finance', 'Finance'),
         ('account_user', 'Account User'),
+        ('crm', 'CRM'),
         ('admin', 'Admin'),
+    )
+    CRM_ROLE_CHOICES = (
+        ('viewer', 'Viewer'),
+        ('ops', 'Ops'),
+        ('compliance', 'Compliance'),
+        ('supervisor', 'Supervisor'),
+    )
+    KYC_STATUS_CHOICES = (
+        ('unverified', 'Unverified'),
+        ('pending', 'Pending'),
+        ('verified', 'Verified'),
+        ('rejected', 'Rejected'),
+    )
+    VIP_LEVEL_CHOICES = (
+        ('standard', 'Standard'),
+        ('vip1', 'VIP 1'),
+        ('vip2', 'VIP 2'),
+        ('vip3', 'VIP 3'),
+    )
+    FINANCE_ROLE_CHOICES = (
+        ('manager', 'Finance Manager'),
+        ('accountant', 'Accountant'),
+        ('auditor', 'Auditor'),
+        ('settlement', 'Settlement Officer'),
+        ('withdrawal', 'Withdrawal Officer'),
     )
 
     email = models.EmailField(unique=True)
@@ -232,6 +260,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     downline_activity_last_seen_at = models.DateTimeField(null=True, blank=True)
     
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES, default='player')
+    crm_role = models.CharField(max_length=20, choices=CRM_ROLE_CHOICES, default='viewer', db_index=True)
+    finance_role = models.CharField(max_length=20, choices=FINANCE_ROLE_CHOICES, blank=True, default='', db_index=True)
+    kyc_status = models.CharField(max_length=20, choices=KYC_STATUS_CHOICES, default='unverified', db_index=True)
+    vip_level = models.CharField(max_length=20, choices=VIP_LEVEL_CHOICES, default='standard', db_index=True)
+    vip_manager = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='vip_customers', limit_choices_to={'user_type': 'crm'})
     
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
@@ -331,7 +364,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         if self.user_type == 'admin':
             self.is_staff = True
             self.is_superuser = True
-        elif self.user_type in ['master_agent', 'super_agent', 'agent', 'cashier']:
+        elif self.user_type in ['master_agent', 'super_agent', 'agent', 'cashier', 'crm', 'account_user', 'retail_manager', 'finance']:
             self.is_staff = True 
             self.is_superuser = False
         else:
@@ -1399,6 +1432,47 @@ class ActivityLog(models.Model):
     def __str__(self):
         return f"{self.user.email} - {self.action}"
 
+class CRMActionLog(models.Model):
+    ACTION_TYPES = (
+        ('WITHDRAWAL_APPROVED', 'Withdrawal Approved'),
+        ('WITHDRAWAL_REJECTED', 'Withdrawal Rejected'),
+        ('USER_SUSPENDED', 'User Suspended'),
+        ('USER_UNSUSPENDED', 'User Unsuspended'),
+        ('PROFILE_EDITED', 'Profile Edited'),
+        ('WITHDRAWAL_FROZEN', 'Withdrawals Frozen'),
+        ('WITHDRAWAL_UNFROZEN', 'Withdrawals Unfrozen'),
+        ('WALLET_CREDITED', 'Wallet Credited'),
+        ('WALLET_DEBITED', 'Wallet Debited'),
+        ('PASSWORD_RESET', 'Password Reset'),
+        ('MESSAGE_SENT', 'Message Sent'),
+        ('VIP_UPDATED', 'VIP/KYC Updated'),
+        ('CASHIER_REG_APPROVED', 'Cashier Registration Approved'),
+        ('CASHIER_REG_REJECTED', 'Cashier Registration Rejected'),
+        ('AGENT_REG_APPROVED', 'Agent Registration Approved'),
+        ('AGENT_REG_REJECTED', 'Agent Registration Rejected'),
+    )
+
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_actions')
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_action_targets')
+    action_type = models.CharField(max_length=50, choices=ACTION_TYPES, db_index=True)
+    reason = models.CharField(max_length=255, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+
+    withdrawal = models.ForeignKey('UserWithdrawal', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_actions')
+    ticket = models.ForeignKey('BetTicket', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_actions')
+    cashier_request = models.ForeignKey('CashierRegistrationRequest', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_actions')
+    pending_agent_registration = models.ForeignKey('pending_registration.PendingAgentRegistration', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_actions')
+
+    data = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.actor.email if self.actor else 'System'
+        return f"{self.action_type} by {who}"
+
 class LoginAttempt(models.Model):
     STATUS_CHOICES = (
         ('success', 'Success'),
@@ -1421,6 +1495,303 @@ class LoginAttempt(models.Model):
 
     def __str__(self):
         return f"{self.username_attempted} - {self.status} - {self.timestamp}"
+
+
+class RetailManagerMasterAgentMapping(models.Model):
+    retail_manager = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_master_agents', limit_choices_to={'user_type': 'retail_manager'})
+    master_agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_to_retail_managers', limit_choices_to={'user_type': 'master_agent'})
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        unique_together = (('retail_manager', 'master_agent'),)
+        verbose_name = 'Retail Manager → Master Agent Mapping'
+        verbose_name_plural = 'Retail Manager → Master Agent Mappings'
+
+    def __str__(self):
+        return f"{self.retail_manager.email} → {self.master_agent.email}"
+
+
+class RetailManagerSuperAgentMapping(models.Model):
+    retail_manager = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_super_agents', limit_choices_to={'user_type': 'retail_manager'})
+    super_agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_to_retail_managers_as_super', limit_choices_to={'user_type': 'super_agent'})
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        unique_together = (('retail_manager', 'super_agent'),)
+        verbose_name = 'Retail Manager → Super Agent Mapping'
+        verbose_name_plural = 'Retail Manager → Super Agent Mappings'
+
+    def __str__(self):
+        return f"{self.retail_manager.email} → {self.super_agent.email}"
+
+
+class RetailManagerAgentMapping(models.Model):
+    retail_manager = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_agents', limit_choices_to={'user_type': 'retail_manager'})
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mapped_to_retail_managers_as_agent', limit_choices_to={'user_type': 'agent'})
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        unique_together = (('retail_manager', 'agent'),)
+        verbose_name = 'Retail Manager → Agent Mapping'
+        verbose_name_plural = 'Retail Manager → Agent Mappings'
+
+    def __str__(self):
+        return f"{self.retail_manager.email} → {self.agent.email}"
+
+
+class FinanceAuditLog(models.Model):
+    ACTION_TYPES = (
+        ('WITHDRAWAL_APPROVED', 'Withdrawal Approved'),
+        ('WITHDRAWAL_REJECTED', 'Withdrawal Rejected'),
+        ('WITHDRAWAL_COMPLETED', 'Withdrawal Completed'),
+        ('TX_REVERSED', 'Transaction Reversed'),
+        ('TX_VERIFIED', 'Transaction Verified'),
+        ('WALLET_ADJUSTED', 'Wallet Adjusted'),
+        ('REPORT_EXPORTED', 'Report Exported'),
+        ('SCHEDULED_REPORT_SENT', 'Scheduled Report Sent'),
+        ('DEPOSIT_MANUAL_COMPLETED', 'Deposit Manually Completed'),
+        ('SETTLEMENT_CREATED', 'Settlement Created'),
+        ('SETTLEMENT_APPROVED', 'Settlement Approved'),
+        ('SETTLEMENT_PAID', 'Settlement Paid'),
+        ('JOURNAL_CREATED', 'Journal Entry Created'),
+    )
+
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_actions')
+    action_type = models.CharField(max_length=50, choices=ACTION_TYPES, db_index=True)
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_action_targets')
+    transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_audit_logs')
+    withdrawal = models.ForeignKey('UserWithdrawal', on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_audit_logs')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    reason = models.CharField(max_length=255, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    data = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.actor.email if self.actor else 'System'
+        return f"{self.action_type} by {who}"
+
+
+class WithdrawalPinVerificationLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='withdrawal_pin_verifications')
+    success = models.BooleanField(default=False, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"PIN verify {self.user.email} ({'ok' if self.success else 'fail'})"
+
+
+class PaymentGatewayEventLog(models.Model):
+    GATEWAY_CHOICES = (
+        ('paystack', 'Paystack'),
+        ('monnify', 'Monnify'),
+        ('kora', 'Korapay'),
+    )
+    EVENT_CHOICES = (
+        ('init', 'Initialize'),
+        ('verify', 'Verify'),
+        ('webhook', 'Webhook'),
+        ('reconcile', 'Reconcile'),
+    )
+
+    gateway = models.CharField(max_length=20, choices=GATEWAY_CHOICES, db_index=True)
+    event_type = models.CharField(max_length=20, choices=EVENT_CHOICES, db_index=True)
+    reference = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='gateway_events')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='gateway_events')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    fee_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    success = models.BooleanField(default=False, db_index=True)
+    http_status = models.IntegerField(null=True, blank=True)
+    message = models.CharField(max_length=255, blank=True, default='')
+    payload = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.gateway}:{self.event_type}:{self.reference or '-'}"
+
+
+class FinanceTransactionReview(models.Model):
+    STATUS_CHOICES = (
+        ('verified', 'Verified'),
+        ('flagged', 'Flagged'),
+        ('rejected', 'Rejected'),
+    )
+    transaction = models.ForeignKey('Transaction', on_delete=models.CASCADE, related_name='finance_reviews')
+    reviewer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_transaction_reviews')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, db_index=True)
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.transaction_id} {self.status}"
+
+
+class LedgerAccount(models.Model):
+    ACCOUNT_TYPE_CHOICES = (
+        ('asset', 'Asset'),
+        ('liability', 'Liability'),
+        ('equity', 'Equity'),
+        ('revenue', 'Revenue'),
+        ('expense', 'Expense'),
+    )
+    code = models.CharField(max_length=30, unique=True)
+    name = models.CharField(max_length=140)
+    account_type = models.CharField(max_length=12, choices=ACCOUNT_TYPE_CHOICES, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['code']
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class JournalEntry(models.Model):
+    entry_date = models.DateField(db_index=True)
+    memo = models.CharField(max_length=255, blank=True, default='')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='journal_entries_created')
+    related_transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='journal_entries')
+    related_withdrawal = models.ForeignKey('UserWithdrawal', on_delete=models.SET_NULL, null=True, blank=True, related_name='journal_entries')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-entry_date', '-created_at']
+
+    def __str__(self):
+        return f"JE {self.id} {self.entry_date}"
+
+
+class JournalLine(models.Model):
+    entry = models.ForeignKey(JournalEntry, on_delete=models.CASCADE, related_name='lines')
+    account = models.ForeignKey(LedgerAccount, on_delete=models.PROTECT, related_name='journal_lines')
+    related_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='journal_lines')
+    debit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    credit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f"{self.account.code} D{self.debit} C{self.credit}"
+
+
+class FinanceSettlementBatch(models.Model):
+    STATUS_CHOICES = (
+        ('draft', 'Draft'),
+        ('approved', 'Approved'),
+        ('paid', 'Paid'),
+        ('cancelled', 'Cancelled'),
+    )
+    TYPE_CHOICES = (
+        ('weekly_commission', 'Weekly Commissions'),
+        ('network_commission', 'Network Commissions'),
+        ('mixed_commission', 'Mixed Commissions'),
+        ('manual', 'Manual'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    settlement_type = models.CharField(max_length=30, choices=TYPE_CHOICES, db_index=True)
+    period_start = models.DateField(db_index=True)
+    period_end = models.DateField(db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', db_index=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_settlement_batches_created')
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_settlement_batches_approved')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    approved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Settlement {self.id} ({self.status})"
+
+
+class FinanceSettlementItem(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('failed', 'Failed'),
+    )
+    batch = models.ForeignKey(FinanceSettlementBatch, on_delete=models.CASCADE, related_name='items')
+    beneficiary = models.ForeignKey(User, on_delete=models.CASCADE, related_name='finance_settlement_items')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    weekly_commission = models.ForeignKey('commission.WeeklyAgentCommission', on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_settlement_items')
+    monthly_commission = models.ForeignKey('commission.MonthlyNetworkCommission', on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_settlement_items')
+    agent_payout = models.ForeignKey('AgentPayout', on_delete=models.SET_NULL, null=True, blank=True, related_name='finance_settlement_items')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    paid_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    error_message = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.beneficiary.email} ₦{self.amount} ({self.status})"
+
+
+class ScheduledFinanceReport(models.Model):
+    DATASET_CHOICES = (
+        ('transactions', 'Transactions'),
+        ('deposits', 'Deposits'),
+        ('withdrawals', 'Withdrawals'),
+        ('ledger', 'Finance Audit Ledger'),
+        ('journals', 'Journal Entries'),
+        ('settlements', 'Settlements'),
+        ('gateway_logs', 'Gateway Logs'),
+        ('pin_logs', 'Withdrawal PIN Logs'),
+    )
+    FORMAT_CHOICES = (
+        ('csv', 'CSV'),
+        ('xlsx', 'Excel'),
+        ('pdf', 'PDF'),
+    )
+    FREQUENCY_CHOICES = (
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('monthly', 'Monthly'),
+    )
+
+    name = models.CharField(max_length=120)
+    dataset = models.CharField(max_length=30, choices=DATASET_CHOICES, db_index=True)
+    report_format = models.CharField(max_length=10, choices=FORMAT_CHOICES, default='csv')
+    frequency = models.CharField(max_length=10, choices=FREQUENCY_CHOICES, default='daily', db_index=True)
+    recipients = models.TextField(blank=True, default='')
+
+    is_active = models.BooleanField(default=True, db_index=True)
+    last_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_status = models.CharField(max_length=20, blank=True, default='')
+    last_error = models.CharField(max_length=255, blank=True, default='')
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='scheduled_finance_reports_created')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.dataset})"
+
 
 @receiver(pre_save, sender=BetTicket)
 def refund_stake_on_void(sender, instance, **kwargs):

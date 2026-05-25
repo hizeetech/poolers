@@ -742,11 +742,13 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     # Explicitly define password fields to match clean method and avoid inheritance issues
     password = forms.CharField(
         widget=forms.PasswordInput(attrs={'class': 'form-control'}),
-        label="Password"
+        label="Password",
+        required=False
     )
     password2 = forms.CharField(
         widget=forms.PasswordInput(attrs={'class': 'form-control'}),
-        label="Confirm Password"
+        label="Confirm Password",
+        required=False
     )
 
     USER_TYPE_ADMIN_CHOICES = [
@@ -778,14 +780,15 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     phone_number = forms.CharField(max_length=20, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
     shop_address = forms.CharField(max_length=255, required=False, widget=forms.TextInput(attrs={'class': 'form-control'}))
     crm_role = forms.ChoiceField(
-        choices=getattr(User, 'CRM_ROLE_CHOICES', ()),
+        choices=(('', '---------'),) + tuple(getattr(User, 'CRM_ROLE_CHOICES', ())),
         required=False,
-        initial='viewer',
+        initial='',
         widget=forms.Select(attrs={'class': 'form-control'})
     )
     finance_role = forms.ChoiceField(
-        choices=getattr(User, 'FINANCE_ROLE_CHOICES', ()),
+        choices=(('', '---------'),) + tuple(getattr(User, 'FINANCE_ROLE_CHOICES', ())),
         required=False,
+        initial='',
         widget=forms.Select(attrs={'class': 'form-control'})
     )
 
@@ -822,6 +825,10 @@ class AdminUserCreationForm(DjangoUserCreationForm):
 
         if 'password1' in self.fields:
             del self.fields['password1']
+        if 'crm_role' in self.fields:
+            self.fields['crm_role'].initial = ''
+        if 'finance_role' in self.fields:
+            self.fields['finance_role'].initial = ''
 
     def clean_password2(self):
         password = self.cleaned_data.get("password")
@@ -833,6 +840,33 @@ class AdminUserCreationForm(DjangoUserCreationForm):
     def clean(self):
         cleaned_data = super().clean()
         user_type = cleaned_data.get('user_type')
+        password = cleaned_data.get('password')
+        password2 = cleaned_data.get('password2')
+        crm_role = (cleaned_data.get('crm_role') or '').strip()
+        finance_role = (cleaned_data.get('finance_role') or '').strip()
+
+        auto_password_roles = {'retail_manager', 'finance', 'account_user', 'crm'}
+        if user_type in auto_password_roles and not password and not password2:
+            from django.utils.crypto import get_random_string
+            generated = get_random_string(12)
+            cleaned_data['password'] = generated
+            cleaned_data['password2'] = generated
+            password = generated
+            password2 = generated
+
+        if user_type not in auto_password_roles and (not password or not password2):
+            self.add_error('password', "Password is required.")
+            self.add_error('password2', "Confirm Password is required.")
+
+        if user_type != 'crm':
+            cleaned_data['crm_role'] = ''
+        else:
+            cleaned_data['crm_role'] = crm_role or 'viewer'
+
+        if user_type != 'finance':
+            cleaned_data['finance_role'] = ''
+        else:
+            cleaned_data['finance_role'] = finance_role
 
         if user_type == 'super_agent':
             if not cleaned_data.get('master_agent'):

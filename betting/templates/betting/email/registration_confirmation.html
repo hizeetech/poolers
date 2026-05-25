@@ -8,16 +8,77 @@
 </head>
 
 <body>
-    <p>Dear {{ user.first_name|default:user.email }},</p>
-    <p>Thank you for registering with PoolBetting!</p>
-    <p>Your account details are:</p>
-    <p><strong>Username (Email):</strong> {{ user.email }}</p>
-    <p><strong>Temporary Password:</strong> {{ password }}</p>
-    <p>Please log in and consider changing your password for security.</p>
-    <p><a href="http://127.0.0.1:8000/login/">Login to your account</a></p>
-    <p>If you did not register for this service, please ignore this email.</p>
-    <p>Best regards,</p>
-    <p>The PoolBetting Team</p>
+    <div style="background:#f6f9fc;padding:24px 0;">
+      <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+        <div style="background:#0b3d2e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+            StakeNaija
+          </div>
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+            Registration Confirmation
+          </div>
+        </div>
+
+        <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+          <div style="padding:18px 18px 0 18px;">
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+              Welcome, {{ user.first_name|default:user.email|escape }}
+            </div>
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+              Your account has been created successfully. You can log in using either your Email or Username with the Password below.
+            </div>
+          </div>
+
+          <div style="padding:18px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;">
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Email</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ user.email|default:"-"|escape }}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Username</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ user.username|default:"-"|escape }}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Password</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ password|default:"-"|escape }}</div>
+                </td>
+              </tr>
+            </table>
+
+            <div style="margin-top:12px;border:1px dashed #d0d5dd;border-radius:12px;padding:12px;background:#ffffff;">
+              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:8px;">
+                Copy &amp; Paste
+              </div>
+              <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;white-space:pre-wrap;word-break:break-word;line-height:1.5;">
+Email: {{ user.email|default:"-"|escape }}
+Username: {{ user.username|default:"-"|escape }}
+Password: {{ password|default:"-"|escape }}
+              </div>
+            </div>
+
+            <div style="margin-top:14px;">
+              <a href="{{ login_url|default:'http://127.0.0.1:8000/login/'|escape }}" style="display:inline-block;background:#0d6efd;color:#ffffff;text-decoration:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-weight:700;font-size:14px;padding:10px 14px;border-radius:10px;">
+                Login to StakeNaija
+              </a>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+              Please log in and consider changing your password for security. If you did not register for this service, please ignore this email.
+            </div>
+          </div>
+        </div>
+
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+          © {% now "Y" %} StakeNaija
+        </div>
+      </div>
+    </div>
 </body>
 
 </html>

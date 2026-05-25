@@ -1,38 +1,69 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 640px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-        .header { background-color: #0b3d2e; color: #fff; padding: 12px; text-align: center; border-radius: 5px 5px 0 0; }
-        .content { padding: 20px; }
-        .footer { font-size: 12px; color: #777; text-align: center; margin-top: 20px; }
-        .details { background-color: #f9f9f9; padding: 15px; border-left: 4px solid #0b3d2e; margin: 15px 0; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h2>Agent Registration Submitted</h2>
+    <div style="background:#f6f9fc;padding:24px 0;">
+      <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+        <div style="background:#0b3d2e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+            StakeNaija
+          </div>
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+            Registration Submitted
+          </div>
         </div>
-        <div class="content">
-            <p>Hello {{ pending_agent.full_name }},</p>
-            <p>Your registration has been submitted successfully and is pending approval.</p>
 
-            <div class="details">
-                <p><strong>Login Email:</strong> <span class="mono">{{ pending_agent.email }}</span></p>
-                <p><strong>Role:</strong> {{ pending_agent.get_user_type_display }}</p>
-                <p><strong>Status:</strong> {{ pending_agent.status }}</p>
+        <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+          <div style="padding:18px 18px 0 18px;">
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+              Hello {{ pending_agent.full_name|default:"there"|escape }}
+            </div>
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+              Your registration has been submitted successfully and is now pending approval.
+            </div>
+          </div>
+
+          <div style="padding:18px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;">
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Email</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ pending_agent.email|default:"-"|escape }}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Role</div>
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:14px;font-weight:700;">{{ pending_agent.get_user_type_display|default:"-"|escape }}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Status</div>
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:14px;font-weight:800;">{{ pending_agent.status|default:"PENDING"|escape }}</div>
+                </td>
+              </tr>
+            </table>
+
+            <div style="margin-top:12px;border:1px solid #eef2f6;border-radius:12px;padding:12px;background:#ffffff;">
+              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;">
+                Once approved, your login details (including cashier accounts) will be sent to this email address.
+              </div>
             </div>
 
-            <p>Once approved by the administrator, your login details (including cashier accounts) will be sent to this email address.</p>
+            <div style="margin-top:14px;">
+              <a href="{{ login_url|escape }}" style="display:inline-block;background:#0d6efd;color:#ffffff;text-decoration:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-weight:700;font-size:14px;padding:10px 14px;border-radius:10px;">
+                Go to Login Page
+              </a>
+            </div>
+          </div>
+        </div>
 
-            <p>Login page: <a href="{{ login_url }}">{{ login_url }}</a></p>
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+          © {% now "Y" %} StakeNaija
         </div>
-        <div class="footer">
-            <p>&copy; {% now "Y" %} StakeNaija. All rights reserved.</p>
-        </div>
+      </div>
     </div>
 </body>
 </html>

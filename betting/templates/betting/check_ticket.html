@@ -277,71 +277,73 @@
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body p-4" id="ticket-content-to-print">
-                    <div class="text-center mb-3">
-                        {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="mb-1">
-                        {% else %}
-                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="mb-1">
-                        {% endif %}
-                        <small class="text-muted d-block">Reprinted Copy</small>
-                    </div>
-                    
-                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
-                        <tbody>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-ticket-id"></td>
-                            </tr>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
-                                <td style="border: 1px solid #000;" class="text-end" id="modal-placed-at"></td>
-                            </tr>
-                            <tr class="d-none" id="modal-status-container">
-                                <td style="border: 1px solid #000; font-weight: 700;">STATUS</td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold text-danger" id="modal-status"></td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div class="ticket-print">
+                        <div class="text-center mb-3">
+                            {% if site_config.logo %}
+                                <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="ticket-logo mb-1">
+                            {% else %}
+                                <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="ticket-logo mb-1">
+                            {% endif %}
+                            <small class="text-muted d-block">Reprinted Copy</small>
+                        </div>
+                        
+                        <table class="table table-sm mb-2 tight" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                            <tbody>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-ticket-id"></td>
+                                </tr>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
+                                    <td style="border: 1px solid #000;" class="text-end ticket-num" id="modal-placed-at"></td>
+                                </tr>
+                                <tr class="d-none" id="modal-status-container">
+                                    <td style="border: 1px solid #000; font-weight: 700;">STATUS</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-status"></td>
+                                </tr>
+                            </tbody>
+                        </table>
 
-                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
-                        <thead>
-                            <tr>
-                                <th style="border: 1px solid #000;">MATCH</th>
-                                <th style="border: 1px solid #000;">PICK</th>
-                                <th style="border: 1px solid #000;" class="text-end">ODDS</th>
-                            </tr>
-                        </thead>
-                        <tbody id="modal-selections-list"></tbody>
-                    </table>
+                        <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th style="border: 1px solid #000;">MATCH</th>
+                                    <th style="border: 1px solid #000;">PICK</th>
+                                    <th style="border: 1px solid #000;" class="text-end">ODDS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-selections-list"></tbody>
+                        </table>
 
-                    <table class="table table-sm mb-0" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
-                        <tbody>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">STAKE</td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-stake-amount"></td>
-                            </tr>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">ODDS</td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-total-odds"></td>
-                            </tr>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">SETTLED WINNING</td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-potential-winning"></td>
-                            </tr>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 700;">BONUS <span id="modal-bonus-percent" class="fw-bold"></span></td>
-                                <td style="border: 1px solid #000;" class="text-end fw-bold" id="modal-bonus-amount"></td>
-                            </tr>
-                            <tr>
-                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL PAYOUT</td>
-                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end" id="modal-max-winning"></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                    
-                    <div class="text-center mt-4">
-                        <small class="text-muted d-block">Generated: <span id="modal-generation-time"></span></small>
-                        <small class="text-muted d-block fst-italic">This is a duplicate copy.</small>
+                        <table class="table table-sm mb-0" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                            <tbody>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">STAKE</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-stake-amount"></td>
+                                </tr>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">ODDS</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-total-odds"></td>
+                                </tr>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">SETTLED WINNING</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-potential-winning"></td>
+                                </tr>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 700;">BONUS <span id="modal-bonus-percent" class="fw-bold"></span></td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-bonus-amount"></td>
+                                </tr>
+                                <tr>
+                                    <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL PAYOUT</td>
+                                    <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end ticket-num ticket-strong" id="modal-max-winning"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        
+                        <div class="text-center mt-4">
+                            <small class="text-muted d-block">Generated: <span id="modal-generation-time" class="ticket-num"></span></small>
+                            <small class="text-muted d-block fst-italic">This is a duplicate copy.</small>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer bg-light">
@@ -354,26 +356,6 @@
         </div>
     </div>
 
-    <style>
-    .watermark {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%) rotate(-45deg);
-        font-size: 3rem;
-        color: rgba(0, 0, 0, 0.1);
-        z-index: 0;
-        pointer-events: none;
-        white-space: nowrap;
-        font-weight: bold;
-        border: 2px dashed rgba(0, 0, 0, 0.1);
-        padding: 1rem;
-    }
-    #printTicketModal .modal-body {
-        position: relative;
-        overflow: hidden;
-    }
-    </style>
     <script>
     function rebetTicket(ticketId) {
         const btn = document.querySelector(`.rebet-btn-${ticketId}`);
@@ -443,37 +425,24 @@
                             <td style="border: 1px solid #000;">
                                 <div class="text-muted small">${sel.bet_type_display}</div>
                             </td>
-                            <td style="border: 1px solid #000;" class="text-end fw-bold">${sel.odd.toFixed(2)}</td>
+                            <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num">${sel.odd.toFixed(2)}</td>
                         `;
                         list.appendChild(tr);
                     });
 
-                    // Add Watermark
-                    let watermark = document.getElementById('reprint-watermark');
-                    let watermarkText = 'COPY - NOT ORIGINAL';
-                    
                     const statusContainer = document.getElementById('modal-status-container');
                     const statusText = document.getElementById('modal-status');
+                    let flagText = 'REPRINT COPY';
                     
                     // Reset first
                     statusContainer.classList.add('d-none');
                     statusText.textContent = '';
 
                     if (['cancelled', 'deleted', 'voided'].includes(ticket.status_code)) {
-                        watermarkText = ticket.status.toUpperCase();
-                        statusText.textContent = ticket.status.toUpperCase();
+                        const st = ticket.status.toUpperCase();
+                        flagText = st + ' COPY';
+                        statusText.textContent = st;
                         statusContainer.classList.remove('d-none');
-                    }
-
-                    if (!watermark) {
-                        watermark = document.createElement('div');
-                        watermark.id = 'reprint-watermark';
-                        watermark.className = 'watermark';
-                        watermark.textContent = watermarkText;
-                        document.querySelector('#printTicketModal .modal-body').appendChild(watermark);
-                    } else {
-                        watermark.textContent = watermarkText;
-                        watermark.style.display = 'block';
                     }
 
                     // Show Modal
@@ -484,34 +453,18 @@
                     document.getElementById('print-ticket-btn').onclick = function() {
                         logReprint(ticket.ticket_id);
                         
-                        const printContent = document.getElementById('ticket-content-to-print').outerHTML;
-                        const printWindow = window.open('', '', 'height=600,width=400');
-                        printWindow.document.write('<html><head><title>Print Ticket</title>');
-                        printWindow.document.write('<base href="' + window.location.origin + '/">');
-                        printWindow.document.write('<style>');
-                        printWindow.document.write('body { font-family: "Courier New", monospace; width: 100%; max-width: 80mm; margin: 0; padding: 5px; color: #000; position: relative; text-rendering: geometricPrecision; -webkit-print-color-adjust: exact; print-color-adjust: exact; }');
-                        printWindow.document.write('.watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 2rem; color: rgba(0, 0, 0, 0.2); border: 2px dashed #000; padding: 1rem; z-index: 100; opacity: 0.5; pointer-events: none; }');
-                        printWindow.document.write('img { max-width: 100%; height: auto; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; }');
-                        printWindow.document.write('table { width: 100%; border-collapse: collapse; }');
-                        printWindow.document.write('th, td { border: 1.5px solid #000; padding: 4px 5px; font-size: 13px; line-height: 1.3; vertical-align: top; }');
-                        printWindow.document.write('th { font-weight: 900; text-transform: uppercase; }');
-                        printWindow.document.write('.text-center { text-align: center; }');
-                        printWindow.document.write('.text-end { text-align: right; }');
-                        printWindow.document.write('.fw-bold { font-weight: 900; }');
-                        printWindow.document.write('.text-muted { color: #000; }');
-                        printWindow.document.write('.small { font-size: 11px; }');
-                        printWindow.document.write('</style>');
-                        printWindow.document.write('</head><body>');
-                        printWindow.document.write(printContent);
-                        printWindow.document.write('</body></html>');
-                        printWindow.document.close();
-                        
-                        // Wait for content to load/render (though document.write is synchronous mostly)
-                        setTimeout(function() {
-                            printWindow.focus();
-                            printWindow.print();
-                            // printWindow.close(); // Optional: close after print
-                        }, 500);
+                        const ticketEl = document.querySelector('#ticket-content-to-print .ticket-print');
+                        const html = ticketEl ? ticketEl.outerHTML : (document.getElementById('ticket-content-to-print') ? document.getElementById('ticket-content-to-print').innerHTML : '');
+                        if (typeof window.openThermalPrintWindow === 'function') {
+                            window.openThermalPrintWindow({
+                                title: 'Ticket Copy',
+                                html: html,
+                                paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80',
+                                flagText: flagText
+                            });
+                        } else {
+                            window.print();
+                        }
                     };
 
                 } else {

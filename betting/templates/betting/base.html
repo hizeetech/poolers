@@ -945,6 +945,177 @@
         });
     </script>
 
+    <script>
+        (function () {
+            const normalizePaper = (v) => (String(v || '').trim() === '58' ? '58' : '80');
+
+            window.getThermalPaperMm = function () {
+                try {
+                    return normalizePaper(localStorage.getItem('thermal_paper_mm'));
+                } catch (e) {
+                    return '80';
+                }
+            };
+
+            window.setThermalPaperMm = function (paperMm) {
+                try {
+                    localStorage.setItem('thermal_paper_mm', normalizePaper(paperMm));
+                } catch (e) {}
+            };
+
+            const buildThermalCss = function (paperMm) {
+                const paper = normalizePaper(paperMm);
+                const is58 = paper === '58';
+                const paperWidth = is58 ? '58mm' : '80mm';
+                const contentWidth = is58 ? '54mm' : '76mm';
+                const padY = '2.0mm';
+                const padX = is58 ? '1.6mm' : '1.8mm';
+
+                return `
+                    :root {
+                        --paper-width: ${paperWidth};
+                        --content-width: ${contentWidth};
+                        --pad-y: ${padY};
+                        --pad-x: ${padX};
+                        --font-base: 12px;
+                        --font-small: 11px;
+                        --font-strong: 15px;
+                        --rule: 2px;
+                    }
+                    @page {
+                        size: var(--paper-width) auto;
+                        margin: 0;
+                    }
+                    html, body {
+                        margin: 0;
+                        padding: 0;
+                        width: var(--paper-width);
+                        background: #fff !important;
+                    }
+                    body {
+                        color: #000 !important;
+                        font-family: Arial, Helvetica, "Courier New", Courier, monospace;
+                        font-size: var(--font-base);
+                        font-weight: 700;
+                        line-height: 1.25;
+                        letter-spacing: 0.15px;
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
+                        text-rendering: geometricPrecision;
+                        -webkit-font-smoothing: none;
+                        font-variant-numeric: tabular-nums;
+                    }
+                    * {
+                        color: #000 !important;
+                        background: transparent !important;
+                        box-shadow: none !important;
+                        text-shadow: none !important;
+                        filter: none !important;
+                        outline: none !important;
+                    }
+                    img {
+                        max-width: 100%;
+                        height: auto;
+                        image-rendering: -webkit-optimize-contrast;
+                        image-rendering: crisp-edges;
+                    }
+                    .thermal-root {
+                        width: var(--content-width);
+                        padding: var(--pad-y) var(--pad-x);
+                        margin: 0 auto;
+                    }
+                    .ticket-logo {
+                        display: block;
+                        margin: 0 auto 2.2mm auto;
+                    }
+                    .thermal-flag {
+                        border: var(--rule) solid #000;
+                        padding: 1.2mm 1.6mm;
+                        font-weight: 900;
+                        text-transform: uppercase;
+                        letter-spacing: 0.4px;
+                        font-size: var(--font-base);
+                        text-align: center;
+                        margin: 0 0 2.0mm 0;
+                    }
+                    .thermal-divider {
+                        border-top: var(--rule) solid #000;
+                        margin: 2.0mm 0;
+                    }
+                    table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        table-layout: fixed;
+                    }
+                    th, td {
+                        border: 1px solid #000;
+                        padding: 3px 4px;
+                        vertical-align: top;
+                        word-break: break-word;
+                    }
+                    th {
+                        font-weight: 900;
+                        text-transform: uppercase;
+                        font-size: var(--font-base);
+                    }
+                    .text-center { text-align: center; }
+                    .text-end { text-align: right; }
+                    .fw-bold { font-weight: 900; }
+                    .small { font-size: var(--font-small); }
+                    .text-muted { color: #000 !important; }
+                    .ticket-num {
+                        font-family: "Courier New", Courier, monospace;
+                        font-weight: 900;
+                        letter-spacing: 0.35px;
+                        font-variant-numeric: tabular-nums;
+                    }
+                    .ticket-strong {
+                        font-size: var(--font-strong);
+                        font-weight: 900;
+                        letter-spacing: 0.25px;
+                    }
+                    .tight td, .tight th {
+                        padding: 2px 3px;
+                    }
+                    @media print {
+                        a[href]::after { content: ""; }
+                    }
+                `;
+            };
+
+            window.openThermalPrintWindow = function (opts) {
+                const title = (opts && opts.title) ? String(opts.title) : 'Print Ticket';
+                const html = (opts && opts.html) ? String(opts.html) : '';
+                const paperMm = normalizePaper((opts && opts.paperMm) ? opts.paperMm : window.getThermalPaperMm());
+                const flagText = (opts && opts.flagText) ? String(opts.flagText) : '';
+
+                const w = window.open('', '', 'height=700,width=480');
+                if (!w) return;
+
+                const css = buildThermalCss(paperMm);
+                const wrapped = `
+                    <div class="thermal-root">
+                        ${flagText ? `<div class="thermal-flag">${flagText}</div>` : ''}
+                        ${html}
+                    </div>
+                `;
+
+                w.document.open();
+                w.document.write('<!DOCTYPE html><html><head>');
+                w.document.write('<meta charset="utf-8">');
+                w.document.write('<meta name="viewport" content="width=device-width, initial-scale=1">');
+                w.document.write('<title>' + title.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</title>');
+                w.document.write('<base href="' + window.location.origin + '/">');
+                w.document.write('<style>' + css + '</style>');
+                w.document.write('</head><body>');
+                w.document.write(wrapped);
+                w.document.write('<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},250);};<\/script>');
+                w.document.write('</body></html>');
+                w.document.close();
+            };
+        })();
+    </script>
+
     {% block extra_js %}{% endblock %}
     
     <script>

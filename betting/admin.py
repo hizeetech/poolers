@@ -335,6 +335,37 @@ class CustomUserAdmin(UserAdmin):
         # Otherwise, super().save_model will call obj.save() and form.save() as needed.
         super().save_model(request, obj, form, change)
 
+        if not change and getattr(obj, 'email', None) and getattr(obj, 'user_type', None) in ['retail_manager', 'finance', 'account_user', 'crm']:
+            raw_password = None
+            try:
+                raw_password = form.cleaned_data.get('password')
+            except Exception:
+                raw_password = None
+            if raw_password:
+                login_url = request.build_absolute_uri('/login/')
+                subject = 'Your StakeNaija Account Login Details'
+                message = (
+                    f"Hello,\n\n"
+                    f"An account has been created for you on StakeNaija.\n\n"
+                    f"Role: {obj.get_user_type_display()}\n"
+                    f"Email: {obj.email}\n"
+                    f"Password: {raw_password}\n\n"
+                    f"Login: {login_url}\n\n"
+                    f"If you did not request this account, please contact support."
+                )
+                from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+                try:
+                    send_mail(
+                        subject=subject,
+                        message=message,
+                        from_email=from_email,
+                        recipient_list=[obj.email],
+                        fail_silently=False,
+                    )
+                    messages.success(request, f"Login details sent to {obj.email}.")
+                except Exception as e:
+                    messages.warning(request, f"User created but email sending failed: {e}")
+
         # Additional safeguards/messages if needed, but primary logic is in form's clean/save
         if obj.user_type == 'admin' and not obj.is_superuser:
             messages.warning(request, f"User {obj.email} is an 'admin' type but not a superuser. Please ensure 'is_superuser' is checked.")

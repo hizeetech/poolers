@@ -344,15 +344,109 @@ class CustomUserAdmin(UserAdmin):
             if raw_password:
                 login_url = request.build_absolute_uri('/login/')
                 subject = 'Your StakeNaija Account Login Details'
+                username_value = getattr(obj, 'username', '') or ''
+                role_value = obj.get_user_type_display()
+                host_value = request.get_host()
+                def _esc(v):
+                    return (v or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+                email_html = _esc(obj.email)
+                username_html = _esc(username_value or '-')
+                password_html = _esc(raw_password)
+                role_html = _esc(role_value)
+                login_url_html = _esc(login_url)
+                host_html = _esc(host_value)
                 message = (
                     f"Hello,\n\n"
                     f"An account has been created for you on StakeNaija.\n\n"
-                    f"Role: {obj.get_user_type_display()}\n"
+                    f"Role: {role_value}\n"
                     f"Email: {obj.email}\n"
+                    f"Username: {username_value or '-'}\n"
                     f"Password: {raw_password}\n\n"
+                    f"You can log in using either your Email or Username with the Password above.\n\n"
                     f"Login: {login_url}\n\n"
-                    f"If you did not request this account, please contact support."
+                    f"If you did not request this account, please contact support.\n"
+                    f"Host: {host_value}"
                 )
+                html_message = f"""
+                <div style="background:#f6f9fc;padding:24px 0;">
+                  <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+                    <div style="background:#0b3d2e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+                      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+                        StakeNaija
+                      </div>
+                      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+                        Account Access Details
+                      </div>
+                    </div>
+
+                    <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+                      <div style="padding:18px 18px 0 18px;">
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                          Your login details
+                        </div>
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                          You can log in using either your Email or Username with the Password below.
+                        </div>
+                      </div>
+
+                      <div style="padding:18px;">
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;">
+                          <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Role</div>
+                              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:14px;font-weight:700;">{role_html}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Email</div>
+                              <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{email_html}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Username</div>
+                              <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{username_html}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Password</div>
+                              <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{password_html}</div>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <div style="margin-top:14px;border:1px dashed #d0d5dd;border-radius:12px;padding:12px;background:#ffffff;">
+                          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:8px;">
+                            Copy &amp; Paste
+                          </div>
+                          <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;white-space:pre-wrap;word-break:break-word;line-height:1.5;">
+Email: {email_html}
+Username: {username_html}
+Password: {password_html}
+                          </div>
+                        </div>
+
+                        <div style="margin-top:14px;">
+                          <a href="{login_url_html}" style="display:inline-block;background:#0d6efd;color:#ffffff;text-decoration:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-weight:700;font-size:14px;padding:10px 14px;border-radius:10px;">
+                            Login to StakeNaija
+                          </a>
+                        </div>
+
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+                          If you did not request this account, please contact support immediately.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+                      © {timezone.localdate().year} StakeNaija • {host_html}
+                    </div>
+                  </div>
+                </div>
+                """
                 from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
                 try:
                     send_mail(
@@ -360,6 +454,7 @@ class CustomUserAdmin(UserAdmin):
                         message=message,
                         from_email=from_email,
                         recipient_list=[obj.email],
+                        html_message=html_message,
                         fail_silently=False,
                     )
                     messages.success(request, f"Login details sent to {obj.email}.")

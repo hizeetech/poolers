@@ -1,34 +1,64 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-        .header { background-color: #F44336; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
-        .content { padding: 20px; }
-        .footer { font-size: 12px; color: #777; text-align: center; margin-top: 20px; }
-        .reason { background-color: #ffebee; padding: 15px; border-left: 4px solid #F44336; margin: 15px 0; }
-    </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h2>Registration Update</h2>
+    <div style="background:#f6f9fc;padding:24px 0;">
+      <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+        <div style="background:#b42318;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+            StakeNaija
+          </div>
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+            Registration Update
+          </div>
         </div>
-        <div class="content">
-            <p>Dear {{ full_name }},</p>
-            <p>We regret to inform you that your application to become an Agent/Super Agent has been rejected.</p>
-            
-            <p><strong>Reason for rejection:</strong></p>
-            <div class="reason">
-                {{ reason }}
+
+        <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+          <div style="padding:18px 18px 0 18px;">
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+              Hello {{ pending_reg.full_name|default:"there"|escape }}
             </div>
-            
-            <p>If you believe this is a mistake or have addressed the issues mentioned, please contact support or submit a new registration.</p>
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+              Your registration was not approved at this time.
+            </div>
+          </div>
+
+          <div style="padding:18px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;">
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Email</div>
+                  <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ pending_reg.email|default:"-"|escape }}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Role</div>
+                  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:14px;font-weight:700;">{{ pending_reg.get_user_type_display|default:"-"|escape }}</div>
+                </td>
+              </tr>
+            </table>
+
+            <div style="border:1px solid #fee4e2;background:#fff5f4;border-radius:12px;padding:12px;">
+              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#b42318;font-weight:800;font-size:13px;margin-bottom:6px;">
+                Reason for rejection
+              </div>
+              <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#7a271a;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word;">
+                {{ reason|default:"No reason provided."|escape }}
+              </div>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+              If you believe this is a mistake or you have addressed the issues mentioned, please contact support or submit a new registration.
+            </div>
+          </div>
         </div>
-        <div class="footer">
-            <p>&copy; {% now "Y" %} Pool Betting Platform. All rights reserved.</p>
+
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+          © {% now "Y" %} StakeNaija
         </div>
+      </div>
     </div>
 </body>
 </html>

@@ -49,19 +49,24 @@
       <div class="text-muted small">Range: {{ metrics_label }}</div>
     </div>
 
-    <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
-      <input type="hidden" name="tab" value="{{ active_tab }}">
-      <div>
-        <label class="form-label small text-muted mb-1">From</label>
-        <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
-      </div>
-      <div>
-        <label class="form-label small text-muted mb-1">To</label>
-        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
-      </div>
-      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
-      <a class="btn btn-sm btn-outline-secondary" href="?tab={{ active_tab }}">Reset</a>
-    </form>
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+      <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+        <input type="hidden" name="tab" value="{{ active_tab }}">
+        <div>
+          <label class="form-label small text-muted mb-1">From</label>
+          <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+        </div>
+        <div>
+          <label class="form-label small text-muted mb-1">To</label>
+          <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
+        </div>
+        <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+        <a class="btn btn-sm btn-outline-secondary" href="?tab={{ active_tab }}">Reset</a>
+      </form>
+      <button id="rmRegisterAgentBtn" type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#rmRegisterAgentModal">
+        Register Agent
+      </button>
+    </div>
   </div>
 
   <ul class="nav nav-tabs rm-tabs mb-3">
@@ -951,4 +956,75 @@
   })();
 </script>
 {% endif %}
+
+<div class="modal fade" id="rmRegisterAgentModal" tabindex="-1" aria-labelledby="rmRegisterAgentModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="rmRegisterAgentModalLabel">Register New Agent</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        {% if mapped_super_agents %}
+        <form method="post" action="{% url 'pending_registration:register_agent' %}">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Super Agent <span class="text-danger">*</span></label>
+            <select name="super_agent_id" class="form-select" required>
+              {% for sa in mapped_super_agents %}
+              <option value="{{ sa.id }}">{{ sa.email|default:sa.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label for="rm_full_name" class="form-label fw-semibold">Full Name <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" name="full_name" id="rm_full_name" placeholder="Enter full name" required>
+          </div>
+          <div class="mb-3">
+            <label for="rm_email" class="form-label fw-semibold">Email <span class="text-danger">*</span></label>
+            <input type="email" class="form-control" name="email" id="rm_email" placeholder="Enter email address" required>
+          </div>
+          <div class="mb-3">
+            <label for="rm_phone" class="form-label fw-semibold">Phone <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" name="phone" id="rm_phone" placeholder="Enter phone number" required>
+          </div>
+          <div class="mb-3">
+            <label for="rm_state" class="form-label fw-semibold">State</label>
+            <input type="text" class="form-control" name="state" id="rm_state" placeholder="Enter state (e.g. Lagos)">
+          </div>
+          <input type="hidden" name="user_type" value="agent">
+          <div class="mb-3">
+            <label for="rm_password" class="form-label fw-semibold">Password <span class="text-danger">*</span></label>
+            <input type="password" class="form-control" name="password" id="rm_password" required>
+          </div>
+          <div class="mb-3">
+            <label for="rm_confirm_password" class="form-label fw-semibold">Confirm Password <span class="text-danger">*</span></label>
+            <input type="password" class="form-control" name="confirm_password" id="rm_confirm_password" required>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-success">Submit for Approval</button>
+          </div>
+        </form>
+        {% else %}
+        <div class="alert alert-warning mb-0">No mapped Super Agents available. Map a Super Agent to this Retail Manager before registering an Agent.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('rmRegisterAgentBtn');
+    const modalEl = document.getElementById('rmRegisterAgentModal');
+    if (!btn || !modalEl) return;
+    btn.addEventListener('click', function (e) {
+      try {
+        if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+          const m = bootstrap.Modal.getOrCreateInstance(modalEl);
+          m.show();
+        }
+      } catch (err) {}
+    });
+  });
+</script>
 {% endblock %}

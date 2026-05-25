@@ -38,10 +38,116 @@
                 {% endfor %}
             </ul>
 
-            <button class="btn btn-primary mt-4" onclick="window.print()">Print Ticket</button> {% else %}
+            <button class="btn btn-primary mt-4" type="button" id="print-ticket-btn">Print Ticket</button>
+
+            <div class="d-none" id="ticket-receipt-template">
+                <div class="ticket-print">
+                    <div class="text-center mb-2">
+                        {% if site_config.logo %}
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                        {% else %}
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                        {% endif %}
+                    </div>
+
+                    <table class="table table-sm mb-2 tight" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BET ID</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">{{ bet_ticket.ticket_id }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">STATUS</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">{{ bet_ticket.status|upper }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num">{{ bet_ticket.bet_time|date:"Y-m-d H:i" }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #000;">MATCH</th>
+                                <th style="border: 1px solid #000;">PICK</th>
+                                <th style="border: 1px solid #000;" class="text-end">ODDS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for selection in selections %}
+                            <tr>
+                                <td style="border: 1px solid #000;">
+                                    <div class="fw-bold">
+                                        {% if selection.fixture %}
+                                            {{ selection.fixture.home_team }} vs {{ selection.fixture.away_team }}
+                                        {% else %}
+                                            {{ selection.fixture_home_team }} vs {{ selection.fixture_away_team }}
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td style="border: 1px solid #000;">
+                                    <div class="text-muted small">{{ selection.bet_type }}</div>
+                                </td>
+                                <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num">{{ selection.odd_selected }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+
+                    <table class="table table-sm mb-0" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">
+                        <tbody>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">STAKE</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">₦{{ bet_ticket.stake_amount }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">ODDS</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">{{ bet_ticket.total_odd }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">POT. WIN</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">₦{{ bet_ticket.potential_winning }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 700;">BONUS</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">₦{{ bet_ticket.bonus_amount }}</td>
+                            </tr>
+                            <tr>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL WIN</td>
+                                <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end ticket-num ticket-strong">₦{{ bet_ticket.max_winning }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% else %}
             <p class="text-center">No ticket found with that ID or an error occurred.</p>
             <a href="{% url 'fixtures' %}" class="btn btn-secondary mt-3">Back to Fixtures</a> {% endif %}
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const btn = document.getElementById('print-ticket-btn');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+            const tpl = document.querySelector('#ticket-receipt-template .ticket-print');
+            const html = tpl ? tpl.outerHTML : '';
+            if (typeof window.openThermalPrintWindow === 'function') {
+                window.openThermalPrintWindow({
+                    title: 'Ticket',
+                    html: html,
+                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80'
+                });
+            } else {
+                window.print();
+            }
+        });
+    });
+</script>
 {% endblock %}

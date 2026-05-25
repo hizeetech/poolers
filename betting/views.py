@@ -6988,6 +6988,7 @@ def retail_dashboard(request):
         'player_kyc': player_kyc,
         'players_page': players_page,
         'states': list(State.objects.all().order_by('state_name')),
+        'mapped_super_agents': list(super_agents.only('id', 'email', 'username').order_by('email')[:200]),
     }
     return render(request, 'betting/retail_dashboard.html', context)
 

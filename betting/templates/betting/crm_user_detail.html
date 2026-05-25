@@ -1,0 +1,461 @@
+{% extends 'betting/base.html' %}
+{% block title %}CRM User Detail{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-3">
+    <div>
+      <div class="text-muted small">Customer 360</div>
+      <h2 class="fw-bold mb-0">{{ target_user.get_full_name|default:target_user.email }}</h2>
+      <div class="text-muted small">{{ target_user.email }}{% if target_user.username %} • {{ target_user.username }}{% endif %}</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_dashboard' %}">Back</a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="text-muted small">Wallet Balance</div>
+          <div class="fs-3 fw-bold text-success">₦{{ wallet.balance|default_if_none:0|floatformat:2 }}</div>
+          <div class="text-muted small mt-2">User Type: <span class="text-uppercase">{{ target_user.user_type }}</span></div>
+          <div class="text-muted small">Phone: {{ target_user.phone_number|default:"-" }}</div>
+          <div class="text-muted small">KYC: {{ target_user.get_kyc_status_display|default:"-" }}</div>
+          <div class="text-muted small">VIP: {{ target_user.get_vip_level_display|default:"-" }}{% if target_user.vip_manager %} • Manager: {{ target_user.vip_manager.email }}{% endif %}</div>
+          <div class="text-muted small">Joined: {{ target_user.date_joined|date:"Y-m-d H:i" }}</div>
+          <div class="text-muted small">Last Login: {{ target_user.last_login|date:"Y-m-d H:i"|default:"-" }}</div>
+          <div class="mt-2">
+            {% if target_user.withdrawal_locked %}
+              <span class="badge bg-danger">Withdrawals Frozen</span>
+            {% else %}
+              <span class="badge bg-success">Withdrawals Enabled</span>
+            {% endif %}
+          </div>
+          <div class="mt-3">
+            {% if can_suspend_users %}
+            <form method="post" class="d-flex gap-2 align-items-end">
+              {% csrf_token %}
+              <input type="hidden" name="toggle_active" value="1">
+              {% if target_user.is_active %}
+                <input type="hidden" name="make_active" value="0">
+                <div class="flex-grow-1">
+                  <label class="form-label small text-muted mb-1">Reason</label>
+                  <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for suspension">
+                </div>
+                <button class="btn btn-sm btn-danger" type="submit">Suspend</button>
+              {% else %}
+                <input type="hidden" name="make_active" value="1">
+                <div class="flex-grow-1">
+                  <label class="form-label small text-muted mb-1">Reason</label>
+                  <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for re-activate">
+                </div>
+                <button class="btn btn-sm btn-success" type="submit">Re-activate</button>
+              {% endif %}
+            </form>
+            {% endif %}
+          </div>
+          <div class="mt-3">
+            {% if can_freeze_withdrawals %}
+            <form method="post" class="d-flex gap-2 align-items-end">
+              {% csrf_token %}
+              <input type="hidden" name="toggle_withdrawals" value="1">
+              {% if target_user.withdrawal_locked %}
+                <input type="hidden" name="freeze" value="0">
+              {% else %}
+                <input type="hidden" name="freeze" value="1">
+              {% endif %}
+              <div class="flex-grow-1">
+                <label class="form-label small text-muted mb-1">Reason</label>
+                <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason (optional)">
+              </div>
+              {% if target_user.withdrawal_locked %}
+                <button class="btn btn-sm btn-success" type="submit">Unfreeze</button>
+              {% else %}
+                <button class="btn btn-sm btn-warning" type="submit">Freeze</button>
+              {% endif %}
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Edit Profile</div>
+        <div class="card-body">
+          {% if can_edit_profiles %}
+          <form method="post" class="row g-3">
+            {% csrf_token %}
+            <input type="hidden" name="save_profile" value="1">
+            <div class="col-md-4">
+              <label class="form-label">First Name</label>
+              {{ profile_form.first_name }}
+              {{ profile_form.first_name.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Last Name</label>
+              {{ profile_form.last_name }}
+              {{ profile_form.last_name.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Other Name</label>
+              {{ profile_form.other_name }}
+              {{ profile_form.other_name.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Phone</label>
+              {{ profile_form.phone_number }}
+              {{ profile_form.phone_number.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">State</label>
+              {{ profile_form.state }}
+              {{ profile_form.state.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Bank Account Name</label>
+              {{ profile_form.bank_account_name }}
+              {{ profile_form.bank_account_name.errors }}
+            </div>
+            <div class="col-12">
+              <label class="form-label">Shop Address</label>
+              {{ profile_form.shop_address }}
+              {{ profile_form.shop_address.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">KYC Status</label>
+              {{ profile_form.kyc_status }}
+              {{ profile_form.kyc_status.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">VIP Level</label>
+              {{ profile_form.vip_level }}
+              {{ profile_form.vip_level.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">VIP Manager</label>
+              {{ profile_form.vip_manager }}
+              {{ profile_form.vip_manager.errors }}
+            </div>
+            <div class="col-12">
+              <button class="btn btn-primary" type="submit">Save</button>
+            </div>
+          </form>
+          {% else %}
+          <div class="text-muted">No permission to edit profile.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Wallet Actions</div>
+        <div class="card-body">
+          {% if can_manage_wallet %}
+          <form method="post" class="row g-2">
+            {% csrf_token %}
+            <input type="hidden" name="wallet_adjust" value="1">
+            <div class="col-12">
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="action" value="credit" checked>
+                <label class="form-check-label">Credit</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="action" value="debit">
+                <label class="form-check-label">Debit</label>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small text-muted mb-1">Amount</label>
+              <input type="number" step="0.01" min="0.01" name="amount" class="form-control form-control-sm" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small text-muted mb-1">Reason</label>
+              <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason (optional)">
+            </div>
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Description</label>
+              <textarea name="description" class="form-control form-control-sm" rows="2" placeholder="Description (optional)"></textarea>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+            </div>
+          </form>
+          {% if can_reset_password %}
+          <form method="post" class="mt-2">
+            {% csrf_token %}
+            <input type="hidden" name="reset_password" value="1">
+            <button class="btn btn-sm btn-outline-danger" type="submit">Reset Password</button>
+          </form>
+          {% endif %}
+          {% else %}
+          <div class="text-muted">No permission to manage wallet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Communication Center</div>
+        <div class="card-body">
+          {% if can_message %}
+          <form method="post" class="row g-2">
+            {% csrf_token %}
+            <input type="hidden" name="send_message" value="1">
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Title</label>
+              <input type="text" name="msg_title" class="form-control form-control-sm" placeholder="Title">
+            </div>
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Message</label>
+              <textarea name="msg_body" class="form-control form-control-sm" rows="3" required></textarea>
+            </div>
+            <div class="col-12">
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" name="via_inapp" value="1" checked>
+                <label class="form-check-label">In-app</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" name="via_email" value="1">
+                <label class="form-check-label">Email</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" name="via_sms" value="1">
+                <label class="form-check-label">SMS</label>
+              </div>
+            </div>
+            <div class="col-12">
+              <button class="btn btn-sm btn-success" type="submit">Send</button>
+            </div>
+          </form>
+          {% else %}
+          <div class="text-muted">No permission to send messages.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Recent Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th class="text-end">Amount</th>
+                  <th>Status</th>
+                  <th class="text-end">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in withdrawals %}
+                <tr>
+                  <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ w.status }}</td>
+                  <td class="text-end">
+                    {% if can_approve_withdrawals and w.status == 'pending' %}
+                      <form method="post" action="{% url 'betting:crm_withdrawal_action' w.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="approve">
+                        <button class="btn btn-sm btn-success" type="submit">Approve</button>
+                      </form>
+                      <form method="post" action="{% url 'betting:crm_withdrawal_action' w.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reject">
+                        <input type="text" name="reason" class="form-control form-control-sm d-inline-block" style="width: 140px;" placeholder="Reason">
+                        <button class="btn btn-sm btn-danger" type="submit">Reject</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No withdrawals.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Recent Tickets</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Ticket</th>
+                  <th class="text-end">Stake</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for t in tickets %}
+                <tr>
+                  <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+                  <td class="fw-semibold">{{ t.ticket_id }}</td>
+                  <td class="text-end">₦{{ t.stake_amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ t.status }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No tickets.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Recent Transactions</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                  <th class="text-end">Amount</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tx in transactions %}
+                <tr>
+                  <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ tx.transaction_type }}</td>
+                  <td class="text-muted small">{{ tx.description|default:"-" }}</td>
+                  <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ tx.status }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No transactions.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Login / IP History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>IP</th>
+                  <th>User Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for la in login_attempts %}
+                <tr>
+                  <td class="text-nowrap">{{ la.timestamp|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ la.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ la.user_agent|default:"-"|truncatechars:60 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-center text-muted py-4">No login history.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if ip_intel %}
+          <div class="p-3 border-top">
+            <div class="text-muted small">IP Intelligence ({{ ip_intel.ip_address }})</div>
+            <div class="small">VPN: {{ ip_intel.is_vpn }} • Proxy: {{ ip_intel.is_proxy }} • TOR: {{ ip_intel.is_tor }} • DC: {{ ip_intel.is_datacenter }} • Risk: {{ ip_intel.risk_score }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Device Tracking</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Last Seen</th>
+                  <th>Fingerprint</th>
+                  <th>IP</th>
+                  <th>Platform</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in device_fingerprints %}
+                <tr>
+                  <td class="text-nowrap">{{ d.last_seen_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ d.fingerprint_hash|truncatechars:16 }}</td>
+                  <td class="text-muted small">{{ d.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ d.platform|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No device fingerprints.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Risk & Suspicious Activity</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Kind</th>
+                  <th>Risk</th>
+                  <th>IP</th>
+                  <th>Ticket</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in suspicious_logs %}
+                <tr>
+                  <td class="text-nowrap">{{ s.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ s.kind }}</td>
+                  <td class="fw-semibold">{{ s.risk_score }}</td>
+                  <td class="text-muted small">{{ s.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ s.ticket.ticket_id|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No suspicious activity.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -89,6 +89,24 @@ urlpatterns = [
     path('account-user/dashboard/', views.account_user_dashboard, name='account_user_dashboard'),
     path('super-admin/fund-account-user/', views.super_admin_fund_account_user, name='super_admin_fund_account_user'),
 
+    # CRM URLs
+    path('crm/dashboard/', views.crm_dashboard, name='crm_dashboard'),
+    path('crm/activity-feed/', views.crm_activity_feed, name='crm_activity_feed'),
+    path('crm/user/<int:user_id>/', views.crm_user_detail, name='crm_user_detail'),
+    path('crm/withdrawals/<int:withdrawal_id>/action/', views.crm_withdrawal_action, name='crm_withdrawal_action'),
+    path('crm/registrations/cashier/<int:pk>/<str:action>/', views.crm_cashier_registration_action, name='crm_cashier_registration_action'),
+    path('crm/registrations/agent/<int:pk>/<str:action>/', views.crm_agent_registration_action, name='crm_agent_registration_action'),
+
+    # Retail Manager URLs
+    path('retail/dashboard/', views.retail_dashboard, name='retail_dashboard'),
+    path('retail/activity-feed/', views.retail_activity_feed, name='retail_activity_feed'),
+    path('retail/player/<int:user_id>/', views.retail_player_detail, name='retail_player_detail'),
+    path('retail/export/', views.retail_export, name='retail_export'),
+
+    # Finance URLs
+    path('finance/dashboard/', views.finance_dashboard, name='finance_dashboard'),
+    path('finance/export/', views.finance_export, name='finance_export'),
+
     # API endpoints
     path('api/betting-periods/', views.api_betting_periods, name='api_betting_periods'),
     path('api/fixtures/', views.api_fixtures, name='api_fixtures'),

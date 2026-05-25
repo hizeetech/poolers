@@ -1,0 +1,274 @@
+{% extends 'betting/base.html' %}
+{% block title %}Player 360{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mb-3">
+    <div>
+      <h3 class="fw-bold mb-0">Player 360</h3>
+      <div class="text-muted small">{{ target_user.email|default:target_user.username }}</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:retail_dashboard' %}?tab=players">Back</a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Profile</div>
+        <div class="card-body">
+          <div class="text-muted small">Full Name</div>
+          <div class="fw-semibold">{{ target_user.get_full_name|default:"-" }}</div>
+          <div class="text-muted small mt-2">Username</div>
+          <div class="fw-semibold">{{ target_user.username|default:"-" }}</div>
+          <div class="text-muted small mt-2">Phone</div>
+          <div class="fw-semibold">{{ target_user.phone_number|default:"-" }}</div>
+          <div class="text-muted small mt-2">KYC</div>
+          <div class="fw-semibold">{{ target_user.get_kyc_status_display|default:"-" }}</div>
+          <div class="text-muted small mt-2">VIP</div>
+          <div class="fw-semibold">{{ target_user.get_vip_level_display|default:"-" }}{% if target_user.vip_manager %} • {{ target_user.vip_manager.email }}{% endif %}</div>
+          <div class="text-muted small mt-2">Joined</div>
+          <div class="fw-semibold">{{ target_user.date_joined|date:"Y-m-d H:i"|default:"-" }}</div>
+          <div class="text-muted small mt-2">Last Login</div>
+          <div class="fw-semibold">{{ target_user.last_login|date:"Y-m-d H:i"|default:"-" }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Wallet</div>
+        <div class="card-body">
+          <div class="text-muted small">Balance</div>
+          <div class="fs-4 fw-bold text-success">₦{{ wallet.balance|default_if_none:0|floatformat:2 }}</div>
+          <div class="text-muted small mt-3">Status</div>
+          {% if target_user.is_active %}
+            <span class="badge bg-success">Active</span>
+          {% else %}
+            <span class="badge bg-danger">Suspended</span>
+          {% endif %}
+          <div class="text-muted small mt-3">Withdrawals</div>
+          {% if target_user.withdrawal_locked %}
+            <span class="badge bg-danger">Frozen</span>
+          {% else %}
+            <span class="badge bg-success">Enabled</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Network</div>
+        <div class="card-body">
+          <div class="text-muted small">Agent</div>
+          <div class="fw-semibold">{{ target_user.agent.email|default:"-" }}</div>
+          <div class="text-muted small mt-2">Super Agent</div>
+          <div class="fw-semibold">{{ target_user.super_agent.email|default:"-" }}</div>
+          <div class="text-muted small mt-2">Master Agent</div>
+          <div class="fw-semibold">{{ target_user.master_agent.email|default:"-" }}</div>
+          <div class="text-muted small mt-2">State</div>
+          <div class="fw-semibold">{{ target_user.state.state_name|default:"-" }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Recent Bets</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Ticket</th>
+                  <th class="text-end">Stake</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for t in tickets %}
+                <tr>
+                  <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+                  <td class="fw-semibold">{{ t.ticket_id }}</td>
+                  <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
+                  <td class="text-uppercase small">{{ t.status }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No tickets.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Deposits</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Gateway</th>
+                  <th class="text-end">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tx in deposits %}
+                <tr>
+                  <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
+                  <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-center text-muted py-4">No deposits.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th class="text-end">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in withdrawals %}
+                <tr>
+                  <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ w.status }}</td>
+                  <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-center text-muted py-4">No withdrawals.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Login / IP History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>IP</th>
+                  <th>User Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for la in login_attempts %}
+                <tr>
+                  <td class="text-nowrap">{{ la.timestamp|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ la.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ la.user_agent|default:"-"|truncatechars:70 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-center text-muted py-4">No login history.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if ip_intel %}
+          <div class="p-3 border-top">
+            <div class="text-muted small">IP Intelligence ({{ ip_intel.ip_address }})</div>
+            <div class="small">VPN: {{ ip_intel.is_vpn }} • Proxy: {{ ip_intel.is_proxy }} • TOR: {{ ip_intel.is_tor }} • DC: {{ ip_intel.is_datacenter }} • Risk: {{ ip_intel.risk_score }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Device Tracking</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Last Seen</th>
+                  <th>Fingerprint</th>
+                  <th>IP</th>
+                  <th>Platform</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in device_fingerprints %}
+                <tr>
+                  <td class="text-nowrap">{{ d.last_seen_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ d.fingerprint_hash|truncatechars:16 }}</td>
+                  <td class="text-muted small">{{ d.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ d.platform|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No device fingerprints.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Risk & Suspicious Activity</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Kind</th>
+                  <th>Risk</th>
+                  <th>IP</th>
+                  <th>Ticket</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in suspicious_logs %}
+                <tr>
+                  <td class="text-nowrap">{{ s.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-uppercase small">{{ s.kind }}</td>
+                  <td class="fw-semibold">{{ s.risk_score }}</td>
+                  <td class="text-muted small">{{ s.ip_address|default:"-" }}</td>
+                  <td class="text-muted small">{{ s.ticket.ticket_id|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No suspicious activity.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

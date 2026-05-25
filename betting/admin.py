@@ -48,7 +48,9 @@ from .models import (
     PasswordResetRequest, State, FooterPage, FooterBadge,
     GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog,
     PaymentGatewayDeposit,
-    CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier
+    CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
+    RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
+    FinanceAuditLog, CRMActionLog
 )
 
 
@@ -229,8 +231,8 @@ class CustomUserAdmin(UserAdmin):
 
     fieldsets = (
         (None, {'fields': ('email', 'username', 'password')}),
-        ('Personal info', {'fields': ('first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name')}),
-        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 'groups', 'user_permissions', 'user_type')}),
+        ('Personal info', {'fields': ('first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name', 'kyc_status', 'vip_level', 'vip_manager')}),
+        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 'groups', 'user_permissions', 'user_type', 'crm_role', 'finance_role')}),
         ('Hierarchy', {'fields': ('master_agent', 'super_agent', 'agent', 'cashier_prefix')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
         ('Security & Locking', {'fields': ('is_locked', 'failed_login_attempts', 'last_failed_login', 'locked_at', 'lock_reason')}),
@@ -243,7 +245,8 @@ class CustomUserAdmin(UserAdmin):
             'fields': (
                 'email', 'username', 'password', 'password2',
                 'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name',
-                'user_type', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 
+                'kyc_status', 'vip_level', 'vip_manager',
+                'user_type', 'crm_role', 'finance_role', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 
                 'groups', 'user_permissions', 
                 'master_agent', 'super_agent', 'agent', 'cashier_prefix'
             ),
@@ -1262,6 +1265,62 @@ class BettingLimitAuditLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
+
+class RetailManagerMasterAgentMappingAdmin(admin.ModelAdmin):
+    list_display = ('retail_manager', 'master_agent', 'created_at')
+    search_fields = ('retail_manager__email', 'retail_manager__username', 'master_agent__email', 'master_agent__username')
+    list_filter = ('created_at',)
+    autocomplete_fields = ('retail_manager', 'master_agent')
+    date_hierarchy = 'created_at'
+
+
+class RetailManagerSuperAgentMappingAdmin(admin.ModelAdmin):
+    list_display = ('retail_manager', 'super_agent', 'created_at')
+    search_fields = ('retail_manager__email', 'retail_manager__username', 'super_agent__email', 'super_agent__username')
+    list_filter = ('created_at',)
+    autocomplete_fields = ('retail_manager', 'super_agent')
+    date_hierarchy = 'created_at'
+
+
+class RetailManagerAgentMappingAdmin(admin.ModelAdmin):
+    list_display = ('retail_manager', 'agent', 'created_at')
+    search_fields = ('retail_manager__email', 'retail_manager__username', 'agent__email', 'agent__username')
+    list_filter = ('created_at',)
+    autocomplete_fields = ('retail_manager', 'agent')
+    date_hierarchy = 'created_at'
+
+class FinanceAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'action_type', 'actor', 'target_user', 'transaction', 'withdrawal', 'ip_address')
+    list_filter = ('action_type', 'created_at')
+    search_fields = ('actor__email', 'target_user__email', 'reason', 'notes', 'transaction__id', 'withdrawal__id')
+    readonly_fields = [f.name for f in FinanceAuditLog._meta.fields]
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+class CRMActionLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'action_type', 'actor', 'target_user', 'reason')
+    list_filter = ('action_type', 'created_at')
+    search_fields = ('actor__email', 'target_user__email', 'reason', 'notes')
+    readonly_fields = [f.name for f in CRMActionLog._meta.fields]
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
 # Register your models with the CUSTOM admin site
 betting_admin_site.register(User, CustomUserAdmin)
 betting_admin_site.register(Wallet, WalletAdmin)
@@ -1280,6 +1339,11 @@ betting_admin_site.register(GlobalBettingSettings, GlobalBettingSettingsAdmin)
 betting_admin_site.register(AgentBettingLimitOverride, AgentBettingLimitOverrideAdmin)
 betting_admin_site.register(UserBettingLimitOverride, UserBettingLimitOverrideAdmin)
 betting_admin_site.register(BettingLimitAuditLog, BettingLimitAuditLogAdmin)
+betting_admin_site.register(RetailManagerMasterAgentMapping, RetailManagerMasterAgentMappingAdmin)
+betting_admin_site.register(RetailManagerSuperAgentMapping, RetailManagerSuperAgentMappingAdmin)
+betting_admin_site.register(RetailManagerAgentMapping, RetailManagerAgentMappingAdmin)
+betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
+betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
 
 from risk.models import (
     RiskEngineSettings,

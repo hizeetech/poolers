@@ -1,0 +1,954 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+{% block title %}Retail Manager Dashboard{% endblock %}
+
+{% block content %}
+<style>
+  .rm-tabs.nav-tabs {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    gap: 6px;
+  }
+  .rm-tabs.nav-tabs .nav-link {
+    border: 1px solid rgba(0,0,0,0.08);
+    color: #132C46;
+    background: #ffffff;
+    font-weight: 600;
+    border-radius: 10px 10px 0 0;
+    padding: 10px 14px;
+    transition: background-color 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+  }
+  .rm-tabs.nav-tabs .nav-link:hover {
+    background: rgba(19, 44, 70, 0.06);
+    color: #0B3D2E;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+  }
+  .rm-tabs.nav-tabs .nav-link.active {
+    background: linear-gradient(135deg, #0B3D2E, #062E21);
+    color: #ffffff;
+    border-color: rgba(0,0,0,0.08);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+  }
+  .kpi-card {
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  }
+  .kpi-label { color: #6c757d; font-size: 0.82rem; }
+  .kpi-value { font-weight: 800; font-size: 1.35rem; color: #132C46; }
+  .feed-item { border-bottom: 1px solid rgba(0,0,0,0.06); padding: 10px 0; }
+  .feed-item:last-child { border-bottom: none; }
+</style>
+
+<div class="container py-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Retail Manager Dashboard</h2>
+      <div class="text-muted small">Network-scoped analytics, monitoring, and reporting</div>
+      <div class="text-muted small">Range: {{ metrics_label }}</div>
+    </div>
+
+    <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
+      <div>
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
+      </div>
+      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+      <a class="btn btn-sm btn-outline-secondary" href="?tab={{ active_tab }}">Reset</a>
+    </form>
+  </div>
+
+  <ul class="nav nav-tabs rm-tabs mb-3">
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'hierarchy' %}active{% endif %}" href="?tab=hierarchy&start_date={{ start_date }}&end_date={{ end_date }}">Hierarchy</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'shops' %}active{% endif %}" href="?tab=shops&start_date={{ start_date }}&end_date={{ end_date }}">Shops</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'players' %}active{% endif %}" href="?tab=players&start_date={{ start_date }}&end_date={{ end_date }}">Players</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'bets' %}active{% endif %}" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}">Bets</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'finance' %}active{% endif %}" href="?tab=finance&start_date={{ start_date }}&end_date={{ end_date }}">Finance</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'commissions' %}active{% endif %}" href="?tab=commissions&start_date={{ start_date }}&end_date={{ end_date }}">Commissions</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'risk' %}active{% endif %}" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}">Risk</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
+  </ul>
+
+  {% if active_tab == 'overview' %}
+  <div class="row g-3">
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Mapped Master Agents</div>
+        <div class="kpi-value">{{ kpis.total_mapped_master_agents }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Mapped Super Agents</div>
+        <div class="kpi-value">{{ kpis.total_mapped_super_agents }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Mapped Agents</div>
+        <div class="kpi-value">{{ kpis.total_mapped_agents }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Active Players</div>
+        <div class="kpi-value">{{ kpis.total_active_players }}</div>
+      </div>
+    </div>
+
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Bets Today</div>
+        <div class="kpi-value" id="kpiBetsToday">{{ kpis.total_bets_today }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Stake Today</div>
+        <div class="kpi-value" id="kpiStakeToday">₦{{ kpis.total_stake_today|floatformat:2 }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Payouts Today</div>
+        <div class="kpi-value" id="kpiPayoutsToday">₦{{ kpis.total_payouts_today|floatformat:2 }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Revenue Today</div>
+        <div class="kpi-value">₦{{ kpis.revenue_today|floatformat:2 }}</div>
+      </div>
+    </div>
+
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Deposits Today</div>
+        <div class="kpi-value" id="kpiDepositsToday">₦{{ kpis.deposits_today|floatformat:2 }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Withdrawals Today</div>
+        <div class="kpi-value" id="kpiWithdrawalsToday">₦{{ kpis.withdrawals_today|floatformat:2 }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Pending Withdrawals</div>
+        <div class="kpi-value" id="kpiPendingWithdrawals">{{ kpis.pending_withdrawals_count }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Online Users</div>
+        <div class="kpi-value" id="kpiOnlineUsers">{{ kpis.online_users }}</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Top Performing Agents (by stake)</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Agent</th>
+                  <th class="text-end">Bets</th>
+                  <th class="text-end">Stake</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for a in top_agents %}
+                <tr>
+                  <td class="text-muted small">{{ a.user__agent__email|default:"-" }}</td>
+                  <td class="text-end">{{ a.bets }}</td>
+                  <td class="text-end fw-semibold">₦{{ a.stake|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-center text-muted py-4">No data.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-8">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light fw-semibold">Revenue & Betting Trends</div>
+        <div class="card-body">
+          <canvas id="rmRevenueChart" height="90"></canvas>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Deposit vs Withdrawal</div>
+        <div class="card-body">
+          <canvas id="rmCashflowChart" height="90"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Real-time Activity Feed</div>
+          <div class="d-flex align-items-center gap-2">
+            <a href="#" id="rmFeedToggle" class="small text-decoration-none" style="display:none;">See All</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:retail_activity_feed' %}" target="_blank" rel="noopener">JSON</a>
+          </div>
+        </div>
+        <div class="card-body">
+          <div id="rmFeed" class="text-muted">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'hierarchy' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Hierarchy (Retail Manager → Master → Super → Agent)</div>
+    <div class="card-body">
+      {% if hierarchy %}
+        <div class="accordion" id="rmHierarchy">
+          {% for n in hierarchy %}
+          <div class="accordion-item">
+            <h2 class="accordion-header" id="ma-{{ n.master_agent.id }}">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#ma-body-{{ n.master_agent.id }}">
+                {{ n.master_agent.email }}{% if n.master_agent.state %} • {{ n.master_agent.state }}{% endif %}
+              </button>
+            </h2>
+            <div id="ma-body-{{ n.master_agent.id }}" class="accordion-collapse collapse" data-bs-parent="#rmHierarchy">
+              <div class="accordion-body">
+                {% if n.direct_agents %}
+                <div class="mb-3">
+                  <div class="fw-semibold mb-2">Direct Agents</div>
+                  <div class="table-responsive">
+                    <table class="table table-sm">
+                      <thead class="table-light"><tr><th>Agent</th><th>State</th></tr></thead>
+                      <tbody>
+                        {% for ag in n.direct_agents %}
+                        <tr><td>{{ ag.email }}</td><td class="text-muted small">{{ ag.state|default:"-" }}</td></tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {% endif %}
+
+                {% for sa in n.super_agents %}
+                <div class="mb-3">
+                  <div class="fw-semibold">Super Agent: {{ sa.super_agent.email }}</div>
+                  <div class="text-muted small mb-2">{{ sa.super_agent.state|default:"-" }}</div>
+                  <div class="table-responsive">
+                    <table class="table table-sm">
+                      <thead class="table-light"><tr><th>Agent</th><th>State</th></tr></thead>
+                      <tbody>
+                        {% for ag in sa.agents %}
+                        <tr><td>{{ ag.email }}</td><td class="text-muted small">{{ ag.state|default:"-" }}</td></tr>
+                        {% empty %}
+                        <tr><td colspan="2" class="text-center text-muted">No agents.</td></tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {% empty %}
+                <div class="text-muted">No super agents mapped under this master agent.</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="text-muted">No mappings yet. Ask an Admin to map Master Agents/Super Agents/Agents to your Retail Manager account.</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'shops' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Shops Management (Agents)</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="shops">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="shop_q" value="{{ shop_q }}" class="form-control form-control-sm" placeholder="Email/Username/Address">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">State</label>
+            <select name="shop_state" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for st in states %}
+              <option value="{{ st.id }}" {% if shop_state == st.id|stringformat:"s" %}selected{% endif %}>{{ st.state_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="shop_active" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="1" {% if shop_active == '1' %}selected{% endif %}>Active</option>
+              <option value="0" {% if shop_active == '0' %}selected{% endif %}>Inactive</option>
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Shop (Agent)</th>
+              <th>State</th>
+              <th>Address</th>
+              <th class="text-end">Players</th>
+              <th class="text-end">Cashiers</th>
+              <th class="text-end">Bets</th>
+              <th class="text-end">Stake</th>
+              <th class="text-end">Payout</th>
+              <th class="text-end">Revenue</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in shops_page %}
+            <tr>
+              <td class="fw-semibold">{{ s.email|default:s.username }}</td>
+              <td class="text-muted small">{{ s.state.state_name|default:"-" }}</td>
+              <td class="text-muted small">{{ s.shop_address|default:"-" }}</td>
+              <td class="text-end">{{ s.players_count }}</td>
+              <td class="text-end">{{ s.cashiers_count }}</td>
+              <td class="text-end">{{ s.bets_count }}</td>
+              <td class="text-end fw-semibold">₦{{ s.stake_sum|floatformat:2 }}</td>
+              <td class="text-end fw-semibold">₦{{ s.payout_sum|floatformat:2 }}</td>
+              <td class="text-end fw-semibold">₦{{ s.revenue_sum|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="9" class="text-center text-muted py-4">No shops found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% if shops_page %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ shops_page.number }} of {{ shops_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if shops_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=shops&start_date={{ start_date }}&end_date={{ end_date }}&shop_q={{ shop_q }}&shop_state={{ shop_state }}&shop_active={{ shop_active }}&shops_page={{ shops_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if shops_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=shops&start_date={{ start_date }}&end_date={{ end_date }}&shop_q={{ shop_q }}&shop_state={{ shop_state }}&shop_active={{ shop_active }}&shops_page={{ shops_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if active_tab == 'players' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Player Monitoring</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="players">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="player_q" value="{{ player_q }}" class="form-control form-control-sm" placeholder="Name/Email/Phone">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="player_status" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="1" {% if player_status == '1' %}selected{% endif %}>Active</option>
+              <option value="0" {% if player_status == '0' %}selected{% endif %}>Inactive</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">KYC</label>
+            <select name="player_kyc" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="unverified" {% if player_kyc == 'unverified' %}selected{% endif %}>Unverified</option>
+              <option value="pending" {% if player_kyc == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="verified" {% if player_kyc == 'verified' %}selected{% endif %}>Verified</option>
+              <option value="rejected" {% if player_kyc == 'rejected' %}selected{% endif %}>Rejected</option>
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>User</th>
+              <th>Phone</th>
+              <th class="text-end">Wallet</th>
+              <th>KYC</th>
+              <th>VIP</th>
+              <th>Last Login</th>
+              <th>Agent</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in players_page %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ u.email|default:u.username }}</div>
+                <div class="text-muted small">{{ u.get_full_name|default:"-" }}</div>
+              </td>
+              <td class="text-muted small">{{ u.phone_number|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ u.wallet.balance|default_if_none:0|floatformat:2 }}</td>
+              <td class="text-muted small">{{ u.get_kyc_status_display|default:"-" }}</td>
+              <td class="text-muted small">{{ u.get_vip_level_display|default:"-" }}</td>
+              <td class="text-muted small text-nowrap">{{ u.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td class="text-muted small">{{ u.agent.email|default:"-" }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_player_detail' u.id %}">Open</a>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" class="text-center text-muted py-4">No players found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% if players_page %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ players_page.number }} of {{ players_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if players_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=players&start_date={{ start_date }}&end_date={{ end_date }}&player_q={{ player_q }}&player_status={{ player_status }}&player_kyc={{ player_kyc }}&players_page={{ players_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if players_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=players&start_date={{ start_date }}&end_date={{ end_date }}&player_q={{ player_q }}&player_status={{ player_status }}&player_kyc={{ player_kyc }}&players_page={{ players_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if active_tab == 'reports' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Reports & Exports (Network Scoped)</div>
+    <div class="card-body">
+      <div class="text-muted small mb-2">Range: {{ metrics_label }}</div>
+      <div class="row g-2">
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Bets</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=bets&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=bets&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=bets&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Transactions</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=transactions&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=transactions&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=transactions&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Withdrawals</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=withdrawals&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=withdrawals&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=withdrawals&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Commissions</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=commissions&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=commissions&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=commissions&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Players</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=players&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=players&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=players&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded-3 p-3 h-100">
+            <div class="fw-semibold mb-2">Shops</div>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=shops&format=csv&start_date={{ start_date }}&end_date={{ end_date }}">CSV</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=shops&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}">Excel</a>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=shops&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}">PDF</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="text-muted small mt-3">PDF exports are capped to the first 2,000 rows.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'bets' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Bet Monitoring (Network Scoped)</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="bets">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="bet_q" value="{{ bet_q }}" class="form-control form-control-sm" placeholder="Ticket/User/Phone">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="bet_status" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="pending" {% if bet_status == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="won" {% if bet_status == 'won' %}selected{% endif %}>Won</option>
+              <option value="lost" {% if bet_status == 'lost' %}selected{% endif %}>Lost</option>
+              <option value="cashed_out" {% if bet_status == 'cashed_out' %}selected{% endif %}>Cashed Out</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Agent</label>
+            <select name="bet_agent" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for ag in agent_filter_options %}
+              <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Ticket</th>
+              <th>User</th>
+              <th class="text-end">Stake</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in bet_tickets_page %}
+            <tr>
+              <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+              <td class="fw-semibold">{{ t.ticket_id }}</td>
+              <td class="text-muted small">
+                <div class="fw-semibold text-dark">{{ t.user.email|default:t.user.username }}</div>
+              </td>
+              <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ t.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No bets found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% if bet_tickets_page %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ bet_tickets_page.number }} of {{ bet_tickets_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if bet_tickets_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if bet_tickets_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if active_tab == 'finance' %}
+  <div class="row g-3">
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light">
+          <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+            <div class="fw-semibold">Transactions</div>
+            <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+              <input type="hidden" name="tab" value="finance">
+              <input type="hidden" name="start_date" value="{{ start_date }}">
+              <input type="hidden" name="end_date" value="{{ end_date }}">
+              <div>
+                <label class="form-label small text-muted mb-1">User Search</label>
+                <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Email/Username/Phone">
+              </div>
+              <div>
+                <label class="form-label small text-muted mb-1">Type</label>
+                <select name="tx_type" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="deposit" {% if tx_type == 'deposit' %}selected{% endif %}>Deposit</option>
+                  <option value="withdrawal" {% if tx_type == 'withdrawal' %}selected{% endif %}>Withdrawal</option>
+                  <option value="bet_placement" {% if tx_type == 'bet_placement' %}selected{% endif %}>Bet Placement</option>
+                  <option value="bet_payout" {% if tx_type == 'bet_payout' %}selected{% endif %}>Bet Payout</option>
+                  <option value="commission_payout" {% if tx_type == 'commission_payout' %}selected{% endif %}>Commission</option>
+                </select>
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Type</th>
+                  <th class="text-end">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tx in tx_page %}
+                <tr>
+                  <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+                  <td class="text-uppercase small">{{ tx.transaction_type }}</td>
+                  <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No transactions.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Withdrawals</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Status</th>
+                  <th class="text-end">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for w in withdrawals_page %}
+                <tr>
+                  <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+                  <td class="text-uppercase small">{{ w.status }}</td>
+                  <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No withdrawals.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'commissions' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Commission Breakdown (network scoped)</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Agent</th>
+              <th class="text-end">Total Commission</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in commission_rows %}
+            <tr>
+              <td class="text-muted small">{{ r.user__email|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ r.total|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="2" class="text-center text-muted py-4">No commissions.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'risk' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Fraud & Risk Monitoring (network scoped)</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="risk">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Kind</label>
+            <input type="text" name="risk_kind" value="{{ risk_kind }}" class="form-control form-control-sm" placeholder="Optional">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Kind</th>
+              <th>Risk</th>
+              <th>User</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in risk_logs_page %}
+            <tr>
+              <td class="text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-uppercase small">{{ r.kind }}</td>
+              <td class="fw-semibold">{{ r.risk_score }}</td>
+              <td class="text-muted small">{{ r.user.email|default:r.user.username }}</td>
+              <td class="text-muted small">{{ r.ip_address|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No risk logs.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if active_tab == 'overview' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    const labels = {{ charts_data.labels|safe }};
+    const bets = {{ charts_data.bets|safe }};
+    const stake = {{ charts_data.stake|safe }};
+    const payouts = {{ charts_data.payouts|safe }};
+    const deposits = {{ charts_data.deposits|safe }};
+    const withdrawals = {{ charts_data.withdrawals|safe }};
+
+    const revenueCtx = document.getElementById('rmRevenueChart');
+    if (revenueCtx) {
+      new Chart(revenueCtx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Stake', data: stake, borderColor: '#00C853', backgroundColor: 'rgba(0,200,83,0.10)', tension: 0.25 },
+            { label: 'Payouts', data: payouts, borderColor: '#FF5252', backgroundColor: 'rgba(255,82,82,0.10)', tension: 0.25 },
+            { label: 'Bets', data: bets, borderColor: '#132C46', backgroundColor: 'rgba(19,44,70,0.08)', tension: 0.25, yAxisID: 'y1' },
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true },
+            y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+          }
+        }
+      });
+    }
+
+    const cashflowCtx = document.getElementById('rmCashflowChart');
+    if (cashflowCtx) {
+      new Chart(cashflowCtx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Deposits', data: deposits, backgroundColor: 'rgba(0,200,83,0.35)' },
+            { label: 'Withdrawals', data: withdrawals, backgroundColor: 'rgba(255,82,82,0.35)' },
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const feedEl = document.getElementById('rmFeed');
+    const feedToggleEl = document.getElementById('rmFeedToggle');
+    let feedExpanded = false;
+    const eventsState = [];
+
+    const parseNumber = (text) => {
+      const s = String(text || '').replace(/[₦,]/g, '').trim();
+      const n = Number(s);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const setCurrency = (el, value) => {
+      if (!el) return;
+      const n = Number(value || 0);
+      el.textContent = `₦${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    const setInt = (el, value) => {
+      if (!el) return;
+      el.textContent = `${parseInt(value || 0, 10) || 0}`;
+    };
+
+    const applyKpiDeltas = (deltas) => {
+      if (!deltas) return;
+      if (typeof deltas.bets_today === 'number') {
+        const el = document.getElementById('kpiBetsToday');
+        setInt(el, parseNumber(el && el.textContent) + deltas.bets_today);
+      }
+      if (typeof deltas.stake_today === 'number') {
+        const el = document.getElementById('kpiStakeToday');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.stake_today);
+      }
+      if (typeof deltas.deposits_today === 'number') {
+        const el = document.getElementById('kpiDepositsToday');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.deposits_today);
+      }
+      if (typeof deltas.withdrawals_today === 'number') {
+        const el = document.getElementById('kpiWithdrawalsToday');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.withdrawals_today);
+      }
+      if (typeof deltas.pending_withdrawals === 'number') {
+        const el = document.getElementById('kpiPendingWithdrawals');
+        setInt(el, parseNumber(el && el.textContent) + deltas.pending_withdrawals);
+      }
+    };
+
+    const renderFeed = (events) => {
+      if (!feedEl) return;
+      if (!events || !events.length) {
+        feedEl.innerHTML = '<div class="text-muted">No activity.</div>';
+        if (feedToggleEl) feedToggleEl.style.display = 'none';
+        return;
+      }
+      const limit = feedExpanded ? events.length : 6;
+      feedEl.innerHTML = events.slice(0, limit).map(e => {
+        const ts = e.ts ? new Date(e.ts).toLocaleString() : '';
+        const amount = e.amount ? `₦${Number(e.amount).toLocaleString()}` : '';
+        return `<div class="feed-item">
+          <div class="d-flex justify-content-between align-items-center">
+            <div class="fw-semibold">${e.label || e.type}</div>
+            <div class="text-muted small">${ts}</div>
+          </div>
+          <div class="text-muted small">${e.user || '-'} · ${amount} · ${e.status || ''}</div>
+        </div>`;
+      }).join('');
+      if (feedToggleEl) {
+        feedToggleEl.style.display = events.length > 6 ? 'inline' : 'none';
+        feedToggleEl.textContent = feedExpanded ? 'Hide All' : 'See All';
+      }
+    };
+
+    const loadFeed = async () => {
+      try {
+        const res = await fetch("{% url 'betting:retail_activity_feed' %}", { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        const data = await res.json();
+        const incoming = (data || {}).events || [];
+        eventsState.splice(0, eventsState.length, ...incoming);
+        renderFeed(eventsState);
+      } catch (e) {
+        if (feedEl) feedEl.textContent = 'Failed to load feed.';
+      }
+    };
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
+    let socket;
+
+    const connect = () => {
+      socket = new WebSocket(wsUrl);
+      socket.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type !== 'retail_event') return;
+          const p = msg.payload || {};
+          const evObj = {
+            ts: p.ts || '',
+            type: p.event_type || 'event',
+            user: p.user || '-',
+            label: p.label || p.event_type || 'event',
+            amount: p.amount || '',
+            status: p.status || '',
+          };
+          eventsState.unshift(evObj);
+          if (eventsState.length > 30) eventsState.length = 30;
+          renderFeed(eventsState);
+          applyKpiDeltas(p.kpi_deltas || {});
+        } catch (e) {}
+      };
+      socket.onclose = () => {
+        setTimeout(connect, 2500);
+      };
+    };
+
+    loadFeed();
+    connect();
+    if (feedToggleEl) {
+      feedToggleEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        feedExpanded = !feedExpanded;
+        renderFeed(eventsState);
+      });
+    }
+  })();
+</script>
+{% endif %}
+{% endblock %}

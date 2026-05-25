@@ -1,7 +1,25 @@
 from celery import shared_task
+from django.core.mail import EmailMessage
 from django.utils import timezone
 from django.db.models import Q
-from .models import Fixture
+from django.db.models import Sum, Value, DecimalField
+from django.db.models.functions import Coalesce
+from decimal import Decimal
+from datetime import datetime, timedelta
+import io
+import pandas as pd
+
+from .models import (
+    Fixture,
+    ScheduledFinanceReport,
+    Transaction,
+    UserWithdrawal,
+    FinanceAuditLog,
+    JournalEntry,
+    PaymentGatewayEventLog,
+    WithdrawalPinVerificationLog,
+    FinanceSettlementBatch,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -69,3 +87,260 @@ def recalculate_tickets_for_fixture(fixture_id):
         
     except Exception as e:
         logger.error(f"Critical error in recalculate_tickets_for_fixture: {e}")
+
+
+def _parse_recipients(raw):
+    parts = [p.strip() for p in (raw or '').replace(';', ',').split(',')]
+    return [p for p in parts if p and '@' in p]
+
+
+def _report_range_for_frequency(freq, today):
+    if freq == 'weekly':
+        end_date = today - timedelta(days=1)
+        start_date = end_date - timedelta(days=6)
+        return start_date, end_date
+    if freq == 'monthly':
+        first_this_month = today.replace(day=1)
+        end_prev = first_this_month - timedelta(days=1)
+        start_prev = end_prev.replace(day=1)
+        return start_prev, end_prev
+    end_date = today - timedelta(days=1)
+    start_date = end_date
+    return start_date, end_date
+
+
+def _next_run_at(freq, now):
+    local_now = timezone.localtime(now)
+    run_time = local_now.replace(hour=8, minute=5, second=0, microsecond=0)
+    if run_time <= local_now:
+        run_time = run_time + timedelta(days=1)
+    if freq == 'weekly':
+        run_time = run_time + timedelta(days=7)
+    elif freq == 'monthly':
+        first_next_month = (run_time.date().replace(day=1) + timedelta(days=32)).replace(day=1)
+        run_time = timezone.make_aware(datetime.combine(first_next_month, run_time.time()))
+    return run_time
+
+
+def generate_finance_report_bytes(dataset, fmt, start_dt, end_dt):
+    rows = []
+    title = dataset or 'report'
+
+    if dataset == 'deposits':
+        qs = Transaction.objects.filter(transaction_type='deposit', timestamp__gte=start_dt, timestamp__lte=end_dt).select_related('user').order_by('-timestamp')
+        for tx in qs[:100000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'tx_id': str(tx.id),
+                'user': tx.user.email or tx.user.username,
+                'amount': str(tx.amount),
+                'status': tx.status,
+                'successful': 'yes' if tx.is_successful else 'no',
+                'gateway': getattr(tx, 'payment_gateway', ''),
+                'ref': tx.paystack_reference or tx.external_reference or '',
+            })
+        title = 'deposits'
+    elif dataset == 'withdrawals':
+        qs = UserWithdrawal.objects.filter(request_time__gte=start_dt, request_time__lte=end_dt).select_related('user', 'approved_rejected_by').order_by('-request_time')
+        for w in qs[:100000]:
+            rows.append({
+                'time': w.request_time.isoformat(sep=' ', timespec='seconds'),
+                'withdrawal_id': str(w.id),
+                'user': w.user.email or w.user.username,
+                'amount': str(w.amount),
+                'status': w.status,
+                'bank': w.bank_name,
+                'account_number': w.account_number,
+                'handled_by': getattr(getattr(w, 'approved_rejected_by', None), 'email', '') or '',
+            })
+        title = 'withdrawals'
+    elif dataset == 'transactions':
+        qs = Transaction.objects.filter(timestamp__gte=start_dt, timestamp__lte=end_dt).select_related('user', 'initiating_user').order_by('-timestamp')
+        for tx in qs[:100000]:
+            rows.append({
+                'time': tx.timestamp.isoformat(sep=' ', timespec='seconds'),
+                'tx_id': str(tx.id),
+                'user': tx.user.email or tx.user.username,
+                'type': tx.transaction_type,
+                'amount': str(tx.amount),
+                'status': tx.status,
+                'successful': 'yes' if tx.is_successful else 'no',
+                'gateway': getattr(tx, 'payment_gateway', ''),
+                'initiator': getattr(getattr(tx, 'initiating_user', None), 'email', '') or '',
+            })
+        title = 'transactions'
+    elif dataset == 'ledger':
+        qs = FinanceAuditLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('actor', 'target_user', 'transaction', 'withdrawal').order_by('-created_at')
+        for a in qs[:100000]:
+            rows.append({
+                'time': a.created_at.isoformat(sep=' ', timespec='seconds'),
+                'action': a.action_type,
+                'actor': getattr(getattr(a, 'actor', None), 'email', '') or '',
+                'target_user': getattr(getattr(a, 'target_user', None), 'email', '') or '',
+                'transaction_id': str(a.transaction_id) if a.transaction_id else '',
+                'withdrawal_id': str(a.withdrawal_id) if a.withdrawal_id else '',
+                'reason': a.reason,
+            })
+        title = 'ledger'
+    elif dataset == 'journals':
+        qs = JournalEntry.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('created_by').prefetch_related('lines__account').order_by('-created_at')
+        for je in qs[:50000]:
+            for line in list(getattr(je, 'lines', []).all())[:50]:
+                rows.append({
+                    'time': je.created_at.isoformat(sep=' ', timespec='seconds'),
+                    'entry_date': je.entry_date.isoformat(),
+                    'journal_id': str(je.id),
+                    'memo': je.memo,
+                    'created_by': getattr(getattr(je, 'created_by', None), 'email', '') or '',
+                    'account': getattr(getattr(line, 'account', None), 'code', '') or '',
+                    'account_name': getattr(getattr(line, 'account', None), 'name', '') or '',
+                    'debit': str(line.debit),
+                    'credit': str(line.credit),
+                })
+        title = 'journals'
+    elif dataset == 'settlements':
+        qs = FinanceSettlementBatch.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('created_by', 'approved_by').order_by('-created_at')
+        for b in qs[:50000]:
+            totals = b.items.aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
+            rows.append({
+                'time': b.created_at.isoformat(sep=' ', timespec='seconds'),
+                'batch_id': str(b.id),
+                'type': b.settlement_type,
+                'status': b.status,
+                'period_start': b.period_start.isoformat(),
+                'period_end': b.period_end.isoformat(),
+                'items_total': str(totals),
+            })
+        title = 'settlements'
+    elif dataset == 'gateway_logs':
+        qs = PaymentGatewayEventLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('transaction', 'user').order_by('-created_at')
+        for g in qs[:100000]:
+            rows.append({
+                'time': g.created_at.isoformat(sep=' ', timespec='seconds'),
+                'gateway': g.gateway,
+                'event': g.event_type,
+                'reference': g.reference,
+                'success': 'yes' if g.success else 'no',
+                'http_status': str(g.http_status or ''),
+                'amount': str(g.amount or ''),
+                'fee': str(g.fee_amount or ''),
+                'user': getattr(getattr(g, 'user', None), 'email', '') or '',
+                'tx_id': str(g.transaction_id or ''),
+                'message': g.message,
+            })
+        title = 'gateway_logs'
+    elif dataset == 'pin_logs':
+        qs = WithdrawalPinVerificationLog.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt).select_related('user').order_by('-created_at')
+        for p in qs[:100000]:
+            rows.append({
+                'time': p.created_at.isoformat(sep=' ', timespec='seconds'),
+                'user': p.user.email or p.user.username,
+                'success': 'yes' if p.success else 'no',
+                'ip': p.ip_address or '',
+                'user_agent': p.user_agent or '',
+            })
+        title = 'pin_logs'
+    else:
+        raise ValueError("Unknown dataset")
+
+    if fmt == 'csv':
+        import csv
+        output = io.StringIO()
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return output.getvalue().encode('utf-8'), title, 'text/csv', f"{title}.csv"
+
+    if fmt == 'xlsx':
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=title[:31] or 'Sheet1')
+        output.seek(0)
+        return output.getvalue(), title, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', f"{title}.xlsx"
+
+    if fmt == 'pdf':
+        try:
+            from weasyprint import HTML
+        except Exception as e:
+            raise RuntimeError(f"PDF export unavailable: {e}")
+        cols = list(rows[0].keys()) if rows else []
+        def esc(s):
+            return (str(s or '')
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;'))
+        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
+        body = ''.join([
+            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
+            for r in rows[:3000]
+        ])
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              .meta {{ color: #666; margin-bottom: 12px; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>Finance Report: {esc(title)}</h2>
+            <div class="meta">Range: {esc(start_dt.date().isoformat())} → {esc(end_dt.date().isoformat())}</div>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html).write_pdf()
+        return pdf_bytes, title, 'application/pdf', f"{title}.pdf"
+
+    raise ValueError("Unknown format")
+
+
+@shared_task
+def run_scheduled_finance_reports():
+    now = timezone.now()
+    today = timezone.localdate()
+    due = ScheduledFinanceReport.objects.filter(is_active=True).filter(Q(next_run_at__lte=now) | Q(next_run_at__isnull=True)).order_by('next_run_at', 'id')[:200]
+    ran = 0
+    for r in due:
+        recipients = _parse_recipients(r.recipients)
+        if not recipients:
+            r.last_status = 'skipped'
+            r.last_error = 'No recipients'
+            r.next_run_at = _next_run_at(r.frequency, now)
+            r.last_run_at = now
+            r.save(update_fields=['last_status', 'last_error', 'next_run_at', 'last_run_at', 'updated_at'])
+            continue
+        try:
+            start_date, end_date = _report_range_for_frequency(r.frequency, today)
+            start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+            end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
+            content, title, mime, filename = generate_finance_report_bytes(r.dataset, r.report_format, start_dt, end_dt)
+            subject = f"Finance Report: {r.name} ({start_date.isoformat()} → {end_date.isoformat()})"
+            body = f"Attached: {title}.{r.report_format}"
+            email = EmailMessage(subject=subject, body=body, to=recipients)
+            email.attach(filename, content, mime)
+            email.send(fail_silently=False)
+            r.last_status = 'sent'
+            r.last_error = ''
+        except Exception as e:
+            r.last_status = 'failed'
+            r.last_error = str(e)[:255]
+        r.last_run_at = now
+        r.next_run_at = _next_run_at(r.frequency, now)
+        r.save(update_fields=['last_status', 'last_error', 'last_run_at', 'next_run_at', 'updated_at'])
+        ran += 1
+    return ran

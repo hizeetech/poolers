@@ -123,6 +123,17 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
+try:
+    import sys
+    if 'test' in sys.argv:
+        AUTHENTICATION_BACKENDS = [
+            'betting.backends.EmailOrUsernameBackend',
+            'django.contrib.auth.backends.ModelBackend',
+        ]
+        MIDDLEWARE = [m for m in MIDDLEWARE if m != 'axes.middleware.AxesMiddleware']
+except Exception:
+    pass
+
 ROOT_URLCONF = 'poolbetting.urls'
 
 TEMPLATES = [
@@ -341,8 +352,13 @@ FLUTTERWAVE_ENCRYPTION_KEY = os.getenv('FLUTTERWAVE_ENCRYPTION_KEY')
 # poolbetting/settings.py
 
 
+# eBulkSMS
+EBULKSMS_ENABLED = str(os.getenv('EBULKSMS_ENABLED', 'False')).strip().lower() in ('1', 'true', 'yes', 'on')
+EBULKSMS_USERNAME = os.getenv('EBULKSMS_USERNAME')
+EBULKSMS_API_KEY = os.getenv('EBULKSMS_API_KEY')
+EBULKSMS_SENDER = os.getenv('EBULKSMS_SENDER') or os.getenv('EBULKSMS_SENDER_NAME', 'StakeNaija')
 
-# Rest of settings continued
+
 
 
 LOGGING = {

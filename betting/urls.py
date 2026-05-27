@@ -93,6 +93,7 @@ urlpatterns = [
     path('crm/dashboard/', views.crm_dashboard, name='crm_dashboard'),
     path('crm/activity-feed/', views.crm_activity_feed, name='crm_activity_feed'),
     path('crm/user/<int:user_id>/', views.crm_user_detail, name='crm_user_detail'),
+    path('crm/user/<int:user_id>/downline-search/', views.crm_user_downline_search, name='crm_user_downline_search'),
     path('crm/withdrawals/<int:withdrawal_id>/action/', views.crm_withdrawal_action, name='crm_withdrawal_action'),
     path('crm/registrations/cashier/<int:pk>/<str:action>/', views.crm_cashier_registration_action, name='crm_cashier_registration_action'),
     path('crm/registrations/agent/<int:pk>/<str:action>/', views.crm_agent_registration_action, name='crm_agent_registration_action'),

@@ -6940,6 +6940,7 @@ def retail_dashboard(request):
             BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
             .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
             .filter(Q(user_id=OuterRef('pk')) | Q(user__agent_id=OuterRef('pk')))
+            .order_by()
         )
         stake_sub = ticket_scope.annotate(_=Value(1)).values('_').annotate(total=Sum('stake_amount')).values('total')[:1]
         bets_sub = ticket_scope.annotate(_=Value(1)).values('_').annotate(total=Count('id')).values('total')[:1]
@@ -8676,6 +8677,28 @@ def finance_export(request):
 @user_passes_test(is_crm_user)
 def crm_user_detail(request, user_id):
     target = get_object_or_404(User, id=user_id)
+    def _crm_allowed_targets_for_root(root_user):
+        t = (getattr(root_user, 'user_type', '') or '').strip()
+        if t == 'agent':
+            return User.objects.filter(Q(id=root_user.id) | Q(agent=root_user, user_type__in=['cashier', 'player']))
+        if t == 'super_agent':
+            agent_ids = User.objects.filter(super_agent=root_user, user_type='agent').values_list('id', flat=True)
+            return User.objects.filter(
+                Q(id=root_user.id) |
+                Q(id__in=list(agent_ids)) |
+                Q(agent_id__in=list(agent_ids), user_type__in=['cashier', 'player'])
+            )
+        if t == 'master_agent':
+            sa_ids = User.objects.filter(master_agent=root_user, user_type='super_agent').values_list('id', flat=True)
+            ag_ids = User.objects.filter(Q(master_agent=root_user) | Q(super_agent_id__in=list(sa_ids))).filter(user_type='agent').values_list('id', flat=True)
+            return User.objects.filter(
+                Q(id=root_user.id) |
+                Q(id__in=list(sa_ids)) |
+                Q(id__in=list(ag_ids)) |
+                Q(agent_id__in=list(ag_ids), user_type__in=['cashier', 'player'])
+            ).distinct()
+        return User.objects.filter(id=root_user.id)
+
     wallet = Wallet.objects.filter(user=target).first()
     txs = Transaction.objects.filter(user=target).select_related('initiating_user').order_by('-timestamp')[:30]
     deposits = Transaction.objects.filter(user=target, transaction_type='deposit').order_by('-timestamp')[:20]
@@ -8782,6 +8805,16 @@ def crm_user_detail(request, user_id):
                 messages.error(request, 'Not allowed.')
                 return redirect('betting:crm_user_detail', user_id=target.id)
 
+            try:
+                target_user_id = int(request.POST.get('target_user_id') or target.id)
+            except Exception:
+                target_user_id = target.id
+            allowed_qs = _crm_allowed_targets_for_root(target).only('id')
+            if not allowed_qs.filter(id=target_user_id).exists():
+                messages.error(request, 'Not allowed to manage wallet for this user.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            wallet_target = get_object_or_404(User, id=target_user_id)
+
             form = AdminManualWalletForm(request.POST)
             if not form.is_valid():
                 messages.error(request, 'Invalid wallet action.')
@@ -8792,7 +8825,7 @@ def crm_user_detail(request, user_id):
             reason = (request.POST.get('reason') or '').strip()
 
             with db_transaction.atomic():
-                locked_wallet = Wallet.objects.select_for_update().get(user=target)
+                locked_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=wallet_target, defaults={'balance': Decimal('0.00')})
                 if action == 'debit' and locked_wallet.balance < amount:
                     messages.error(request, 'Insufficient wallet balance for debit.')
                     return redirect('betting:crm_user_detail', user_id=target.id)
@@ -8807,9 +8840,9 @@ def crm_user_detail(request, user_id):
                 locked_wallet.save(update_fields=['balance'])
 
                 Transaction.objects.create(
-                    user=target,
+                    user=wallet_target,
                     initiating_user=request.user,
-                    target_user=target,
+                    target_user=wallet_target,
                     transaction_type=txn_type,
                     amount=amount,
                     is_successful=True,
@@ -8820,7 +8853,7 @@ def crm_user_detail(request, user_id):
 
             CRMActionLog.objects.create(
                 actor=request.user,
-                target_user=target,
+                target_user=wallet_target,
                 action_type=crm_action,
                 reason=reason,
                 data={'amount': str(amount), 'description': description},
@@ -8832,69 +8865,162 @@ def crm_user_detail(request, user_id):
             if not crm_can_message(request.user):
                 messages.error(request, 'Not allowed.')
                 return redirect('betting:crm_user_detail', user_id=target.id)
+            try:
+                target_user_id = int(request.POST.get('target_user_id') or target.id)
+            except Exception:
+                target_user_id = target.id
+            allowed_qs = _crm_allowed_targets_for_root(target).only('id')
+            if not allowed_qs.filter(id=target_user_id).exists():
+                messages.error(request, 'Not allowed to message this user.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            msg_target = get_object_or_404(User, id=target_user_id)
+
             title = (request.POST.get('msg_title') or '').strip() or 'Message'
             body = (request.POST.get('msg_body') or '').strip()
             via_inapp = request.POST.get('via_inapp') == '1'
             via_email = request.POST.get('via_email') == '1'
             via_sms = request.POST.get('via_sms') == '1'
 
+            if not body:
+                messages.error(request, 'Message is required.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            if not (via_inapp or via_email or via_sms):
+                messages.error(request, 'Select at least one channel (In-app, Email, or SMS).')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+
             sent = []
+            errors = {}
             if via_inapp:
                 try:
-                    create_notification(recipient=target, notification_type='SYSTEM_ANNOUNCEMENT', title=title, message=body)
+                    create_notification(recipient=msg_target, notification_type='SYSTEM_ANNOUNCEMENT', title=title, message=body)
                     sent.append('in_app')
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors['in_app'] = str(e)
             if via_email:
                 try:
-                    send_mail(
+                    from django.core.mail import EmailMultiAlternatives
+                    from django.template.loader import render_to_string
+                    from django.utils.html import strip_tags
+                    if not msg_target.email:
+                        raise ValueError("Target user has no email address.")
+                    html = render_to_string('betting/email/crm_message.html', {
+                        'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
+                        'title': title,
+                        'body': body,
+                        'user': msg_target,
+                    })
+                    text = strip_tags(html) or body
+                    m = EmailMultiAlternatives(
                         subject=title,
-                        message=body,
+                        body=text,
                         from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                        recipient_list=[target.email],
-                        fail_silently=True
+                        to=[msg_target.email],
                     )
+                    m.attach_alternative(html, "text/html")
+                    m.send(fail_silently=False)
                     sent.append('email')
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors['email'] = str(e)
             sms_status = None
             if via_sms:
                 try:
                     from notifications.services import send_sms_ebulksms
-                    sms_status = send_sms_ebulksms(msisdn=target.phone_number or '', message=body, sender=getattr(settings, 'EBULKSMS_SENDER', None))
+                    sms_status = send_sms_ebulksms(msisdn=msg_target.phone_number or '', message=body, sender=getattr(settings, 'EBULKSMS_SENDER', None))
                     if sms_status.get('ok'):
                         sent.append('sms')
-                except Exception:
-                    sms_status = {'ok': False}
+                    else:
+                        errors['sms'] = sms_status.get('error') or sms_status.get('status') or 'failed'
+                except Exception as e:
+                    sms_status = {'ok': False, 'error': str(e)}
+                    errors['sms'] = str(e)
 
             CRMActionLog.objects.create(
                 actor=request.user,
-                target_user=target,
+                target_user=msg_target,
                 action_type='MESSAGE_SENT',
-                data={'channels': sent, 'sms': sms_status or {}},
+                data={'channels': sent, 'errors': errors, 'sms': sms_status or {}},
             )
-            messages.success(request, f"Message sent via: {', '.join(sent) if sent else 'none'}.")
+            if sent:
+                messages.success(request, f"Message sent via: {', '.join(sent)}.")
+            else:
+                messages.error(request, "Message was not sent. Check email/SMS configuration and recipient details.")
             return redirect('betting:crm_user_detail', user_id=target.id)
 
         elif 'reset_password' in request.POST:
             if not crm_can_reset_password(request.user):
                 messages.error(request, 'Not allowed.')
                 return redirect('betting:crm_user_detail', user_id=target.id)
-            raw_password = get_random_string(12)
-            target.set_password(raw_password)
-            target.save(update_fields=['password'])
             try:
-                send_mail(
-                    subject='Password Reset',
-                    message=f"Your password has been reset.\n\nNew password: {raw_password}\n\nLogin: {request.build_absolute_uri('/login/')}\n",
-                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                    recipient_list=[target.email],
-                    fail_silently=True
-                )
+                target_user_id = int(request.POST.get('target_user_id') or target.id)
             except Exception:
-                pass
-            CRMActionLog.objects.create(actor=request.user, target_user=target, action_type='PASSWORD_RESET')
-            messages.success(request, 'Password reset and emailed to user.')
+                target_user_id = target.id
+            allowed_qs = _crm_allowed_targets_for_root(target).only('id')
+            if not allowed_qs.filter(id=target_user_id).exists():
+                messages.error(request, 'Not allowed to reset password for this user.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
+            reset_target = get_object_or_404(User, id=target_user_id)
+            agent_copy_to = None
+            try:
+                if reset_target.user_type in ['cashier', 'player'] and getattr(reset_target, 'agent_id', None):
+                    agent_user = User.objects.filter(id=reset_target.agent_id).only('id', 'email', 'username', 'user_type').first()
+                    if agent_user and agent_user.email:
+                        agent_copy_to = agent_user.email
+            except Exception:
+                agent_copy_to = None
+
+            to_emails = []
+            cc_emails = []
+            if reset_target.email:
+                to_emails = [reset_target.email]
+                if agent_copy_to and agent_copy_to.lower() != reset_target.email.lower():
+                    cc_emails = [agent_copy_to]
+            else:
+                if agent_copy_to:
+                    to_emails = [agent_copy_to]
+                else:
+                    messages.error(request, 'Target user has no email address and no agent email was found to notify.')
+                    return redirect('betting:crm_user_detail', user_id=target.id)
+
+            raw_password = get_random_string(12)
+            reset_target.set_password(raw_password)
+            reset_target.save(update_fields=['password'])
+
+            login_url = request.build_absolute_uri(reverse('betting:login'))
+            email_error = None
+            try:
+                from django.core.mail import EmailMultiAlternatives
+                from django.template.loader import render_to_string
+                from django.utils.html import strip_tags
+                html = render_to_string('betting/email/password_reset.html', {
+                    'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
+                    'user': reset_target,
+                    'raw_password': raw_password,
+                    'login_url': login_url,
+                    'agent_copy_to': agent_copy_to,
+                })
+                text = strip_tags(html) or f"Your password has been reset. New password: {raw_password}\nLogin: {login_url}"
+                m = EmailMultiAlternatives(
+                    subject='Password Reset',
+                    body=text,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    to=to_emails,
+                    cc=cc_emails,
+                )
+                m.attach_alternative(html, "text/html")
+                m.send(fail_silently=False)
+            except Exception as e:
+                email_error = str(e)
+
+            CRMActionLog.objects.create(
+                actor=request.user,
+                target_user=reset_target,
+                action_type='PASSWORD_RESET',
+                data={'email_error': email_error or '', 'to': to_emails, 'cc': cc_emails},
+            )
+            if email_error:
+                messages.warning(request, f"Password reset succeeded, but email could not be sent: {email_error}")
+            else:
+                messages.success(request, 'Password reset and emailed to user.')
             return redirect('betting:crm_user_detail', user_id=target.id)
 
     login_attempts = LoginAttempt.objects.filter(user=target, status='success').order_by('-timestamp')[:20]
@@ -8926,6 +9052,7 @@ def crm_user_detail(request, user_id):
 
     context = {
         'target_user': target,
+        'default_action_target': target,
         'wallet': wallet,
         'transactions': txs,
         'deposits': deposits,
@@ -8947,6 +9074,69 @@ def crm_user_detail(request, user_id):
         'ip_intel': ip_intel,
     }
     return render(request, 'betting/crm_user_detail.html', context)
+
+
+@login_required
+@user_passes_test(is_crm_user)
+def crm_user_downline_search(request, user_id):
+    root = get_object_or_404(User, id=user_id)
+    if not (crm_can_manage_wallet(request.user) or crm_can_reset_password(request.user) or crm_can_message(request.user)):
+        return JsonResponse({'results': [], 'pagination': {'more': False}}, status=403)
+
+    search_term = (request.GET.get('q', '') or '').strip()
+    page = request.GET.get('page', 1)
+
+    t = (getattr(root, 'user_type', '') or '').strip()
+    qs = User.objects.filter(id=root.id)
+    if t == 'agent':
+        qs = User.objects.filter(Q(id=root.id) | Q(agent=root, user_type__in=['cashier', 'player']))
+    elif t == 'super_agent':
+        ag = User.objects.filter(super_agent=root, user_type='agent')
+        qs = User.objects.filter(Q(id=root.id) | Q(id__in=ag.values('id')) | Q(agent_id__in=ag.values('id'), user_type__in=['cashier', 'player']))
+    elif t == 'master_agent':
+        sa = User.objects.filter(master_agent=root, user_type='super_agent')
+        ag = User.objects.filter(Q(master_agent=root) | Q(super_agent__in=sa)).filter(user_type='agent')
+        qs = User.objects.filter(
+            Q(id=root.id) |
+            Q(id__in=sa.values('id')) |
+            Q(id__in=ag.values('id')) |
+            Q(agent_id__in=ag.values('id'), user_type__in=['cashier', 'player'])
+        ).distinct()
+
+    if search_term:
+        qs = qs.filter(
+            Q(email__icontains=search_term) |
+            Q(username__icontains=search_term) |
+            Q(phone_number__icontains=search_term) |
+            Q(first_name__icontains=search_term) |
+            Q(last_name__icontains=search_term) |
+            Q(other_name__icontains=search_term) |
+            Q(cashier_prefix__icontains=search_term)
+        )
+
+    qs = qs.order_by('email')
+    paginator = Paginator(qs, 20)
+    try:
+        users_page = paginator.page(page)
+    except PageNotAnInteger:
+        users_page = paginator.page(1)
+    except EmptyPage:
+        users_page = paginator.page(paginator.num_pages)
+
+    id_list = [u.id for u in users_page]
+    wallet_map = {row["user_id"]: row["balance"] for row in Wallet.objects.filter(user_id__in=id_list).values("user_id", "balance")}
+
+    results = []
+    for u in users_page:
+        label = u.get_full_name() or u.email
+        if u.username:
+            label = f"{label} @{u.username}"
+        text = f"{label} ({u.get_user_type_display()}) - {u.email}"
+        if u.user_type == 'cashier' and u.cashier_prefix:
+            text = f"{u.cashier_prefix} - {text}"
+        results.append({'id': u.id, 'text': text, 'balance': float(wallet_map.get(u.id) or 0)})
+
+    return JsonResponse({'results': results, 'pagination': {'more': users_page.has_next()}})
 
 @login_required
 @user_passes_test(is_crm_user)

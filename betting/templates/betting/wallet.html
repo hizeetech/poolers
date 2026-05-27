@@ -69,7 +69,7 @@
 
                     <div class="text-center mb-4 wallet-balance">
                         <p class="lead text-muted mb-1">Current Balance</p>
-                        <h3 class="fw-bold text-success fs-1 mb-0">₦{{ wallet.balance|floatformat:2 }}</h3>
+                        <h3 class="fw-bold text-success fs-1 mb-0" id="wallet-balance-display" data-wallet-balance="{{ wallet.balance }}">₦{{ wallet.balance|floatformat:2 }}</h3>
                     </div>
 
                     {# Deposit Section #}
@@ -106,14 +106,32 @@
 
 
                     {# Withdrawal Section - Restricted to Agents #}
-                    {% if request.user.user_type == 'master_agent' or request.user.user_type == 'super_agent' or request.user.user_type == 'agent' %}
+                    {% if can_withdraw_from_wallet %}
                     <hr class="my-4">
                     <h4 class="fw-bold mb-3 text-danger">Withdraw Funds</h4>
+                    <div class="rounded-4 p-3 mb-3" style="background:#fff5f5;border:1px solid rgba(220,53,69,0.18);">
+                        <div class="d-flex justify-content-between align-items-center small">
+                            <span class="text-muted">Available Balance</span>
+                            <span class="fw-bold" id="withdrawAvailableBalance">—</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center small mt-1">
+                            <span class="text-muted">Operating Balance Reserved</span>
+                            <span class="fw-bold" id="withdrawReservedBalance">—</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center small mt-1">
+                            <span class="text-muted">Withdrawable Amount</span>
+                            <span class="fw-bold" id="withdrawWithdrawableAmount">—</span>
+                        </div>
+                        <div class="text-danger small mt-2 d-none" id="withdrawDisabledNotice">
+                            Withdrawals are unavailable because your wallet must retain a minimum operating balance of ₦5,000.
+                        </div>
+                    </div>
                     <form id="withdrawForm" action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
                             <input type="number" name="amount" id="id_amount_withdraw" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 2000" min="100" required>
+                            <div class="text-danger small mt-1 d-none" id="withdrawAmountError"></div>
                         </div>
                         <div class="mb-3">
                             <label for="id_bank_name" class="form-label">Bank Name</label>
@@ -149,6 +167,40 @@
                             </button>
                         {% endif %}
                     </form>
+                    {% if pending_withdrawals %}
+                    <div class="rounded-4 p-3 mb-4" style="background:#fff; border:1px solid rgba(0,0,0,0.08);">
+                        <div class="fw-bold mb-2">Pending Withdrawal Requests</div>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr class="text-muted small">
+                                        <th>ID</th>
+                                        <th>Amount</th>
+                                        <th>Bank</th>
+                                        <th>Account</th>
+                                        <th>Requested</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for w in pending_withdrawals %}
+                                    <tr>
+                                        <td class="small">{{ w.id|truncatechars:10 }}</td>
+                                        <td class="fw-bold text-danger">₦{{ w.amount|floatformat:2 }}</td>
+                                        <td class="small">{{ w.bank_name }}</td>
+                                        <td class="small">{{ w.account_number }}</td>
+                                        <td class="small text-muted">{{ w.request_time|date:"M d, Y H:i" }}</td>
+                                        <td><span class="badge bg-warning text-dark text-uppercase">{{ w.status }}</span></td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="text-muted small mt-2">
+                            You can submit additional withdrawals as long as you keep the ₦5,000 operating balance reserved.
+                        </div>
+                    </div>
+                    {% endif %}
                     {% endif %}
 
                     {# Wallet Transfer Section (Conditional) #}
@@ -465,6 +517,59 @@
 
         const withdrawBtnSpinner = document.getElementById('withdrawBtnSpinner');
         const withdrawBtnText = document.getElementById('withdrawBtnText');
+        const amountInput = document.getElementById('id_amount_withdraw');
+        const amountError = document.getElementById('withdrawAmountError');
+        const availableEl = document.getElementById('withdrawAvailableBalance');
+        const reservedEl = document.getElementById('withdrawReservedBalance');
+        const withdrawableEl = document.getElementById('withdrawWithdrawableAmount');
+        const disabledNotice = document.getElementById('withdrawDisabledNotice');
+        const balanceDisplay = document.getElementById('wallet-balance-display');
+
+        const formatNaira = (n) => {
+            const v = Number(n);
+            if (!Number.isFinite(v)) return '₦0.00';
+            return '₦' + new Intl.NumberFormat('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+        };
+
+        const minOperating = Number('{{ min_operating_balance|default:"5000.00" }}');
+        const getAvailableBalance = () => {
+            const raw = balanceDisplay ? (balanceDisplay.getAttribute('data-wallet-balance') || '') : '';
+            const num = Number(String(raw).replace(/,/g, '').trim());
+            return Number.isFinite(num) ? num : 0;
+        };
+
+        const setAmountError = (text) => {
+            if (!amountError) return;
+            if (text) {
+                amountError.textContent = text;
+                amountError.classList.remove('d-none');
+            } else {
+                amountError.textContent = '';
+                amountError.classList.add('d-none');
+            }
+        };
+
+        const refreshWithdrawLimits = () => {
+            const available = getAvailableBalance();
+            const reserved = Number.isFinite(minOperating) ? minOperating : 5000;
+            const withdrawable = Math.max(0, available - reserved);
+
+            if (availableEl) availableEl.textContent = formatNaira(available);
+            if (reservedEl) reservedEl.textContent = formatNaira(reserved);
+            if (withdrawableEl) withdrawableEl.textContent = formatNaira(withdrawable);
+
+            if (amountInput) {
+                const maxStr = withdrawable.toFixed(2);
+                amountInput.setAttribute('max', maxStr);
+            }
+
+            const disableForReserve = withdrawable <= 0.000001;
+            if (disabledNotice) disabledNotice.classList.toggle('d-none', !disableForReserve);
+            if (disableForReserve) {
+                if (withdrawBtnText) withdrawBtn.disabled = true;
+                setAmountError('');
+            }
+        };
 
         const setConfirmLoading = (isLoading) => {
             if (confirmPinSpinner) confirmPinSpinner.classList.toggle('d-none', !isLoading);
@@ -533,8 +638,16 @@
                     window.location.reload();
                     return;
                 }
-
-                await Swal.fire({ icon: 'error', title: 'Oops...', text: (data && data.message) ? data.message : 'Unable to submit withdrawal request.' });
+                if (data && data.code === 'min_operating_balance') {
+                    await Swal.fire({
+                        icon: 'error',
+                        title: 'Withdrawal Failed',
+                        text: 'You must retain a minimum operating balance of ₦5,000 in your wallet before making withdrawals.',
+                        confirmButtonText: 'OK'
+                    });
+                } else {
+                    await Swal.fire({ icon: 'error', title: 'Oops...', text: (data && data.message) ? data.message : 'Unable to submit withdrawal request.' });
+                }
             } catch (e) {
                 await Swal.fire({ icon: 'error', title: 'Oops...', text: 'An error occurred. Please try again.' });
             } finally {
@@ -606,6 +719,28 @@
                 } finally {
                     setConfirmLoading(false);
                 }
+            });
+        }
+
+        refreshWithdrawLimits();
+        if (amountInput) {
+            amountInput.addEventListener('input', function () {
+                const available = getAvailableBalance();
+                const reserved = Number.isFinite(minOperating) ? minOperating : 5000;
+                const withdrawable = Math.max(0, available - reserved);
+                const raw = Number(String(amountInput.value || '').trim());
+                if (!Number.isFinite(raw) || raw <= 0) {
+                    setAmountError('');
+                    if (withdrawBtnText) withdrawBtn.disabled = false;
+                    return;
+                }
+                if (raw > withdrawable + 0.000001) {
+                    setAmountError(`Maximum withdrawable amount is ${formatNaira(withdrawable)} (₦5,000 reserved).`);
+                    if (withdrawBtnText) withdrawBtn.disabled = true;
+                    return;
+                }
+                setAmountError('');
+                if (withdrawBtnText) withdrawBtn.disabled = false;
             });
         }
     });

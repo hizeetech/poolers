@@ -419,6 +419,10 @@ class WithdrawFundsForm(forms.Form):
                 raise forms.ValidationError(f"Insufficient funds. Your balance is ₦{wallet.balance}.")
         return amount
 
+    def clean(self):
+        cleaned = super().clean()
+        return cleaned
+
 
 # --- Betting Period Form (Admin) ---
 class BettingPeriodForm(forms.ModelForm):

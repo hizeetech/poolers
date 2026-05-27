@@ -1,7 +1,7 @@
 {% extends 'betting/base.html' %} {% load static %} {% block title %}Fixtures - Pool Betting{% endblock %} {% block content %}
 <div class="app-page">
 <div class="container py-5 position-relative">
-    <div class="d-flex align-items-center mb-4 gap-3">
+    <div class="d-flex align-items-center mb-4 gap-3 flex-wrap">
         <h2 class="fw-bold mb-0 text-primary">Fixtures</h2>
         <div class="dropdown" style="z-index: 1030;">
             <button class="btn btn-secondary dropdown-toggle" type="button" id="bettingPeriodDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -15,7 +15,85 @@
                 {% endfor %}
             </ul>
         </div>
+        <div class="ms-auto d-flex gap-2 flex-wrap justify-content-end">
+            <button type="button" class="btn btn-outline-dark rounded-pill px-3" id="downloadFixturesPdfBtn">
+                <i class="fas fa-file-pdf me-1"></i> PDF
+            </button>
+            <button type="button" class="btn btn-outline-dark rounded-pill px-3" id="downloadFixturesJpgBtn">
+                <i class="fas fa-image me-1"></i> JPG
+            </button>
+        </div>
     </div>
+
+    <div id="fixtureExportStage" style="position: fixed; left: -12000px; top: 0; background: #ffffff; z-index: -1; width: 1200px; padding: 18px;"></div>
+
+    <style>
+        .fixture-ledger {
+            width: 1160px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+        }
+        .fixture-ledger-header {
+            background: #061c12;
+            border-bottom: 6px solid #b87700;
+            padding: 18px 20px;
+            text-align: center;
+        }
+        .fixture-ledger-title {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            font-weight: 900;
+            letter-spacing: 2px;
+            color: #f5a524;
+            font-size: 34px;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+        .fixture-ledger-subtitle {
+            margin-top: 8px;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            color: rgba(255, 255, 255, 0.86);
+            font-size: 14px;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+        }
+        .fixture-ledger-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        .fixture-ledger-table thead th {
+            background: #233e2b;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-size: 14px;
+            padding: 12px 10px;
+            border-right: 1px solid rgba(255, 255, 255, 0.12);
+            border-bottom: 2px solid #1a2f21;
+            text-align: left;
+        }
+        .fixture-ledger-table tbody td {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            font-size: 15px;
+            padding: 12px 10px;
+            border-bottom: 1px solid #e5e7eb;
+            border-right: 1px solid #eef2f7;
+            vertical-align: middle;
+            color: #0f172a;
+            background: #ffffff;
+        }
+        .fixture-ledger-table tbody tr:nth-child(even) td {
+            background: #fbfcfe;
+        }
+        .fixture-ledger-col-no { width: 52px; text-align: center; }
+        .fixture-ledger-col-code { width: 74px; text-align: center; font-weight: 900; color: #b45309; }
+        .fixture-ledger-col-vs { width: 56px; text-align: center; color: #64748b; }
+        .fixture-ledger-col-draw { width: 92px; text-align: center; font-weight: 900; color: #047857; }
+        .fixture-ledger-col-date { width: 132px; text-align: center; color: #64748b; }
+        .fixture-ledger-col-time { width: 92px; text-align: center; color: #64748b; }
+        .fixture-ledger-team { font-weight: 900; font-size: 18px; color: #0b1220; }
+    </style>
 
     <div class="row">
         <div class="col-md-8">
@@ -202,6 +280,8 @@
 
 {% endblock %} {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script>
     const canPlaceBet = {{ can_place_bet|yesno:'true,false' }};
     const bonusRules = {{ bonus_rules_json|safe }}; // Injected from backend
@@ -1221,6 +1301,179 @@
                     displayMessage('Failed to load rebet selections.', 'danger');
                 }
             });
+        }
+
+        const buildFixturesLedgerHtml = () => {
+            const cards = Array.from(document.querySelectorAll('#fixtures-container .card'));
+            const rows = [];
+            for (const card of cards) {
+                const drawBtn = card.querySelector('button[data-bet-type="draw"]');
+                if (!drawBtn) continue;
+                const badge = card.querySelector('.badge');
+                const codeRaw = badge ? (badge.textContent || '') : '';
+                const code = String(codeRaw).replace('#', '').trim();
+                const homeTeam = (drawBtn.dataset.homeTeam || '').trim();
+                const awayTeam = (drawBtn.dataset.awayTeam || '').trim();
+                const odd = (drawBtn.dataset.odd || '').trim();
+                const d = (drawBtn.dataset.matchDate || '').trim();
+                const t = (drawBtn.dataset.matchTime || '').trim();
+                if (!homeTeam || !awayTeam || !d || !t) continue;
+                rows.push({ code, homeTeam, awayTeam, odd, date: d, time: t });
+            }
+
+            const periodBtn = document.getElementById('bettingPeriodDropdown');
+            const periodName = periodBtn ? (periodBtn.textContent || '').trim() : '';
+            const weekMatch = periodName.match(/(\d{1,3})/);
+            const weekLabel = weekMatch ? `WEEK ${weekMatch[1]}` : (periodName ? periodName.toUpperCase() : 'WEEK');
+
+            const fmtDate = (iso) => {
+                const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if (!m) return iso;
+                return `${m[3]}/${m[2]}/${m[1]}`;
+            };
+
+            const head = `
+                <div class="fixture-ledger-header">
+                    <div class="fixture-ledger-title">STAKENAIJA POOLS CODE ${weekLabel}</div>
+                    <div class="fixture-ledger-subtitle">OFFICIAL FOOTBALL FIXTURES LEDGER • DRAW MARKET ONLY TEMPLATE</div>
+                </div>
+            `;
+
+            const thead = `
+                <thead>
+                    <tr>
+                        <th class="fixture-ledger-col-no">NO</th>
+                        <th class="fixture-ledger-col-code">CODE</th>
+                        <th>HOME TEAM</th>
+                        <th class="fixture-ledger-col-vs">VS</th>
+                        <th>AWAY TEAM</th>
+                        <th class="fixture-ledger-col-draw">X (DRAW)</th>
+                        <th class="fixture-ledger-col-date">DATE</th>
+                        <th class="fixture-ledger-col-time">TIME</th>
+                    </tr>
+                </thead>
+            `;
+
+            const tbody = rows.map((r, idx) => `
+                <tr>
+                    <td class="fixture-ledger-col-no">${idx + 1}</td>
+                    <td class="fixture-ledger-col-code">${(r.code || (idx + 1))}</td>
+                    <td><span class="fixture-ledger-team">${r.homeTeam}</span></td>
+                    <td class="fixture-ledger-col-vs">vs</td>
+                    <td><span class="fixture-ledger-team">${r.awayTeam}</span></td>
+                    <td class="fixture-ledger-col-draw">${r.odd || ''}</td>
+                    <td class="fixture-ledger-col-date">${fmtDate(r.date)}</td>
+                    <td class="fixture-ledger-col-time">${r.time}</td>
+                </tr>
+            `).join('');
+
+            return `
+                <div class="fixture-ledger" id="fixtureLedgerCapture">
+                    ${head}
+                    <table class="fixture-ledger-table">
+                        ${thead}
+                        <tbody>${tbody}</tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderLedgerToCanvas = async () => {
+            if (typeof html2canvas === 'undefined') {
+                throw new Error('html2canvas is not available.');
+            }
+            const stage = document.getElementById('fixtureExportStage');
+            if (!stage) {
+                throw new Error('Export stage not found.');
+            }
+            stage.innerHTML = buildFixturesLedgerHtml();
+            const el = document.getElementById('fixtureLedgerCapture');
+            if (!el) {
+                throw new Error('Ledger element not found.');
+            }
+            const canvas = await html2canvas(el, {
+                backgroundColor: '#ffffff',
+                scale: 2,
+                useCORS: true,
+            });
+            return canvas;
+        };
+
+        const downloadBlobUrl = (blobUrl, filename) => {
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        };
+
+        const makeFilename = (ext) => {
+            const periodBtn = document.getElementById('bettingPeriodDropdown');
+            const periodName = periodBtn ? (periodBtn.textContent || '').trim() : '';
+            const safe = (periodName || 'fixtures').replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
+            return `${safe || 'fixtures'}-ledger.${ext}`;
+        };
+
+        const pdfBtn = document.getElementById('downloadFixturesPdfBtn');
+        const jpgBtn = document.getElementById('downloadFixturesJpgBtn');
+
+        const withBusy = async (fn) => {
+            try {
+                if (typeof Swal !== 'undefined') {
+                    Swal.fire({ title: 'Preparing download…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                }
+                await fn();
+            } finally {
+                if (typeof Swal !== 'undefined') Swal.close();
+            }
+        };
+
+        if (jpgBtn) {
+            jpgBtn.addEventListener('click', () => withBusy(async () => {
+                const canvas = await renderLedgerToCanvas();
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        Swal.fire({ icon: 'error', title: 'Oops...', text: 'Unable to generate image.' });
+                        return;
+                    }
+                    const url = URL.createObjectURL(blob);
+                    downloadBlobUrl(url, makeFilename('jpg'));
+                    setTimeout(() => URL.revokeObjectURL(url), 30000);
+                }, 'image/jpeg', 0.95);
+            }));
+        }
+
+        if (pdfBtn) {
+            pdfBtn.addEventListener('click', () => withBusy(async () => {
+                const canvas = await renderLedgerToCanvas();
+                const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                const jspdfNS = (window.jspdf || {});
+                const jsPDF = jspdfNS.jsPDF;
+                if (!jsPDF) {
+                    Swal.fire({ icon: 'error', title: 'Oops...', text: 'PDF library not available.' });
+                    return;
+                }
+                const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+                const pageWidth = pdf.internal.pageSize.getWidth();
+                const pageHeight = pdf.internal.pageSize.getHeight();
+                const imgWidth = pageWidth;
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+                let heightLeft = imgHeight;
+                let position = 0;
+                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft > 0) {
+                    position -= pageHeight;
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
+                pdf.save(makeFilename('pdf'));
+            }));
         }
 
         // Check for Rebet Data

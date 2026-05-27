@@ -12,6 +12,27 @@ import threading
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
+
+def _enqueue_withdrawal_email(withdrawal_id, event):
+    try:
+        from .tasks import send_withdrawal_notification_emails
+    except Exception:
+        return
+
+    def _sync_send():
+        try:
+            send_withdrawal_notification_emails(withdrawal_id, event)
+        except Exception:
+            return
+
+    try:
+        send_withdrawal_notification_emails.delay(withdrawal_id, event)
+        return
+    except Exception:
+        t = threading.Thread(target=_sync_send)
+        t.daemon = True
+        t.start()
+
 def fetch_and_update_isp(log_id, ip_address):
     try:
         log_debug(f"Thread started for log {log_id}, IP: {ip_address}")
@@ -206,16 +227,14 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
         except UserWithdrawal.DoesNotExist:
             return
 
-        # Check if refund logic is manually handled (e.g., by a view with specific reason)
-        if getattr(instance, '_skip_signal_refund', False):
-            return
+        skip_refund = bool(getattr(instance, '_skip_signal_refund', False))
 
         if old_instance.status != instance.status:
             user = get_current_user()
             request = get_current_request()
             
             # If becoming rejected, refund.
-            if instance.status == 'rejected' and old_instance.status != 'rejected':
+            if instance.status == 'rejected' and old_instance.status != 'rejected' and not skip_refund:
                 with transaction.atomic():
                     wallet = Wallet.objects.select_for_update().get(user=instance.user)
                     wallet.balance += instance.amount
@@ -276,6 +295,12 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                         instance.approver_balance_before = instance.approver_balance_before if instance.approver_balance_before is not None else approver_wallet.balance
                         instance.approver_balance_after = instance.approver_balance_after if instance.approver_balance_after is not None else approver_wallet.balance
 
+                new_status = instance.status
+                if new_status in ['approved', 'completed', 'rejected']:
+                    def _enqueue():
+                        _enqueue_withdrawal_email(instance.pk, new_status)
+                    transaction.on_commit(_enqueue)
+
 @receiver(post_save, sender=UserWithdrawal)
 def log_withdrawal(sender, instance, created, **kwargs):
     user = get_current_user()
@@ -322,6 +347,10 @@ def log_withdrawal(sender, instance, created, **kwargs):
                 "kpi_deltas": {"withdrawals_today": float(instance.amount), "pending_withdrawals": 1},
             }
         )
+
+        def _enqueue_created():
+            _enqueue_withdrawal_email(instance.pk, 'requested')
+        transaction.on_commit(_enqueue_created)
 
 
 @receiver(post_save, sender=Transaction)

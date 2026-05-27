@@ -1,6 +1,10 @@
 from celery import shared_task
 from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 from django.utils import timezone
+from django.conf import settings
 from django.db.models import Q
 from django.db.models import Sum, Value, DecimalField
 from django.db.models.functions import Coalesce
@@ -13,6 +17,7 @@ from .models import (
     Fixture,
     ScheduledFinanceReport,
     Transaction,
+    User,
     UserWithdrawal,
     FinanceAuditLog,
     JournalEntry,
@@ -23,6 +28,136 @@ from .models import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_money(value):
+    try:
+        return f"₦{Decimal(value):,.2f}"
+    except Exception:
+        return f"₦{value}"
+
+
+def _withdrawal_admin_recipients():
+    configured = getattr(settings, 'WITHDRAWAL_ADMIN_EMAILS', None) or []
+    configured = [e.strip() for e in configured if e and '@' in e]
+    qs = (
+        User.objects.filter(is_active=True)
+        .filter(Q(is_superuser=True) | Q(user_type__in=['admin', 'finance', 'account_user']))
+        .exclude(email__isnull=True)
+        .exclude(email='')
+        .values_list('email', flat=True)
+    )
+    all_emails = set(configured)
+    all_emails.update([e.strip() for e in qs if e and '@' in e])
+    return sorted(all_emails)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 5})
+def send_withdrawal_notification_emails(self, withdrawal_id, event):
+    withdrawal = UserWithdrawal.objects.select_related('user', 'approved_rejected_by').get(id=withdrawal_id)
+
+    try:
+        from .models import SiteConfiguration
+        site = SiteConfiguration.load()
+        site_name = (getattr(site, 'site_name', '') or 'StakeNaija').strip() or 'StakeNaija'
+    except Exception:
+        site_name = 'StakeNaija'
+
+    event_key = (event or '').strip().lower()
+    if event_key not in ['requested', 'approved', 'completed', 'rejected']:
+        return
+
+    tx = (
+        Transaction.objects.filter(related_withdrawal_request=withdrawal, transaction_type='withdrawal')
+        .order_by('timestamp')
+        .first()
+    )
+    reference = (
+        getattr(tx, 'external_reference', None)
+        or getattr(tx, 'paystack_reference', None)
+        or (str(getattr(tx, 'id', '')) if tx else '')
+        or str(withdrawal.id)
+    )
+
+    local_requested = timezone.localtime(withdrawal.request_time) if withdrawal.request_time else None
+    local_processed = timezone.localtime(withdrawal.approved_rejected_time) if withdrawal.approved_rejected_time else None
+
+    subject_map = {
+        'requested': f"{site_name} • Withdrawal Request Submitted",
+        'approved': f"{site_name} • Withdrawal Approved",
+        'completed': f"{site_name} • Withdrawal Successful",
+        'rejected': f"{site_name} • Withdrawal Rejected",
+    }
+    template_map = {
+        'requested': 'betting/email/withdrawal_request.html',
+        'approved': 'betting/email/withdrawal_success.html',
+        'completed': 'betting/email/withdrawal_success.html',
+        'rejected': 'betting/email/withdrawal_rejected.html',
+    }
+    user_field_map = {
+        'requested': 'email_request_user_sent_at',
+        'approved': 'email_success_user_sent_at',
+        'completed': 'email_success_user_sent_at',
+        'rejected': 'email_rejected_user_sent_at',
+    }
+    admin_field_map = {
+        'requested': 'email_request_admin_sent_at',
+        'approved': 'email_success_admin_sent_at',
+        'completed': 'email_success_admin_sent_at',
+        'rejected': 'email_rejected_admin_sent_at',
+    }
+
+    subject = subject_map[event_key]
+    template_name = template_map[event_key]
+
+    ctx_base = {
+        'site_name': site_name,
+        'user': withdrawal.user,
+        'withdrawal': withdrawal,
+        'amount_formatted': _fmt_money(withdrawal.amount),
+        'requested_at': local_requested.strftime('%Y-%m-%d %H:%M:%S') if local_requested else '',
+        'processed_at': local_processed.strftime('%Y-%m-%d %H:%M:%S') if local_processed else '',
+        'reference': reference,
+        'status': withdrawal.status,
+        'event': event_key,
+    }
+
+    now = timezone.now()
+
+    user_field = user_field_map[event_key]
+    admin_field = admin_field_map[event_key]
+
+    if getattr(withdrawal, user_field, None) is None:
+        to_email = (withdrawal.user.email or '').strip()
+        if to_email and '@' in to_email:
+            try:
+                html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': False})
+                text = strip_tags(html) or f"{site_name}: Withdrawal update"
+                msg = EmailMultiAlternatives(subject=subject, body=text, to=[to_email])
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=False)
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(**{user_field: now, 'last_email_error': ''})
+            except Exception as e:
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(last_email_error=str(e)[:2000])
+                raise
+
+    if getattr(withdrawal, admin_field, None) is None:
+        recipients = _withdrawal_admin_recipients()
+        if not recipients:
+            UserWithdrawal.objects.filter(id=withdrawal.id).update(
+                last_email_error="No admin recipients configured for withdrawal notifications."
+            )
+        else:
+            try:
+                html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': True})
+                text = strip_tags(html) or f"{site_name}: Withdrawal update"
+                msg = EmailMultiAlternatives(subject=subject, body=text, to=recipients)
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=False)
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(**{admin_field: now, 'last_email_error': ''})
+            except Exception as e:
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(last_email_error=str(e)[:2000])
+                raise
 
 @shared_task
 def update_started_fixtures_status():
@@ -266,14 +401,10 @@ def generate_finance_report_bytes(dataset, fmt, start_dt, end_dt):
             from weasyprint import HTML
         except Exception as e:
             raise RuntimeError(f"PDF export unavailable: {e}")
+        from html import escape as _html_escape
         cols = list(rows[0].keys()) if rows else []
         def esc(s):
-            return (str(s or '')
-                    .replace('&', '&amp;')
-                    .replace('<', '&lt;')
-                    .replace('>', '&gt;')
-                    .replace('"', '&quot;')
-                    .replace("'", '&#39;'))
+            return _html_escape(str(s or ''), quote=True)
         head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
         body = ''.join([
             "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"

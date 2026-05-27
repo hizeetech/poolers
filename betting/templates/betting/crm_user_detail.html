@@ -1,5 +1,22 @@
 {% extends 'betting/base.html' %}
 {% block title %}CRM User Detail{% endblock %}
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" />
+<style>
+  .crm-see-toggle {
+    border: 0;
+    background: transparent;
+    color: #0b3d2e;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .crm-see-toggle:hover { text-decoration: underline; }
+  .select2-container--bootstrap-5 .select2-selection--single { min-height: 31px; }
+  .select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered { line-height: 29px; }
+  .select2-container--bootstrap-5 .select2-selection--single .select2-selection__arrow { height: 29px; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="container py-4">
   <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-3">
@@ -161,6 +178,14 @@
             {% csrf_token %}
             <input type="hidden" name="wallet_adjust" value="1">
             <div class="col-12">
+              <label class="form-label small text-muted mb-1">Apply To (Agent / Downlines)</label>
+              <select name="target_user_id" id="crmTargetUserSelect" class="form-select form-select-sm" style="width: 100%;">
+                <option value="{{ target_user.id }}" selected>
+                  {{ target_user.get_full_name|default:target_user.email }} ({{ target_user.email }}){% if target_user.username %} @{{ target_user.username }}{% endif %} [{{ target_user.get_user_type_display }}]
+                </option>
+              </select>
+            </div>
+            <div class="col-12">
               <div class="form-check form-check-inline">
                 <input class="form-check-input" type="radio" name="action" value="credit" checked>
                 <label class="form-check-label">Credit</label>
@@ -190,6 +215,7 @@
           <form method="post" class="mt-2">
             {% csrf_token %}
             <input type="hidden" name="reset_password" value="1">
+            <input type="hidden" name="target_user_id" id="crmResetTargetUserId" value="{{ target_user.id }}">
             <button class="btn btn-sm btn-outline-danger" type="submit">Reset Password</button>
           </form>
           {% endif %}
@@ -208,6 +234,7 @@
           <form method="post" class="row g-2">
             {% csrf_token %}
             <input type="hidden" name="send_message" value="1">
+            <input type="hidden" name="target_user_id" id="crmMessageTargetUserId" value="{{ target_user.id }}">
             <div class="col-12">
               <label class="form-label small text-muted mb-1">Title</label>
               <input type="text" name="msg_title" class="form-control form-control-sm" placeholder="Title">
@@ -245,7 +272,12 @@
   <div class="row g-3">
     <div class="col-lg-6">
       <div class="card shadow-sm">
-        <div class="card-header bg-light fw-semibold">Recent Withdrawals</div>
+        <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+          <span>Recent Withdrawals</span>
+          {% if withdrawals|length > 6 %}
+          <button type="button" class="crm-see-toggle" data-crm-toggle="withdrawals">See All</button>
+          {% endif %}
+        </div>
         <div class="card-body p-0">
           <div class="table-responsive">
             <table class="table table-sm mb-0">
@@ -259,7 +291,7 @@
               </thead>
               <tbody>
                 {% for w in withdrawals %}
-                <tr>
+                <tr class="{% if forloop.counter > 6 %}crm-hide crm-withdrawals-row{% endif %}">
                   <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
                   <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
                   <td class="text-uppercase small">{{ w.status }}</td>
@@ -323,7 +355,12 @@
 
     <div class="col-12">
       <div class="card shadow-sm">
-        <div class="card-header bg-light fw-semibold">Recent Transactions</div>
+        <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+          <span>Recent Transactions</span>
+          {% if transactions|length > 6 %}
+          <button type="button" class="crm-see-toggle" data-crm-toggle="transactions">See All</button>
+          {% endif %}
+        </div>
         <div class="card-body p-0">
           <div class="table-responsive">
             <table class="table table-sm mb-0">
@@ -338,7 +375,7 @@
               </thead>
               <tbody>
                 {% for tx in transactions %}
-                <tr>
+                <tr class="{% if forloop.counter > 6 %}crm-hide crm-transactions-row{% endif %}">
                   <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
                   <td class="text-uppercase small">{{ tx.transaction_type }}</td>
                   <td class="text-muted small">{{ tx.description|default:"-" }}</td>
@@ -357,7 +394,12 @@
 
     <div class="col-lg-6">
       <div class="card shadow-sm">
-        <div class="card-header bg-light fw-semibold">Login / IP History</div>
+        <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+          <span>Login / IP History</span>
+          {% if login_attempts|length > 6 %}
+          <button type="button" class="crm-see-toggle" data-crm-toggle="logins">See All</button>
+          {% endif %}
+        </div>
         <div class="card-body p-0">
           <div class="table-responsive">
             <table class="table table-sm mb-0">
@@ -370,7 +412,7 @@
               </thead>
               <tbody>
                 {% for la in login_attempts %}
-                <tr>
+                <tr class="{% if forloop.counter > 6 %}crm-hide crm-logins-row{% endif %}">
                   <td class="text-nowrap">{{ la.timestamp|date:"Y-m-d H:i" }}</td>
                   <td class="text-muted small">{{ la.ip_address|default:"-" }}</td>
                   <td class="text-muted small">{{ la.user_agent|default:"-"|truncatechars:60 }}</td>
@@ -458,4 +500,72 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+  (function() {
+    const hideClass = 'crm-hide';
+    const updateHiddenTargets = () => {
+      const sel = document.getElementById('crmTargetUserSelect');
+      const v = sel ? (sel.value || '') : '';
+      const r = document.getElementById('crmResetTargetUserId');
+      const m = document.getElementById('crmMessageTargetUserId');
+      if (r) r.value = v;
+      if (m) m.value = v;
+    };
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const style = document.createElement('style');
+      style.textContent = `.${hideClass}{display:none !important;}`;
+      document.head.appendChild(style);
+
+      const $sel = $('#crmTargetUserSelect');
+      if ($sel.length) {
+        $sel.select2({
+          theme: 'bootstrap-5',
+          placeholder: 'Search by Username, Email, Name, or Phone...',
+          allowClear: false,
+          ajax: {
+            url: '{% url "betting:crm_user_downline_search" target_user.id %}',
+            dataType: 'json',
+            delay: 250,
+            data: function(params) {
+              return { q: params.term, page: params.page };
+            },
+            processResults: function(data, params) {
+              params.page = params.page || 1;
+              return { results: data.results, pagination: { more: data.pagination.more } };
+            },
+            cache: true
+          },
+          minimumInputLength: 0
+        });
+        $sel.on('change', updateHiddenTargets);
+      }
+      updateHiddenTargets();
+
+      const toggleMap = {
+        withdrawals: { rows: 'crm-withdrawals-row' },
+        transactions: { rows: 'crm-transactions-row' },
+        logins: { rows: 'crm-logins-row' },
+      };
+
+      const toggle = (key, btn) => {
+        const cfg = toggleMap[key];
+        if (!cfg) return;
+        const rows = document.querySelectorAll('.' + cfg.rows);
+        const anyHidden = Array.from(rows).some(r => r.classList.contains(hideClass));
+        rows.forEach(r => r.classList.toggle(hideClass, !anyHidden ? true : false));
+        if (btn) btn.textContent = anyHidden ? 'Hide' : 'See All';
+      };
+
+      document.querySelectorAll('[data-crm-toggle]').forEach((btn) => {
+        btn.addEventListener('click', () => toggle(btn.getAttribute('data-crm-toggle'), btn));
+      });
+    });
+  })();
+</script>
 {% endblock %}

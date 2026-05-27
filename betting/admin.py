@@ -1131,11 +1131,38 @@ class ApprovedNewCashierAdmin(admin.ModelAdmin):
 
 # --- UserWithdrawal Admin ---
 class UserWithdrawalAdmin(admin.ModelAdmin):
-    list_display = ('user', 'amount', 'bank_name', 'account_number', 'account_name', 'status', 'request_time')
+    def short_id(self, obj):
+        return str(getattr(obj, 'id', '') or '')[:8]
+    short_id.short_description = "ID"
+
+    list_display = (
+        'short_id',
+        'user',
+        'amount',
+        'bank_name',
+        'account_number',
+        'account_name',
+        'status',
+        'request_time',
+        'email_request_admin_sent_at',
+        'email_request_user_sent_at',
+        'email_success_admin_sent_at',
+        'email_success_user_sent_at',
+    )
     list_editable = ('status',)
     list_filter = ('status', 'request_time', 'bank_name')
     search_fields = ('user__username', 'user__email', 'account_number', 'account_name')
-    readonly_fields = ('request_time', 'approved_rejected_time')
+    readonly_fields = (
+        'request_time',
+        'approved_rejected_time',
+        'email_request_admin_sent_at',
+        'email_request_user_sent_at',
+        'email_success_admin_sent_at',
+        'email_success_user_sent_at',
+        'email_rejected_admin_sent_at',
+        'email_rejected_user_sent_at',
+        'last_email_error',
+    )
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
 

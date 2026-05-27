@@ -1702,6 +1702,7 @@ def wallet_view(request):
     # Active Loans
     active_loans = Loan.objects.filter(borrower=request.user, status='active')
     withdrawal_lock_expires_at = request.user.get_withdrawal_lock_expires_at()
+    can_withdraw = request.user.user_type in ['agent', 'super_agent', 'master_agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm']
 
     context = {
         'wallet': wallet,
@@ -1718,6 +1719,8 @@ def wallet_view(request):
         'withdrawal_attempts': request.user.withdrawal_attempts,
         'withdrawal_lock_expires_at': withdrawal_lock_expires_at,
         'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
+        'min_operating_balance': Decimal('5000.00'),
+        'can_withdraw_from_wallet': can_withdraw,
     }
     return render(request, 'betting/wallet.html', context)
 
@@ -2170,7 +2173,7 @@ def verify_kora_deposit(request):
                 return redirect('betting:wallet')
 
             # Update wallet balance
-            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=user)
             user_wallet.balance += amount_verified
             user_wallet.save()
 
@@ -2295,8 +2298,8 @@ def verify_deposit(request):
 @db_transaction.atomic
 def withdraw_funds(request):
     expects_json = request.headers.get('Content-Type', '').startswith('application/json')
-    # Restrict withdrawal to specific roles
-    if request.user.user_type not in ['master_agent', 'super_agent', 'agent']:
+    allowed_user_types = {'master_agent', 'super_agent', 'agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm'}
+    if request.user.user_type not in allowed_user_types:
         if expects_json:
             return JsonResponse({'status': 'error', 'message': 'You are not authorized to withdraw funds.'}, status=403)
         messages.error(request, "You are not authorized to withdraw funds.")
@@ -2327,7 +2330,7 @@ def withdraw_funds(request):
         return redirect('betting:profile')
 
     # Check for active loans
-    has_active_loans = Loan.objects.filter(borrower=request.user, status='active', outstanding_balance__gt=0).exists()
+    has_active_loans = Loan.objects.filter(borrower=user, status='active', outstanding_balance__gt=0).exists()
     if has_active_loans:
         if expects_json:
             return JsonResponse({'status': 'error', 'message': 'You cannot withdraw funds while you have an active unpaid loan.'}, status=400)
@@ -2357,7 +2360,31 @@ def withdraw_funds(request):
             bank_name = form.cleaned_data['bank_name']
             account_number = form.cleaned_data['account_number']
 
-            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
+            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=user)
+
+            recent_cutoff = timezone.now() - timedelta(seconds=3)
+            if UserWithdrawal.objects.filter(user=user, request_time__gte=recent_cutoff).exists():
+                msg = "Please wait a moment before submitting another withdrawal request."
+                if expects_json:
+                    return JsonResponse({'status': 'error', 'code': 'rate_limited', 'message': msg}, status=429)
+                messages.error(request, msg)
+                return redirect('betting:wallet')
+
+            min_operating = Decimal('5000.00')
+            max_withdrawable = user_wallet.balance - min_operating
+            if max_withdrawable <= 0 or amount > max_withdrawable:
+                msg = "You must retain a minimum operating balance of ₦5,000 in your wallet before making withdrawals."
+                payload = {
+                    'status': 'error',
+                    'code': 'min_operating_balance',
+                    'message': msg,
+                    'min_operating_balance': float(min_operating),
+                    'max_withdrawable': float(max(max_withdrawable, Decimal('0.00'))),
+                }
+                if expects_json:
+                    return JsonResponse(payload, status=400)
+                messages.error(request, msg)
+                return redirect('betting:wallet')
 
             if user_wallet.balance < amount:
                 if expects_json:
@@ -2371,7 +2398,7 @@ def withdraw_funds(request):
             user_wallet.save()
 
             withdrawal = UserWithdrawal.objects.create(
-                user=request.user,
+                user=user,
                 amount=amount,
                 bank_name=bank_name,
                 account_name=form.cleaned_data['account_name'], # Corrected to use cleaned_data
@@ -2382,9 +2409,9 @@ def withdraw_funds(request):
             )
 
             Transaction.objects.create(
-                user=request.user,
-                initiating_user=request.user,
-                target_user=request.user,
+                user=user,
+                initiating_user=user,
+                target_user=user,
                 transaction_type='withdrawal',
                 amount=amount,
                 is_successful=True,
@@ -2400,9 +2427,23 @@ def withdraw_funds(request):
         else:
             if expects_json:
                 msg = "Invalid withdrawal request."
+                code = "invalid"
+                details = {}
+                try:
+                    if form.errors:
+                        for k, v in form.errors.items():
+                            details[k] = [str(e) for e in v]
+                except Exception:
+                    details = {}
                 if form.non_field_errors():
                     msg = " ".join([str(e) for e in form.non_field_errors()])
-                return JsonResponse({'status': 'error', 'message': msg}, status=400)
+                elif details.get('amount'):
+                    msg = details['amount'][0] or msg
+                elif details:
+                    first_key = next(iter(details.keys()))
+                    if details.get(first_key):
+                        msg = details[first_key][0] or msg
+                return JsonResponse({'status': 'error', 'code': code, 'message': msg, 'errors': details}, status=400)
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f"{field.replace('_', ' ').title()}: {error}")
@@ -2449,7 +2490,8 @@ def verify_withdrawal_pin(request):
 
     user = User.objects.select_for_update().get(pk=request.user.pk)
 
-    if user.user_type not in ['master_agent', 'super_agent', 'agent']:
+    allowed_user_types = {'master_agent', 'super_agent', 'agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm'}
+    if user.user_type not in allowed_user_types:
         return JsonResponse({'status': 'error', 'message': 'You are not authorized to withdraw funds.'}, status=403)
 
     if user.maybe_auto_unlock_withdrawal():
@@ -4445,7 +4487,7 @@ def withdraw_request_list(request):
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 @db_transaction.atomic
 def approve_reject_withdrawal(request, withdrawal_id):
-    withdrawal_request = get_object_or_404(UserWithdrawal, id=withdrawal_id)
+    withdrawal_request = get_object_or_404(UserWithdrawal.objects.select_for_update(), id=withdrawal_id)
 
     if withdrawal_request.status != 'pending':
         messages.warning(request, f"This withdrawal request has already been {withdrawal_request.status}.")
@@ -4906,11 +4948,13 @@ def admin_wallet_report(request):
     user_filter = request.GET.get('user', 'all')
 
     wallets_queryset = Wallet.objects.all()
+    selected_user = None
 
     if user_filter != 'all':
         try:
             filter_user_id = int(user_filter)
             wallets_queryset = wallets_queryset.filter(user__id=filter_user_id)
+            selected_user = User.objects.filter(id=filter_user_id).first()
         except (ValueError, TypeError):
             pass 
 
@@ -4927,8 +4971,8 @@ def admin_wallet_report(request):
     context = {
         'report_title': report_title,
         'wallets': wallets,
-        'all_users': User.objects.all().order_by('email'), 
         'current_user_filter': user_filter,
+        'selected_user': selected_user,
     }
     return render(request, 'betting/admin/wallet_report.html', context)
 
@@ -5407,9 +5451,13 @@ def api_initiate_deposit(request):
 def api_verify_deposit(request):
     return JsonResponse({'status': 'success', 'message': 'API endpoint for verify deposit (placeholder).'})
 
-@csrf_exempt
+@login_required
 def api_withdraw_funds(request):
-    return JsonResponse({'status': 'success', 'message': 'API endpoint for withdraw funds (placeholder).'})
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=405)
+    if not request.headers.get('Content-Type', '').startswith('application/json'):
+        return JsonResponse({'status': 'error', 'message': 'Content-Type must be application/json.'}, status=415)
+    return withdraw_funds(request)
 
 @csrf_exempt
 def api_wallet_transfer(request):

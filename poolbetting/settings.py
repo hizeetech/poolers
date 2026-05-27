@@ -338,6 +338,12 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD') # Your email password or 
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL') # Used as the "From" address if not specified
 SERVER_EMAIL = os.getenv('SERVER_EMAIL') # For error reporting by Django
 
+WITHDRAWAL_ADMIN_EMAILS = [
+    e.strip()
+    for e in (os.getenv('WITHDRAWAL_ADMIN_EMAILS') or '').split(',')
+    if e and e.strip() and '@' in e.strip()
+]
+
 
 # Paystack API Keys
 PAYSTACK_PUBLIC_KEY = os.getenv('PAYSTACK_PUBLIC_KEY')

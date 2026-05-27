@@ -1405,6 +1405,13 @@ class UserWithdrawal(models.Model):
     approver_balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Approver's wallet balance after processing")
     
     processed_ip = models.GenericIPAddressField(null=True, blank=True)
+    email_request_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_request_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_success_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_success_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_rejected_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_rejected_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_email_error = models.TextField(blank=True, default="")
 
     def __str__(self):
         return f"Withdrawal {self.id} - {self.user.email} - {self.amount}"

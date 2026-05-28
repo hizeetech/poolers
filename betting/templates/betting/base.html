@@ -948,6 +948,7 @@
     <script>
         (function () {
             const normalizePaper = (v) => (String(v || '').trim() === '58' ? '58' : '80');
+            const defaultThermalLogoUrl = "{% static 'betting/images/printerimg.png' %}";
 
             window.getThermalPaperMm = function () {
                 try {
@@ -1010,7 +1011,6 @@
                         background: transparent !important;
                         box-shadow: none !important;
                         text-shadow: none !important;
-                        filter: none !important;
                         outline: none !important;
                     }
                     img {
@@ -1027,6 +1027,8 @@
                     .ticket-logo {
                         display: block;
                         margin: 0 auto 2.2mm auto;
+                        max-width: calc(var(--content-width) - 1mm);
+                        filter: grayscale(1) contrast(320%);
                     }
                     .thermal-flag {
                         border: var(--rule) solid #000;
@@ -1088,13 +1090,18 @@
                 const html = (opts && opts.html) ? String(opts.html) : '';
                 const paperMm = normalizePaper((opts && opts.paperMm) ? opts.paperMm : window.getThermalPaperMm());
                 const flagText = (opts && opts.flagText) ? String(opts.flagText) : '';
+                const showLogo = !(opts && opts.showLogo === false);
+                const logoUrl = (opts && opts.logoUrl) ? String(opts.logoUrl) : defaultThermalLogoUrl;
 
                 const w = window.open('', '', 'height=700,width=480');
                 if (!w) return;
 
                 const css = buildThermalCss(paperMm);
+                const safeLogoUrl = logoUrl.replace(/"/g, '&quot;').replace(/</g, '%3C').replace(/>/g, '%3E');
+                const logoHtml = showLogo ? `<img class="ticket-logo" src="${safeLogoUrl}" alt="">` : '';
                 const wrapped = `
                     <div class="thermal-root">
+                        ${logoHtml}
                         ${flagText ? `<div class="thermal-flag">${flagText}</div>` : ''}
                         ${html}
                     </div>
@@ -1109,7 +1116,7 @@
                 w.document.write('<style>' + css + '</style>');
                 w.document.write('</head><body>');
                 w.document.write(wrapped);
-                w.document.write('<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},250);};<\/script>');
+                w.document.write('<script>(function(){function r(c){var i=[].slice.call(document.images||[]);if(!i.length){c();return;}var p=i.length,d=false;function f(){if(d)return;d=true;c();}function k(){p--;if(p<=0)f();}i.forEach(function(x){if(x.complete&&x.naturalWidth>0){k();}else{x.addEventListener(\"load\",k,{once:true});x.addEventListener(\"error\",k,{once:true});}});setTimeout(f,1200);}window.onload=function(){r(function(){setTimeout(function(){window.focus();window.print();},150);});};})();<\/script>');
                 w.document.write('</body></html>');
                 w.document.close();
             };

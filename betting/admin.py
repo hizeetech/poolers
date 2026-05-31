@@ -775,15 +775,17 @@ class FixtureAdmin(admin.ModelAdmin):
                 
                 try:
                     # Read Excel: Columns A, B, D, E, F, G -> Indices 0, 1, 3, 4, 5, 6
-                    # Use dtype=str to prevent automatic date parsing by pandas/Excel engine
-                    # This ensures we get the raw text (e.g. "07/02/2026") which we can parse correctly with dayfirst=True
-                    df = pd.read_excel(excel_file, usecols=[0, 1, 3, 4, 5, 6], dtype=str)
+                    # Do not force dtype=str for all columns because Excel dates may come as datetime objects or serials.
+                    # We'll parse dates/times explicitly below and always treat slash/dot/hyphen dates as day/month/year.
+                    df = pd.read_excel(excel_file, usecols=[0, 1, 3, 4, 5, 6])
                     df.columns = ['serial_number', 'home_team', 'away_team', 'draw_odd', 'match_date', 'match_time']
                     
                     success_count = 0
+                    updated_count = 0
                     skip_count = 0
                     errors = []
                     created_fixture_ids = []
+                    updated_fixture_ids = []
                     
                     for index, row in df.iterrows():
                         try:
@@ -820,20 +822,35 @@ class FixtureAdmin(admin.ModelAdmin):
                                     digits = s.replace('.', '').replace('/', '').replace('-', '')
                                     if len(digits) <= 6:
                                         try:
-                                            serial = int(float(s))
-                                            if serial > 0:
-                                                return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
+                                            serial_num = int(float(s))
+                                            if serial_num > 0:
+                                                parsed = (datetime(1899, 12, 30) + timedelta(days=serial_num)).date()
+                                                if betting_period and (parsed < betting_period.start_date or parsed > betting_period.end_date):
+                                                    raise ValueError(
+                                                        f"Excel date serial {s} resolves to {parsed}, which is outside the selected betting period ({betting_period.start_date} to {betting_period.end_date}). "
+                                                        f"Ensure the sheet date column is saved as text in dd/mm/yyyy."
+                                                    )
+                                                return parsed
+                                        except ValueError:
+                                            raise
                                         except Exception:
                                             pass
+
                                 for fmt in ('%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y', '%d.%m.%Y', '%d.%m.%y', '%Y-%m-%d'):
                                     try:
-                                        return datetime.strptime(s, fmt).date()
+                                        parsed = datetime.strptime(s, fmt).date()
+                                        break
                                     except ValueError:
-                                        continue
-                                try:
-                                    return pd.to_datetime(s, dayfirst=True, errors='raise').date()
-                                except Exception as e:
-                                    raise ValueError(f"Invalid date format: {v} ({str(e)})")
+                                        parsed = None
+                                if parsed is None:
+                                    try:
+                                        parsed = pd.to_datetime(s, dayfirst=True, errors='raise').date()
+                                    except Exception as e:
+                                        raise ValueError(f"Invalid date format: {v} ({str(e)})")
+
+                                if betting_period and (parsed < betting_period.start_date or parsed > betting_period.end_date):
+                                    raise ValueError(f"Date {parsed} is outside the selected betting period ({betting_period.start_date} to {betting_period.end_date}).")
+                                return parsed
 
                             match_date = _parse_excel_date(row['match_date'])
                                 
@@ -861,14 +878,23 @@ class FixtureAdmin(admin.ModelAdmin):
                             except Exception as e:
                                 raise ValueError(f"Invalid time format: {match_time}")
 
-                            # Check duplicates (Serial + BettingPeriod)
-                            if Fixture.objects.filter(serial_number=serial, betting_period=betting_period).exists():
-                                skip_count += 1
-                                errors.append(f"Row {index + 2}: Duplicate Serial {serial}")
+                            existing_fixture = Fixture.objects.filter(serial_number=serial, betting_period=betting_period).first()
+                            if existing_fixture:
+                                existing_fixture.home_team = home
+                                existing_fixture.away_team = away
+                                existing_fixture.draw_odd = row['draw_odd'] if not pd.isna(row['draw_odd']) else None
+                                existing_fixture.match_date = match_date
+                                existing_fixture.match_time = match_time
+                                if not existing_fixture.status:
+                                    existing_fixture.status = 'scheduled'
+                                existing_fixture.is_active = True
+                                existing_fixture.save(update_fields=['home_team', 'away_team', 'draw_odd', 'match_date', 'match_time', 'status', 'is_active'])
+                                updated_fixture_ids.append(existing_fixture.id)
+                                updated_count += 1
                                 continue
                                 
                             # Check duplicates (Teams + Date + Time)
-                            if Fixture.objects.filter(home_team__iexact=home, away_team__iexact=away, match_date=match_date, match_time=match_time).exists():
+                            if Fixture.objects.filter(betting_period=betting_period, home_team__iexact=home, away_team__iexact=away, match_date=match_date, match_time=match_time).exists():
                                 skip_count += 1
                                 errors.append(f"Row {index + 2}: Duplicate Fixture {home} vs {away}")
                                 continue
@@ -918,7 +944,7 @@ class FixtureAdmin(admin.ModelAdmin):
                     except Exception:
                         pass
 
-                    messages.success(request, f"Upload Complete: {success_count} added, {skip_count} skipped.")
+                    messages.success(request, f"Upload Complete: {success_count} added, {updated_count} updated, {skip_count} skipped.")
                     if errors:
                         error_msg = " | ".join(errors[:10])
                         if len(errors) > 10:

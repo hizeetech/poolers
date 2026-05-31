@@ -89,6 +89,50 @@
         if (msg.type === "notification") {
           const current = parseInt(badge.textContent || "0", 10) || 0;
           setCount(current + 1);
+          const payload = msg.payload || {};
+          const systemTab = document.getElementById("system-tab");
+          if (systemTab) {
+            const emptyState = systemTab.querySelector(".notification-item.text-center");
+            if (emptyState) emptyState.remove();
+
+            const link = document.createElement("a");
+            link.href = "/notifications/";
+            link.className = "text-decoration-none";
+
+            const item = document.createElement("div");
+            item.className = "notification-item unread";
+
+            const content = document.createElement("div");
+            content.className = "notification-content";
+
+            const title = document.createElement("div");
+            title.className = "notification-title";
+            title.textContent = (payload.title || "Notification").toString();
+
+            const text = document.createElement("div");
+            text.className = "notification-text";
+            text.textContent = (payload.message || "").toString().slice(0, 140);
+
+            const meta = document.createElement("div");
+            meta.className = "text-muted small mt-1";
+            meta.style.fontSize = "0.7rem";
+            meta.textContent = "just now";
+
+            content.appendChild(title);
+            if (text.textContent) content.appendChild(text);
+            content.appendChild(meta);
+            item.appendChild(content);
+            link.appendChild(item);
+
+            systemTab.insertBefore(link, systemTab.firstChild);
+
+            const items = systemTab.querySelectorAll("a .notification-item");
+            if (items.length > 10) {
+              const last = items[items.length - 1];
+              const anchor = last.closest("a");
+              if (anchor) anchor.remove();
+            }
+          }
         }
       } catch (e) {}
     };

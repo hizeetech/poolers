@@ -93,6 +93,52 @@
         .fixture-ledger-col-date { width: 132px; text-align: center; color: #64748b; }
         .fixture-ledger-col-time { width: 92px; text-align: center; color: #64748b; }
         .fixture-ledger-team { font-weight: 900; font-size: 12px; color: #0b1220; }
+        .popular-picks-card {
+            background: #0b0f14;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .popular-picks-title {
+            color: #f5a524;
+            font-weight: 900;
+            letter-spacing: 0.6px;
+        }
+        .popular-pick-btn {
+            padding: 12px 12px;
+            border-radius: 14px;
+        }
+        .popular-pick-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .popular-pick-left {
+            min-width: 120px;
+        }
+        .popular-pick-market {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.65);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        .popular-pick-selection {
+            font-size: 15px;
+            font-weight: 900;
+            color: #ffffff;
+        }
+        .popular-pick-match {
+            font-size: 14px;
+            font-weight: 900;
+            color: #ffffff;
+            text-align: right;
+        }
+        .popular-pick-odd {
+            font-size: 14px;
+            font-weight: 900;
+            color: rgba(255, 255, 255, 0.88);
+            text-align: right;
+        }
     </style>
 
     <div class="row">
@@ -172,6 +218,50 @@
                     </div>
                     <button id="place-bet-btn" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm">Place Bet</button>
                     <div id="response-message" class="mt-3 text-center d-none"></div>
+                </div>
+            </div>
+            <div class="card popular-picks-card shadow-lg rounded-3 mt-3">
+                <div class="card-header bg-transparent">
+                    <div class="popular-picks-title">Popular Picks</div>
+                </div>
+                <div class="card-body p-2">
+                    <div id="popularPicksList">
+                        {% if popular_picks %}
+                            <div class="d-flex flex-column gap-2">
+                                {% for pick in popular_picks %}
+                                    {% with f=pick.fixture %}
+                                        {% if pick.odd_value %}
+                                            <button type="button"
+                                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn
+                                                    {% if pick.bet_type == 'home_win' or pick.bet_type == 'draw' or pick.bet_type == 'away_win' %}btn-outline-primary{% elif pick.bet_type == 'home_dnb' or pick.bet_type == 'away_dnb' %}btn-outline-info{% elif pick.bet_type|slice:':5' == 'over_' or pick.bet_type|slice:':6' == 'under_' %}btn-outline-secondary{% elif pick.bet_type == 'btts_yes' %}btn-outline-success{% elif pick.bet_type == 'btts_no' %}btn-outline-danger{% else %}btn-outline-light{% endif %}"
+                                                    data-fixture-id="{{ f.id }}"
+                                                    data-bet-type="{{ pick.bet_type }}"
+                                                    data-odd="{{ pick.odd_value|floatformat:2 }}"
+                                                    data-selection-text="{{ pick.market_label }} {{ pick.selection_label }} ({{ pick.odd_value|floatformat:2 }})"
+                                                    data-period-name="{{ f.betting_period.name }}"
+                                                    data-home-team="{{ f.home_team }}"
+                                                    data-away-team="{{ f.away_team }}"
+                                                    data-match-date="{{ f.match_date|date:'Y-m-d' }}"
+                                                    data-match-time="{{ f.match_time|time:'H:i' }}">
+                                                <div class="popular-pick-row">
+                                                    <div class="popular-pick-left">
+                                                        <div class="popular-pick-market">{{ pick.market_label }}</div>
+                                                        <div class="popular-pick-selection">{{ pick.selection_label }}</div>
+                                                    </div>
+                                                    <div class="flex-grow-1">
+                                                        <div class="popular-pick-match">{{ f.home_team }} vs. {{ f.away_team }}</div>
+                                                        <div class="popular-pick-odd">{{ pick.odd_value|floatformat:2 }}</div>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        {% endif %}
+                                    {% endwith %}
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="text-muted small px-2 py-2">No popular picks yet.</div>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
@@ -791,6 +881,12 @@
             'away_win': 'Away Win',
             'home_dnb': 'Home DNB',
             'away_dnb': 'Away DNB',
+            'over_1_5': 'Over 1.5',
+            'under_1_5': 'Under 1.5',
+            'over_2_5': 'Over 2.5',
+            'under_2_5': 'Under 2.5',
+            'over_3_5': 'Over 3.5',
+            'under_3_5': 'Under 3.5',
             'over1_5': 'Over 1.5',
             'under1_5': 'Under 1.5',
             'over2_5': 'Over 2.5',
@@ -807,6 +903,8 @@
     // Function to attach event listeners to bet buttons
     function attachBetButtonListeners() {
         document.querySelectorAll('.bet-selection-btn').forEach(button => {
+            if (button.dataset.betBound === '1') return;
+            button.dataset.betBound = '1';
             button.addEventListener('click', function() {
                 const fixtureId = this.dataset.fixtureId;
                 const betType = this.dataset.betType;
@@ -852,16 +950,106 @@
     // Function to poll for fixture updates
     function pollFixtures() {
         const pollUrl = "{% if current_betting_period %}{% url 'betting:fixtures_list_partial_with_period' current_betting_period.id %}{% else %}{% url 'betting:fixtures_list_partial' %}{% endif %}";
+        const picksUrl = "{% if current_betting_period %}{% url 'betting:popular_picks_json_with_period' current_betting_period.id %}{% else %}{% url 'betting:popular_picks_json' %}{% endif %}";
+        let lastPopularPicksFingerprint = '';
+
+        const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[c]));
+
+        const getPopularPickOutlineClass = (betType) => {
+            const bt = String(betType || '');
+            if (bt === 'home_win' || bt === 'draw' || bt === 'away_win') return 'btn-outline-primary';
+            if (bt === 'home_dnb' || bt === 'away_dnb') return 'btn-outline-info';
+            if (bt.startsWith('over_') || bt.startsWith('under_') || bt.startsWith('over') || bt.startsWith('under')) return 'btn-outline-secondary';
+            if (bt === 'btts_yes') return 'btn-outline-success';
+            if (bt === 'btts_no') return 'btn-outline-danger';
+            return 'btn-outline-light';
+        };
+
+        const renderPopularPicks = (picks) => {
+            const container = document.getElementById('popularPicksList');
+            if (!container) return;
+            const list = Array.isArray(picks) ? picks : [];
+            if (list.length === 0) {
+                container.innerHTML = `<div class="text-muted small px-2 py-2">No popular picks yet.</div>`;
+                return;
+            }
+
+            const html = `
+                <div class="d-flex flex-column gap-2">
+                    ${list.map((p) => {
+                        const betType = String(p.bet_type || '');
+                        const odd = Number(p.odd);
+                        const oddText = Number.isFinite(odd) ? odd.toFixed(2) : '';
+                        const market = escapeHtml(p.market_label || '');
+                        const selection = escapeHtml(p.selection_label || '');
+                        const home = escapeHtml(p.home_team || '');
+                        const away = escapeHtml(p.away_team || '');
+                        const periodName = escapeHtml(p.period_name || '');
+                        const matchDate = escapeHtml(p.match_date || '');
+                        const matchTime = escapeHtml(p.match_time || '');
+                        const outlineClass = getPopularPickOutlineClass(betType);
+                        const selectionText = escapeHtml(`${market} ${selection} (${oddText})`);
+                        const fixtureId = escapeHtml(p.fixture_id || '');
+                        return `
+                            <button type="button"
+                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn ${outlineClass}"
+                                    data-fixture-id="${fixtureId}"
+                                    data-bet-type="${escapeHtml(betType)}"
+                                    data-odd="${escapeHtml(oddText)}"
+                                    data-selection-text="${selectionText}"
+                                    data-period-name="${periodName}"
+                                    data-home-team="${home}"
+                                    data-away-team="${away}"
+                                    data-match-date="${matchDate}"
+                                    data-match-time="${matchTime}">
+                                <div class="popular-pick-row">
+                                    <div class="popular-pick-left">
+                                        <div class="popular-pick-market">${market}</div>
+                                        <div class="popular-pick-selection">${selection}</div>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="popular-pick-match">${home} vs. ${away}</div>
+                                        <div class="popular-pick-odd">${escapeHtml(oddText)}</div>
+                                    </div>
+                                </div>
+                            </button>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+            container.innerHTML = html;
+        };
         
         setInterval(async () => {
             try {
-                const response = await fetch(pollUrl);
-                if (response.ok) {
-                    const html = await response.text();
+                const [fixturesResp, picksResp] = await Promise.all([
+                    fetch(pollUrl),
+                    fetch(picksUrl, { headers: { 'Accept': 'application/json' } }),
+                ]);
+
+                if (fixturesResp.ok) {
+                    const html = await fixturesResp.text();
                     document.getElementById('fixtures-container').innerHTML = html;
-                    attachBetButtonListeners();
-                    updateButtonHighlights(); // Restore highlights for selected bets
                 }
+
+                if (picksResp.ok) {
+                    const payload = await picksResp.json();
+                    const picks = (payload && payload.success) ? (payload.picks || []) : [];
+                    const fingerprint = JSON.stringify(picks.map(p => [p.fixture_id, p.bet_type, p.odd, p.market_label, p.selection_label, p.home_team, p.away_team, p.match_date, p.match_time]));
+                    if (fingerprint !== lastPopularPicksFingerprint) {
+                        lastPopularPicksFingerprint = fingerprint;
+                        renderPopularPicks(picks);
+                    }
+                }
+
+                attachBetButtonListeners();
+                updateButtonHighlights(); // Restore highlights for selected bets
             } catch (error) {
                 console.error('Error polling fixtures:', error);
             }

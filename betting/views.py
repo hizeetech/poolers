@@ -48,7 +48,7 @@ from risk.services import (
 from notifications.services import create_notification
 
 from .models import (
-    User, Wallet, Transaction, BettingPeriod, Fixture, Selection, BetTicket,
+    User, Wallet, Transaction, BettingPeriod, Fixture, PopularPick, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
     SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage, State,
@@ -716,6 +716,19 @@ def fixtures_view(request, period_id=None):
 
     all_periods = BettingPeriod.objects.all().order_by('-start_date')
     active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')
+    popular_picks = []
+    if current_betting_period:
+        local_now = timezone.localtime(timezone.now())
+        picks_qs = PopularPick.objects.select_related('fixture', 'fixture__betting_period').filter(
+            is_active=True,
+            fixture__is_active=True,
+            fixture__status='scheduled',
+            fixture__betting_period=current_betting_period,
+        ).filter(
+            Q(fixture__match_date__gt=local_now.date()) |
+            Q(fixture__match_date=local_now.date(), fixture__match_time__gt=local_now.time())
+        )
+        popular_picks = [p for p in picks_qs if p.odd_value is not None][:10]
 
     bonus_rules_data = []
     for r in get_active_bonus_rules_cached():
@@ -737,6 +750,7 @@ def fixtures_view(request, period_id=None):
         'current_betting_period': current_betting_period,
         'all_periods': all_periods,
         'active_periods': active_periods,
+        'popular_picks': popular_picks,
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
         'can_place_bet': is_cashier(request.user),
         'bonus_rules_json': json.dumps(bonus_rules_data),
@@ -754,6 +768,45 @@ def fixtures_list_partial(request, period_id=None):
         'current_betting_period': current_betting_period,
     }
     return render(request, 'betting/includes/fixtures_list.html', context)
+
+def popular_picks_json(request, period_id=None):
+    _, current_betting_period = _get_fixtures_data(period_id)
+    if not current_betting_period:
+        return JsonResponse({'success': True, 'picks': []})
+
+    local_now = timezone.localtime(timezone.now())
+    picks_qs = PopularPick.objects.select_related('fixture', 'fixture__betting_period').filter(
+        is_active=True,
+        fixture__is_active=True,
+        fixture__status='scheduled',
+        fixture__betting_period=current_betting_period,
+    ).filter(
+        Q(fixture__match_date__gt=local_now.date()) |
+        Q(fixture__match_date=local_now.date(), fixture__match_time__gt=local_now.time())
+    ).order_by('sort_order', '-created_at')
+
+    picks = []
+    for p in picks_qs[:20]:
+        odd = p.odd_value
+        if odd is None:
+            continue
+        f = p.fixture
+        picks.append({
+            'fixture_id': f.id,
+            'bet_type': p.bet_type,
+            'odd': float(odd),
+            'market_label': p.market_label,
+            'selection_label': p.selection_label,
+            'period_name': f.betting_period.name if f.betting_period_id else '',
+            'home_team': f.home_team,
+            'away_team': f.away_team,
+            'match_date': f.match_date.strftime('%Y-%m-%d') if f.match_date else '',
+            'match_time': f.match_time.strftime('%H:%M') if f.match_time else '',
+        })
+        if len(picks) >= 10:
+            break
+
+    return JsonResponse({'success': True, 'picks': picks})
 
 
 @login_required

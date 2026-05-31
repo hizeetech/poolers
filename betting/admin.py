@@ -42,7 +42,7 @@ from datetime import datetime, time, timedelta
 import math
 
 from .models import (
-    User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
+    User, Wallet, Transaction, BettingPeriod, Fixture, PopularPick, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
@@ -705,6 +705,21 @@ class BettingPeriodAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     search_fields = ('name',)
     ordering = ('-start_date',)
+
+class PopularPickAdmin(admin.ModelAdmin):
+    list_display = ('fixture', 'get_period', 'bet_type', 'get_odd', 'is_active', 'sort_order', 'created_at')
+    list_filter = ('is_active', 'bet_type', 'fixture__betting_period')
+    search_fields = ('fixture__home_team', 'fixture__away_team', 'fixture__serial_number')
+    autocomplete_fields = ('fixture',)
+    ordering = ('sort_order', '-created_at')
+
+    def get_period(self, obj):
+        return getattr(obj.fixture, 'betting_period', None)
+    get_period.short_description = 'Betting Period'
+
+    def get_odd(self, obj):
+        return obj.odd_value
+    get_odd.short_description = 'Odd'
 
 # --- Fixture Admin ---
 class FixtureAdmin(admin.ModelAdmin):
@@ -1529,6 +1544,7 @@ betting_admin_site.register(PaymentGatewayDeposit, PaymentGatewayDepositAdmin)
 betting_admin_site.register(PendingCashierRegistration, PendingCashierRegistrationAdmin)
 betting_admin_site.register(ApprovedNewCashier, ApprovedNewCashierAdmin)
 betting_admin_site.register(BettingPeriod, BettingPeriodAdmin)
+betting_admin_site.register(PopularPick, PopularPickAdmin)
 betting_admin_site.register(Fixture, FixtureAdmin)
 betting_admin_site.register(Result, ResultAdmin)
 betting_admin_site.register(BetTicket, BetTicketAdmin)

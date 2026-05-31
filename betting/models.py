@@ -730,6 +730,97 @@ class Fixture(models.Model):
     def __str__(self):
         return f"{self.home_team} vs {self.away_team}"
 
+class PopularPick(models.Model):
+    BET_TYPE_CHOICES = (
+        ('home_win', 'Home Win'),
+        ('draw', 'Draw'),
+        ('away_win', 'Away Win'),
+        ('home_dnb', 'Home DNB'),
+        ('away_dnb', 'Away DNB'),
+        ('over_1_5', 'Over 1.5'),
+        ('under_1_5', 'Under 1.5'),
+        ('over_2_5', 'Over 2.5'),
+        ('under_2_5', 'Under 2.5'),
+        ('over_3_5', 'Over 3.5'),
+        ('under_3_5', 'Under 3.5'),
+        ('btts_yes', 'BTTS Yes'),
+        ('btts_no', 'BTTS No'),
+    )
+
+    fixture = models.OneToOneField(Fixture, on_delete=models.CASCADE, related_name='popular_pick')
+    bet_type = models.CharField(max_length=50, choices=BET_TYPE_CHOICES)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('sort_order', '-created_at')
+        verbose_name = "Popular Pick"
+        verbose_name_plural = "Popular Picks"
+
+    def __str__(self):
+        return f"{self.fixture} - {self.bet_type}"
+
+    @property
+    def odd_value(self):
+        field_map = {
+            'home_win': 'home_win_odd',
+            'draw': 'draw_odd',
+            'away_win': 'away_win_odd',
+            'home_dnb': 'home_dnb_odd',
+            'away_dnb': 'away_dnb_odd',
+            'over_1_5': 'over_1_5_odd',
+            'under_1_5': 'under_1_5_odd',
+            'over_2_5': 'over_2_5_odd',
+            'under_2_5': 'under_2_5_odd',
+            'over_3_5': 'over_3_5_odd',
+            'under_3_5': 'under_3_5_odd',
+            'btts_yes': 'btts_yes_odd',
+            'btts_no': 'btts_no_odd',
+        }
+        field_name = field_map.get(self.bet_type)
+        if not field_name or not self.fixture_id:
+            return None
+        return getattr(self.fixture, field_name, None)
+
+    @property
+    def market_label(self):
+        if self.bet_type in ('home_win', 'draw', 'away_win'):
+            return '1x2'
+        if self.bet_type in ('home_dnb', 'away_dnb'):
+            return 'DNB'
+        if self.bet_type.startswith('over_') or self.bet_type.startswith('under_'):
+            return 'Goals'
+        if self.bet_type.startswith('btts_'):
+            return 'BTTS'
+        return 'Pick'
+
+    @property
+    def selection_label(self):
+        if self.bet_type == 'home_win':
+            return '1'
+        if self.bet_type == 'draw':
+            return 'X'
+        if self.bet_type == 'away_win':
+            return '2'
+        if self.bet_type == 'home_dnb':
+            return 'Home DNB'
+        if self.bet_type == 'away_dnb':
+            return 'Away DNB'
+        if self.bet_type == 'btts_yes':
+            return 'Yes'
+        if self.bet_type == 'btts_no':
+            return 'No'
+        display_map = {
+            'over_1_5': 'Over 1.5',
+            'under_1_5': 'Under 1.5',
+            'over_2_5': 'Over 2.5',
+            'under_2_5': 'Under 2.5',
+            'over_3_5': 'Over 3.5',
+            'under_3_5': 'Under 3.5',
+        }
+        return display_map.get(self.bet_type, self.bet_type.replace('_', ' ').title())
+
 class Selection(models.Model):
     bet_ticket = models.ForeignKey('BetTicket', on_delete=models.CASCADE, related_name='selections')
     fixture = models.ForeignKey(Fixture, on_delete=models.SET_NULL, null=True, blank=True, related_name='selections')

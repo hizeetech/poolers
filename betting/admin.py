@@ -38,7 +38,8 @@ import pandas as pd
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 import os
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+import math
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, BetTicket,
@@ -727,7 +728,7 @@ class FixtureAdmin(admin.ModelAdmin):
     serial_number_display.admin_order_field = 'serial_int'
 
     class Media:
-        js = ('js/admin_fixture_toggle.js?v=2',)
+        js = ('js/admin_fixture_toggle.js',)
 
     change_list_template = "betting/admin/fixture_change_list.html"
 
@@ -802,19 +803,39 @@ class FixtureAdmin(admin.ModelAdmin):
                             home = str(row['home_team']).strip()
                             away = str(row['away_team']).strip()
                             
-                            # Parse Date using pandas to_datetime for robustness
-                            match_date = row['match_date']
-                            try:
-                                if pd.notna(match_date):
-                                    # If string is "2026-02-07 00:00:00" (from Excel conversion), slice it
-                                    if isinstance(match_date, str) and ' ' in match_date:
-                                        match_date = match_date.split(' ')[0]
-                                        
-                                    match_date = pd.to_datetime(match_date, dayfirst=True).date()
-                                else:
+                            def _parse_excel_date(v):
+                                if v is None or pd.isna(v):
                                     raise ValueError("Date is missing")
-                            except Exception as e:
-                                raise ValueError(f"Invalid date format: {match_date} ({str(e)})")
+                                if hasattr(v, 'date') and not isinstance(v, str):
+                                    try:
+                                        return v.date()
+                                    except Exception:
+                                        pass
+                                s = str(v).strip()
+                                if not s or s.lower() in ['nan', 'none', 'null']:
+                                    raise ValueError("Date is missing")
+                                if ' ' in s:
+                                    s = s.split(' ')[0].strip()
+                                if s.replace('.', '').replace('/', '').replace('-', '').isdigit():
+                                    digits = s.replace('.', '').replace('/', '').replace('-', '')
+                                    if len(digits) <= 6:
+                                        try:
+                                            serial = int(float(s))
+                                            if serial > 0:
+                                                return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
+                                        except Exception:
+                                            pass
+                                for fmt in ('%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y', '%d.%m.%Y', '%d.%m.%y', '%Y-%m-%d'):
+                                    try:
+                                        return datetime.strptime(s, fmt).date()
+                                    except ValueError:
+                                        continue
+                                try:
+                                    return pd.to_datetime(s, dayfirst=True, errors='raise').date()
+                                except Exception as e:
+                                    raise ValueError(f"Invalid date format: {v} ({str(e)})")
+
+                            match_date = _parse_excel_date(row['match_date'])
                                 
                             # Parse Time
                             match_time = row['match_time']

@@ -1,11 +1,20 @@
 from django.db import transaction
 from django.utils import timezone
-from .models import WeeklyAgentCommission, MonthlyNetworkCommission, AgentCommissionProfile, CommissionPeriod
+from .models import (
+    WeeklyAgentCommission,
+    MonthlyNetworkCommission,
+    AgentCommissionProfile,
+    CommissionPeriod,
+    CommissionPlan,
+    CommissionProfileAssignmentLog,
+    CommissionOverrideLog,
+)
 from betting.models import Wallet, Transaction, BetTicket, SiteConfiguration
 from django.db.models import Sum, Q
 from decimal import Decimal
 import logging
 from django.contrib.auth import get_user_model
+from django.core.mail import EmailMultiAlternatives
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -155,7 +164,7 @@ def calculate_weekly_agent_commission_data(agent, period):
         user__agent=agent,
         placed_at__date__gte=period.start_date,
         placed_at__date__lte=period.end_date
-    ).exclude(status__in=['cancelled', 'deleted'])
+    ).exclude(status__in=['pending', 'cancelled', 'deleted'])
     
     total_stake = (tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)).quantize(Decimal('0.01'))
     total_winnings = (tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)).quantize(Decimal('0.01'))
@@ -387,7 +396,7 @@ class CommissionCalculationService:
 class CommissionPayoutService:
     @staticmethod
     def process_weekly_payouts(period):
-        commissions = WeeklyAgentCommission.objects.filter(period=period, status='unpaid')
+        commissions = WeeklyAgentCommission.objects.filter(period=period, status='pending')
         count = 0
         for comm in commissions:
             success, msg = pay_weekly_commission(comm)
@@ -397,10 +406,149 @@ class CommissionPayoutService:
 
     @staticmethod
     def process_monthly_payouts(period):
-        commissions = MonthlyNetworkCommission.objects.filter(period=period, status='unpaid')
+        commissions = MonthlyNetworkCommission.objects.filter(period=period, status='pending')
         count = 0
         for comm in commissions:
             success, msg = pay_monthly_network_commission(comm)
             if success:
                 count += 1
         return count
+
+
+class CommissionProfileAssignmentService:
+    @staticmethod
+    def _is_super_admin(user):
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        return bool(getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') == 'admin')
+
+    @staticmethod
+    def _restriction_next_allowed(profile):
+        try:
+            from datetime import timedelta
+            base = profile.last_changed_at or profile.assigned_at or timezone.now()
+            return base + timedelta(days=30)
+        except Exception:
+            return None
+
+    @staticmethod
+    def assign_profile(*, agent, plan, actor, reason='', ip_address=None, device_info='', allow_override=False):
+        if not agent or getattr(agent, 'user_type', None) != 'agent':
+            return False, "Invalid agent.", None
+        if not plan or not isinstance(plan, CommissionPlan):
+            return False, "Invalid commission profile.", None
+
+        now = timezone.now()
+        actor_role = (getattr(actor, 'user_type', '') or '').strip()
+        is_super = CommissionProfileAssignmentService._is_super_admin(actor)
+        can_override = bool(allow_override and is_super)
+
+        with transaction.atomic():
+            existing = AgentCommissionProfile.objects.select_for_update().filter(user=agent).select_related('plan').first()
+            prev_plan = existing.plan if existing else None
+
+            if existing:
+                if prev_plan and prev_plan.id == plan.id and existing.is_active:
+                    return True, "No change (already assigned).", existing
+
+                next_allowed = CommissionProfileAssignmentService._restriction_next_allowed(existing)
+                if next_allowed and now < next_allowed and not can_override:
+                    msg = (
+                        "This agent's commission profile was recently modified. "
+                        "Commission profiles can only be changed once every 30 days. "
+                        "Please wait until the restriction period expires or contact the System Administrator."
+                    )
+                    return False, msg, existing
+
+                existing.plan = plan
+                existing.is_active = True
+                existing.assigned_at = now
+                existing.assigned_by = actor if actor and getattr(actor, 'is_authenticated', False) else None
+                existing.assigned_by_role = actor_role
+                existing.last_changed_at = now
+                existing.last_changed_by = actor if actor and getattr(actor, 'is_authenticated', False) else None
+                existing.last_change_reason = (reason or '')[:255]
+                existing.updated_at = now
+                existing.save()
+                profile = existing
+            else:
+                profile = AgentCommissionProfile.objects.create(
+                    user=agent,
+                    plan=plan,
+                    is_active=True,
+                    assigned_at=now,
+                    assigned_by=actor if actor and getattr(actor, 'is_authenticated', False) else None,
+                    assigned_by_role=actor_role,
+                    last_changed_at=now,
+                    last_changed_by=actor if actor and getattr(actor, 'is_authenticated', False) else None,
+                    last_change_reason=(reason or '')[:255],
+                    updated_at=now,
+                )
+
+            CommissionProfileAssignmentLog.objects.create(
+                agent=agent,
+                previous_profile=prev_plan,
+                new_profile=plan,
+                assigned_by=actor if actor and getattr(actor, 'is_authenticated', False) else None,
+                assigned_by_role=actor_role,
+                assignment_reason=(reason or '')[:255],
+                ip_address=ip_address,
+                device_info=(device_info or '')[:2000],
+                is_override=bool(can_override),
+            )
+
+            if can_override:
+                CommissionOverrideLog.objects.create(
+                    agent=agent,
+                    old_profile=prev_plan,
+                    new_profile=plan,
+                    admin_user=actor if actor and getattr(actor, 'is_authenticated', False) else None,
+                    reason=(reason or '')[:255],
+                    ip_address=ip_address,
+                    device_info=(device_info or '')[:2000],
+                )
+
+        try:
+            from notifications.services import create_notification
+            create_notification(
+                recipient=agent,
+                notification_type='SYSTEM_ANNOUNCEMENT',
+                title='Commission profile updated',
+                message=f"Your commission profile has been set to {plan.name}.",
+            )
+        except Exception:
+            pass
+
+        try:
+            to_email = (getattr(agent, 'email', '') or '').strip()
+            if to_email and '@' in to_email:
+                try:
+                    site = SiteConfiguration.load()
+                    site_name = (getattr(site, 'site_name', '') or 'StakeNaija').strip() or 'StakeNaija'
+                except Exception:
+                    site_name = 'StakeNaija'
+                subject = f"{site_name} • Commission Profile Assigned"
+                text = f"Your commission profile has been set to {plan.name}."
+                html = f"""
+                <html><body style="font-family:Arial,sans-serif;">
+                <div style="max-width:640px;margin:0 auto;padding:16px;">
+                  <div style="background:#0b3d2e;color:#fff;padding:14px 16px;border-radius:12px;font-weight:800;">
+                    {site_name}
+                  </div>
+                  <div style="margin-top:12px;background:#fff;border:1px solid #e9edf2;border-radius:12px;padding:16px;">
+                    <div style="font-size:16px;font-weight:800;color:#101828;">Commission Profile Assigned</div>
+                    <div style="margin-top:8px;color:#475467;font-size:13px;">Hello {agent.get_full_name() or agent.username or agent.email},</div>
+                    <div style="margin-top:10px;color:#101828;font-size:14px;line-height:1.6;">
+                      Your commission profile has been set to <b>{plan.name}</b>.
+                    </div>
+                  </div>
+                </div>
+                </body></html>
+                """
+                msg = EmailMultiAlternatives(subject=subject, body=text, to=[to_email])
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=True)
+        except Exception:
+            pass
+
+        return True, "Commission profile assigned.", profile

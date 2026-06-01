@@ -29,10 +29,13 @@ def site_configuration(request):
             continue
         seen.add(key)
         unique_badges.append(b)
+    now = timezone.localtime(timezone.now())
     return {
         'site_config': SiteConfiguration.load(),
         'footer_pages': FooterPage.objects.filter(is_active=True, show_in_footer=True).order_by('order', 'footer_label'),
         'footer_badges': unique_badges,
+        'server_epoch_ms': int(now.timestamp() * 1000),
+        'server_tz': timezone.get_current_timezone_name(),
     }
 
 def impersonation_context(request):

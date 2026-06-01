@@ -131,6 +131,7 @@ try:
             'django.contrib.auth.backends.ModelBackend',
         ]
         MIDDLEWARE = [m for m in MIDDLEWARE if m != 'axes.middleware.AxesMiddleware']
+        SILENCED_SYSTEM_CHECKS = list(globals().get('SILENCED_SYSTEM_CHECKS', [])) + ['axes.W002', 'axes.W003']
 except Exception:
     pass
 

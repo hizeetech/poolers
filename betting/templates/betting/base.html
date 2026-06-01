@@ -64,6 +64,10 @@
             padding-top: 0.15rem;
             padding-bottom: 0.15rem;
         }
+
+        .navbar .container-fluid {
+            position: relative;
+        }
         
         .navbar-brand {
             color: var(--navbar-text) !important;
@@ -90,6 +94,56 @@
         
         .nav-link:hover {
             color: var(--hover-accent) !important;
+        }
+
+        .server-clock-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 12px;
+            min-width: 220px;
+        }
+
+        .server-clock {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            padding: 8px 12px;
+            border-radius: 10px;
+            color: #00F5D4;
+            background: rgba(0, 0, 0, 0.22);
+            border: 1px solid rgba(0, 245, 212, 0.28);
+            box-shadow:
+                0 0 10px rgba(0, 245, 212, 0.35),
+                inset 0 0 14px rgba(0, 245, 212, 0.10);
+            text-shadow:
+                0 0 6px rgba(0, 245, 212, 0.55),
+                0 0 18px rgba(0, 245, 212, 0.30);
+            white-space: nowrap;
+            font-size: 0.86rem;
+            line-height: 1;
+            user-select: none;
+        }
+
+        @media (max-width: 991.98px) {
+            .server-clock-wrap {
+                margin: 10px 0 2px 0;
+                min-width: auto;
+            }
+            .server-clock {
+                width: 100%;
+                text-align: center;
+            }
+        }
+
+        @media (min-width: 992px) {
+            .server-clock-wrap {
+                position: absolute;
+                left: 50%;
+                transform: translateX(-50%);
+                margin: 0;
+                min-width: 260px;
+            }
         }
 
         /* Wallet Highlight */
@@ -448,6 +502,9 @@
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
+                <div class="server-clock-wrap mx-auto">
+                    <span id="serverClock" class="server-clock" data-server-epoch-ms="{{ server_epoch_ms }}" data-server-tz="{{ server_tz }}">--:--:--</span>
+                </div>
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="{% url 'betting:frontpage' %}">Home</a>
@@ -876,6 +933,42 @@
                             console.log('Error updating wallet balance:', error);
                         });
                 }, 5000);
+            }
+
+            const clockEl = document.getElementById('serverClock');
+            if (clockEl) {
+                const serverEpochMs = Number(clockEl.getAttribute('data-server-epoch-ms') || '0');
+                const serverTz = (clockEl.getAttribute('data-server-tz') || 'UTC').trim() || 'UTC';
+                const offsetMs = Number.isFinite(serverEpochMs) && serverEpochMs > 0 ? (serverEpochMs - Date.now()) : 0;
+
+                const fmtParts = (d) => {
+                    try {
+                        const parts = new Intl.DateTimeFormat('en-GB', {
+                            timeZone: serverTz,
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: false,
+                        }).formatToParts(d);
+                        const map = {};
+                        for (const p of parts) map[p.type] = p.value;
+                        return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
+                    } catch (e) {
+                        const pad = (n) => String(n).padStart(2, '0');
+                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                    }
+                };
+
+                const tick = () => {
+                    const d = new Date(Date.now() + offsetMs);
+                    clockEl.textContent = fmtParts(d);
+                };
+
+                tick();
+                setInterval(tick, 1000);
             }
         });
     </script>

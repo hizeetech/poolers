@@ -1,0 +1,470 @@
+{% extends 'betting/base.html' %}
+{% block title %}Commission Management{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Commission Management</h2>
+      <div class="text-muted small">Assign and manage agent commission profiles with audit history.</div>
+    </div>
+  </div>
+
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item"><a class="nav-link {% if tab == 'profiles' %}active{% endif %}" href="?tab=profiles">Commission Profiles</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'assign' %}active{% endif %}" href="?tab=assign">Assign Commission Profile</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'assigned' %}active{% endif %}" href="?tab=assigned">Assigned Profiles</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'unassigned' %}active{% endif %}" href="?tab=unassigned">Unassigned Agents</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'history' %}active{% endif %}" href="?tab=history">Assignment History</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'requests' %}active{% endif %}" href="?tab=requests">Commission Change Requests</a></li>
+  </ul>
+  <form style="display:none;">{% csrf_token %}</form>
+
+  {% if tab == 'profiles' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Commission Profiles</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Name</th>
+              <th>Description</th>
+              <th class="text-end">GGR %</th>
+              <th>Hybrid</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in profiles %}
+            <tr>
+              <td class="fw-semibold">{{ p.name }}</td>
+              <td class="text-muted small">{{ p.description|default:"-" }}</td>
+              <td class="text-end">{{ p.ggr_percent }}</td>
+              <td>
+                {% if p.is_hybrid_active %}
+                <span class="badge bg-success">Active</span>
+                {% else %}
+                <span class="badge bg-secondary">Off</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-center text-muted py-4">No profiles found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if tab == 'assign' %}
+  <div class="row g-3">
+    <div class="col-12 col-lg-7">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Assign / Reassign</div>
+        <div class="card-body">
+          <form id="commissionAssignForm" method="post" action="{% url 'betting:commission_management_assign_api' %}">
+            {% csrf_token %}
+            <div class="mb-3">
+              <label class="form-label small text-muted mb-1">Search Agent</label>
+              <select id="commissionAgentSelect" name="agent_id" class="form-select" style="width:100%;" required>
+                {% if preselected_agent %}
+                <option value="{{ preselected_agent.id }}" selected>{{ preselected_agent.username }} • {{ preselected_agent.get_full_name|default:preselected_agent.email }}</option>
+                {% endif %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small text-muted mb-1">Commission Profile</label>
+              <select name="profile_id" class="form-select" required>
+                <option value="">Select profile</option>
+                {% for p in plans %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small text-muted mb-1">Assignment Reason</label>
+              <input type="text" name="reason" class="form-control" placeholder="Optional reason (audit logged)">
+            </div>
+            {% if is_super_admin %}
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" value="1" id="allowOverride" name="allow_override">
+              <label class="form-check-label" for="allowOverride">Override 30-day restriction</label>
+            </div>
+            {% endif %}
+            <button class="btn btn-success" type="submit">Assign Profile</button>
+            <a class="btn btn-outline-secondary" href="?tab=assigned">View Assigned</a>
+          </form>
+        </div>
+      </div>
+      <div class="alert alert-warning rounded-3 shadow-sm mt-3 mb-0">
+        <div class="fw-semibold">Commission Change Restricted</div>
+        <div class="small">
+          Agents can only have their commission profile changed once every 30 days. Only Super Admin can override.
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">Quick Links</div>
+        <div class="card-body">
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="?tab=unassigned">Unassigned Agents</a>
+            <a class="btn btn-sm btn-outline-primary" href="?tab=history">Assignment History</a>
+            <a class="btn btn-sm btn-outline-primary" href="?tab=requests">Change Requests</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if tab == 'assigned' or tab == 'unassigned' or tab == 'history' or tab == 'requests' %}
+  {% if tab == 'requests' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold">Submit Commission Change Request</div>
+    <div class="card-body">
+      <form id="commissionChangeRequestForm" method="post" action="{% url 'betting:commission_management_change_request_api' %}">
+        {% csrf_token %}
+        <div class="row g-2">
+          <div class="col-12 col-lg-5">
+            <label class="form-label small text-muted mb-1">Agent</label>
+            <select id="commissionRequestAgentSelect" name="agent_id" class="form-select" style="width:100%;" required></select>
+          </div>
+          <div class="col-12 col-lg-4">
+            <label class="form-label small text-muted mb-1">Requested Profile</label>
+            <select name="profile_id" class="form-select" required>
+              <option value="">Select profile</option>
+              {% for p in plans %}
+              <option value="{{ p.id }}">{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12 col-lg-3">
+            <label class="form-label small text-muted mb-1">Reason</label>
+            <input type="text" name="reason" class="form-control" placeholder="Optional">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-outline-primary" type="submit">Submit Request</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">
+          {% if tab == 'assigned' %}Assigned Profiles{% elif tab == 'unassigned' %}Agents Without Commission Profile{% elif tab == 'history' %}Assignment History{% else %}Commission Change Requests{% endif %}
+        </div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="{{ tab }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Username/Name/Email/Phone">
+          </div>
+          {% if tab == 'assigned' or tab == 'history' %}
+          <div>
+            <label class="form-label small text-muted mb-1">Profile</label>
+            <select name="profile" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for p in plans %}
+              <option value="{{ p.id }}" {% if profile_id == p.id|stringformat:"s" %}selected{% endif %}>{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+          {% if tab == 'requests' %}
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="status" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="approved" {% if status == 'approved' %}selected{% endif %}>Approved</option>
+              <option value="rejected" {% if status == 'rejected' %}selected{% endif %}>Rejected</option>
+            </select>
+          </div>
+          {% endif %}
+          {% if tab == 'assigned' or tab == 'history' %}
+          <div>
+            <label class="form-label small text-muted mb-1">From</label>
+            <input type="date" name="from" value="{{ date_from }}" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">To</label>
+            <input type="date" name="to" value="{{ date_to }}" class="form-control form-control-sm">
+          </div>
+          {% endif %}
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+      <div class="mt-2 d-flex flex-wrap gap-2">
+        {% if tab == 'unassigned' %}
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=unassigned&format=csv">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=unassigned&format=xlsx">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=unassigned&format=pdf">PDF</a>
+        {% endif %}
+        {% if tab == 'assigned' %}
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=assigned&format=csv">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=assigned&format=xlsx">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=assigned&format=pdf">PDF</a>
+        {% endif %}
+        {% if tab == 'history' %}
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=history&format=csv">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=history&format=xlsx">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:commission_management_export' %}?dataset=history&format=pdf">PDF</a>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light">
+            {% if tab == 'assigned' %}
+            <tr>
+              <th>Agent</th>
+              <th>Profile</th>
+              <th>Date Assigned</th>
+              <th>Assigned By</th>
+              <th>Status</th>
+            </tr>
+            {% elif tab == 'unassigned' %}
+            <tr>
+              <th>Username</th>
+              <th>Full Name</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>Date Registered</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+            {% elif tab == 'history' %}
+            <tr>
+              <th>Date/Time</th>
+              <th>Agent</th>
+              <th>Previous</th>
+              <th>New</th>
+              <th>Assigned By</th>
+              <th>Role</th>
+              <th>IP</th>
+              <th>Override</th>
+            </tr>
+            {% else %}
+            <tr>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Agent</th>
+              <th>Current</th>
+              <th>Requested</th>
+              <th>Requested By</th>
+              <th>Reason</th>
+              <th></th>
+            </tr>
+            {% endif %}
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              {% if tab == 'assigned' %}
+              <tr>
+                <td>
+                  <div class="fw-semibold">{{ r.user.username }}</div>
+                  <div class="small text-muted">{{ r.user.get_full_name|default:r.user.email }}</div>
+                </td>
+                <td><span class="badge bg-info text-dark">{{ r.plan.name }}</span></td>
+                <td class="text-nowrap">{{ r.assigned_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-muted small">{{ r.assigned_by.email|default:r.assigned_by.username|default:"-" }}</td>
+                <td>{% if r.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
+              </tr>
+              {% elif tab == 'unassigned' %}
+              <tr>
+                <td class="fw-semibold">{{ r.username }}</td>
+                <td>{{ r.get_full_name|default:"-" }}</td>
+                <td class="text-muted small">{{ r.email|default:"-" }}</td>
+                <td class="text-muted small">{{ r.phone_number|default:"-" }}</td>
+                <td class="text-nowrap">{{ r.date_joined|date:"Y-m-d H:i" }}</td>
+                <td>{% if r.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
+                <td class="text-end">
+                  <a class="btn btn-sm btn-outline-success" href="?tab=assign&agent_id={{ r.id }}">Quick Assign</a>
+                </td>
+              </tr>
+              {% elif tab == 'history' %}
+              <tr>
+                <td class="text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-muted small">{{ r.agent.email|default:r.agent.username }}</td>
+                <td class="text-muted small">{{ r.previous_profile.name|default:"-" }}</td>
+                <td class="fw-semibold">{{ r.new_profile.name }}</td>
+                <td class="text-muted small">{{ r.assigned_by.email|default:r.assigned_by.username|default:"-" }}</td>
+                <td class="text-uppercase small">{{ r.assigned_by_role|default:"-" }}</td>
+                <td class="text-muted small">{{ r.ip_address|default:"-" }}</td>
+                <td>{% if r.is_override %}<span class="badge bg-warning text-dark">Yes</span>{% else %}<span class="badge bg-light text-dark">No</span>{% endif %}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td class="text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-uppercase small">{{ r.status }}</td>
+                <td class="text-muted small">{{ r.agent.email|default:r.agent.username }}</td>
+                <td class="text-muted small">{{ r.current_profile.name|default:"-" }}</td>
+                <td class="fw-semibold">{{ r.requested_profile.name }}</td>
+                <td class="text-muted small">{{ r.requested_by.email|default:r.requested_by.username|default:"-" }}</td>
+                <td class="text-muted small">{{ r.reason|default:"-" }}</td>
+                <td class="text-end">
+                  {% if is_super_admin and r.status == 'pending' %}
+                  <button class="btn btn-sm btn-success crm-approve-request" data-id="{{ r.id }}">Approve</button>
+                  <button class="btn btn-sm btn-outline-danger crm-reject-request" data-id="{{ r.id }}">Reject</button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endif %}
+            {% empty %}
+            <tr><td colspan="10" class="text-center text-muted py-4">No records found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% if page_obj %}
+    <div class="card-footer py-2">
+      <nav aria-label="Pagination">
+        <ul class="pagination pagination-sm justify-content-center mb-0">
+          {% if page_obj.has_previous %}
+          <li class="page-item"><a class="page-link" href="?tab={{ tab }}&q={{ q }}&profile={{ profile_id }}&status={{ status }}&from={{ date_from }}&to={{ date_to }}&page={{ page_obj.previous_page_number }}">&laquo;</a></li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+          {% endif %}
+          <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+          {% if page_obj.has_next %}
+          <li class="page-item"><a class="page-link" href="?tab={{ tab }}&q={{ q }}&profile={{ profile_id }}&status={{ status }}&from={{ date_from }}&to={{ date_to }}&page={{ page_obj.next_page_number }}">&raquo;</a></li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+          {% endif %}
+        </ul>
+      </nav>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+  function crmAlert(type, title, text) {
+    if (window.Swal) {
+      Swal.fire({icon: type, title: title, text: text});
+    } else {
+      alert(title + "\\n\\n" + text);
+    }
+  }
+
+  (function() {
+    const agentSelect = document.getElementById('commissionAgentSelect');
+    if (agentSelect && window.jQuery && window.jQuery.fn && window.jQuery.fn.select2) {
+      window.jQuery(agentSelect).select2({
+        width: 'resolve',
+        placeholder: 'Search by username, name, email or phone',
+        ajax: {
+          url: "{% url 'betting:commission_management_agent_search' %}",
+          dataType: 'json',
+          delay: 250,
+          data: function (params) {
+            return { q: params.term };
+          },
+          processResults: function (data) {
+            return data;
+          },
+          cache: true
+        }
+      });
+    }
+
+    const assignForm = document.getElementById('commissionAssignForm');
+    if (assignForm) {
+      assignForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const fd = new FormData(assignForm);
+        const csrf = assignForm.querySelector('input[name="csrfmiddlewaretoken"]')?.value || '';
+        try {
+          const resp = await fetch(assignForm.action, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrf},
+            body: fd
+          });
+          const data = await resp.json();
+          if (data && data.success) {
+            crmAlert('success', 'Assigned', data.message || 'Commission profile assigned.');
+          } else {
+            crmAlert('warning', 'Commission Change Restricted', (data && data.message) ? data.message : 'Failed.');
+          }
+        } catch (err) {
+          crmAlert('error', 'Error', 'Request failed.');
+        }
+      });
+    }
+
+    const reqForm = document.getElementById('commissionChangeRequestForm');
+    const reqAgentSelect = document.getElementById('commissionRequestAgentSelect');
+    if (reqAgentSelect && window.jQuery && window.jQuery.fn && window.jQuery.fn.select2) {
+      window.jQuery(reqAgentSelect).select2({
+        width: 'resolve',
+        placeholder: 'Search by username, name, email or phone',
+        ajax: {
+          url: "{% url 'betting:commission_management_agent_search' %}",
+          dataType: 'json',
+          delay: 250,
+          data: function (params) {
+            return { q: params.term };
+          },
+          processResults: function (data) {
+            return data;
+          },
+          cache: true
+        }
+      });
+    }
+    if (reqForm) {
+      reqForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const fd = new FormData(reqForm);
+        const csrf = reqForm.querySelector('input[name="csrfmiddlewaretoken"]')?.value || '';
+        try {
+          const resp = await fetch(reqForm.action, { method: 'POST', headers: {'X-CSRFToken': csrf}, body: fd });
+          const data = await resp.json();
+          if (data && data.success) {
+            crmAlert('success', 'Submitted', data.message || 'Request submitted.');
+            window.location.reload();
+          } else {
+            crmAlert('warning', 'Failed', (data && data.message) ? data.message : 'Failed.');
+          }
+        } catch (err) {
+          crmAlert('error', 'Error', 'Request failed.');
+        }
+      });
+    }
+
+    async function decideRequest(id, action) {
+      const csrf = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value || '';
+      const fd = new FormData();
+      fd.append('action', action);
+      fd.append('note', '');
+      const url = "{% url 'betting:commission_management_change_request_decide_api' 0 %}".replace('/0/', '/' + id + '/');
+      const resp = await fetch(url, {method: 'POST', headers: {'X-CSRFToken': csrf}, body: fd});
+      const data = await resp.json();
+      if (data && data.success) {
+        crmAlert('success', 'Done', data.message || 'Updated.');
+        window.location.reload();
+      } else {
+        crmAlert('warning', 'Failed', (data && data.message) ? data.message : 'Failed.');
+      }
+    }
+
+    document.querySelectorAll('.crm-approve-request').forEach(btn => {
+      btn.addEventListener('click', () => decideRequest(btn.getAttribute('data-id'), 'approve'));
+    });
+    document.querySelectorAll('.crm-reject-request').forEach(btn => {
+      btn.addEventListener('click', () => decideRequest(btn.getAttribute('data-id'), 'reject'));
+    });
+  })();
+</script>
+{% endblock %}

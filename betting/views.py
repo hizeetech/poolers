@@ -20,8 +20,9 @@ from datetime import timedelta, date, datetime
 import logging
 import requests # For Paystack API calls
 import json
-from django.http import JsonResponse, HttpResponse, Http404
+from django.http import JsonResponse, HttpResponse, Http404, HttpResponseForbidden, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from django.utils.crypto import get_random_string
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
@@ -807,6 +808,449 @@ def popular_picks_json(request, period_id=None):
             break
 
     return JsonResponse({'success': True, 'picks': picks})
+
+
+def _can_access_commission_management(user):
+    return bool(
+        user
+        and getattr(user, 'is_authenticated', False)
+        and (getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') in ['admin', 'crm', 'account_user', 'retail_manager'])
+    )
+
+
+def _commission_allowed_agents_qs(user):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return User.objects.none()
+    if getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') in ['admin', 'crm', 'account_user']:
+        return User.objects.filter(user_type='agent')
+    if getattr(user, 'user_type', '') == 'retail_manager':
+        mas = get_retail_manager_master_agents(user)
+        sas = get_retail_manager_super_agents(user, master_agents_qs=mas)
+        return get_retail_manager_agents(user, master_agents_qs=mas, super_agents_qs=sas)
+    return User.objects.none()
+
+
+@login_required
+def commission_management(request):
+    if not _can_access_commission_management(request.user):
+        return HttpResponseForbidden("Not allowed.")
+
+    from commission.models import (
+        CommissionPlan,
+        AgentCommissionProfile,
+        CommissionProfileAssignmentLog,
+        CommissionChangeRequest,
+    )
+
+    tab = (request.GET.get('tab') or 'assign').strip() or 'assign'
+    preselect_agent_id = (request.GET.get('agent_id') or '').strip()
+    q = (request.GET.get('q') or '').strip()
+    profile_id = (request.GET.get('profile') or '').strip()
+    status = (request.GET.get('status') or '').strip()
+    date_from = (request.GET.get('from') or '').strip()
+    date_to = (request.GET.get('to') or '').strip()
+
+    allowed_agents = _commission_allowed_agents_qs(request.user)
+
+    plans = CommissionPlan.objects.all().order_by('name')
+    context = {
+        'tab': tab,
+        'q': q,
+        'profile_id': profile_id,
+        'status': status,
+        'date_from': date_from,
+        'date_to': date_to,
+        'plans': plans,
+        'is_super_admin': bool(request.user.is_superuser or request.user.user_type == 'admin'),
+        'is_retail_manager': bool(request.user.user_type == 'retail_manager'),
+    }
+    if tab == 'assign' and preselect_agent_id:
+        try:
+            pre_u = allowed_agents.get(id=preselect_agent_id)
+            context['preselected_agent'] = pre_u
+        except Exception:
+            context['preselected_agent'] = None
+
+    if tab == 'profiles':
+        context['profiles'] = plans
+        return render(request, 'betting/commission_management.html', context)
+
+    if tab == 'assigned':
+        qs = AgentCommissionProfile.objects.select_related('user', 'plan', 'assigned_by').filter(user__in=allowed_agents)
+        if q:
+            qs = qs.filter(
+                Q(user__username__icontains=q) |
+                Q(user__email__icontains=q) |
+                Q(user__first_name__icontains=q) |
+                Q(user__last_name__icontains=q) |
+                Q(user__phone_number__icontains=q)
+            )
+        if profile_id:
+            qs = qs.filter(plan_id=profile_id)
+        if date_from:
+            qs = qs.filter(assigned_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(assigned_at__date__lte=date_to)
+        page = Paginator(qs.order_by('-assigned_at'), 30).get_page(request.GET.get('page'))
+        context['page_obj'] = page
+        context['rows'] = page.object_list
+        return render(request, 'betting/commission_management.html', context)
+
+    if tab == 'unassigned':
+        qs = allowed_agents.filter(commission_profile__isnull=True)
+        if q:
+            qs = qs.filter(
+                Q(username__icontains=q) |
+                Q(email__icontains=q) |
+                Q(first_name__icontains=q) |
+                Q(last_name__icontains=q) |
+                Q(phone_number__icontains=q)
+            )
+        page = Paginator(qs.order_by('-date_joined'), 30).get_page(request.GET.get('page'))
+        context['page_obj'] = page
+        context['rows'] = page.object_list
+        return render(request, 'betting/commission_management.html', context)
+
+    if tab == 'history':
+        qs = CommissionProfileAssignmentLog.objects.select_related('agent', 'previous_profile', 'new_profile', 'assigned_by').filter(agent__in=allowed_agents)
+        if q:
+            qs = qs.filter(
+                Q(agent__username__icontains=q) |
+                Q(agent__email__icontains=q) |
+                Q(assigned_by__username__icontains=q) |
+                Q(assigned_by__email__icontains=q) |
+                Q(assignment_reason__icontains=q) |
+                Q(ip_address__icontains=q)
+            )
+        if profile_id:
+            qs = qs.filter(new_profile_id=profile_id)
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+        page = Paginator(qs.order_by('-created_at'), 30).get_page(request.GET.get('page'))
+        context['page_obj'] = page
+        context['rows'] = page.object_list
+        return render(request, 'betting/commission_management.html', context)
+
+    if tab == 'requests':
+        qs = CommissionChangeRequest.objects.select_related('agent', 'current_profile', 'requested_profile', 'requested_by', 'decided_by').filter(agent__in=allowed_agents)
+        if status:
+            qs = qs.filter(status=status)
+        if q:
+            qs = qs.filter(
+                Q(agent__username__icontains=q) |
+                Q(agent__email__icontains=q) |
+                Q(requested_by__username__icontains=q) |
+                Q(reason__icontains=q)
+            )
+        page = Paginator(qs.order_by('-created_at'), 30).get_page(request.GET.get('page'))
+        context['page_obj'] = page
+        context['rows'] = page.object_list
+        return render(request, 'betting/commission_management.html', context)
+
+    return render(request, 'betting/commission_management.html', context)
+
+
+@login_required
+def commission_management_agent_search(request):
+    if not _can_access_commission_management(request.user):
+        return JsonResponse({'results': []})
+
+    term = (request.GET.get('q') or request.GET.get('term') or '').strip()
+    state_id = (request.GET.get('state') or '').strip()
+    agent_type = (request.GET.get('agent_type') or '').strip()
+
+    qs = _commission_allowed_agents_qs(request.user).select_related('state')
+    if state_id:
+        qs = qs.filter(state_id=state_id)
+    if agent_type:
+        qs = qs.filter(user_type=agent_type)
+
+    if term:
+        qs = qs.filter(
+            Q(username__icontains=term) |
+            Q(email__icontains=term) |
+            Q(first_name__icontains=term) |
+            Q(last_name__icontains=term) |
+            Q(phone_number__icontains=term) |
+            Q(shop_address__icontains=term)
+        )
+
+    qs = qs.order_by('username')[:30]
+    results = []
+    for u in qs:
+        results.append({
+            'id': u.id,
+            'text': f"{u.username} • {u.get_full_name() or u.email or ''}".strip(),
+        })
+    return JsonResponse({'results': results})
+
+
+@login_required
+@require_POST
+def commission_management_assign_api(request):
+    if not _can_access_commission_management(request.user):
+        return JsonResponse({'success': False, 'message': 'Not allowed.'}, status=403)
+
+    from commission.models import CommissionPlan
+    from commission.services import CommissionProfileAssignmentService
+
+    agent_id = (request.POST.get('agent_id') or '').strip()
+    profile_id = (request.POST.get('profile_id') or '').strip()
+    reason = (request.POST.get('reason') or '').strip()
+    allow_override = (request.POST.get('allow_override') or '').strip().lower() in ['1', 'true', 'yes', 'on']
+
+    try:
+        agent = _commission_allowed_agents_qs(request.user).get(id=agent_id)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Agent not found or not allowed.'}, status=404)
+
+    try:
+        plan = CommissionPlan.objects.get(id=profile_id)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Commission profile not found.'}, status=404)
+
+    ip = get_client_ip(request) if 'get_client_ip' in globals() else request.META.get('REMOTE_ADDR')
+    device = (request.META.get('HTTP_USER_AGENT', '') or '')[:2000]
+    ok, msg, profile = CommissionProfileAssignmentService.assign_profile(
+        agent=agent,
+        plan=plan,
+        actor=request.user,
+        reason=reason,
+        ip_address=ip,
+        device_info=device,
+        allow_override=allow_override,
+    )
+
+    if not ok:
+        return JsonResponse({'success': False, 'message': msg}, status=400)
+
+    return JsonResponse({
+        'success': True,
+        'message': msg,
+        'assigned_profile': getattr(getattr(profile, 'plan', None), 'name', ''),
+        'assigned_at': profile.assigned_at.isoformat(sep=' ', timespec='seconds') if getattr(profile, 'assigned_at', None) else '',
+    })
+
+
+@login_required
+@require_POST
+def commission_management_change_request_api(request):
+    if not _can_access_commission_management(request.user):
+        return JsonResponse({'success': False, 'message': 'Not allowed.'}, status=403)
+
+    from commission.models import CommissionPlan, AgentCommissionProfile, CommissionChangeRequest
+
+    agent_id = (request.POST.get('agent_id') or '').strip()
+    profile_id = (request.POST.get('profile_id') or '').strip()
+    reason = (request.POST.get('reason') or '').strip()
+
+    try:
+        agent = _commission_allowed_agents_qs(request.user).get(id=agent_id)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Agent not found or not allowed.'}, status=404)
+
+    try:
+        plan = CommissionPlan.objects.get(id=profile_id)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Commission profile not found.'}, status=404)
+
+    current = AgentCommissionProfile.objects.filter(user=agent).select_related('plan').first()
+    req = CommissionChangeRequest.objects.create(
+        agent=agent,
+        requested_by=request.user,
+        current_profile=getattr(current, 'plan', None),
+        requested_profile=plan,
+        reason=(reason or '')[:255],
+        status='pending',
+    )
+
+    return JsonResponse({'success': True, 'message': 'Change request submitted.', 'id': req.id})
+
+
+@login_required
+@require_POST
+def commission_management_change_request_decide_api(request, request_id):
+    if not _can_access_commission_management(request.user):
+        return JsonResponse({'success': False, 'message': 'Not allowed.'}, status=403)
+
+    from commission.models import CommissionChangeRequest
+    from commission.services import CommissionProfileAssignmentService
+
+    is_super = bool(request.user.is_superuser or request.user.user_type == 'admin')
+    if not is_super:
+        return JsonResponse({'success': False, 'message': 'Only Super Admin can approve/reject.'}, status=403)
+
+    action = (request.POST.get('action') or '').strip().lower()
+    note = (request.POST.get('note') or '').strip()
+    try:
+        req = CommissionChangeRequest.objects.select_related('agent', 'current_profile', 'requested_profile').get(id=request_id)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Request not found.'}, status=404)
+
+    if req.status != 'pending':
+        return JsonResponse({'success': False, 'message': 'Request already decided.'}, status=400)
+
+    if action not in ['approve', 'reject']:
+        return JsonResponse({'success': False, 'message': 'Invalid action.'}, status=400)
+
+    if action == 'reject':
+        req.status = 'rejected'
+        req.decided_by = request.user
+        req.decided_at = timezone.now()
+        req.decision_note = (note or '')[:255]
+        req.save(update_fields=['status', 'decided_by', 'decided_at', 'decision_note', 'updated_at'])
+        return JsonResponse({'success': True, 'message': 'Request rejected.'})
+
+    ip = get_client_ip(request) if 'get_client_ip' in globals() else request.META.get('REMOTE_ADDR')
+    device = (request.META.get('HTTP_USER_AGENT', '') or '')[:2000]
+    ok, msg, _ = CommissionProfileAssignmentService.assign_profile(
+        agent=req.agent,
+        plan=req.requested_profile,
+        actor=request.user,
+        reason=note or req.reason or 'Approved change request',
+        ip_address=ip,
+        device_info=device,
+        allow_override=True,
+    )
+    if not ok:
+        return JsonResponse({'success': False, 'message': msg}, status=400)
+
+    req.status = 'approved'
+    req.decided_by = request.user
+    req.decided_at = timezone.now()
+    req.decision_note = (note or '')[:255]
+    req.save(update_fields=['status', 'decided_by', 'decided_at', 'decision_note', 'updated_at'])
+    return JsonResponse({'success': True, 'message': 'Request approved and profile assigned.'})
+
+
+@login_required
+def commission_management_export(request):
+    if not _can_access_commission_management(request.user):
+        return HttpResponseForbidden("Not allowed.")
+
+    from commission.models import AgentCommissionProfile, CommissionProfileAssignmentLog
+
+    dataset = (request.GET.get('dataset') or '').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+
+    allowed_agents = _commission_allowed_agents_qs(request.user)
+    rows = []
+    title = 'commission_management'
+
+    if dataset == 'unassigned':
+        title = 'unassigned_agents'
+        qs = allowed_agents.filter(commission_profile__isnull=True).select_related('state').order_by('-date_joined')
+        for u in qs[:100000]:
+            rows.append({
+                'username': u.username,
+                'full_name': u.get_full_name(),
+                'email': u.email,
+                'phone': u.phone_number or '',
+                'state': getattr(getattr(u, 'state', None), 'state_name', '') or '',
+                'agent_type': u.user_type,
+                'date_registered': u.date_joined.isoformat(sep=' ', timespec='seconds') if u.date_joined else '',
+                'status': 'active' if u.is_active else 'inactive',
+            })
+    elif dataset == 'assigned':
+        title = 'assigned_profiles'
+        qs = AgentCommissionProfile.objects.select_related('user', 'plan', 'assigned_by').filter(user__in=allowed_agents).order_by('-assigned_at')
+        for p in qs[:100000]:
+            rows.append({
+                'username': p.user.username,
+                'full_name': p.user.get_full_name(),
+                'email': p.user.email,
+                'profile': p.plan.name,
+                'assigned_at': p.assigned_at.isoformat(sep=' ', timespec='seconds') if p.assigned_at else '',
+                'assigned_by': getattr(getattr(p, 'assigned_by', None), 'email', '') or '',
+                'status': 'active' if p.is_active else 'inactive',
+            })
+    elif dataset == 'history':
+        title = 'assignment_history'
+        qs = CommissionProfileAssignmentLog.objects.select_related('agent', 'previous_profile', 'new_profile', 'assigned_by').filter(agent__in=allowed_agents).order_by('-created_at')
+        for h in qs[:100000]:
+            rows.append({
+                'time': h.created_at.isoformat(sep=' ', timespec='seconds') if h.created_at else '',
+                'agent': h.agent.email or h.agent.username,
+                'previous_profile': getattr(getattr(h, 'previous_profile', None), 'name', '') or '',
+                'new_profile': h.new_profile.name,
+                'assigned_by': getattr(getattr(h, 'assigned_by', None), 'email', '') or '',
+                'role': h.assigned_by_role,
+                'ip': h.ip_address or '',
+                'reason': h.assignment_reason,
+                'override': 'yes' if h.is_override else 'no',
+            })
+    else:
+        return HttpResponseBadRequest("Unknown dataset")
+
+    if fmt == 'csv':
+        import io
+        import csv
+        output = io.StringIO()
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        resp = HttpResponse(output.getvalue(), content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="{title}.csv"'
+        return resp
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=(title[:31] or 'Sheet1'))
+        output.seek(0)
+        resp = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        resp['Content-Disposition'] = f'attachment; filename="{title}.xlsx"'
+        return resp
+
+    if fmt == 'pdf':
+        try:
+            from weasyprint import HTML
+        except Exception as e:
+            return HttpResponseBadRequest(f"PDF export unavailable: {e}")
+        from html import escape as _html_escape
+        cols = list(rows[0].keys()) if rows else []
+        def esc(s):
+            return _html_escape(str(s or ''), quote=True)
+        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
+        body = ''.join([
+            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
+            for r in rows[:3000]
+        ])
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>{esc(title.replace('_',' ').title())}</h2>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html).write_pdf()
+        resp = HttpResponse(pdf_bytes, content_type='application/pdf')
+        resp['Content-Disposition'] = f'attachment; filename="{title}.pdf"'
+        return resp
+
+    return HttpResponseBadRequest("Unknown format")
 
 
 @login_required

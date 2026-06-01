@@ -1507,6 +1507,51 @@ class UserWithdrawal(models.Model):
     def __str__(self):
         return f"Withdrawal {self.id} - {self.user.email} - {self.amount}"
 
+class WithdrawalReport(models.Model):
+    EVENT_CHOICES = (
+        ('requested', 'Requested'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('completed', 'Completed'),
+    )
+
+    withdrawal = models.ForeignKey(UserWithdrawal, on_delete=models.CASCADE, related_name='report_entries')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='withdrawal_reports')
+
+    username = models.CharField(max_length=150, blank=True, default='')
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    bank_name = models.CharField(max_length=255, blank=True, default='')
+    account_name = models.CharField(max_length=255, blank=True, default='')
+    account_number = models.CharField(max_length=50, blank=True, default='')
+
+    requested_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    transaction_reference = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    withdrawal_status = models.CharField(max_length=20, blank=True, default='', db_index=True)
+
+    event = models.CharField(max_length=20, choices=EVENT_CHOICES, db_index=True)
+    is_admin_copy = models.BooleanField(default=False, db_index=True)
+
+    email_subject = models.CharField(max_length=255, blank=True, default='')
+    email_to = models.TextField(blank=True, default='')
+    email_cc = models.TextField(blank=True, default='')
+    email_bcc = models.TextField(blank=True, default='')
+    email_body_text = models.TextField(blank=True, default='')
+    email_body_html = models.TextField(blank=True, default='')
+    email_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    email_error = models.TextField(blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+        unique_together = ('withdrawal', 'event', 'is_admin_copy')
+        verbose_name = "Withdrawal Report"
+        verbose_name_plural = "Withdrawal Reports"
+
+    def __str__(self):
+        return f"{self.username or self.user_id or ''} • {self.event} • {self.withdrawal_status}"
+
 class ProcessedWithdrawal(UserWithdrawal):
     class Meta:
         proxy = True

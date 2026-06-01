@@ -49,7 +49,7 @@ from notifications.services import create_notification
 
 from .models import (
     User, Wallet, Transaction, BettingPeriod, Fixture, PopularPick, Selection, BetTicket,
-    BonusRule, SystemSetting, UserWithdrawal, AgentPayout, ActivityLog,
+    BonusRule, SystemSetting, UserWithdrawal, WithdrawalReport, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
     SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage, State,
     BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
@@ -8758,6 +8758,7 @@ def crm_user_detail(request, user_id):
     bonuses = Transaction.objects.filter(user=target, transaction_type='bonus').order_by('-timestamp')[:20]
     tickets = BetTicket.objects.filter(user=target).order_by('-placed_at')[:20]
     withdrawals = UserWithdrawal.objects.filter(user=target).order_by('-request_time')[:20]
+    withdrawal_reports = WithdrawalReport.objects.filter(withdrawal__user=target).select_related('withdrawal', 'user').order_by('-created_at')[:50]
 
     profile_form = CRMUserProfileForm(instance=target)
 
@@ -9112,6 +9113,7 @@ def crm_user_detail(request, user_id):
         'bonuses': bonuses,
         'tickets': tickets,
         'withdrawals': withdrawals,
+        'withdrawal_reports': withdrawal_reports,
         'profile_form': profile_form,
         'can_approve_withdrawals': crm_can_approve_withdrawals(request.user),
         'can_suspend_users': crm_can_suspend_users(request.user),

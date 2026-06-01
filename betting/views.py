@@ -2012,6 +2012,8 @@ def check_ticket_status(request):
     if request.user.is_authenticated:
         if request.user.is_superuser or request.user.user_type == 'admin':
             tickets = BetTicket.objects.all().order_by('-placed_at')
+        elif is_crm_user(request.user) or is_finance_user(request.user) or is_account_user(request.user):
+            tickets = BetTicket.objects.all().order_by('-placed_at')
         elif request.user.user_type == 'master_agent':
             tickets = BetTicket.objects.filter(
                 Q(user__master_agent=request.user) | 
@@ -6833,7 +6835,7 @@ def crm_dashboard(request):
     agent_filter_options = []
     if active_tab == 'bets':
         bets_qs = (
-            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            BetTicket.objects.exclude(status__in=['deleted'])
             .select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent')
             .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
             .order_by('-placed_at')

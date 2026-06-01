@@ -274,7 +274,13 @@
                 </td>
                 <td><span class="badge bg-info text-dark">{{ r.plan.name }}</span></td>
                 <td class="text-nowrap">{{ r.assigned_at|date:"Y-m-d H:i" }}</td>
-                <td class="text-muted small">{{ r.assigned_by.email|default:r.assigned_by.username|default:"-" }}</td>
+                <td class="text-muted small">
+                  {% if r.assigned_by %}
+                    {{ r.assigned_by.email|default:r.assigned_by.username }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
                 <td>{% if r.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
               </tr>
               {% elif tab == 'unassigned' %}
@@ -295,7 +301,13 @@
                 <td class="text-muted small">{{ r.agent.email|default:r.agent.username }}</td>
                 <td class="text-muted small">{{ r.previous_profile.name|default:"-" }}</td>
                 <td class="fw-semibold">{{ r.new_profile.name }}</td>
-                <td class="text-muted small">{{ r.assigned_by.email|default:r.assigned_by.username|default:"-" }}</td>
+                <td class="text-muted small">
+                  {% if r.assigned_by %}
+                    {{ r.assigned_by.email|default:r.assigned_by.username }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
                 <td class="text-uppercase small">{{ r.assigned_by_role|default:"-" }}</td>
                 <td class="text-muted small">{{ r.ip_address|default:"-" }}</td>
                 <td>{% if r.is_override %}<span class="badge bg-warning text-dark">Yes</span>{% else %}<span class="badge bg-light text-dark">No</span>{% endif %}</td>
@@ -307,7 +319,13 @@
                 <td class="text-muted small">{{ r.agent.email|default:r.agent.username }}</td>
                 <td class="text-muted small">{{ r.current_profile.name|default:"-" }}</td>
                 <td class="fw-semibold">{{ r.requested_profile.name }}</td>
-                <td class="text-muted small">{{ r.requested_by.email|default:r.requested_by.username|default:"-" }}</td>
+                <td class="text-muted small">
+                  {% if r.requested_by %}
+                    {{ r.requested_by.email|default:r.requested_by.username }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
                 <td class="text-muted small">{{ r.reason|default:"-" }}</td>
                 <td class="text-end">
                   {% if is_super_admin and r.status == 'pending' %}
@@ -348,6 +366,7 @@
 </div>
 
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 <script>
   function crmAlert(type, title, text) {

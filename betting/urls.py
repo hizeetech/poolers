@@ -110,6 +110,14 @@ urlpatterns = [
     path('finance/dashboard/', views.finance_dashboard, name='finance_dashboard'),
     path('finance/export/', views.finance_export, name='finance_export'),
 
+    # Commission Management (CRM / Account User / Retail Manager / Super Admin)
+    path('commission-management/', views.commission_management, name='commission_management'),
+    path('commission-management/agent-search/', views.commission_management_agent_search, name='commission_management_agent_search'),
+    path('commission-management/api/assign/', views.commission_management_assign_api, name='commission_management_assign_api'),
+    path('commission-management/api/change-request/', views.commission_management_change_request_api, name='commission_management_change_request_api'),
+    path('commission-management/api/change-request/<int:request_id>/decide/', views.commission_management_change_request_decide_api, name='commission_management_change_request_decide_api'),
+    path('commission-management/export/', views.commission_management_export, name='commission_management_export'),
+
     # API endpoints
     path('api/betting-periods/', views.api_betting_periods, name='api_betting_periods'),
     path('api/fixtures/', views.api_fixtures, name='api_fixtures'),

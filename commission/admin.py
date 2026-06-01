@@ -6,7 +6,8 @@ from betting.admin import betting_admin_site
 from .models import (
     CommissionPlan, HybridCommissionRule, AgentCommissionProfile,
     CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission,
-    NetworkCommissionSettings, RetailTransaction, PaidWeeklyAgentCommission
+    NetworkCommissionSettings, RetailTransaction, PaidWeeklyAgentCommission,
+    CommissionProfileAssignmentLog, CommissionOverrideLog, CommissionChangeRequest
 )
 from .services import (
     calculate_weekly_agent_commission, calculate_monthly_network_commission,
@@ -287,14 +288,35 @@ class CommissionPlanAdmin(admin.ModelAdmin):
     )
 
 class AgentCommissionProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'plan', 'is_active')
-    search_fields = ('user__email', 'user__first_name', 'user__last_name')
-    list_filter = ('plan', 'is_active')
+    list_display = ('user', 'plan', 'is_active', 'assigned_at', 'assigned_by', 'last_changed_at')
+    search_fields = ('user__email', 'user__username', 'user__first_name', 'user__last_name', 'user__phone_number')
+    list_filter = ('plan', 'is_active', 'assigned_by_role')
     autocomplete_fields = ['plan']
     # Note: autocomplete_fields=['user'] requires UserAdmin to have search_fields. 
     # If User is not registered in this admin site with search_fields, it might fail.
     # We'll use raw_id_fields as a fallback or if autocomplete is not set up.
     raw_id_fields = ('user',)
+    readonly_fields = ('created_at', 'updated_at')
+
+
+class CommissionProfileAssignmentLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'agent', 'previous_profile', 'new_profile', 'assigned_by', 'assigned_by_role', 'is_override', 'ip_address')
+    list_filter = ('assigned_by_role', 'is_override', 'new_profile', 'created_at')
+    search_fields = ('agent__email', 'agent__username', 'assigned_by__email', 'assigned_by__username', 'ip_address', 'assignment_reason')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+class CommissionOverrideLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'agent', 'old_profile', 'new_profile', 'admin_user', 'ip_address')
+    list_filter = ('new_profile', 'created_at')
+    search_fields = ('agent__email', 'agent__username', 'admin_user__email', 'admin_user__username', 'reason', 'ip_address')
+
+
+class CommissionChangeRequestAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'status', 'agent', 'current_profile', 'requested_profile', 'requested_by', 'decided_by', 'decided_at')
+    list_filter = ('status', 'requested_profile', 'created_at')
+    search_fields = ('agent__email', 'agent__username', 'requested_by__email', 'requested_by__username', 'reason', 'decision_note')
+    readonly_fields = ('created_at', 'updated_at', 'decided_at')
 
 class NetworkCommissionSettingsAdmin(admin.ModelAdmin):
     list_display = ('role', 'commission_percent', 'payout_day_description')
@@ -583,3 +605,6 @@ betting_admin_site.register(WeeklyAgentCommission, WeeklyAgentCommissionAdmin)
 betting_admin_site.register(PaidWeeklyAgentCommission, PaidWeeklyAgentCommissionAdmin)
 betting_admin_site.register(MonthlyNetworkCommission, MonthlyNetworkCommissionAdmin)
 betting_admin_site.register(RetailTransaction, RetailTransactionAdmin)
+betting_admin_site.register(CommissionProfileAssignmentLog, CommissionProfileAssignmentLogAdmin)
+betting_admin_site.register(CommissionOverrideLog, CommissionOverrideLogAdmin)
+betting_admin_site.register(CommissionChangeRequest, CommissionChangeRequestAdmin)

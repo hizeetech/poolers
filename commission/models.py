@@ -4,6 +4,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
 from decimal import Decimal
 from betting.models import User as BettingUser
+from django.utils import timezone
 
 User = settings.AUTH_USER_MODEL
 
@@ -72,9 +73,79 @@ class AgentCommissionProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='commission_profile')
     plan = models.ForeignKey(CommissionPlan, on_delete=models.PROTECT, related_name='assigned_agents')
     is_active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(default=timezone.now, db_index=True)
+    assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_profiles_assigned')
+    assigned_by_role = models.CharField(max_length=30, blank=True, default='')
+    last_changed_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_changed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_profiles_changed')
+    last_change_reason = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
         return f"{self.user} - {self.plan}"
+
+
+class CommissionProfileAssignmentLog(models.Model):
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commission_assignment_logs', limit_choices_to={'user_type': 'agent'})
+    previous_profile = models.ForeignKey(CommissionPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='assignment_logs_previous')
+    new_profile = models.ForeignKey(CommissionPlan, on_delete=models.PROTECT, related_name='assignment_logs_new')
+    assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_assignment_logs_by')
+    assigned_by_role = models.CharField(max_length=30, blank=True, default='')
+    assignment_reason = models.CharField(max_length=255, blank=True, default='')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_info = models.TextField(blank=True, default='')
+    is_override = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"{self.agent} • {self.previous_profile} → {self.new_profile}"
+
+
+class CommissionOverrideLog(models.Model):
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commission_override_logs', limit_choices_to={'user_type': 'agent'})
+    old_profile = models.ForeignKey(CommissionPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='override_logs_old')
+    new_profile = models.ForeignKey(CommissionPlan, on_delete=models.PROTECT, related_name='override_logs_new')
+    admin_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_override_logs_by')
+    reason = models.CharField(max_length=255, blank=True, default='')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_info = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"{self.agent} • {self.old_profile} → {self.new_profile}"
+
+
+class CommissionChangeRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commission_change_requests', limit_choices_to={'user_type': 'agent'})
+    requested_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_change_requests_by')
+    current_profile = models.ForeignKey(CommissionPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='change_requests_current')
+    requested_profile = models.ForeignKey(CommissionPlan, on_delete=models.PROTECT, related_name='change_requests_requested')
+    reason = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    decided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_change_requests_decided')
+    decided_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    decision_note = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"{self.agent} • {self.current_profile} → {self.requested_profile} ({self.status})"
 
 class CommissionPeriod(models.Model):
     PERIOD_TYPE_CHOICES = (

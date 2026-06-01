@@ -53,6 +53,24 @@ def _withdrawal_admin_recipients():
     all_emails.update([e.strip() for e in qs if e and '@' in e])
     return sorted(all_emails)
 
+def _withdrawal_agent_recipients(withdrawal_user):
+    try:
+        u = withdrawal_user
+        if not u:
+            return []
+        agent_user = None
+        user_type = (getattr(u, 'user_type', '') or '').strip().lower()
+        if user_type in ['agent', 'super_agent', 'master_agent']:
+            agent_user = u
+        else:
+            agent_user = getattr(u, 'agent', None)
+        email = (getattr(agent_user, 'email', '') or '').strip() if agent_user else ''
+        if email and '@' in email:
+            return [email]
+    except Exception:
+        pass
+    return []
+
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 5})
 def send_withdrawal_notification_emails(self, withdrawal_id, event):
@@ -166,17 +184,28 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
 
     if getattr(withdrawal, user_field, None) is None:
         to_email = (withdrawal.user.email or '').strip()
-        if to_email and '@' in to_email:
+        to_emails = [to_email] if (to_email and '@' in to_email) else []
+        cc_emails = []
+        agent_emails = _withdrawal_agent_recipients(withdrawal.user)
+        for e in agent_emails:
+            if e and e not in to_emails and e not in cc_emails:
+                cc_emails.append(e)
+        if not to_emails and cc_emails:
+            to_emails = cc_emails
+            cc_emails = []
+
+        if to_emails:
             try:
                 html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': False})
                 text = strip_tags(html) or f"{site_name}: Withdrawal update"
-                msg = EmailMultiAlternatives(subject=subject, body=text, to=[to_email])
+                msg = EmailMultiAlternatives(subject=subject, body=text, to=to_emails, cc=cc_emails)
                 msg.attach_alternative(html, "text/html")
                 msg.send(fail_silently=False)
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(**{user_field: now, 'last_email_error': ''})
                 save_report_entry(
                     is_admin_copy=False,
-                    to_emails=[to_email],
+                    to_emails=to_emails,
+                    cc_emails=cc_emails,
                     subject_text=subject,
                     body_text=text,
                     body_html=html,
@@ -187,7 +216,8 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(last_email_error=str(e)[:2000])
                 save_report_entry(
                     is_admin_copy=False,
-                    to_emails=[to_email],
+                    to_emails=to_emails,
+                    cc_emails=cc_emails,
                     subject_text=subject,
                     body_text='',
                     body_html='',

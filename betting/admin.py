@@ -53,6 +53,7 @@ from .models import (
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
     FinanceAuditLog, CRMActionLog, WithdrawalReport
 )
+from . import signals
 
 
 # --- Custom Admin Site Definition ---
@@ -1227,6 +1228,57 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     )
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
+    actions = ['resend_emails_backfill_email_timestamps']
+
+    def resend_emails_backfill_email_timestamps(self, request, queryset):
+        try:
+            from .tasks import send_withdrawal_notification_emails
+        except Exception:
+            send_withdrawal_notification_emails = None
+
+        attempted = 0
+        sent = 0
+        skipped = 0
+        failed = 0
+
+        for w in queryset.select_related('user').iterator():
+            needed_events = []
+
+            if w.email_request_admin_sent_at is None or w.email_request_user_sent_at is None:
+                needed_events.append('requested')
+
+            status_key = (w.status or '').strip().lower()
+            if status_key in ('approved', 'completed'):
+                if w.email_success_admin_sent_at is None or w.email_success_user_sent_at is None:
+                    needed_events.append(status_key)
+            elif status_key == 'rejected':
+                if w.email_rejected_admin_sent_at is None or w.email_rejected_user_sent_at is None:
+                    needed_events.append('rejected')
+
+            needed_events = list(dict.fromkeys(needed_events))
+            if not needed_events:
+                skipped += 1
+                continue
+
+            if not send_withdrawal_notification_emails:
+                failed += 1
+                continue
+
+            for ev in needed_events:
+                try:
+                    attempted += 1
+                    send_withdrawal_notification_emails(w.id, ev)
+                    sent += 1
+                except Exception:
+                    failed += 1
+
+        self.message_user(
+            request,
+            f"Resend/backfill attempted={attempted}, sent={sent}, skipped={skipped}, failed={failed}.",
+            level=messages.INFO if failed == 0 else messages.WARNING,
+        )
+
+    resend_emails_backfill_email_timestamps.short_description = "Resend emails / backfill email timestamps (missing only)"
 
 class WithdrawalReportAdmin(admin.ModelAdmin):
     list_display = (

@@ -8,6 +8,7 @@ from django.conf import settings
 from django.db.models import Q
 from django.db.models import Sum, Value, DecimalField
 from django.db.models.functions import Coalesce
+from django.core.cache import cache
 from decimal import Decimal
 from datetime import datetime, timedelta
 import io
@@ -66,6 +67,10 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
 
     event_key = (event or '').strip().lower()
     if event_key not in ['requested', 'approved', 'completed', 'rejected']:
+        return
+
+    lock_key = f"withdrawal-email-lock:{withdrawal_id}:{event_key}"
+    if not cache.add(lock_key, 1, timeout=300):
         return
 
     tx = (

@@ -19,6 +19,7 @@ from .models import (
     Transaction,
     User,
     UserWithdrawal,
+    WithdrawalReport,
     FinanceAuditLog,
     JournalEntry,
     PaymentGatewayEventLog,
@@ -127,6 +128,37 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
     user_field = user_field_map[event_key]
     admin_field = admin_field_map[event_key]
 
+    def save_report_entry(*, is_admin_copy, to_emails, cc_emails=None, bcc_emails=None, subject_text='', body_text='', body_html='', sent_at=None, error_text=''):
+        try:
+            u = withdrawal.user
+            WithdrawalReport.objects.update_or_create(
+                withdrawal=withdrawal,
+                event=event_key,
+                is_admin_copy=bool(is_admin_copy),
+                defaults={
+                    'user': u,
+                    'username': (getattr(u, 'username', '') or getattr(u, 'email', '') or '').strip(),
+                    'amount': withdrawal.amount,
+                    'bank_name': withdrawal.bank_name,
+                    'account_name': withdrawal.account_name,
+                    'account_number': withdrawal.account_number,
+                    'requested_at': withdrawal.request_time,
+                    'updated_at': withdrawal.approved_rejected_time or now,
+                    'transaction_reference': reference,
+                    'withdrawal_status': withdrawal.status,
+                    'email_subject': subject_text or '',
+                    'email_to': ', '.join([e for e in (to_emails or []) if e])[:5000],
+                    'email_cc': ', '.join([e for e in (cc_emails or []) if e])[:5000],
+                    'email_bcc': ', '.join([e for e in (bcc_emails or []) if e])[:5000],
+                    'email_body_text': body_text or '',
+                    'email_body_html': body_html or '',
+                    'email_sent_at': sent_at,
+                    'email_error': error_text or '',
+                }
+            )
+        except Exception:
+            pass
+
     if getattr(withdrawal, user_field, None) is None:
         to_email = (withdrawal.user.email or '').strip()
         if to_email and '@' in to_email:
@@ -137,8 +169,26 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 msg.attach_alternative(html, "text/html")
                 msg.send(fail_silently=False)
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(**{user_field: now, 'last_email_error': ''})
+                save_report_entry(
+                    is_admin_copy=False,
+                    to_emails=[to_email],
+                    subject_text=subject,
+                    body_text=text,
+                    body_html=html,
+                    sent_at=now,
+                    error_text='',
+                )
             except Exception as e:
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(last_email_error=str(e)[:2000])
+                save_report_entry(
+                    is_admin_copy=False,
+                    to_emails=[to_email],
+                    subject_text=subject,
+                    body_text='',
+                    body_html='',
+                    sent_at=None,
+                    error_text=str(e)[:2000],
+                )
                 raise
 
     if getattr(withdrawal, admin_field, None) is None:
@@ -146,6 +196,15 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
         if not recipients:
             UserWithdrawal.objects.filter(id=withdrawal.id).update(
                 last_email_error="No admin recipients configured for withdrawal notifications."
+            )
+            save_report_entry(
+                is_admin_copy=True,
+                to_emails=[],
+                subject_text=subject,
+                body_text='',
+                body_html='',
+                sent_at=None,
+                error_text="No admin recipients configured for withdrawal notifications.",
             )
         else:
             try:
@@ -155,8 +214,26 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 msg.attach_alternative(html, "text/html")
                 msg.send(fail_silently=False)
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(**{admin_field: now, 'last_email_error': ''})
+                save_report_entry(
+                    is_admin_copy=True,
+                    to_emails=recipients,
+                    subject_text=subject,
+                    body_text=text,
+                    body_html=html,
+                    sent_at=now,
+                    error_text='',
+                )
             except Exception as e:
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(last_email_error=str(e)[:2000])
+                save_report_entry(
+                    is_admin_copy=True,
+                    to_emails=recipients,
+                    subject_text=subject,
+                    body_text='',
+                    body_html='',
+                    sent_at=None,
+                    error_text=str(e)[:2000],
+                )
                 raise
 
 @shared_task

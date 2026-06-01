@@ -51,7 +51,7 @@ from .models import (
     PaymentGatewayDeposit,
     CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
-    FinanceAuditLog, CRMActionLog
+    FinanceAuditLog, CRMActionLog, WithdrawalReport
 )
 
 
@@ -1228,6 +1228,140 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
 
+class WithdrawalReportAdmin(admin.ModelAdmin):
+    list_display = (
+        'created_at',
+        'username',
+        'amount',
+        'bank_name',
+        'account_number',
+        'transaction_reference',
+        'event',
+        'is_admin_copy',
+        'withdrawal_status',
+        'requested_at',
+        'updated_at',
+        'email_sent_at',
+    )
+    list_filter = ('event', 'is_admin_copy', 'withdrawal_status', 'bank_name', 'requested_at', 'email_sent_at')
+    search_fields = (
+        'username',
+        'user__username',
+        'user__email',
+        'account_number',
+        'account_name',
+        'transaction_reference',
+        'withdrawal__id',
+    )
+    readonly_fields = (
+        'withdrawal',
+        'user',
+        'username',
+        'amount',
+        'bank_name',
+        'account_name',
+        'account_number',
+        'requested_at',
+        'updated_at',
+        'transaction_reference',
+        'withdrawal_status',
+        'event',
+        'is_admin_copy',
+        'email_subject',
+        'email_to',
+        'email_cc',
+        'email_bcc',
+        'email_body_text',
+        'email_body_html',
+        'email_sent_at',
+        'email_error',
+        'created_at',
+    )
+    date_hierarchy = 'created_at'
+    list_select_related = ('user', 'withdrawal')
+    actions = ['backfill_reports_from_withdrawals']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def get_urls(self):
+        urls = super().get_urls()
+        my_urls = [
+            path('backfill/', self.admin_site.admin_view(self.backfill_view), name='withdrawalreport_backfill'),
+        ]
+        return my_urls + urls
+
+    def backfill_view(self, request):
+        self.backfill_reports_from_withdrawals(request, None)
+        return redirect('../')
+
+    def backfill_reports_from_withdrawals(self, request, queryset):
+        status_to_event = {
+            'pending': 'requested',
+            'approved': 'approved',
+            'rejected': 'rejected',
+            'completed': 'completed',
+        }
+
+        created = 0
+        updated = 0
+        total = 0
+
+        withdrawals = UserWithdrawal.objects.select_related('user').all().order_by('request_time')
+        for w in withdrawals:
+            total += 1
+            event_key = status_to_event.get((w.status or '').strip().lower(), 'requested')
+
+            tx = (
+                Transaction.objects.filter(related_withdrawal_request=w, transaction_type='withdrawal')
+                .order_by('timestamp')
+                .first()
+            )
+            reference = (
+                getattr(tx, 'external_reference', None)
+                or getattr(tx, 'paystack_reference', None)
+                or (str(getattr(tx, 'id', '')) if tx else '')
+                or str(w.id)
+            )
+
+            defaults = {
+                'user': w.user,
+                'username': (getattr(w.user, 'username', '') or getattr(w.user, 'email', '') or '').strip(),
+                'amount': w.amount,
+                'bank_name': w.bank_name,
+                'account_name': w.account_name,
+                'account_number': w.account_number,
+                'requested_at': w.request_time,
+                'updated_at': w.approved_rejected_time or w.request_time,
+                'transaction_reference': reference,
+                'withdrawal_status': w.status,
+                'email_subject': '',
+                'email_to': '',
+                'email_cc': '',
+                'email_bcc': '',
+                'email_body_text': '',
+                'email_body_html': '',
+                'email_sent_at': None,
+                'email_error': '',
+            }
+
+            obj, was_created = WithdrawalReport.objects.update_or_create(
+                withdrawal=w,
+                event=event_key,
+                is_admin_copy=False,
+                defaults=defaults,
+            )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
+
+        self.message_user(request, f"Backfill complete: {created} created, {updated} updated (scanned {total}).")
+    backfill_reports_from_withdrawals.short_description = "Backfill reports from all withdrawals"
+
 # --- BonusRule Admin ---
 class BonusRuleAdmin(admin.ModelAdmin):
     list_display = (
@@ -1551,6 +1685,7 @@ betting_admin_site.register(BetTicket, BetTicketAdmin)
 betting_admin_site.register(BonusRule, BonusRuleAdmin)
 betting_admin_site.register(SystemSetting)
 betting_admin_site.register(UserWithdrawal, UserWithdrawalAdmin)
+betting_admin_site.register(WithdrawalReport, WithdrawalReportAdmin)
 betting_admin_site.register(GlobalBettingSettings, GlobalBettingSettingsAdmin)
 betting_admin_site.register(AgentBettingLimitOverride, AgentBettingLimitOverrideAdmin)
 betting_admin_site.register(UserBettingLimitOverride, UserBettingLimitOverrideAdmin)

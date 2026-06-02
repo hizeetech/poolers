@@ -1,6 +1,22 @@
 import json
+import os
 
-from celery import shared_task
+ENABLE_CELERY_APPS = os.getenv("ENABLE_CELERY_APPS", "").strip().lower() in ("1", "true", "yes", "on")
+FORCE_CELERY_ON_WINDOWS = os.getenv("FORCE_CELERY_ON_WINDOWS", "").strip().lower() in ("1", "true", "yes", "on")
+CELERY_APPS_ENABLED = ENABLE_CELERY_APPS and (os.name != "nt" or FORCE_CELERY_ON_WINDOWS)
+if CELERY_APPS_ENABLED:
+    from celery import shared_task
+else:
+    def shared_task(*args, **kwargs):
+        def decorator(func):
+            def delay(*dargs, **dkwargs):
+                return func(*dargs, **dkwargs)
+            func.delay = delay
+            return func
+        if args and callable(args[0]) and not kwargs:
+            return decorator(args[0])
+        return decorator
+
 from django.apps import apps
 from django.conf import settings
 from django.core.cache import cache

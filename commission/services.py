@@ -669,76 +669,72 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
     total_stake = (tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)).quantize(Decimal('0.01'))
     total_winnings = (tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)).quantize(Decimal('0.01'))
     ggr = (total_stake - total_winnings).quantize(Decimal('0.01'))
-    
-    # GGR Commission
-    ggr_comm = Decimal(0)
-    if ggr > 0:
-        ggr_comm = (ggr * plan.ggr_percent / 100).quantize(Decimal('0.01'))
-    
-    # Hybrid / Single Logic
-    single_comm = Decimal(0)
-    multiple_comm = Decimal(0)
-    
-    if plan.is_hybrid_active or plan.enable_single_selection_override:
-        # Optimisation: Fetch needed fields
-        # selection count is Count('selections')
-        from django.db.models import Count
-        tickets_with_count = tickets.annotate(num_selections=Count('selections'))
-        
-        hybrid_rules = list(plan.hybrid_rules.all())
-        
-        for ticket in tickets_with_count:
-            ticket_comm = Decimal(0)
-            is_single = (ticket.num_selections == 1)
-            
-            # Single Override
-            if is_single and plan.enable_single_selection_override:
-                if plan.single_selection_calc_type == 'percentage_stake':
-                    ticket_comm = (ticket.stake_amount * plan.single_selection_value / 100)
-                elif plan.single_selection_calc_type == 'percentage_ggr':
-                    # GGR of a single ticket = Stake - Winning
-                    # If won, GGR is negative usually.
-                    ticket_ggr = ticket.stake_amount - (ticket.max_winning if ticket.status == 'won' else 0)
-                    if ticket_ggr > 0:
-                        ticket_comm = (ticket_ggr * plan.single_selection_value / 100)
-                elif plan.single_selection_calc_type == 'fixed_value':
-                    ticket_comm = plan.single_selection_value
-                single_comm += ticket_comm
-            
-            # Hybrid (Multi-selection)
-            elif plan.is_hybrid_active and not is_single:
-                # Find matching rule
-                for rule in hybrid_rules:
-                    match = False
-                    if rule.max_selections:
-                        if rule.min_selections <= ticket.num_selections <= rule.max_selections:
-                            match = True
-                    else:
-                        if ticket.num_selections >= rule.min_selections:
-                            match = True
-                    
-                    if match:
-                        ticket_comm = (ticket.stake_amount * rule.commission_percent / 100)
-                        break
-                multiple_comm += ticket_comm
 
-    single_comm = single_comm.quantize(Decimal('0.01'))
-    multiple_comm = multiple_comm.quantize(Decimal('0.01'))
-    hybrid_comm = (single_comm + multiple_comm).quantize(Decimal('0.01'))
-    
-    total_comm = ggr_comm + hybrid_comm
+    from django.db.models import Count
+    tickets_with_count = tickets.annotate(num_selections=Count('selections'))
+
+    single_stake = Decimal('0.00')
+    single_winnings = Decimal('0.00')
+    multiple_stake = Decimal('0.00')
+    multiple_winnings = Decimal('0.00')
+
+    hybrid_rules = list(plan.hybrid_rules.all()) if plan.is_hybrid_active else []
+
+    for ticket in tickets_with_count:
+        stake = (ticket.stake_amount or Decimal('0.00'))
+        winnings = (ticket.max_winning or Decimal('0.00')) if ticket.status == 'won' else Decimal('0.00')
+        if getattr(ticket, 'num_selections', 0) == 1:
+            single_stake += stake
+            single_winnings += winnings
+        else:
+            multiple_stake += stake
+            multiple_winnings += winnings
+
+    single_stake = single_stake.quantize(Decimal('0.01'))
+    single_winnings = single_winnings.quantize(Decimal('0.01'))
+    multiple_stake = multiple_stake.quantize(Decimal('0.01'))
+    multiple_winnings = multiple_winnings.quantize(Decimal('0.01'))
+
+    single_ggr = (single_stake - single_winnings).quantize(Decimal('0.01'))
+    multiple_ggr = (multiple_stake - multiple_winnings).quantize(Decimal('0.01'))
+
+    commission_single_amount = Decimal('0.00')
+    if single_ggr > 0:
+        commission_single_amount = (single_ggr * (plan.ggr_percent or Decimal('0.00')) / Decimal('100.00')).quantize(Decimal('0.01'))
+
+    commission_multiple_amount = Decimal('0.00')
+    if plan.is_hybrid_active and multiple_ggr > 0 and hybrid_rules:
+        multi_pct = Decimal('0.00')
+        for rule in hybrid_rules:
+            if rule.max_selections:
+                if rule.min_selections <= 2 <= rule.max_selections:
+                    multi_pct = rule.commission_percent or Decimal('0.00')
+                    break
+            else:
+                if 2 >= rule.min_selections:
+                    multi_pct = rule.commission_percent or Decimal('0.00')
+                    break
+        if multi_pct > 0:
+            commission_multiple_amount = (multiple_ggr * multi_pct / Decimal('100.00')).quantize(Decimal('0.01'))
+
+    commission_total_amount = (commission_single_amount + commission_multiple_amount).quantize(Decimal('0.01'))
 
     data = {
         'total_stake': total_stake,
         'total_winnings': total_winnings,
         'ggr': ggr,
-        'commission_ggr_amount': ggr_comm,
-        'commission_hybrid_amount': hybrid_comm,
-        'commission_total_amount': total_comm
+        'single_stake': single_stake,
+        'single_winnings': single_winnings,
+        'single_ggr': single_ggr,
+        'multiple_stake': multiple_stake,
+        'multiple_winnings': multiple_winnings,
+        'multiple_ggr': multiple_ggr,
+        'commission_ggr_amount': commission_single_amount,
+        'commission_hybrid_amount': commission_multiple_amount,
+        'commission_single_amount': commission_single_amount,
+        'commission_multiple_amount': commission_multiple_amount,
+        'commission_total_amount': commission_total_amount
     }
-    if include_breakdown:
-        data['commission_single_amount'] = (ggr_comm + single_comm).quantize(Decimal('0.01'))
-        data['commission_multiple_amount'] = multiple_comm.quantize(Decimal('0.01'))
     return data
 
 def calculate_weekly_agent_commission(agent, period):

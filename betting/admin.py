@@ -1,4 +1,6 @@
 from django.contrib import admin
+import os
+import sys
 from django import forms
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import Q, IntegerField, Sum
@@ -15,11 +17,19 @@ from django_ckeditor_5.widgets import CKEditor5Widget
 from django.core.mail import send_mail
 from django.utils.crypto import get_random_string
 
-# Celery Beat and Results imports
-from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
-from django_celery_beat.admin import PeriodicTaskAdmin, ClockedScheduleAdmin
-from django_celery_results.models import TaskResult, GroupResult
-from django_celery_results.admin import TaskResultAdmin, GroupResultAdmin
+ENABLE_CELERY_APPS = os.getenv("ENABLE_CELERY_APPS", "").strip().lower() in ("1", "true", "yes", "on")
+FORCE_CELERY_ON_WINDOWS = os.getenv("FORCE_CELERY_ON_WINDOWS", "").strip().lower() in ("1", "true", "yes", "on")
+CELERY_APPS_ENABLED = ENABLE_CELERY_APPS and (os.name != "nt" or FORCE_CELERY_ON_WINDOWS)
+if CELERY_APPS_ENABLED:
+    from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule, SolarSchedule, ClockedSchedule
+    from django_celery_beat.admin import PeriodicTaskAdmin, ClockedScheduleAdmin
+    from django_celery_results.models import TaskResult, GroupResult
+    from django_celery_results.admin import TaskResultAdmin, GroupResultAdmin
+else:
+    PeriodicTask = IntervalSchedule = CrontabSchedule = SolarSchedule = ClockedSchedule = None
+    PeriodicTaskAdmin = ClockedScheduleAdmin = None
+    TaskResult = GroupResult = None
+    TaskResultAdmin = GroupResultAdmin = None
 
 # Import your views for custom admin pages
 from . import views 
@@ -34,10 +44,8 @@ from .forms import (
     FixtureForm,
     FixtureUploadForm
 )
-import pandas as pd
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
-import os
 from datetime import datetime, time, timedelta
 import math
 
@@ -758,6 +766,7 @@ class FixtureAdmin(admin.ModelAdmin):
 
     def download_sample_template(self, request):
         import io
+        import pandas as pd
         from django.http import HttpResponse
         
         # Create a DataFrame with sample data matching the required structure
@@ -784,6 +793,7 @@ class FixtureAdmin(admin.ModelAdmin):
 
     def import_fixtures(self, request):
         if request.method == "POST":
+            import pandas as pd
             form = FixtureUploadForm(request.POST, request.FILES)
             if form.is_valid():
                 excel_file = request.FILES["excel_file"]
@@ -2083,16 +2093,14 @@ class ActivityLogAdmin(admin.ModelAdmin):
 
 betting_admin_site.register(ActivityLog, ActivityLogAdmin)
 
-# Register Celery Beat models
-betting_admin_site.register(PeriodicTask, PeriodicTaskAdmin)
-betting_admin_site.register(IntervalSchedule)
-betting_admin_site.register(CrontabSchedule)
-betting_admin_site.register(SolarSchedule)
-betting_admin_site.register(ClockedSchedule, ClockedScheduleAdmin)
-
-# Register Celery Results models
-betting_admin_site.register(TaskResult, TaskResultAdmin)
-betting_admin_site.register(GroupResult, GroupResultAdmin)
+if PeriodicTask is not None:
+    betting_admin_site.register(PeriodicTask, PeriodicTaskAdmin)
+    betting_admin_site.register(IntervalSchedule)
+    betting_admin_site.register(CrontabSchedule)
+    betting_admin_site.register(SolarSchedule)
+    betting_admin_site.register(ClockedSchedule, ClockedScheduleAdmin)
+    betting_admin_site.register(TaskResult, TaskResultAdmin)
+    betting_admin_site.register(GroupResult, GroupResultAdmin)
 
 # Site Configuration Admin
 class SiteConfigurationAdmin(admin.ModelAdmin):

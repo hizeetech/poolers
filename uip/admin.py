@@ -2,7 +2,6 @@ from django.contrib import admin
 from django.shortcuts import redirect
 from django.urls import reverse
 from .models import DailyMetricSnapshot, Alert, UIPDashboardLink
-from .tasks import aggregate_daily_metrics
 from django.utils import timezone
 
 @admin.register(DailyMetricSnapshot)
@@ -13,6 +12,7 @@ class DailyMetricSnapshotAdmin(admin.ModelAdmin):
     actions = ['run_aggregation_now']
     
     def run_aggregation_now(self, request, queryset):
+        from .tasks import aggregate_daily_metrics
         # Trigger aggregation for the selected dates (if any) or just run for yesterday
         # Since this action applies to selected objects, we can re-calculate them.
         for snapshot in queryset:

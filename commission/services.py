@@ -108,6 +108,97 @@ def pay_weekly_commission(commission_record, actor=None):
         
     return True, "Paid successfully"
 
+def pay_weekly_commission_amount(commission_record, amount, actor=None):
+    if commission_record.status == 'paid':
+        return False, "Already paid"
+
+    outstanding = (commission_record.commission_total_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if outstanding <= 0:
+        commission_record.status = 'paid'
+        commission_record.paid_at = timezone.now()
+        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
+        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        return True, "Marked as paid (No outstanding amount)"
+
+    try:
+        amount = Decimal(str(amount))
+    except Exception:
+        return False, "Invalid amount"
+
+    if amount <= 0:
+        return False, "Amount must be greater than zero"
+
+    pay_amount = amount if amount <= outstanding else outstanding
+
+    config = SiteConfiguration.load()
+    account_user = None
+
+    if config.commission_payment_source == 'account_wallet':
+        if actor and getattr(actor, 'user_type', None) == 'account_user':
+            account_user = actor
+        else:
+            account_user = User.objects.filter(user_type='account_user').first()
+        if not account_user:
+            return False, "No Account User found to fund commission."
+
+        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+        if payer_wallet.balance < pay_amount:
+            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+
+    with transaction.atomic():
+        if account_user and config.commission_payment_source == 'account_wallet':
+            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            if payer_wallet.balance < pay_amount:
+                raise ValueError("Insufficient funds in Account User wallet during transaction.")
+
+            payer_wallet.balance -= pay_amount
+            payer_wallet.save()
+
+            Transaction.objects.create(
+                user=account_user,
+                transaction_type='account_user_debit',
+                amount=pay_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Adjusted Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
+            )
+
+        wallet, _ = Wallet.objects.get_or_create(user=commission_record.agent)
+        if isinstance(wallet.balance, float):
+            wallet.balance = Decimal(str(wallet.balance))
+
+        wallet.balance += pay_amount
+        wallet.save()
+
+        Transaction.objects.create(
+            user=commission_record.agent,
+            transaction_type='commission_payout',
+            amount=pay_amount,
+            is_successful=True,
+            status='completed',
+            description=f"Adjusted Weekly Commission for {commission_record.period}",
+        )
+
+        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
+        if commission_record.amount_paid >= (commission_record.commission_total_amount or Decimal('0.00')):
+            commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
+            commission_record.status = 'paid'
+        else:
+            commission_record.status = 'partially_paid'
+        commission_record.paid_at = timezone.now()
+        if actor:
+            commission_record.paid_by = actor
+        commission_record.paid_source = (config.commission_payment_source or '').strip()
+        if account_user:
+            commission_record.paid_from_user = account_user
+        elif actor:
+            commission_record.paid_from_user = actor
+        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+
+    if pay_amount != amount:
+        return True, f"Paid ₦{pay_amount} (capped to outstanding)"
+    return True, f"Paid ₦{pay_amount}"
+
 def pay_monthly_network_commission(commission_record, actor=None):
     if commission_record.status == 'paid':
         return False, "Already paid"
@@ -189,6 +280,97 @@ def pay_monthly_network_commission(commission_record, actor=None):
         commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
         
     return True, "Paid successfully"
+
+def pay_monthly_network_commission_amount(commission_record, amount, actor=None):
+    if commission_record.status == 'paid':
+        return False, "Already paid"
+
+    outstanding = (commission_record.commission_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if outstanding <= 0:
+        commission_record.status = 'paid'
+        commission_record.paid_at = timezone.now()
+        commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
+        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        return True, "Marked as paid (No outstanding amount)"
+
+    try:
+        amount = Decimal(str(amount))
+    except Exception:
+        return False, "Invalid amount"
+
+    if amount <= 0:
+        return False, "Amount must be greater than zero"
+
+    pay_amount = amount if amount <= outstanding else outstanding
+
+    config = SiteConfiguration.load()
+    account_user = None
+
+    if config.commission_payment_source == 'account_wallet':
+        if actor and getattr(actor, 'user_type', None) == 'account_user':
+            account_user = actor
+        else:
+            account_user = User.objects.filter(user_type='account_user').first()
+        if not account_user:
+            return False, "No Account User found to fund commission."
+
+        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+        if payer_wallet.balance < pay_amount:
+            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+
+    with transaction.atomic():
+        if account_user and config.commission_payment_source == 'account_wallet':
+            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            if payer_wallet.balance < pay_amount:
+                raise ValueError("Insufficient funds in Account User wallet during transaction.")
+
+            payer_wallet.balance -= pay_amount
+            payer_wallet.save()
+
+            Transaction.objects.create(
+                user=account_user,
+                transaction_type='account_user_debit',
+                amount=pay_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Adjusted Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
+            )
+
+        wallet, _ = Wallet.objects.get_or_create(user=commission_record.user)
+        if isinstance(wallet.balance, float):
+            wallet.balance = Decimal(str(wallet.balance))
+
+        wallet.balance += pay_amount
+        wallet.save()
+
+        Transaction.objects.create(
+            user=commission_record.user,
+            transaction_type='commission_payout',
+            amount=pay_amount,
+            is_successful=True,
+            status='completed',
+            description=f"Adjusted Monthly Network Commission ({commission_record.role}) for {commission_record.period}",
+        )
+
+        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
+        if commission_record.amount_paid >= (commission_record.commission_amount or Decimal('0.00')):
+            commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
+            commission_record.status = 'paid'
+        else:
+            commission_record.status = 'partially_paid'
+        commission_record.paid_at = timezone.now()
+        if actor:
+            commission_record.paid_by = actor
+        commission_record.paid_source = (config.commission_payment_source or '').strip()
+        if account_user:
+            commission_record.paid_from_user = account_user
+        elif actor:
+            commission_record.paid_from_user = actor
+        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+
+    if pay_amount != amount:
+        return True, f"Paid ₦{pay_amount} (capped to outstanding)"
+    return True, f"Paid ₦{pay_amount}"
 
 
 def recall_commission(*, commission_type, commission_id, amount, reason, notes, actor, ip_address=None, device_info='', require_approval=False, other_reason_text='', recall_obj=None):
@@ -469,7 +651,7 @@ def decide_commission_recall(*, recall_id, actor, decision, note=''):
     CommissionRecallApproval.objects.create(recall=recall, status='approved', decided_by=actor, note=(note or '').strip())
     return True, "Recall request approved and executed."
 
-def calculate_weekly_agent_commission_data(agent, period):
+def calculate_weekly_agent_commission_data(agent, period, include_breakdown=False):
     try:
         profile = agent.commission_profile
         plan = profile.plan
@@ -494,7 +676,8 @@ def calculate_weekly_agent_commission_data(agent, period):
         ggr_comm = (ggr * plan.ggr_percent / 100).quantize(Decimal('0.01'))
     
     # Hybrid / Single Logic
-    hybrid_comm = Decimal(0)
+    single_comm = Decimal(0)
+    multiple_comm = Decimal(0)
     
     if plan.is_hybrid_active or plan.enable_single_selection_override:
         # Optimisation: Fetch needed fields
@@ -520,6 +703,7 @@ def calculate_weekly_agent_commission_data(agent, period):
                         ticket_comm = (ticket_ggr * plan.single_selection_value / 100)
                 elif plan.single_selection_calc_type == 'fixed_value':
                     ticket_comm = plan.single_selection_value
+                single_comm += ticket_comm
             
             # Hybrid (Multi-selection)
             elif plan.is_hybrid_active and not is_single:
@@ -536,14 +720,15 @@ def calculate_weekly_agent_commission_data(agent, period):
                     if match:
                         ticket_comm = (ticket.stake_amount * rule.commission_percent / 100)
                         break
-            
-            hybrid_comm += ticket_comm
+                multiple_comm += ticket_comm
 
-    hybrid_comm = hybrid_comm.quantize(Decimal('0.01'))
+    single_comm = single_comm.quantize(Decimal('0.01'))
+    multiple_comm = multiple_comm.quantize(Decimal('0.01'))
+    hybrid_comm = (single_comm + multiple_comm).quantize(Decimal('0.01'))
     
     total_comm = ggr_comm + hybrid_comm
 
-    return {
+    data = {
         'total_stake': total_stake,
         'total_winnings': total_winnings,
         'ggr': ggr,
@@ -551,6 +736,10 @@ def calculate_weekly_agent_commission_data(agent, period):
         'commission_hybrid_amount': hybrid_comm,
         'commission_total_amount': total_comm
     }
+    if include_breakdown:
+        data['commission_single_amount'] = (ggr_comm + single_comm).quantize(Decimal('0.01'))
+        data['commission_multiple_amount'] = multiple_comm.quantize(Decimal('0.01'))
+    return data
 
 def calculate_weekly_agent_commission(agent, period):
     data = calculate_weekly_agent_commission_data(agent, period)

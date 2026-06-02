@@ -20,7 +20,7 @@ from datetime import timedelta, date, datetime
 import logging
 import requests # For Paystack API calls
 import json
-from django.http import JsonResponse, HttpResponse, Http404, HttpResponseForbidden, HttpResponseBadRequest
+from django.http import JsonResponse, HttpResponse, Http404, HttpResponseForbidden, HttpResponseBadRequest, QueryDict
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils.crypto import get_random_string
@@ -6024,7 +6024,7 @@ def mark_downline_activity_notifications_read(request):
 # --- Account User Views ---
 
 from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
-from commission.services import pay_weekly_commission, pay_monthly_network_commission
+from commission.services import pay_weekly_commission, pay_monthly_network_commission, pay_weekly_commission_amount, pay_monthly_network_commission_amount
 
 @login_required
 @user_passes_test(is_account_user)
@@ -6259,6 +6259,61 @@ def account_user_dashboard(request):
             messages.error(request, "User not found or invalid ID.")
 
     if request.method == 'POST':
+        if 'pay_adjusted' in request.POST:
+            config = SiteConfiguration.load()
+            if not config.account_user_commission_authority:
+                messages.error(request, "Commission disbursement is disabled for Account Users in Site Configuration.")
+                return redirect('betting:account_user_dashboard')
+
+            comm_key = (request.POST.get('pay_adjusted') or '').strip()
+            selected_period_raw = (request.POST.get('commission_period') or '').strip()
+            selected_period_id = None
+            if selected_period_raw:
+                try:
+                    selected_period_id = int(selected_period_raw)
+                except Exception:
+                    selected_period_id = None
+
+            if not selected_period_id:
+                messages.error(request, "Please select a commission period before paying.")
+                return redirect('betting:account_user_dashboard')
+
+            amount_raw = request.POST.get(f"adjusted_amount_{comm_key}")
+            try:
+                amount = Decimal(str(amount_raw))
+            except Exception:
+                messages.error(request, "Invalid adjusted commission amount.")
+                return redirect('betting:account_user_dashboard')
+
+            try:
+                comm_type, comm_id = comm_key.split('_', 1)
+                if comm_type == 'weekly':
+                    comm = WeeklyAgentCommission.objects.get(id=comm_id)
+                    if comm.period_id != selected_period_id:
+                        raise InvalidOperation("Selected item does not match the selected commission period.")
+                    success, msg = pay_weekly_commission_amount(comm, amount, actor=request.user)
+                elif comm_type == 'monthly':
+                    comm = MonthlyNetworkCommission.objects.get(id=comm_id)
+                    if comm.period_id != selected_period_id:
+                        raise InvalidOperation("Selected item does not match the selected commission period.")
+                    success, msg = pay_monthly_network_commission_amount(comm, amount, actor=request.user)
+                else:
+                    success, msg = False, "Invalid type"
+            except Exception as e:
+                success, msg = False, str(e)
+
+            if success:
+                messages.success(request, msg)
+            else:
+                messages.error(request, msg)
+
+            qd = QueryDict(mutable=True)
+            qd['commission_period'] = str(selected_period_id)
+            commission_search_post = (request.POST.get('commission_search') or '').strip()
+            if commission_search_post:
+                qd['commission_search'] = commission_search_post
+            return redirect(f"{reverse('betting:account_user_dashboard')}?{qd.urlencode()}")
+
         if 'pay_commissions' in request.POST:
             config = SiteConfiguration.load()
             if not config.account_user_commission_authority:
@@ -6308,7 +6363,12 @@ def account_user_dashboard(request):
             
             if success_count > 0:
                 messages.success(request, f"Successfully paid {success_count} commissions.")
-            return redirect('betting:account_user_dashboard')
+            qd = QueryDict(mutable=True)
+            qd['commission_period'] = str(selected_period_id)
+            commission_search_post = (request.POST.get('commission_search') or '').strip()
+            if commission_search_post:
+                qd['commission_search'] = commission_search_post
+            return redirect(f"{reverse('betting:account_user_dashboard')}?{qd.urlencode()}")
 
         elif 'process_withdrawals' in request.POST:
             selected_withdrawals = request.POST.getlist('selected_withdrawals')
@@ -6617,7 +6677,8 @@ def account_user_dashboard(request):
             'user': wc.agent,
             'period': wc.period,
             'amount': (wc.commission_total_amount or Decimal('0.00')) - (wc.amount_paid or Decimal('0.00')),
-            'ggr_ngr': wc.ggr
+            'ggr_ngr': wc.ggr,
+            'status': wc.status,
         })
     
     for mc in pending_monthly:
@@ -6627,7 +6688,8 @@ def account_user_dashboard(request):
             'user': mc.user,
             'period': mc.period,
             'amount': (mc.commission_amount or Decimal('0.00')) - (mc.amount_paid or Decimal('0.00')),
-            'ggr_ngr': mc.ngr
+            'ggr_ngr': mc.ngr,
+            'status': mc.status,
         })
 
     # Fetch Pending Withdrawals

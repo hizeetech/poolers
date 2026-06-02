@@ -396,26 +396,25 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
                     
                     # Check existing
                     existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
+                    calc = calculate_weekly_agent_commission_data(agent, period, include_breakdown=True) or {}
                     
                     if existing:
                         row = {
                             'agent': agent,
                             'plan': profile.plan.name,
-                            'data': existing,
+                            'calc': calc,
                             'status': existing.get_status_display(),
                             'is_paid': existing.status == 'paid'
                         }
                         # Show if paid or if amount > 0
-                        if existing.status == 'paid' or existing.commission_total_amount > 0:
+                        if existing.status == 'paid' or calc.get('commission_total_amount', 0) > 0 or existing.commission_total_amount > 0:
                             agent_data.append(row)
                     else:
-                        # Calculate
-                        data = calculate_weekly_agent_commission_data(agent, period)
-                        if data and data['commission_total_amount'] > 0:
+                        if calc.get('commission_total_amount', 0) > 0:
                             row = {
                                 'agent': agent,
                                 'plan': profile.plan.name,
-                                'data': data,
+                                'calc': calc,
                                 'status': 'Pending (Calculated)',
                                 'is_paid': False
                             }

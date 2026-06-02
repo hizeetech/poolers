@@ -823,6 +823,7 @@ $(document).ready(function() {
                                         <th>Period</th>
                                         <th>GGR/NGR</th>
                                         <th>Commission</th>
+                                        <th>Adjusted Commission</th>
                                         <th>Status</th>
                                     </tr>
                                 </thead>
@@ -842,11 +843,27 @@ $(document).ready(function() {
                                         </td>
                                         <td>₦{{ comm.ggr_ngr|floatformat:2 }}</td>
                                         <td class="fw-bold text-success">₦{{ comm.amount|floatformat:2 }}</td>
-                                        <td><span class="badge bg-warning text-dark">Pending</span></td>
+                                        <td>
+                                            <div class="d-flex gap-2 align-items-center">
+                                                <input type="number" step="0.01" min="0" name="adjusted_amount_{{ comm.id_str }}" class="form-control form-control-sm" placeholder="{{ comm.amount|floatformat:2 }}" style="max-width: 140px;">
+                                                <button type="submit" name="pay_adjusted" value="{{ comm.id_str }}" class="btn btn-sm btn-primary" onclick="return confirm('Pay adjusted commission amount for this user?');">Pay</button>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if comm.status == 'paid' %}
+                                                <span class="badge bg-success">Paid</span>
+                                            {% elif comm.status == 'approved' %}
+                                                <span class="badge bg-info text-dark">Approved</span>
+                                            {% elif comm.status == 'partially_paid' %}
+                                                <span class="badge bg-warning text-dark">Partially Paid</span>
+                                            {% else %}
+                                                <span class="badge bg-warning text-dark">Pending</span>
+                                            {% endif %}
+                                        </td>
                                     </tr>
                                     {% empty %}
                                     <tr>
-                                        <td colspan="7" class="text-center py-4 text-muted">No pending commissions found.</td>
+                                        <td colspan="8" class="text-center py-4 text-muted">No pending commissions found.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>

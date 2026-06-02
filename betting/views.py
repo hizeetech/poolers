@@ -6036,6 +6036,8 @@ def account_user_dashboard(request):
     activity_log = []
     start_date_str = (request.GET.get('start_date') or '').strip()
     end_date_str = (request.GET.get('end_date') or '').strip()
+    commission_period_id_raw = (request.GET.get('commission_period') or '').strip()
+    commission_search = (request.GET.get('commission_search') or '').strip()
 
     # --- NEW: Fetch Credit/Loan Data ---
     all_incoming_credit_requests = CreditRequest.objects.filter(
@@ -6264,6 +6266,18 @@ def account_user_dashboard(request):
                 return redirect('betting:account_user_dashboard')
 
             selected_items = request.POST.getlist('selected_commissions')
+            selected_period_raw = (request.POST.get('commission_period') or '').strip()
+            selected_period_id = None
+            if selected_period_raw:
+                try:
+                    selected_period_id = int(selected_period_raw)
+                except Exception:
+                    selected_period_id = None
+
+            if not selected_period_id:
+                messages.error(request, "Please select a commission period before paying.")
+                return redirect('betting:account_user_dashboard')
+
             success_count = 0
             error_count = 0
             
@@ -6272,9 +6286,13 @@ def account_user_dashboard(request):
                     comm_type, comm_id = item.split('_')
                     if comm_type == 'weekly':
                         comm = WeeklyAgentCommission.objects.get(id=comm_id)
+                        if comm.period_id != selected_period_id:
+                            raise InvalidOperation("Selected item does not match the selected commission period.")
                         success, msg = pay_weekly_commission(comm, actor=request.user)
                     elif comm_type == 'monthly':
                         comm = MonthlyNetworkCommission.objects.get(id=comm_id)
+                        if comm.period_id != selected_period_id:
+                            raise InvalidOperation("Selected item does not match the selected commission period.")
                         success, msg = pay_monthly_network_commission(comm, actor=request.user)
                     else:
                         success, msg = False, "Invalid type"
@@ -6511,8 +6529,53 @@ def account_user_dashboard(request):
         pass
 
     # Fetch Pending Commissions
-    pending_weekly = WeeklyAgentCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('agent', 'period').order_by('period__start_date')
-    pending_monthly = MonthlyNetworkCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('user', 'period').order_by('period__start_date')
+    pending_weekly_base = WeeklyAgentCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('agent', 'period').order_by('-period__start_date')
+    pending_monthly_base = MonthlyNetworkCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('user', 'period').order_by('-period__start_date')
+
+    commission_period_options = []
+    selected_commission_period_id = None
+    try:
+        from commission.models import CommissionPeriod as CommissionPeriodModel
+        period_ids = set(pending_weekly_base.values_list('period_id', flat=True).distinct()) | set(pending_monthly_base.values_list('period_id', flat=True).distinct())
+        if period_ids:
+            commission_period_options = list(CommissionPeriodModel.objects.filter(id__in=period_ids).order_by('-start_date'))
+        if commission_period_id_raw:
+            try:
+                selected_commission_period_id = int(commission_period_id_raw)
+            except Exception:
+                selected_commission_period_id = None
+        if selected_commission_period_id is None and commission_period_options:
+            selected_commission_period_id = commission_period_options[0].id
+    except Exception:
+        commission_period_options = []
+        selected_commission_period_id = None
+
+    pending_weekly = pending_weekly_base
+    pending_monthly = pending_monthly_base
+
+    if selected_commission_period_id:
+        pending_weekly = pending_weekly.filter(period_id=selected_commission_period_id)
+        pending_monthly = pending_monthly.filter(period_id=selected_commission_period_id)
+
+    if commission_search:
+        weekly_q = (
+            Q(agent__email__icontains=commission_search) |
+            Q(agent__username__icontains=commission_search) |
+            Q(agent__phone_number__icontains=commission_search) |
+            Q(agent__first_name__icontains=commission_search) |
+            Q(agent__last_name__icontains=commission_search) |
+            Q(agent__other_name__icontains=commission_search)
+        )
+        monthly_q = (
+            Q(user__email__icontains=commission_search) |
+            Q(user__username__icontains=commission_search) |
+            Q(user__phone_number__icontains=commission_search) |
+            Q(user__first_name__icontains=commission_search) |
+            Q(user__last_name__icontains=commission_search) |
+            Q(user__other_name__icontains=commission_search)
+        )
+        pending_weekly = pending_weekly.filter(weekly_q)
+        pending_monthly = pending_monthly.filter(monthly_q)
     
     try:
         from commission.services import calculate_weekly_agent_commission_data, calculate_monthly_network_commission_data
@@ -6766,6 +6829,9 @@ def account_user_dashboard(request):
         'recent_transactions': recent_transactions,
         'wallet': request.user.wallet,
         'pending_commissions': pending_commissions_page, # Paginated
+        'commission_period_options': commission_period_options,
+        'selected_commission_period_id': selected_commission_period_id,
+        'commission_search': commission_search,
     }
     return render(request, 'betting/account_user_dashboard.html', context)
 

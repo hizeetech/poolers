@@ -2101,7 +2101,7 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'fields': ('site_name', 'logo', 'favicon', 'landing_page_background', 'show_ticket_status_on_landing', 'carousel_interval')
         }),
         ('Commission Settings', {
-            'fields': ('commission_payment_source', 'account_user_commission_authority')
+            'fields': ('commission_payment_source', 'account_user_commission_authority', 'require_commission_recall_approval')
         }),
         ('Bet Permission Settings', {
             'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),

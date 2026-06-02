@@ -42,6 +42,11 @@ class SiteConfiguration(models.Model):
         default=False, 
         help_text='Enable or disable Account User commission authority.'
     )
+
+    require_commission_recall_approval = models.BooleanField(
+        default=False,
+        help_text='If enabled, Account User commission recalls require Admin approval before reversal occurs.'
+    )
     
     PAYMENT_SOURCE_CHOICES = [
         ('system', 'System Default (Super Admin Wallet)'), 
@@ -583,11 +588,15 @@ class Transaction(models.Model):
         ('bet_placement', 'Bet Placement'),
         ('bet_payout', 'Bet Payout'),
         ('commission_payout', 'Commission Payout'),
+        ('commission_recall_debit', 'Commission Recall Debit'),
+        ('commission_recall_credit', 'Commission Recall Credit'),
         ('wallet_transfer_out', 'Wallet Transfer Out'),
         ('wallet_transfer_in', 'Wallet Transfer In'),
         ('bonus', 'Bonus'),
         ('ticket_deletion_refund', 'Ticket Deletion Refund'),
         ('withdrawal_refund', 'Withdrawal Refund'),
+        ('account_user_debit', 'Account User Debit'),
+        ('account_user_credit', 'Account User Credit'),
     )
     STATUS_CHOICES = (
         ('pending', 'Pending'),

@@ -3731,12 +3731,16 @@ def agent_dashboard(request):
 
     if user.user_type == 'agent':
         weekly_comms = WeeklyAgentCommission.objects.filter(agent=user)
-        total_commission_paid = weekly_comms.filter(status='paid').aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
-        pending_commission = weekly_comms.filter(status='pending').aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
+        total_commission_paid = weekly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
+        pending_total = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
+        pending_paid = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
+        pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
     elif user.user_type in ['super_agent', 'master_agent']:
         monthly_comms = MonthlyNetworkCommission.objects.filter(user=user)
-        total_commission_paid = monthly_comms.filter(status='paid').aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
-        pending_commission = monthly_comms.filter(status='pending').aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
+        total_commission_paid = monthly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
+        pending_total = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
+        pending_paid = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
+        pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
 
     # Top performing users/agents (example: based on GGR)
     # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
@@ -4286,33 +4290,35 @@ def admin_commission_financial_report(request):
         )
 
     # Aggregates
+    weekly_paid = weekly_qs.aggregate(total=Sum('amount_paid'))['total'] or Decimal('0.00')
+    weekly_pending_total = weekly_qs.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(total=Sum('commission_total_amount'))['total'] or Decimal('0.00')
+    weekly_pending_paid = weekly_qs.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(total=Sum('amount_paid'))['total'] or Decimal('0.00')
     weekly_stats = weekly_qs.aggregate(
-        total_paid=Sum('commission_total_amount', filter=Q(status='paid')),
-        total_pending=Sum('commission_total_amount', filter=Q(status='pending')),
         total_ggr=Sum('ggr'),
         total_stake=Sum('total_stake')
     )
     
+    monthly_paid = monthly_qs.aggregate(total=Sum('amount_paid'))['total'] or Decimal('0.00')
+    monthly_pending_total = monthly_qs.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(total=Sum('commission_amount'))['total'] or Decimal('0.00')
+    monthly_pending_paid = monthly_qs.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(total=Sum('amount_paid'))['total'] or Decimal('0.00')
     monthly_stats = monthly_qs.aggregate(
-        total_paid=Sum('commission_amount', filter=Q(status='paid')),
-        total_pending=Sum('commission_amount', filter=Q(status='pending')),
         total_ngr=Sum('ngr')
     )
     
     def get_val(val): return val or Decimal('0.00')
     
     summary = {
-        'total_weekly_paid': get_val(weekly_stats['total_paid']),
-        'total_weekly_pending': get_val(weekly_stats['total_pending']),
+        'total_weekly_paid': weekly_paid,
+        'total_weekly_pending': max(Decimal('0.00'), weekly_pending_total - weekly_pending_paid),
         'total_weekly_ggr': get_val(weekly_stats['total_ggr']),
         'total_weekly_stake': get_val(weekly_stats['total_stake']),
         
-        'total_monthly_paid': get_val(monthly_stats['total_paid']),
-        'total_monthly_pending': get_val(monthly_stats['total_pending']),
+        'total_monthly_paid': monthly_paid,
+        'total_monthly_pending': max(Decimal('0.00'), monthly_pending_total - monthly_pending_paid),
         'total_monthly_ngr': get_val(monthly_stats['total_ngr']),
         
-        'grand_total_paid': get_val(weekly_stats['total_paid']) + get_val(monthly_stats['total_paid']),
-        'grand_total_pending': get_val(weekly_stats['total_pending']) + get_val(monthly_stats['total_pending']),
+        'grand_total_paid': weekly_paid + monthly_paid,
+        'grand_total_pending': max(Decimal('0.00'), weekly_pending_total - weekly_pending_paid) + max(Decimal('0.00'), monthly_pending_total - monthly_pending_paid),
     }
 
     # Prepare list for table
@@ -6028,6 +6034,8 @@ def account_user_dashboard(request):
     found_user = None
     search_results = None
     activity_log = []
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
 
     # --- NEW: Fetch Credit/Loan Data ---
     all_incoming_credit_requests = CreditRequest.objects.filter(
@@ -6073,6 +6081,174 @@ def account_user_dashboard(request):
         'failed_transactions_7d': Transaction.objects.filter(Q(status='failed') | Q(is_successful=False)).filter(timestamp__gte=timezone.now() - timedelta(days=7)).count(),
     }
 
+    metrics_start_date = None
+    metrics_end_date = None
+    if start_date_str:
+        try:
+            metrics_start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        except Exception:
+            metrics_start_date = None
+    if end_date_str:
+        try:
+            metrics_end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except Exception:
+            metrics_end_date = None
+    if metrics_start_date and metrics_end_date and metrics_start_date > metrics_end_date:
+        metrics_start_date, metrics_end_date = metrics_end_date, metrics_start_date
+    if metrics_start_date is None and metrics_end_date is None:
+        metrics_end_date = today
+        metrics_start_date = today - timedelta(days=30)
+        metrics_label = 'Last 30 days'
+    else:
+        metrics_start_date = metrics_start_date or metrics_end_date or today
+        metrics_end_date = metrics_end_date or metrics_start_date or today
+        metrics_label = 'Custom range'
+
+    metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
+    metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+
+    platform_users_qs = User.objects.filter(is_superuser=False)
+    kpi_cache_key = f"account_user:kpis:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    chart_cache_key = f"account_user:charts:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    kpis = cache.get(kpi_cache_key)
+    charts_data = cache.get(chart_cache_key)
+
+    if kpis is None:
+        total_registered_users = platform_users_qs.count()
+        active_users_today = platform_users_qs.filter(last_login__date=today).count()
+        new_registrations = platform_users_qs.filter(date_joined__date__gte=metrics_start_date, date_joined__date__lte=metrics_end_date).count()
+
+        tickets_qs = BetTicket.objects.exclude(status__in=['deleted', 'cancelled']).filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+        total_bets_placed = tickets_qs.count()
+        total_stake_amount = tickets_qs.aggregate(v=Sum('stake_amount'))['v'] or Decimal('0.00')
+
+        total_payouts = tickets_qs.filter(status='won').aggregate(v=Sum('max_winning'))['v'] or Decimal('0.00')
+        ggr = total_stake_amount - total_payouts
+
+        bonus_cost = Transaction.objects.filter(
+            transaction_type='bonus',
+            status='completed',
+            is_successful=True,
+            timestamp__gte=metrics_start_dt,
+            timestamp__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+        ngr = ggr - bonus_cost
+
+        total_deposits = Transaction.objects.filter(
+            transaction_type='deposit',
+            status='completed',
+            is_successful=True,
+            timestamp__gte=metrics_start_dt,
+            timestamp__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+
+        total_withdrawals = UserWithdrawal.objects.filter(
+            status='approved',
+            approved_rejected_time__gte=metrics_start_dt,
+            approved_rejected_time__lte=metrics_end_dt,
+        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
+
+        pending_withdrawals_count = UserWithdrawal.objects.filter(status='pending').count()
+
+        bettors_in_range = tickets_qs.values('user_id').distinct().count()
+        conversion_rate = (Decimal(bettors_in_range) / Decimal(total_registered_users) * Decimal('100.00')) if total_registered_users else Decimal('0.00')
+        average_bet_value = (total_stake_amount / Decimal(total_bets_placed)) if total_bets_placed else Decimal('0.00')
+
+        kpis = {
+            'total_registered_users': int(total_registered_users),
+            'active_users_today': int(active_users_today),
+            'new_registrations': int(new_registrations),
+            'total_bets_placed': int(total_bets_placed),
+            'total_stake_amount': str(total_stake_amount),
+            'total_payouts': str(total_payouts),
+            'ggr': str(ggr),
+            'ngr': str(ngr),
+            'total_deposits': str(total_deposits),
+            'total_withdrawals': str(total_withdrawals),
+            'pending_withdrawals': int(pending_withdrawals_count),
+            'conversion_rate': str(conversion_rate.quantize(Decimal('0.01'))),
+            'average_bet_value': str(average_bet_value.quantize(Decimal('0.01'))),
+        }
+        cache.set(kpi_cache_key, kpis, 30)
+
+    if charts_data is None:
+        ticket_series = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
+            .annotate(day=TruncDate('placed_at'))
+            .values('day')
+            .annotate(
+                stake=Sum('stake_amount'),
+                payouts=Sum(Case(When(status='won', then=F('max_winning')), default=Value(0), output_field=DecimalField())),
+                bets=Count('id'),
+            )
+            .order_by('day')
+        )
+
+        registrations_series = (
+            platform_users_qs.filter(date_joined__gte=metrics_start_dt, date_joined__lte=metrics_end_dt)
+            .annotate(day=TruncDate('date_joined'))
+            .values('day')
+            .annotate(registrations=Count('id'))
+            .order_by('day')
+        )
+
+        deposit_series = (
+            Transaction.objects.filter(
+                transaction_type='deposit',
+                status='completed',
+                is_successful=True,
+                timestamp__gte=metrics_start_dt,
+                timestamp__lte=metrics_end_dt,
+            )
+            .annotate(day=TruncDate('timestamp'))
+            .values('day')
+            .annotate(deposits=Sum('amount'))
+            .order_by('day')
+        )
+
+        withdrawal_series = (
+            UserWithdrawal.objects.filter(
+                status='approved',
+                approved_rejected_time__gte=metrics_start_dt,
+                approved_rejected_time__lte=metrics_end_dt,
+            )
+            .annotate(day=TruncDate('approved_rejected_time'))
+            .values('day')
+            .annotate(withdrawals=Sum('amount'))
+            .order_by('day')
+        )
+
+        selection_top = (
+            Selection.objects.filter(bet_ticket__placed_at__gte=metrics_start_dt, bet_ticket__placed_at__lte=metrics_end_dt)
+            .values('fixture_home_team', 'fixture_away_team')
+            .annotate(picks=Count('id'))
+            .order_by('-picks')[:5]
+        )
+
+        charts_data = {
+            'ticket_series': [
+                {
+                    'day': r['day'].isoformat(),
+                    'stake': str(r['stake'] or Decimal('0.00')),
+                    'payouts': str(r['payouts'] or Decimal('0.00')),
+                    'bets': int(r['bets'] or 0),
+                }
+                for r in ticket_series
+            ],
+            'registrations_series': [{'day': r['day'].isoformat(), 'registrations': int(r['registrations'] or 0)} for r in registrations_series],
+            'deposit_series': [{'day': r['day'].isoformat(), 'deposits': str(r['deposits'] or Decimal('0.00'))} for r in deposit_series],
+            'withdrawal_series': [{'day': r['day'].isoformat(), 'withdrawals': str(r['withdrawals'] or Decimal('0.00'))} for r in withdrawal_series],
+            'top_fixtures': [
+                {
+                    'label': f"{(r.get('fixture_home_team') or '').strip()} vs {(r.get('fixture_away_team') or '').strip()}".strip() or 'Fixture',
+                    'picks': int(r['picks'] or 0),
+                }
+                for r in selection_top
+            ],
+        }
+        cache.set(chart_cache_key, charts_data, 60)
+
     # Handle View User via GET
     if request.method == 'GET' and 'view_user_id' in request.GET:
         try:
@@ -6082,6 +6258,11 @@ def account_user_dashboard(request):
 
     if request.method == 'POST':
         if 'pay_commissions' in request.POST:
+            config = SiteConfiguration.load()
+            if not config.account_user_commission_authority:
+                messages.error(request, "Commission disbursement is disabled for Account Users in Site Configuration.")
+                return redirect('betting:account_user_dashboard')
+
             selected_items = request.POST.getlist('selected_commissions')
             success_count = 0
             error_count = 0
@@ -6091,10 +6272,10 @@ def account_user_dashboard(request):
                     comm_type, comm_id = item.split('_')
                     if comm_type == 'weekly':
                         comm = WeeklyAgentCommission.objects.get(id=comm_id)
-                        success, msg = pay_weekly_commission(comm)
+                        success, msg = pay_weekly_commission(comm, actor=request.user)
                     elif comm_type == 'monthly':
                         comm = MonthlyNetworkCommission.objects.get(id=comm_id)
-                        success, msg = pay_monthly_network_commission(comm)
+                        success, msg = pay_monthly_network_commission(comm, actor=request.user)
                     else:
                         success, msg = False, "Invalid type"
                     
@@ -6307,9 +6488,31 @@ def account_user_dashboard(request):
             else:
                  messages.error(request, "Target user not specified.")
 
+    try:
+        from commission.models import CommissionPeriod as CommissionPeriodModel, AgentCommissionProfile
+        from commission.services import calculate_weekly_agent_commission
+
+        recent_weekly_periods = list(CommissionPeriodModel.objects.filter(period_type='weekly').order_by('-start_date')[:12])
+        for period in recent_weekly_periods:
+            agent_ids = (
+                BetTicket.objects.filter(
+                    user__agent__isnull=False,
+                    placed_at__date__gte=period.start_date,
+                    placed_at__date__lte=period.end_date,
+                )
+                .exclude(status__in=['pending', 'cancelled', 'deleted'])
+                .values_list('user__agent_id', flat=True)
+                .distinct()
+            )
+            prof_agent_ids = AgentCommissionProfile.objects.filter(is_active=True, user_id__in=agent_ids).values_list('user_id', flat=True)
+            for agent in User.objects.filter(id__in=prof_agent_ids):
+                calculate_weekly_agent_commission(agent, period)
+    except Exception:
+        pass
+
     # Fetch Pending Commissions
-    pending_weekly = WeeklyAgentCommission.objects.filter(status='pending').select_related('agent', 'period').order_by('period__start_date')
-    pending_monthly = MonthlyNetworkCommission.objects.filter(status='pending').select_related('user', 'period').order_by('period__start_date')
+    pending_weekly = WeeklyAgentCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('agent', 'period').order_by('period__start_date')
+    pending_monthly = MonthlyNetworkCommission.objects.filter(status__in=['pending', 'approved', 'partially_paid']).select_related('user', 'period').order_by('period__start_date')
     
     try:
         from commission.services import calculate_weekly_agent_commission_data, calculate_monthly_network_commission_data
@@ -6350,7 +6553,7 @@ def account_user_dashboard(request):
             'type': 'Weekly',
             'user': wc.agent,
             'period': wc.period,
-            'amount': wc.commission_total_amount,
+            'amount': (wc.commission_total_amount or Decimal('0.00')) - (wc.amount_paid or Decimal('0.00')),
             'ggr_ngr': wc.ggr
         })
     
@@ -6360,7 +6563,7 @@ def account_user_dashboard(request):
             'type': f"Monthly ({mc.role.replace('_', ' ').title()})",
             'user': mc.user,
             'period': mc.period,
-            'amount': mc.commission_amount,
+            'amount': (mc.commission_amount or Decimal('0.00')) - (mc.amount_paid or Decimal('0.00')),
             'ggr_ngr': mc.ngr
         })
 
@@ -6532,6 +6735,13 @@ def account_user_dashboard(request):
 
     context = {
         'account_kpis': account_kpis,
+        'kpis': kpis,
+        'charts_data': charts_data,
+        'metrics_label': metrics_label,
+        'metrics_start': metrics_start_date.isoformat(),
+        'metrics_end': metrics_end_date.isoformat(),
+        'start_date': start_date_str,
+        'end_date': end_date_str,
         'wallets_page': wallets_page,
         'wallet_search': wallet_search,
         'transactions_page': transactions_page,
@@ -6558,6 +6768,60 @@ def account_user_dashboard(request):
         'pending_commissions': pending_commissions_page, # Paginated
     }
     return render(request, 'betting/account_user_dashboard.html', context)
+
+
+@login_required
+@user_passes_test(is_account_user)
+def account_user_activity_feed(request):
+    limit = 20
+    tickets = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .select_related('user')
+        .order_by('-placed_at')[:10]
+    )
+    txs = (
+        Transaction.objects.filter(status='completed', is_successful=True)
+        .select_related('user')
+        .order_by('-timestamp')[:10]
+    )
+    withdrawals = (
+        UserWithdrawal.objects.select_related('user')
+        .order_by('-request_time')[:10]
+    )
+
+    events = []
+    for t in tickets:
+        events.append({
+            'ts': t.placed_at.isoformat() if getattr(t, 'placed_at', None) else '',
+            'type': 'bet',
+            'user': getattr(getattr(t, 'user', None), 'email', '') or getattr(getattr(t, 'user', None), 'username', '') or '-',
+            'label': f"Bet placed ({t.ticket_id or ''})".strip(),
+            'amount': str(getattr(t, 'stake_amount', Decimal('0.00'))),
+            'status': t.status,
+        })
+
+    for tx in txs:
+        events.append({
+            'ts': tx.timestamp.isoformat() if getattr(tx, 'timestamp', None) else '',
+            'type': 'transaction',
+            'user': getattr(getattr(tx, 'user', None), 'email', '') or getattr(getattr(tx, 'user', None), 'username', '') or '-',
+            'label': tx.transaction_type,
+            'amount': str(getattr(tx, 'amount', Decimal('0.00'))),
+            'status': tx.status,
+        })
+
+    for w in withdrawals:
+        events.append({
+            'ts': w.request_time.isoformat() if getattr(w, 'request_time', None) else '',
+            'type': 'withdrawal',
+            'user': getattr(getattr(w, 'user', None), 'email', '') or getattr(getattr(w, 'user', None), 'username', '') or '-',
+            'label': 'Withdrawal request',
+            'amount': str(getattr(w, 'amount', Decimal('0.00'))),
+            'status': w.status,
+        })
+
+    events.sort(key=lambda e: e.get('ts') or '', reverse=True)
+    return JsonResponse({'events': events[:limit]})
 
 @login_required
 @user_passes_test(is_crm_user)
@@ -7811,6 +8075,472 @@ def retail_export(request):
 
 
 @login_required
+def commission_recall_dashboard(request):
+    if not (
+        request.user.is_superuser
+        or request.user.user_type in ['admin', 'account_user']
+        or is_finance_user(request.user)
+        or is_crm_user(request.user)
+        or is_retail_manager(request.user)
+    ):
+        return HttpResponseForbidden("Not allowed.")
+
+    from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission, CommissionRecall, CommissionRecallLog
+    from commission.services import recall_commission, decide_commission_recall
+    from betting.utils import get_client_ip
+
+    config = SiteConfiguration.load()
+    can_recall = bool(
+        request.user.is_superuser
+        or request.user.user_type in ['admin']
+        or (request.user.user_type == 'account_user' and config.account_user_commission_authority)
+        or request.user.has_perm('commission.can_recall_commission')
+    )
+    can_approve = bool(
+        request.user.is_superuser
+        or request.user.user_type in ['admin']
+        or request.user.has_perm('commission.can_approve_commission_recall')
+    )
+
+    tab = (request.GET.get('tab') or 'queue').strip() or 'queue'
+    q = (request.GET.get('q') or '').strip()
+    agent_type = (request.GET.get('agent_type') or '').strip()
+    status_filter = (request.GET.get('status') or '').strip()
+    reason_filter = (request.GET.get('reason') or '').strip()
+    start_date = (request.GET.get('start_date') or '').strip()
+    end_date = (request.GET.get('end_date') or '').strip()
+
+    if request.method == 'POST':
+        action = (request.POST.get('action') or '').strip()
+
+        if action == 'recall':
+            if not can_recall:
+                messages.error(request, "Not allowed to recall commissions.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            commission_type = (request.POST.get('commission_type') or '').strip()
+            commission_id = (request.POST.get('commission_id') or '').strip()
+            amount_str = (request.POST.get('amount') or '').strip()
+            reason = (request.POST.get('reason') or '').strip()
+            other_reason_text = (request.POST.get('other_reason_text') or '').strip()
+            notes = (request.POST.get('notes') or '').strip()
+
+            if reason == 'other' and not other_reason_text:
+                messages.error(request, "Other reason text is required.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            try:
+                amount = Decimal(amount_str)
+            except Exception:
+                messages.error(request, "Invalid amount.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            try:
+                commission_id_int = int(commission_id)
+            except Exception:
+                messages.error(request, "Invalid commission.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            require_approval = bool(config.require_commission_recall_approval and request.user.user_type == 'account_user' and not (request.user.is_superuser or request.user.user_type == 'admin'))
+            ok, msg = recall_commission(
+                commission_type=commission_type,
+                commission_id=commission_id_int,
+                amount=amount,
+                reason=reason,
+                notes=notes,
+                actor=request.user,
+                ip_address=get_client_ip(request),
+                device_info=(request.META.get('HTTP_USER_AGENT') or '')[:255],
+                require_approval=require_approval,
+                other_reason_text=other_reason_text,
+            )
+            if ok:
+                messages.success(request, msg)
+            else:
+                messages.error(request, msg)
+            return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+        if action == 'bulk_recall':
+            if not can_recall:
+                messages.error(request, "Not allowed to recall commissions.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            selected = request.POST.getlist('selected_items')
+            reason = (request.POST.get('reason') or '').strip()
+            other_reason_text = (request.POST.get('other_reason_text') or '').strip()
+            notes = (request.POST.get('notes') or '').strip()
+            if not selected:
+                messages.warning(request, "No commissions selected.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+            if reason == 'other' and not other_reason_text:
+                messages.error(request, "Other reason text is required.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+            require_approval = bool(config.require_commission_recall_approval and request.user.user_type == 'account_user' and not (request.user.is_superuser or request.user.user_type == 'admin'))
+            ok_count = 0
+            fail_count = 0
+            for item in selected:
+                try:
+                    ctype, cid = item.split('_', 1)
+                    cid_int = int(cid)
+                except Exception:
+                    fail_count += 1
+                    continue
+
+                if ctype == 'weekly':
+                    rec = WeeklyAgentCommission.objects.filter(id=cid_int).first()
+                    if not rec:
+                        fail_count += 1
+                        continue
+                    amount = rec.amount_paid or Decimal('0.00')
+                else:
+                    rec = MonthlyNetworkCommission.objects.filter(id=cid_int).first()
+                    if not rec:
+                        fail_count += 1
+                        continue
+                    amount = rec.amount_paid or Decimal('0.00')
+
+                if amount <= 0:
+                    fail_count += 1
+                    continue
+
+                ok, _msg = recall_commission(
+                    commission_type=ctype,
+                    commission_id=cid_int,
+                    amount=amount,
+                    reason=reason,
+                    notes=notes,
+                    actor=request.user,
+                    ip_address=get_client_ip(request),
+                    device_info=(request.META.get('HTTP_USER_AGENT') or '')[:255],
+                    require_approval=require_approval,
+                    other_reason_text=other_reason_text,
+                )
+                if ok:
+                    ok_count += 1
+                else:
+                    fail_count += 1
+
+            if ok_count:
+                messages.success(request, f"Recalled {ok_count} commission(s).")
+            if fail_count:
+                messages.warning(request, f"{fail_count} commission(s) could not be recalled.")
+            return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab={tab}")
+
+        if action == 'decide':
+            if not can_approve:
+                messages.error(request, "Not allowed.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab=requests")
+
+            recall_id = (request.POST.get('recall_id') or '').strip()
+            decision = (request.POST.get('decision') or '').strip()
+            note = (request.POST.get('note') or '').strip()
+            try:
+                recall_id_int = int(recall_id)
+            except Exception:
+                messages.error(request, "Invalid recall request.")
+                return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab=requests")
+
+            ok, msg = decide_commission_recall(recall_id=recall_id_int, actor=request.user, decision=decision, note=note)
+            if ok:
+                messages.success(request, msg)
+            else:
+                messages.error(request, msg)
+            return redirect(f"{reverse('betting:commission_recall_dashboard')}?tab=requests")
+
+    weekly_qs = WeeklyAgentCommission.objects.select_related('agent', 'period', 'paid_by').filter(amount_paid__gt=0)
+    monthly_qs = MonthlyNetworkCommission.objects.select_related('user', 'period', 'paid_by').filter(amount_paid__gt=0)
+
+    if status_filter:
+        weekly_qs = weekly_qs.filter(status=status_filter)
+        monthly_qs = monthly_qs.filter(status=status_filter)
+    else:
+        weekly_qs = weekly_qs.filter(status__in=['paid', 'partially_paid'])
+        monthly_qs = monthly_qs.filter(status__in=['paid', 'partially_paid'])
+
+    if agent_type:
+        weekly_qs = weekly_qs.filter(agent__user_type=agent_type)
+        monthly_qs = monthly_qs.filter(user__user_type=agent_type)
+
+    if start_date:
+        weekly_qs = weekly_qs.filter(paid_at__date__gte=start_date)
+        monthly_qs = monthly_qs.filter(paid_at__date__gte=start_date)
+    if end_date:
+        weekly_qs = weekly_qs.filter(paid_at__date__lte=end_date)
+        monthly_qs = monthly_qs.filter(paid_at__date__lte=end_date)
+
+    if q:
+        weekly_qs = weekly_qs.filter(Q(agent__email__icontains=q) | Q(agent__username__icontains=q))
+        monthly_qs = monthly_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q))
+
+    queue_rows = []
+    for wc in weekly_qs.order_by('-paid_at')[:500]:
+        queue_rows.append({
+            'id_str': f"weekly_{wc.id}",
+            'commission_type': 'weekly',
+            'commission_id': wc.id,
+            'user': wc.agent,
+            'period': wc.period,
+            'total_amount': wc.commission_total_amount,
+            'amount_paid': wc.amount_paid,
+            'paid_at': wc.paid_at,
+            'paid_by': wc.paid_by,
+            'status': wc.status,
+        })
+
+    for mc in monthly_qs.order_by('-paid_at')[:500]:
+        queue_rows.append({
+            'id_str': f"monthly_{mc.id}",
+            'commission_type': 'monthly',
+            'commission_id': mc.id,
+            'user': mc.user,
+            'period': mc.period,
+            'total_amount': mc.commission_amount,
+            'amount_paid': mc.amount_paid,
+            'paid_at': mc.paid_at,
+            'paid_by': mc.paid_by,
+            'status': mc.status,
+        })
+
+    queue_rows.sort(key=lambda r: (r['paid_at'] or timezone.now()), reverse=True)
+
+    logs_qs = CommissionRecallLog.objects.select_related('agent', 'recalled_by').all()
+    if reason_filter:
+        logs_qs = logs_qs.filter(recall_reason=reason_filter)
+    if start_date:
+        logs_qs = logs_qs.filter(recall_date__gte=start_date)
+    if end_date:
+        logs_qs = logs_qs.filter(recall_date__lte=end_date)
+    if q:
+        logs_qs = logs_qs.filter(Q(agent__email__icontains=q) | Q(agent__username__icontains=q) | Q(recalled_by__email__icontains=q))
+    recall_logs = logs_qs.order_by('-created_at')[:500]
+
+    requests_qs = CommissionRecall.objects.select_related('beneficiary', 'requested_by', 'decided_by', 'period').filter(status='pending_approval').order_by('-created_at')[:500]
+
+    context = {
+        'tab': tab,
+        'q': q,
+        'agent_type': agent_type,
+        'status_filter': status_filter,
+        'reason_filter': reason_filter,
+        'start_date': start_date,
+        'end_date': end_date,
+        'can_recall': can_recall,
+        'can_approve': can_approve,
+        'require_recall_approval': bool(config.require_commission_recall_approval),
+        'queue_rows': queue_rows,
+        'recall_logs': recall_logs,
+        'recall_requests': requests_qs,
+        'recall_reasons': CommissionRecall.RECALL_REASON_CHOICES,
+        'agent_type_choices': [
+            ('agent', 'Agent'),
+            ('super_agent', 'Super Agent'),
+            ('master_agent', 'Master Agent'),
+        ],
+    }
+    return render(request, 'betting/commission_recall.html', context)
+
+
+@login_required
+def commission_recall_export(request):
+    if not (
+        request.user.is_superuser
+        or request.user.user_type in ['admin', 'account_user']
+        or is_finance_user(request.user)
+        or is_crm_user(request.user)
+        or is_retail_manager(request.user)
+    ):
+        return HttpResponse("Not allowed.", status=403)
+
+    from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission, CommissionRecall, CommissionRecallLog
+
+    dataset = (request.GET.get('dataset') or 'history').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    q = (request.GET.get('q') or '').strip()
+    agent_type = (request.GET.get('agent_type') or '').strip()
+    status_filter = (request.GET.get('status') or '').strip()
+    reason_filter = (request.GET.get('reason') or '').strip()
+    start_date = (request.GET.get('start_date') or '').strip()
+    end_date = (request.GET.get('end_date') or '').strip()
+
+    rows = []
+    title = dataset
+    today = timezone.localdate()
+    if not start_date:
+        start_date = (today - timedelta(days=30)).isoformat()
+    if not end_date:
+        end_date = today.isoformat()
+
+    if dataset == 'queue':
+        weekly_qs = WeeklyAgentCommission.objects.select_related('agent', 'period', 'paid_by').filter(amount_paid__gt=0)
+        monthly_qs = MonthlyNetworkCommission.objects.select_related('user', 'period', 'paid_by').filter(amount_paid__gt=0)
+
+        if status_filter:
+            weekly_qs = weekly_qs.filter(status=status_filter)
+            monthly_qs = monthly_qs.filter(status=status_filter)
+        else:
+            weekly_qs = weekly_qs.filter(status__in=['paid', 'partially_paid'])
+            monthly_qs = monthly_qs.filter(status__in=['paid', 'partially_paid'])
+
+        if agent_type:
+            weekly_qs = weekly_qs.filter(agent__user_type=agent_type)
+            monthly_qs = monthly_qs.filter(user__user_type=agent_type)
+
+        if start_date:
+            weekly_qs = weekly_qs.filter(paid_at__date__gte=start_date)
+            monthly_qs = monthly_qs.filter(paid_at__date__gte=start_date)
+        if end_date:
+            weekly_qs = weekly_qs.filter(paid_at__date__lte=end_date)
+            monthly_qs = monthly_qs.filter(paid_at__date__lte=end_date)
+
+        if q:
+            weekly_qs = weekly_qs.filter(Q(agent__email__icontains=q) | Q(agent__username__icontains=q))
+            monthly_qs = monthly_qs.filter(Q(user__email__icontains=q) | Q(user__username__icontains=q))
+
+        for wc in weekly_qs.order_by('-paid_at')[:200000]:
+            rows.append({
+                'type': 'weekly',
+                'agent': wc.agent.email or wc.agent.username,
+                'agent_type': wc.agent.user_type,
+                'period_start': wc.period.start_date.isoformat(),
+                'period_end': wc.period.end_date.isoformat(),
+                'total_amount': str(wc.commission_total_amount or ''),
+                'amount_paid': str(wc.amount_paid or ''),
+                'paid_at': wc.paid_at.isoformat(sep=' ', timespec='seconds') if wc.paid_at else '',
+                'paid_by': getattr(getattr(wc, 'paid_by', None), 'email', '') or '',
+                'status': wc.status,
+            })
+
+        for mc in monthly_qs.order_by('-paid_at')[:200000]:
+            rows.append({
+                'type': 'monthly',
+                'agent': mc.user.email or mc.user.username,
+                'agent_type': mc.user.user_type,
+                'period_start': mc.period.start_date.isoformat(),
+                'period_end': mc.period.end_date.isoformat(),
+                'total_amount': str(mc.commission_amount or ''),
+                'amount_paid': str(mc.amount_paid or ''),
+                'paid_at': mc.paid_at.isoformat(sep=' ', timespec='seconds') if mc.paid_at else '',
+                'paid_by': getattr(getattr(mc, 'paid_by', None), 'email', '') or '',
+                'status': mc.status,
+            })
+
+        title = 'paid_queue'
+
+    elif dataset == 'history':
+        logs_qs = CommissionRecallLog.objects.select_related('agent', 'recalled_by').all()
+        if reason_filter:
+            logs_qs = logs_qs.filter(recall_reason=reason_filter)
+        if start_date:
+            logs_qs = logs_qs.filter(recall_date__gte=start_date)
+        if end_date:
+            logs_qs = logs_qs.filter(recall_date__lte=end_date)
+        if q:
+            logs_qs = logs_qs.filter(Q(agent__email__icontains=q) | Q(agent__username__icontains=q) | Q(recalled_by__email__icontains=q))
+        for log in logs_qs.order_by('-created_at')[:200000]:
+            rows.append({
+                'date': log.recall_date.isoformat(),
+                'time': log.recall_time.strftime('%H:%M:%S'),
+                'agent': log.agent.email or log.agent.username,
+                'amount_recalled': str(log.amount_recalled or ''),
+                'reason': log.recall_reason,
+                'old_status': log.old_status,
+                'new_status': log.new_status,
+                'recalled_by': getattr(getattr(log, 'recalled_by', None), 'email', '') or '',
+                'ip': log.ip_address or '',
+            })
+        title = 'recall_history'
+
+    elif dataset == 'requests':
+        qs = CommissionRecall.objects.select_related('beneficiary', 'requested_by', 'period').filter(status='pending_approval')
+        for rr in qs.order_by('-created_at')[:200000]:
+            rows.append({
+                'created_at': rr.created_at.isoformat(sep=' ', timespec='seconds'),
+                'agent': rr.beneficiary.email or rr.beneficiary.username,
+                'period_start': rr.period.start_date.isoformat(),
+                'period_end': rr.period.end_date.isoformat(),
+                'amount': str(rr.amount_requested or ''),
+                'reason': rr.recall_reason,
+                'requested_by': getattr(getattr(rr, 'requested_by', None), 'email', '') or '',
+            })
+        title = 'recall_requests'
+
+    else:
+        return HttpResponse("Unknown dataset.", status=400)
+
+    filename_base = f"commission_recall_{title}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if fmt == 'csv':
+        import csv
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename=\"{filename_base}.csv\"'
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(response, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return response
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=title[:31] or 'Sheet1')
+        output.seek(0)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename=\"{filename_base}.xlsx\"'
+        return response
+
+    if fmt == 'pdf':
+        from weasyprint import HTML
+        def esc(s):
+            return (str(s or "")
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace('"', "&quot;")
+                    .replace("'", "&#39;"))
+        cols = list(rows[0].keys()) if rows else []
+        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
+        body = ''.join([
+            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
+            for r in rows[:2000]
+        ])
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              .meta {{ color: #666; margin-bottom: 12px; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>Commission Recall: {esc(title)}</h2>
+            <div class="meta">Range: {esc(start_date)} → {esc(end_date)}</div>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename=\"{filename_base}.pdf\"'
+        return response
+
+    return HttpResponse("Unknown format.", status=400)
+
+
+@login_required
 @user_passes_test(is_finance_user)
 def finance_dashboard(request):
     tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
@@ -8206,12 +8936,12 @@ def finance_dashboard(request):
             items = 0
             if stype in ['weekly_commission', 'mixed_commission']:
                 wqs = WeeklyAgentCommission.objects.filter(
-                    status='pending',
+                    status__in=['pending', 'approved', 'partially_paid'],
                     period__start_date__lte=metrics_end_date,
                     period__end_date__gte=metrics_start_date,
                 ).select_related('agent', 'period')
                 for wc in wqs:
-                    amt = (wc.commission_total_amount or Decimal('0.00'))
+                    amt = (wc.commission_total_amount or Decimal('0.00')) - (wc.amount_paid or Decimal('0.00'))
                     if amt <= 0:
                         continue
                     FinanceSettlementItem.objects.create(batch=batch, beneficiary=wc.agent, amount=amt, weekly_commission=wc)
@@ -8219,12 +8949,12 @@ def finance_dashboard(request):
                     items += 1
             if stype in ['network_commission', 'mixed_commission']:
                 mqs = MonthlyNetworkCommission.objects.filter(
-                    status='pending',
+                    status__in=['pending', 'approved', 'partially_paid'],
                     period__start_date__lte=metrics_end_date,
                     period__end_date__gte=metrics_start_date,
                 ).select_related('user', 'period')
                 for mc in mqs:
-                    amt = (mc.commission_amount or Decimal('0.00'))
+                    amt = (mc.commission_amount or Decimal('0.00')) - (mc.amount_paid or Decimal('0.00'))
                     if amt <= 0:
                         continue
                     FinanceSettlementItem.objects.create(batch=batch, beneficiary=mc.user, amount=amt, monthly_commission=mc)
@@ -8287,9 +9017,33 @@ def finance_dashboard(request):
                                     timestamp=timezone.now(),
                                 )
                                 if item.weekly_commission_id:
-                                    WeeklyAgentCommission.objects.filter(id=item.weekly_commission_id, status='pending').update(status='paid', paid_at=timezone.now())
+                                    wc = WeeklyAgentCommission.objects.select_for_update().get(id=item.weekly_commission_id)
+                                    wc.amount_paid = (wc.amount_paid or Decimal('0.00')) + (item.amount or Decimal('0.00'))
+                                    total_due = wc.commission_total_amount or Decimal('0.00')
+                                    if wc.amount_paid >= total_due:
+                                        wc.amount_paid = total_due
+                                        wc.status = 'paid'
+                                    else:
+                                        wc.status = 'partially_paid'
+                                    wc.paid_at = timezone.now()
+                                    wc.paid_by = request.user
+                                    wc.paid_source = 'system'
+                                    wc.paid_from_user = request.user
+                                    wc.save(update_fields=['amount_paid', 'status', 'paid_at', 'paid_by', 'paid_source', 'paid_from_user'])
                                 if item.monthly_commission_id:
-                                    MonthlyNetworkCommission.objects.filter(id=item.monthly_commission_id, status='pending').update(status='paid', paid_at=timezone.now())
+                                    mc = MonthlyNetworkCommission.objects.select_for_update().get(id=item.monthly_commission_id)
+                                    mc.amount_paid = (mc.amount_paid or Decimal('0.00')) + (item.amount or Decimal('0.00'))
+                                    total_due = mc.commission_amount or Decimal('0.00')
+                                    if mc.amount_paid >= total_due:
+                                        mc.amount_paid = total_due
+                                        mc.status = 'paid'
+                                    else:
+                                        mc.status = 'partially_paid'
+                                    mc.paid_at = timezone.now()
+                                    mc.paid_by = request.user
+                                    mc.paid_source = 'system'
+                                    mc.paid_from_user = request.user
+                                    mc.save(update_fields=['amount_paid', 'status', 'paid_at', 'paid_by', 'paid_source', 'paid_from_user'])
                                 item.status = 'paid'
                                 item.paid_at = timezone.now()
                                 item.error_message = ''

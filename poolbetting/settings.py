@@ -93,8 +93,18 @@ INSTALLED_APPS = [
     'risk.apps.RiskConfig',
     'notifications.apps.NotificationsConfig',
     'pending_registration.apps.PendingRegistrationConfig',
-    'django_celery_results',
-    'django_celery_beat',
+]
+
+ENABLE_CELERY_APPS = os.getenv("ENABLE_CELERY_APPS", "").strip().lower() in ("1", "true", "yes", "on")
+FORCE_CELERY_ON_WINDOWS = os.getenv("FORCE_CELERY_ON_WINDOWS", "").strip().lower() in ("1", "true", "yes", "on")
+CELERY_APPS_ENABLED = ENABLE_CELERY_APPS and (os.name != "nt" or FORCE_CELERY_ON_WINDOWS)
+if CELERY_APPS_ENABLED:
+    INSTALLED_APPS += [
+        'django_celery_results',
+        'django_celery_beat',
+    ]
+
+INSTALLED_APPS += [
     'axes',
 ]
 

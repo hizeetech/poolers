@@ -178,10 +178,21 @@ class WeeklyAgentCommission(models.Model):
     total_stake = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_winnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     ggr = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    single_stake = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    single_winnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    single_ggr = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    multiple_stake = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    multiple_winnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    multiple_ggr = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     
     commission_ggr_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     commission_hybrid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     commission_total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+
+    commission_single_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    commission_multiple_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     is_marked_for_payment = models.BooleanField(default=False, verbose_name="Pay Now?")

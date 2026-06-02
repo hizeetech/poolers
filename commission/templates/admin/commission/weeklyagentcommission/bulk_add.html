@@ -45,6 +45,7 @@
                            <input type="checkbox" id="action-toggle" style="display: inline-block;">
                         </th>
                         <th scope="col" style="padding: 10px; border-bottom: 1px solid #ddd;">Agent</th>
+                        <th scope="col" style="padding: 10px; border-bottom: 1px solid #ddd;">Username</th>
                         <th scope="col" style="padding: 10px; border-bottom: 1px solid #ddd;">Commission Plan</th>
                         <th scope="col" style="padding: 10px; border-bottom: 1px solid #ddd;">Total Stake</th>
                         <th scope="col" style="padding: 10px; border-bottom: 1px solid #ddd;">Total Winnings</th>
@@ -62,6 +63,7 @@
                             {% endif %}
                         </td>
                         <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ row.agent }}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ row.agent.username|default:"-" }}</td>
                         <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ row.plan }}</td>
                         <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ row.data.total_stake }}</td>
                         <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ row.data.total_winnings }}</td>

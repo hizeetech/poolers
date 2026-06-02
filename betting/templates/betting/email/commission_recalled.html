@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commission Recalled</title>
+</head>
+<body>
+    <div style="background:#f6f9fc;padding:24px 0;">
+        <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+            <div style="background:#0b3d2e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+                    {{ site_name|default:"StakeNaija"|escape }}
+                </div>
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+                    Commission Recalled
+                </div>
+            </div>
+
+            <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+                <div style="padding:18px 18px 0 18px;">
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        Commission Recall Notice
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        A previously paid commission has been recalled and moved back to pending status for future reprocessing.
+                    </div>
+                </div>
+
+                <div style="padding:18px;">
+                    <div style="display:inline-block;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;font-weight:800;border-radius:999px;padding:6px 10px;letter-spacing:0.2px;">
+                        STATUS: {{ status|default:"pending"|upper|escape }}
+                    </div>
+
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;margin-top:12px;">
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Username</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">
+                                    {{ beneficiary.username|default:beneficiary.email|escape }}
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Agent Name</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;font-weight:800;">
+                                    {{ beneficiary.get_full_name|default:beneficiary.email|escape }}
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Commission Period</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;font-weight:800;">
+                                    {{ period.start_date|date:"Y-m-d" }} - {{ period.end_date|date:"Y-m-d" }}
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Amount Recalled</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:800;">
+                                    {{ amount_formatted|default:"-"|escape }}
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Reason</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;font-weight:800;">
+                                    {{ reason_label|default:"-"|escape }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% if notes %}
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Notes</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;line-height:1.5;">
+                                    {{ notes|escape }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </table>
+
+                    <div style="margin-top:12px;border:1px dashed #d0d5dd;border-radius:12px;padding:12px;background:#ffffff;">
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:8px;">
+                            Copy &amp; Paste
+                        </div>
+                        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;white-space:pre-wrap;word-break:break-word;line-height:1.5;">
+Username: {{ beneficiary.username|default:beneficiary.email|escape }}
+Agent Name: {{ beneficiary.get_full_name|default:beneficiary.email|escape }}
+Commission Period: {{ period.start_date|date:"Y-m-d" }} - {{ period.end_date|date:"Y-m-d" }}
+Amount Recalled: {{ amount_formatted|default:"-"|escape }}
+Reason: {{ reason_label|default:"-"|escape }}
+Status: {{ status|default:"pending"|upper|escape }}
+                        </div>
+                    </div>
+
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+                        If you believe this is in error, please contact support.
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+                © {% now "Y" %} {{ site_name|default:"StakeNaija"|escape }}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

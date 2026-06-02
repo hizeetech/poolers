@@ -85,6 +85,7 @@
     {% if can_view_audit %}
     <li class="nav-item"><a class="nav-link {% if active_tab == 'audit' %}active{% endif %}" href="?tab=audit&start_date={{ start_date }}&end_date={{ end_date }}">Audit Logs</a></li>
     {% endif %}
+    <li class="nav-item"><a class="nav-link" href="{% url 'betting:commission_recall_dashboard' %}">Commission Recall</a></li>
   </ul>
 
   {% if active_tab == 'overview' %}

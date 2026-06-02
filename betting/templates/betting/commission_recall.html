@@ -1,0 +1,515 @@
+{% extends 'betting/base.html' %}
+{% block title %}Commission Recall{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Commission Recall</h2>
+      <div class="text-muted small">Recall wrongly paid commissions back into pending state with full audit trail.</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:finance_dashboard' %}">Back to Finance</a>
+    </div>
+  </div>
+
+  <form method="get" class="card shadow-sm mb-3">
+    <div class="card-body">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <div class="row g-2 align-items-end">
+        <div class="col-12 col-md-3">
+          <label class="form-label small text-muted mb-1">Search</label>
+          <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Agent username/email">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-muted mb-1">From</label>
+          <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-muted mb-1">To</label>
+          <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-muted mb-1">Agent Type</label>
+          <select name="agent_type" class="form-select form-select-sm">
+            <option value="">All</option>
+            {% for k, label in agent_type_choices %}
+            <option value="{{ k }}" {% if agent_type == k %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label small text-muted mb-1">Status</label>
+          <select name="status" class="form-select form-select-sm">
+            <option value="">Paid / Partial</option>
+            <option value="paid" {% if status_filter == 'paid' %}selected{% endif %}>Paid</option>
+            <option value="partially_paid" {% if status_filter == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-1 d-grid">
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+      <a class="nav-link {% if tab == 'queue' %}active{% endif %}" href="?tab=queue&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&agent_type={{ agent_type }}&status={{ status_filter }}">Paid Queue</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if tab == 'history' %}active{% endif %}" href="?tab=history&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&agent_type={{ agent_type }}&reason={{ reason_filter }}">Recall History</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if tab == 'requests' %}active{% endif %}" href="?tab=requests">Recall Requests</a>
+    </li>
+  </ul>
+
+  {% if tab == 'queue' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+      <div class="fw-semibold">Paid Commissions</div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=queue&format=csv&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&agent_type={{ agent_type }}&status={{ status_filter }}">CSV</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=queue&format=xlsx&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&agent_type={{ agent_type }}&status={{ status_filter }}">Excel</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=queue&format=pdf&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&agent_type={{ agent_type }}&status={{ status_filter }}">PDF</a>
+        {% if can_recall %}
+        <button type="button" class="btn btn-sm btn-danger" id="bulkRecallBtn">Recall Selected</button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th style="width: 44px;">
+                <input type="checkbox" id="selectAllQueue" class="form-check-input">
+              </th>
+              <th>Agent</th>
+              <th>Period</th>
+              <th class="text-end">Total</th>
+              <th class="text-end">Paid</th>
+              <th>Payment Date</th>
+              <th>Paid By</th>
+              <th>Status</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in queue_rows %}
+            <tr>
+              <td>
+                <input type="checkbox" class="form-check-input queue-checkbox" value="{{ r.id_str }}">
+              </td>
+              <td>
+                <div class="fw-semibold">{{ r.user.username|default:r.user.email }}</div>
+                <div class="text-muted small">{{ r.user.email }}</div>
+                <div class="text-muted small text-uppercase">{{ r.user.user_type }}</div>
+              </td>
+              <td class="text-nowrap">
+                {{ r.period.start_date|date:"Y-m-d" }} → {{ r.period.end_date|date:"Y-m-d" }}
+              </td>
+              <td class="text-end fw-semibold">₦{{ r.total_amount|floatformat:2 }}</td>
+              <td class="text-end fw-semibold">₦{{ r.amount_paid|floatformat:2 }}</td>
+              <td class="text-nowrap">{% if r.paid_at %}{{ r.paid_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+              <td class="text-nowrap">{% if r.paid_by %}{{ r.paid_by.username|default:r.paid_by.email }}{% else %}-{% endif %}</td>
+              <td>
+                {% if r.status == 'paid' %}
+                <span class="badge bg-success">Paid</span>
+                {% elif r.status == 'partially_paid' %}
+                <span class="badge bg-warning text-dark">Partially Paid</span>
+                {% else %}
+                <span class="badge bg-secondary">{{ r.status|title }}</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                {% if can_recall %}
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-danger recall-btn"
+                  data-commission-type="{{ r.commission_type }}"
+                  data-commission-id="{{ r.commission_id }}"
+                  data-agent="{{ r.user.username|default:r.user.email }}"
+                  data-period="{{ r.period.start_date|date:'Y-m-d' }} - {{ r.period.end_date|date:'Y-m-d' }}"
+                  data-max="{{ r.amount_paid }}"
+                >
+                  Recall
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="9" class="text-center text-muted py-4">No paid commissions found for the current filter.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if tab == 'history' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+      <div class="fw-semibold">Recall History</div>
+      <div class="d-flex gap-2 flex-wrap align-items-end">
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=history&format=csv&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&reason={{ reason_filter }}">CSV</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=history&format=xlsx&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&reason={{ reason_filter }}">Excel</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=history&format=pdf&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&reason={{ reason_filter }}">PDF</a>
+        <form method="get" class="d-flex gap-2 align-items-end">
+          <input type="hidden" name="tab" value="history">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Reason</label>
+            <select name="reason" class="form-select form-select-sm" onchange="this.form.submit()">
+              <option value="">All</option>
+              {% for k, label in recall_reasons %}
+              <option value="{{ k }}" {% if reason_filter == k %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Date</th>
+              <th>Agent</th>
+              <th class="text-end">Amount</th>
+              <th>Reason</th>
+              <th>Old → New</th>
+              <th>Recalled By</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in recall_logs %}
+            <tr>
+              <td class="text-nowrap">{{ log.recall_date|date:"Y-m-d" }} {{ log.recall_time|time:"H:i" }}</td>
+              <td>
+                <div class="fw-semibold">{{ log.agent.username|default:log.agent.email }}</div>
+                <div class="text-muted small">{{ log.agent.email }}</div>
+              </td>
+              <td class="text-end fw-semibold">₦{{ log.amount_recalled|floatformat:2 }}</td>
+              <td class="text-nowrap">{{ log.get_recall_reason_display }}</td>
+              <td class="text-nowrap">
+                <span class="badge bg-light text-dark border">{{ log.old_status|default:"-" }}</span>
+                →
+                <span class="badge bg-light text-dark border">{{ log.new_status|default:"-" }}</span>
+              </td>
+              <td class="text-nowrap">{% if log.recalled_by %}{{ log.recalled_by.username|default:log.recalled_by.email }}{% else %}-{% endif %}</td>
+              <td class="text-nowrap">{{ log.ip_address|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">No recall history found.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if tab == 'requests' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+      <div class="fw-semibold">Pending Recall Requests</div>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=requests&format=csv">CSV</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=requests&format=xlsx">Excel</a>
+        <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:commission_recall_export' %}?dataset=requests&format=pdf">PDF</a>
+        {% if require_recall_approval %}
+        <div class="text-muted small">Approval is enabled.</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Created</th>
+              <th>Agent</th>
+              <th>Period</th>
+              <th class="text-end">Amount</th>
+              <th>Reason</th>
+              <th>Requested By</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rr in recall_requests %}
+            <tr>
+              <td class="text-nowrap">{{ rr.created_at|date:"Y-m-d H:i" }}</td>
+              <td>
+                <div class="fw-semibold">{{ rr.beneficiary.username|default:rr.beneficiary.email }}</div>
+                <div class="text-muted small">{{ rr.beneficiary.email }}</div>
+              </td>
+              <td class="text-nowrap">{{ rr.period.start_date|date:"Y-m-d" }} → {{ rr.period.end_date|date:"Y-m-d" }}</td>
+              <td class="text-end fw-semibold">₦{{ rr.amount_requested|floatformat:2 }}</td>
+              <td class="text-nowrap">{{ rr.get_recall_reason_display }}</td>
+              <td class="text-nowrap">{% if rr.requested_by %}{{ rr.requested_by.username|default:rr.requested_by.email }}{% else %}-{% endif %}</td>
+              <td class="text-end">
+                {% if can_approve %}
+                <button type="button" class="btn btn-sm btn-success decide-btn" data-recall-id="{{ rr.id }}" data-decision="approve">Approve</button>
+                <button type="button" class="btn btn-sm btn-outline-danger decide-btn" data-recall-id="{{ rr.id }}" data-decision="reject">Reject</button>
+                {% else %}
+                <span class="text-muted">View Only</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">No pending recall requests.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <form method="post" id="recallForm" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="recall">
+    <input type="hidden" name="commission_type" id="recallCommissionType">
+    <input type="hidden" name="commission_id" id="recallCommissionId">
+    <input type="hidden" name="amount" id="recallAmount">
+    <input type="hidden" name="reason" id="recallReason">
+    <input type="hidden" name="other_reason_text" id="recallOtherReason">
+    <input type="hidden" name="notes" id="recallNotes">
+  </form>
+
+  <form method="post" id="bulkRecallForm" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="bulk_recall">
+    <input type="hidden" name="reason" id="bulkRecallReason">
+    <input type="hidden" name="other_reason_text" id="bulkRecallOtherReason">
+    <input type="hidden" name="notes" id="bulkRecallNotes">
+    <div id="bulkSelectedContainer"></div>
+  </form>
+
+  <form method="post" id="decideForm" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="decide">
+    <input type="hidden" name="recall_id" id="decideRecallId">
+    <input type="hidden" name="decision" id="decideDecision">
+    <input type="hidden" name="note" id="decideNote">
+  </form>
+</div>
+
+{{ recall_reasons|json_script:"recallReasonsData" }}
+
+<script>
+  (function () {
+    const reasons = JSON.parse(document.getElementById('recallReasonsData').textContent);
+
+    function reasonOptionsHtml() {
+      let html = '<select id="swalReason" class="form-select form-select-sm">';
+      html += '<option value="">Select reason</option>';
+      for (const [val, label] of reasons) {
+        html += `<option value="${val}">${label}</option>`;
+      }
+      html += '</select>';
+      return html;
+    }
+
+    function showRecallDialog({ commissionType, commissionId, agent, period, maxAmount }) {
+      const maxVal = parseFloat(maxAmount || 0) || 0;
+      const amountDefault = maxVal.toFixed(2);
+
+      Swal.fire({
+        title: 'Recall Commission?',
+        html:
+          `<div class="text-start small text-muted mb-2">You are about to reverse a commission payment. The recalled amount will be moved back to Pending and may be reprocessed later.</div>` +
+          `<div class="text-start mb-2"><div class="fw-semibold">${agent}</div><div class="text-muted small">${period}</div></div>` +
+          `<div class="text-start mb-2"><label class="form-label small text-muted mb-1">Amount to recall (max ₦${amountDefault})</label>` +
+          `<input id="swalAmount" class="form-control form-control-sm" type="number" step="0.01" min="0.01" max="${maxVal}" value="${amountDefault}"></div>` +
+          `<div class="text-start mb-2"><label class="form-label small text-muted mb-1">Reason</label>${reasonOptionsHtml()}</div>` +
+          `<div class="text-start mb-2 d-none" id="swalOtherWrap"><label class="form-label small text-muted mb-1">Other reason</label>` +
+          `<input id="swalOther" class="form-control form-control-sm" type="text" placeholder="Explain briefly"></div>` +
+          `<div class="text-start"><label class="form-label small text-muted mb-1">Notes (optional)</label>` +
+          `<textarea id="swalNotes" class="form-control form-control-sm" rows="2" placeholder="Additional details"></textarea></div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Yes, Recall',
+        cancelButtonText: 'Cancel',
+        focusConfirm: false,
+        didOpen: () => {
+          const reasonEl = document.getElementById('swalReason');
+          const otherWrap = document.getElementById('swalOtherWrap');
+          reasonEl.addEventListener('change', () => {
+            if (reasonEl.value === 'other') {
+              otherWrap.classList.remove('d-none');
+            } else {
+              otherWrap.classList.add('d-none');
+            }
+          });
+        },
+        preConfirm: () => {
+          const amt = document.getElementById('swalAmount').value;
+          const reason = document.getElementById('swalReason').value;
+          const other = (document.getElementById('swalOther') || {}).value || '';
+          const notes = document.getElementById('swalNotes').value || '';
+
+          if (!amt || parseFloat(amt) <= 0) {
+            Swal.showValidationMessage('Enter a valid amount.');
+            return false;
+          }
+          if (!reason) {
+            Swal.showValidationMessage('Select a recall reason.');
+            return false;
+          }
+          if (reason === 'other' && !other.trim()) {
+            Swal.showValidationMessage('Enter the other reason text.');
+            return false;
+          }
+          return { amt, reason, other, notes };
+        }
+      }).then((result) => {
+        if (!result.isConfirmed) return;
+        const { amt, reason, other, notes } = result.value;
+
+        document.getElementById('recallCommissionType').value = commissionType;
+        document.getElementById('recallCommissionId').value = commissionId;
+        document.getElementById('recallAmount').value = amt;
+        document.getElementById('recallReason').value = reason;
+        document.getElementById('recallOtherReason').value = other || '';
+        document.getElementById('recallNotes').value = notes || '';
+        document.getElementById('recallForm').submit();
+      });
+    }
+
+    function showBulkRecallDialog(selectedItems) {
+      Swal.fire({
+        title: 'Recall Commission?',
+        html:
+          `<div class="text-start small text-muted mb-2">You are about to reverse the selected commission payment(s). The recalled commission will be moved back to Pending status and may be reprocessed later.</div>` +
+          `<div class="text-start mb-2"><label class="form-label small text-muted mb-1">Reason</label>${reasonOptionsHtml()}</div>` +
+          `<div class="text-start mb-2 d-none" id="swalOtherWrap"><label class="form-label small text-muted mb-1">Other reason</label>` +
+          `<input id="swalOther" class="form-control form-control-sm" type="text" placeholder="Explain briefly"></div>` +
+          `<div class="text-start"><label class="form-label small text-muted mb-1">Notes (optional)</label>` +
+          `<textarea id="swalNotes" class="form-control form-control-sm" rows="2" placeholder="Additional details"></textarea></div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Yes, Recall',
+        cancelButtonText: 'Cancel',
+        focusConfirm: false,
+        didOpen: () => {
+          const reasonEl = document.getElementById('swalReason');
+          const otherWrap = document.getElementById('swalOtherWrap');
+          reasonEl.addEventListener('change', () => {
+            if (reasonEl.value === 'other') {
+              otherWrap.classList.remove('d-none');
+            } else {
+              otherWrap.classList.add('d-none');
+            }
+          });
+        },
+        preConfirm: () => {
+          const reason = document.getElementById('swalReason').value;
+          const other = (document.getElementById('swalOther') || {}).value || '';
+          const notes = document.getElementById('swalNotes').value || '';
+          if (!reason) {
+            Swal.showValidationMessage('Select a recall reason.');
+            return false;
+          }
+          if (reason === 'other' && !other.trim()) {
+            Swal.showValidationMessage('Enter the other reason text.');
+            return false;
+          }
+          return { reason, other, notes };
+        }
+      }).then((result) => {
+        if (!result.isConfirmed) return;
+        const { reason, other, notes } = result.value;
+
+        document.getElementById('bulkRecallReason').value = reason;
+        document.getElementById('bulkRecallOtherReason').value = other || '';
+        document.getElementById('bulkRecallNotes').value = notes || '';
+
+        const container = document.getElementById('bulkSelectedContainer');
+        container.innerHTML = '';
+        for (const item of selectedItems) {
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'selected_items';
+          input.value = item;
+          container.appendChild(input);
+        }
+        document.getElementById('bulkRecallForm').submit();
+      });
+    }
+
+    function showDecisionDialog(recallId, decision) {
+      const title = decision === 'approve' ? 'Approve Recall?' : 'Reject Recall?';
+      const confirmText = decision === 'approve' ? 'Approve' : 'Reject';
+      Swal.fire({
+        title,
+        html:
+          `<div class="text-start small text-muted mb-2">This action will ${decision === 'approve' ? 'execute' : 'reject'} the recall request.</div>` +
+          `<div class="text-start"><label class="form-label small text-muted mb-1">Note (optional)</label>` +
+          `<input id="swalNote" class="form-control form-control-sm" type="text" placeholder="Decision note"></div>`,
+        showCancelButton: true,
+        confirmButtonText: confirmText,
+        cancelButtonText: 'Cancel',
+        preConfirm: () => {
+          const note = document.getElementById('swalNote').value || '';
+          return { note };
+        }
+      }).then((result) => {
+        if (!result.isConfirmed) return;
+        document.getElementById('decideRecallId').value = recallId;
+        document.getElementById('decideDecision').value = decision;
+        document.getElementById('decideNote').value = (result.value.note || '');
+        document.getElementById('decideForm').submit();
+      });
+    }
+
+    const selectAll = document.getElementById('selectAllQueue');
+    if (selectAll) {
+      selectAll.addEventListener('change', () => {
+        document.querySelectorAll('.queue-checkbox').forEach(cb => cb.checked = selectAll.checked);
+      });
+    }
+
+    document.querySelectorAll('.recall-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        showRecallDialog({
+          commissionType: btn.dataset.commissionType,
+          commissionId: btn.dataset.commissionId,
+          agent: btn.dataset.agent,
+          period: btn.dataset.period,
+          maxAmount: btn.dataset.max
+        });
+      });
+    });
+
+    const bulkBtn = document.getElementById('bulkRecallBtn');
+    if (bulkBtn) {
+      bulkBtn.addEventListener('click', () => {
+        const selected = Array.from(document.querySelectorAll('.queue-checkbox:checked')).map(cb => cb.value);
+        if (!selected.length) {
+          Swal.fire({ title: 'No selection', text: 'Select at least one commission.', icon: 'info' });
+          return;
+        }
+        showBulkRecallDialog(selected);
+      });
+    }
+
+    document.querySelectorAll('.decide-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        showDecisionDialog(btn.dataset.recallId, btn.dataset.decision);
+      });
+    });
+  })();
+</script>
+{% endblock %}

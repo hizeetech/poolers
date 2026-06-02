@@ -7,11 +7,13 @@ from .models import (
     CommissionPlan, HybridCommissionRule, AgentCommissionProfile,
     CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission,
     NetworkCommissionSettings, RetailTransaction, PaidWeeklyAgentCommission,
-    CommissionProfileAssignmentLog, CommissionOverrideLog, CommissionChangeRequest
+    CommissionProfileAssignmentLog, CommissionOverrideLog, CommissionChangeRequest,
+    CommissionRecall, CommissionRecallLog, CommissionRecallApproval
 )
 from .services import (
     calculate_weekly_agent_commission, calculate_monthly_network_commission,
-    pay_weekly_commission, pay_monthly_network_commission
+    pay_weekly_commission, pay_monthly_network_commission,
+    decide_commission_recall
 )
 from betting.models import User, BetTicket
 from django.db.models import Sum, Q
@@ -371,7 +373,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
         js = ('commission/js/weekly_commission_admin.js', 'commission/js/select_all_commissions.js')
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(status='pending')
+        return super().get_queryset(request).filter(status__in=['pending', 'approved', 'partially_paid'])
 
     def add_view(self, request, form_url='', extra_context=None):
         from django.template.response import TemplateResponse
@@ -433,7 +435,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
                         # Create or Get record (persist calculation)
                         record = calculate_weekly_agent_commission(agent, period)
                         if record:
-                            success, msg = pay_weekly_commission(record)
+                            success, msg = pay_weekly_commission(record, actor=request.user)
                             if success:
                                 count += 1
                     except User.DoesNotExist:
@@ -455,7 +457,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
     def pay_commissions(self, request, queryset):
         success_count = 0
         for record in queryset:
-            success, message = pay_weekly_commission(record)
+            success, message = pay_weekly_commission(record, actor=request.user)
             if success:
                 success_count += 1
         self.message_user(request, f"{success_count} commissions paid successfully.")
@@ -467,7 +469,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
             # Reset flag immediately so it gets saved as False during payment or calculation
             obj.is_marked_for_payment = False
             
-            success, msg = pay_weekly_commission(obj)
+            success, msg = pay_weekly_commission(obj, actor=request.user)
             if success:
                 messages.success(request, f"Payment for {obj.agent}: {msg}")
             else:
@@ -556,7 +558,7 @@ class MonthlyNetworkCommissionAdmin(admin.ModelAdmin):
                         # Create or Get record (persist calculation)
                         record = calculate_monthly_network_commission(user, period)
                         if record:
-                            success, msg = pay_monthly_network_commission(record)
+                            success, msg = pay_monthly_network_commission(record, actor=request.user)
                             if success:
                                 count += 1
                     except User.DoesNotExist:
@@ -578,11 +580,99 @@ class MonthlyNetworkCommissionAdmin(admin.ModelAdmin):
     def pay_commissions(self, request, queryset):
         success_count = 0
         for record in queryset:
-            success, msg = pay_monthly_network_commission(record)
+            success, msg = pay_monthly_network_commission(record, actor=request.user)
             if success:
                 success_count += 1
         self.message_user(request, f"Paid {success_count} commissions.")
     pay_commissions.short_description = "Pay selected commissions to Wallet"
+
+
+class CommissionRecallAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'status', 'beneficiary', 'period', 'amount_requested', 'recall_reason', 'requested_by', 'decided_by', 'executed_at')
+    list_filter = ('status', 'recall_reason', 'created_at')
+    search_fields = ('beneficiary__email', 'beneficiary__username', 'requested_by__email', 'requested_by__username', 'period__start_date', 'period__end_date')
+    readonly_fields = ('created_at',)
+    actions = ('approve_selected', 'reject_selected')
+
+    @admin.action(description='Approve selected recall request(s) (execute recall)')
+    def approve_selected(self, request, queryset):
+        if not (request.user.is_superuser or request.user.user_type in ['admin']):
+            self.message_user(request, "Not allowed.", level=messages.ERROR)
+            return
+
+        success = 0
+        failed = 0
+        for rr in queryset.select_related('beneficiary', 'period', 'requested_by').iterator():
+            if rr.status != 'pending_approval':
+                failed += 1
+                continue
+            ok, msg = decide_commission_recall(recall_id=rr.id, actor=request.user, decision='approve', note='')
+            if ok:
+                success += 1
+            else:
+                failed += 1
+                self.message_user(request, f"Recall {rr.id} failed: {msg}", level=messages.ERROR)
+
+        if success:
+            self.message_user(request, f"Approved and executed {success} recall request(s).", level=messages.SUCCESS)
+        if failed and not success:
+            self.message_user(request, f"{failed} recall request(s) could not be approved.", level=messages.WARNING)
+
+    @admin.action(description='Reject selected recall request(s)')
+    def reject_selected(self, request, queryset):
+        if not (request.user.is_superuser or request.user.user_type in ['admin']):
+            self.message_user(request, "Not allowed.", level=messages.ERROR)
+            return
+
+        success = 0
+        failed = 0
+        for rr in queryset.select_related('beneficiary', 'period', 'requested_by').iterator():
+            if rr.status != 'pending_approval':
+                failed += 1
+                continue
+            ok, msg = decide_commission_recall(recall_id=rr.id, actor=request.user, decision='reject', note='')
+            if ok:
+                success += 1
+            else:
+                failed += 1
+                self.message_user(request, f"Recall {rr.id} reject failed: {msg}", level=messages.ERROR)
+
+        if success:
+            self.message_user(request, f"Rejected {success} recall request(s).", level=messages.SUCCESS)
+        if failed and not success:
+            self.message_user(request, f"{failed} recall request(s) could not be rejected.", level=messages.WARNING)
+
+    def has_add_permission(self, request):
+        return False
+
+
+class CommissionRecallApprovalAdmin(admin.ModelAdmin):
+    list_display = ('decided_at', 'status', 'recall', 'decided_by')
+    list_filter = ('status', 'decided_at')
+    search_fields = ('recall__beneficiary__email', 'recall__beneficiary__username', 'decided_by__email', 'decided_by__username')
+    readonly_fields = ('decided_at',)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class CommissionRecallLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'agent', 'amount_recalled', 'recall_reason', 'recalled_by', 'recall_date', 'old_status', 'new_status')
+    list_filter = ('recall_reason', 'recall_date', 'created_at')
+    search_fields = ('agent__email', 'agent__username', 'recalled_by__email', 'recalled_by__username', 'ip_address')
+    readonly_fields = [f.name for f in CommissionRecallLog._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 class PaidWeeklyAgentCommissionAdmin(admin.ModelAdmin):
     list_display = ('agent', 'period', 'total_stake', 'ggr', 'commission_total_amount', 'status', 'paid_at')
@@ -605,6 +695,9 @@ betting_admin_site.register(WeeklyAgentCommission, WeeklyAgentCommissionAdmin)
 betting_admin_site.register(PaidWeeklyAgentCommission, PaidWeeklyAgentCommissionAdmin)
 betting_admin_site.register(MonthlyNetworkCommission, MonthlyNetworkCommissionAdmin)
 betting_admin_site.register(RetailTransaction, RetailTransactionAdmin)
+betting_admin_site.register(CommissionRecall, CommissionRecallAdmin)
+betting_admin_site.register(CommissionRecallLog, CommissionRecallLogAdmin)
+betting_admin_site.register(CommissionRecallApproval, CommissionRecallApprovalAdmin)
 betting_admin_site.register(CommissionProfileAssignmentLog, CommissionProfileAssignmentLogAdmin)
 betting_admin_site.register(CommissionOverrideLog, CommissionOverrideLogAdmin)
 betting_admin_site.register(CommissionChangeRequest, CommissionChangeRequestAdmin)

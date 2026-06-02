@@ -93,6 +93,8 @@
                                 <td>
                                     {% if data.status == 'paid' %}
                                         <span class="badge bg-success">Paid</span>
+                                    {% elif data.status == 'partially_paid' %}
+                                        <span class="badge bg-warning text-dark">Partially Paid</span>
                                     {% else %}
                                         <span class="badge bg-warning text-dark">Pending</span>
                                     {% endif %}

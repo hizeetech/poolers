@@ -168,6 +168,8 @@ class CommissionPeriod(models.Model):
 class WeeklyAgentCommission(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('partially_paid', 'Partially Paid'),
         ('paid', 'Paid'),
     )
     agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='weekly_commissions')
@@ -185,6 +187,10 @@ class WeeklyAgentCommission(models.Model):
     is_marked_for_payment = models.BooleanField(default=False, verbose_name="Pay Now?")
     created_at = models.DateTimeField(auto_now_add=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    paid_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='weekly_commissions_paid_by')
+    paid_source = models.CharField(max_length=20, blank=True, default='')
+    paid_from_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='weekly_commissions_paid_from')
     
     class Meta:
         unique_together = ('agent', 'period')
@@ -200,6 +206,8 @@ class PaidWeeklyAgentCommission(WeeklyAgentCommission):
 class MonthlyNetworkCommission(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('partially_paid', 'Partially Paid'),
         ('paid', 'Paid'),
     )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='monthly_commissions')
@@ -215,9 +223,13 @@ class MonthlyNetworkCommission(models.Model):
     commission_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    paid_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='monthly_commissions_paid_by')
+    paid_source = models.CharField(max_length=20, blank=True, default='')
+    paid_from_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='monthly_commissions_paid_from')
 
     class Meta:
         unique_together = ('user', 'period')
@@ -238,3 +250,110 @@ class RetailTransaction(BettingUser):
         proxy = True
         verbose_name = "Retail Transaction"
         verbose_name_plural = "Retail Transactions"
+
+
+class CommissionRecall(models.Model):
+    RECALL_REASON_CHOICES = (
+        ('wrong_calculation', 'Wrong Calculation'),
+        ('premature_payment', 'Premature Payment'),
+        ('duplicate_payment', 'Duplicate Payment'),
+        ('fraud_investigation', 'Fraud Investigation'),
+        ('wrong_commission_profile', 'Wrong Commission Profile'),
+        ('compliance_issue', 'Compliance Issue'),
+        ('administrative_error', 'Administrative Error'),
+        ('other', 'Other'),
+    )
+
+    STATUS_CHOICES = (
+        ('executed', 'Executed'),
+        ('pending_approval', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+        ('failed', 'Failed'),
+    )
+
+    weekly_commission = models.ForeignKey(WeeklyAgentCommission, on_delete=models.CASCADE, null=True, blank=True, related_name='recall_requests')
+    monthly_commission = models.ForeignKey(MonthlyNetworkCommission, on_delete=models.CASCADE, null=True, blank=True, related_name='recall_requests')
+    beneficiary = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commission_recalls')
+    period = models.ForeignKey(CommissionPeriod, on_delete=models.CASCADE, related_name='commission_recalls')
+
+    amount_requested = models.DecimalField(max_digits=12, decimal_places=2)
+    recall_reason = models.CharField(max_length=50, choices=RECALL_REASON_CHOICES)
+    other_reason_text = models.CharField(max_length=255, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+
+    requested_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_recalls_requested')
+    requested_by_role = models.CharField(max_length=30, blank=True, default='')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_info = models.CharField(max_length=255, blank=True, default='')
+
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='executed')
+    executed_at = models.DateTimeField(null=True, blank=True)
+
+    decided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_recalls_decided')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+        permissions = [
+            ('can_recall_commission', 'Can recall commission'),
+            ('can_approve_commission_recall', 'Can approve commission recall'),
+        ]
+
+    def __str__(self):
+        return f"Recall {self.amount_requested} • {self.beneficiary} • {self.period} ({self.status})"
+
+
+class CommissionRecallLog(models.Model):
+    recall = models.ForeignKey(CommissionRecall, on_delete=models.PROTECT, related_name='logs')
+    weekly_commission = models.ForeignKey(WeeklyAgentCommission, on_delete=models.SET_NULL, null=True, blank=True, related_name='recall_logs')
+    monthly_commission = models.ForeignKey(MonthlyNetworkCommission, on_delete=models.SET_NULL, null=True, blank=True, related_name='recall_logs')
+
+    agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commission_recall_logs')
+    amount_recalled = models.DecimalField(max_digits=12, decimal_places=2)
+    recall_reason = models.CharField(max_length=50, choices=CommissionRecall.RECALL_REASON_CHOICES)
+    notes = models.TextField(blank=True, default='')
+
+    recalled_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_recalls_executed')
+    recalled_by_role = models.CharField(max_length=30, blank=True, default='')
+
+    recall_date = models.DateField()
+    recall_time = models.TimeField()
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_info = models.CharField(max_length=255, blank=True, default='')
+
+    old_status = models.CharField(max_length=30, blank=True, default='')
+    new_status = models.CharField(max_length=30, blank=True, default='')
+    old_amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    new_amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    old_total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    new_total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"RecallLog {self.amount_recalled} • {self.agent} • {self.recall_date}"
+
+
+class CommissionRecallApproval(models.Model):
+    STATUS_CHOICES = (
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+
+    recall = models.OneToOneField(CommissionRecall, on_delete=models.CASCADE, related_name='approval')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    decided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_recall_approvals')
+    decided_at = models.DateTimeField(auto_now_add=True)
+    note = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        ordering = ('-decided_at',)
+
+    def __str__(self):
+        return f"RecallApproval {self.status} • {self.recall_id}"

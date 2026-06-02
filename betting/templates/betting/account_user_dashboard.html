@@ -48,6 +48,147 @@ $(document).ready(function() {
     });
 });
 </script>
+
+{{ charts_data|json_script:"acct-charts-data" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    const chartsData = JSON.parse(document.getElementById('acct-charts-data').textContent || '{}');
+    const ticketSeries = chartsData.ticket_series || [];
+    const labels = ticketSeries.map(r => r.day);
+    const stakes = ticketSeries.map(r => Number(r.stake || 0));
+    const payouts = ticketSeries.map(r => Number(r.payouts || 0));
+    const bets = ticketSeries.map(r => Number(r.bets || 0));
+
+    const revenueCtx = document.getElementById('acctRevenueChart');
+    if (revenueCtx) {
+      new Chart(revenueCtx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'Stake', data: stakes, borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.15)', tension: 0.25 },
+            { label: 'Payouts', data: payouts, borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.15)', tension: 0.25 },
+            { label: 'Bets', data: bets, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.12)', tension: 0.25, yAxisID: 'y2' },
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true },
+            y2: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } }
+          }
+        }
+      });
+    }
+
+    const depositSeries = chartsData.deposit_series || [];
+    const withdrawalSeries = chartsData.withdrawal_series || [];
+    const cashflowDays = Array.from(new Set([...(depositSeries.map(r => r.day)), ...(withdrawalSeries.map(r => r.day))])).sort();
+    const depositsByDay = Object.fromEntries(depositSeries.map(r => [r.day, Number(r.deposits || 0)]));
+    const withdrawalsByDay = Object.fromEntries(withdrawalSeries.map(r => [r.day, Number(r.withdrawals || 0)]));
+    const cashDeposits = cashflowDays.map(d => depositsByDay[d] || 0);
+    const cashWithdrawals = cashflowDays.map(d => withdrawalsByDay[d] || 0);
+
+    const cashflowCtx = document.getElementById('acctCashflowChart');
+    if (cashflowCtx) {
+      new Chart(cashflowCtx, {
+        type: 'bar',
+        data: {
+          labels: cashflowDays,
+          datasets: [
+            { label: 'Deposits', data: cashDeposits, backgroundColor: 'rgba(25,135,84,0.6)' },
+            { label: 'Withdrawals', data: cashWithdrawals, backgroundColor: 'rgba(220,53,69,0.6)' },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const regSeries = chartsData.registrations_series || [];
+    const regLabels = regSeries.map(r => r.day);
+    const regCounts = regSeries.map(r => Number(r.registrations || 0));
+    const growthCtx = document.getElementById('acctUserGrowthChart');
+    if (growthCtx) {
+      new Chart(growthCtx, {
+        type: 'line',
+        data: { labels: regLabels, datasets: [{ label: 'Registrations', data: regCounts, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.15)', tension: 0.25 }] },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const topFixtures = chartsData.top_fixtures || [];
+    const topBody = document.getElementById('acctTopFixturesBody');
+    if (topBody) {
+      if (!topFixtures.length) {
+        topBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">No data.</td></tr>';
+      } else {
+        topBody.innerHTML = topFixtures.map(r => `<tr><td>${(r.label || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td><td class="text-end fw-semibold">${r.picks || 0}</td></tr>`).join('');
+      }
+    }
+
+    const feedUrl = "{% url 'betting:account_user_activity_feed' %}";
+    const feedBody = document.getElementById('acctActivityFeedBody');
+    const updatedAt = document.getElementById('acctActivityUpdatedAt');
+    const feedToggleEl = document.getElementById('acctFeedToggle');
+    let feedExpanded = false;
+    let feedEventsState = [];
+
+    function fmtTime(ts) {
+      if (!ts) return '-';
+      try { return new Date(ts).toLocaleString(); } catch (e) { return ts; }
+    }
+
+    function renderFeed() {
+      if (!feedBody) return;
+      const limit = feedExpanded ? feedEventsState.length : 6;
+      const rows = (feedEventsState || []).slice(0, limit);
+      if (!rows.length) {
+        feedBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No activity yet.</td></tr>';
+      } else {
+        feedBody.innerHTML = rows.map(e => `
+          <tr>
+            <td class="text-nowrap">${fmtTime(e.ts)}</td>
+            <td class="text-uppercase small">${(e.type || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+            <td class="text-muted small">${(e.user || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+            <td class="text-end fw-semibold">₦${Number(e.amount || 0).toFixed(2)}</td>
+            <td class="text-uppercase small">${(e.status || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td>
+          </tr>
+        `).join('');
+      }
+      if (feedToggleEl) {
+        feedToggleEl.style.display = (feedEventsState || []).length > 6 ? 'inline' : 'none';
+        feedToggleEl.textContent = feedExpanded ? 'Hide All' : 'See All';
+      }
+    }
+
+    async function refreshFeed() {
+      if (!feedBody) return;
+      try {
+        const res = await fetch(feedUrl, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) throw new Error('Bad response');
+        const data = await res.json();
+        feedEventsState = (data.events || []).slice(0, 20);
+        renderFeed();
+        if (updatedAt) updatedAt.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        feedBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Failed to load activity.</td></tr>';
+        if (feedToggleEl) feedToggleEl.style.display = 'none';
+      }
+    }
+
+    refreshFeed();
+    setInterval(refreshFeed, 10000);
+    if (feedToggleEl) {
+      feedToggleEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        feedExpanded = !feedExpanded;
+        renderFeed();
+      });
+    }
+  })();
+</script>
 {% endblock %}
 
 {% block content %}
@@ -56,6 +197,7 @@ $(document).ready(function() {
         <div class="col-md-12">
             <h2 class="fw-bold text-primary">Account User Dashboard</h2>
             <a class="btn btn-success mt-2" href="{% url 'betting:commission_management' %}">Commission Management</a>
+            <a class="btn btn-outline-danger mt-2" href="{% url 'betting:commission_recall_dashboard' %}">Commission Recall</a>
             <div class="card bg-light border-0 shadow-sm mt-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Your Operational Wallet</h5>
@@ -96,6 +238,210 @@ $(document).ready(function() {
                 <div class="card-body">
                     <div class="text-muted small">Failed Transactions (7d)</div>
                     <div class="fw-bold fs-5">{{ account_kpis.failed_transactions_7d }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+                <div>
+                    <div class="fw-semibold">Executive Overview</div>
+                    <div class="text-muted small">{{ metrics_label }} ({{ metrics_start }} → {{ metrics_end }})</div>
+                </div>
+                <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+                    <div>
+                        <label class="form-label small text-muted mb-1">From</label>
+                        <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+                    </div>
+                    <div>
+                        <label class="form-label small text-muted mb-1">To</label>
+                        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
+                    </div>
+                    <button class="btn btn-sm btn-dark" type="submit">Apply</button>
+                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:account_user_dashboard' %}">Reset</a>
+                </form>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="row g-3 mb-3">
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Registered Users</div>
+                            <div class="fs-4 fw-bold">{{ kpis.total_registered_users }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Active Users Today</div>
+                            <div class="fs-4 fw-bold">{{ kpis.active_users_today }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">New Registrations</div>
+                            <div class="fs-4 fw-bold">{{ kpis.new_registrations }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Bets Placed</div>
+                            <div class="fs-4 fw-bold">{{ kpis.total_bets_placed }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Stake Amount</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.total_stake_amount|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Payouts</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.total_payouts|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Gross Gaming Revenue (GGR)</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.ggr|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Net Gaming Revenue (NGR)</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.ngr|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Deposits</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.total_deposits|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Total Withdrawals</div>
+                            <div class="fs-5 fw-bold">₦{{ kpis.total_withdrawals|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Pending Withdrawals</div>
+                            <div class="fs-4 fw-bold">{{ kpis.pending_withdrawals }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-3">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-body">
+                            <div class="text-muted small">Conversion Rate</div>
+                            <div class="fs-4 fw-bold">{{ kpis.conversion_rate }}%</div>
+                            <div class="text-muted small">Avg Bet ₦{{ kpis.average_bet_value|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-12 col-lg-8">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-header bg-light fw-semibold">Revenue & Betting Trends</div>
+                        <div class="card-body">
+                            <canvas id="acctRevenueChart" height="110"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-4">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-header bg-light fw-semibold">Deposit vs Withdrawal</div>
+                        <div class="card-body">
+                            <canvas id="acctCashflowChart" height="110"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-12 col-lg-7">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-header bg-light fw-semibold">User Growth</div>
+                        <div class="card-body">
+                            <canvas id="acctUserGrowthChart" height="110"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-5">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-header bg-light fw-semibold">Top Performing Games/Events</div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Fixture</th>
+                                            <th class="text-end">Picks</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="acctTopFixturesBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-12">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                            <div class="fw-semibold">Real-time Activity Feed</div>
+                            <div class="d-flex align-items-center gap-2">
+                                <a href="#" id="acctFeedToggle" class="small text-decoration-none" style="display:none;">See All</a>
+                                <div class="text-muted small" id="acctActivityUpdatedAt"></div>
+                            </div>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Type</th>
+                                            <th>User</th>
+                                            <th class="text-end">Amount</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="acctActivityFeedBody">
+                                        <tr><td colspan="5" class="text-center text-muted py-4">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -89,6 +89,7 @@ urlpatterns = [
 
     # Account User URLs
     path('account-user/dashboard/', views.account_user_dashboard, name='account_user_dashboard'),
+    path('account-user/activity-feed/', views.account_user_activity_feed, name='account_user_activity_feed'),
     path('super-admin/fund-account-user/', views.super_admin_fund_account_user, name='super_admin_fund_account_user'),
 
     # CRM URLs
@@ -108,6 +109,8 @@ urlpatterns = [
 
     # Finance URLs
     path('finance/dashboard/', views.finance_dashboard, name='finance_dashboard'),
+    path('finance/commission-recall/', views.commission_recall_dashboard, name='commission_recall_dashboard'),
+    path('finance/commission-recall/export/', views.commission_recall_export, name='commission_recall_export'),
     path('finance/export/', views.finance_export, name='finance_export'),
 
     # Commission Management (CRM / Account User / Retail Manager / Super Admin)

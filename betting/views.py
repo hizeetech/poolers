@@ -5794,7 +5794,7 @@ def agent_create_cashier(request):
 
             cashier_prefix = f"{base_prefix}-{next_num:02d}"
 
-            CashierRegistrationRequest.objects.create(
+            req = CashierRegistrationRequest.objects.create(
                 agent=agent,
                 first_name=first_name,
                 last_name=last_name,
@@ -5806,6 +5806,37 @@ def agent_create_cashier(request):
                 cashier_prefix=cashier_prefix,
                 status='PENDING'
             )
+
+            try:
+                admin_emails = list(
+                    User.objects.filter(Q(is_superuser=True) | Q(user_type='admin'))
+                    .exclude(email__isnull=True)
+                    .exclude(email__exact='')
+                    .values_list('email', flat=True)
+                )
+                admin_emails = sorted(set([e.strip() for e in admin_emails if e and e.strip()]))
+                if admin_emails:
+                    review_url = request.build_absolute_uri('/admin/betting/pendingcashierregistration/')
+                    msg = (
+                        "New cashier registration request submitted.\n\n"
+                        f"Agent: {agent.get_full_name() or agent.email}\n"
+                        f"Agent Email: {agent.email}\n"
+                        f"Cashier Code: {cashier_code}\n"
+                        f"Cashier Email: {cashier_email}\n"
+                        f"Cashier Username: {cashier_username}\n"
+                        f"Cashier Name: {first_name} {last_name} {other_name}\n"
+                        f"Cashier Phone: {phone_number or '-'}\n"
+                        f"Review: {review_url}\n"
+                    )
+                    send_mail(
+                        subject=f"New Cashier Request ({cashier_code})",
+                        message=msg,
+                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                        recipient_list=admin_emails,
+                        fail_silently=True,
+                    )
+            except Exception:
+                pass
 
             messages.success(request, f"Cashier registration {cashier_code} submitted for admin approval.")
         except Exception as e:

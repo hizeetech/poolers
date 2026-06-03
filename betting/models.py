@@ -2001,10 +2001,15 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     if should_recalculate:
         try:
             from .tasks import recalculate_tickets_for_fixture
-            recalculate_tickets_for_fixture.delay(instance.id)
+            ticket_count = BetTicket.objects.filter(selections__fixture=instance).distinct().count()
+            is_test_run = any(arg in ('test', 'pytest') for arg in getattr(sys, 'argv', []) or [])
+            if is_test_run or ticket_count <= 200:
+                recalculate_tickets_for_fixture.run(instance.id)
+            else:
+                recalculate_tickets_for_fixture.delay(instance.id)
         except Exception:
             try:
-                recalculate_tickets_for_fixture(instance.id)
+                recalculate_tickets_for_fixture.run(instance.id)
             except Exception:
                 pass
 

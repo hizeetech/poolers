@@ -2176,6 +2176,15 @@ def agent_void_ticket(request, ticket_id):
          messages.error(request, "Only pending tickets can be voided.")
          return redirect('betting:check_ticket_status')
 
+    try:
+        TicketVoidRequest = apps.get_model('void_requests', 'TicketVoidRequest')
+        vr = TicketVoidRequest.objects.filter(ticket=ticket, status='pending', is_processed=False).first()
+        if vr:
+            messages.error(request, "This ticket is already pending void approval.")
+            return redirect('betting:check_ticket_status')
+    except Exception:
+        pass
+
     # Void Process
     ticket.status = 'cancelled'
     ticket.deleted_by = request.user

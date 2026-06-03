@@ -386,11 +386,7 @@ def get_retail_manager_super_agents(user, *, master_agents_qs=None):
     direct_ids = list(
         RetailManagerSuperAgentMapping.objects.filter(retail_manager=user).values_list('super_agent_id', flat=True)
     )
-    direct_qs = User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
-    if master_agents_qs is None:
-        master_agents_qs = get_retail_manager_master_agents(user)
-    derived_qs = User.objects.filter(user_type='super_agent', master_agent__in=master_agents_qs) if master_agents_qs.exists() else User.objects.none()
-    return (direct_qs | derived_qs).distinct()
+    return User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
 
 def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=None):
     if not is_retail_manager(user):
@@ -399,15 +395,11 @@ def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=No
         RetailManagerAgentMapping.objects.filter(retail_manager=user).values_list('agent_id', flat=True)
     )
     direct_qs = User.objects.filter(id__in=direct_ids, user_type='agent') if direct_ids else User.objects.none()
-    if master_agents_qs is None:
-        master_agents_qs = get_retail_manager_master_agents(user)
     if super_agents_qs is None:
-        super_agents_qs = get_retail_manager_super_agents(user, master_agents_qs=master_agents_qs)
+        super_agents_qs = get_retail_manager_super_agents(user)
     derived_q = Q()
     if super_agents_qs.exists():
         derived_q |= Q(super_agent__in=super_agents_qs)
-    if master_agents_qs.exists():
-        derived_q |= Q(master_agent__in=master_agents_qs)
     derived_qs = User.objects.filter(user_type='agent').filter(derived_q) if derived_q else User.objects.none()
     return (direct_qs | derived_qs).distinct()
 
@@ -415,12 +407,12 @@ def get_retail_network_users_qs(user):
     if not is_retail_manager(user):
         return User.objects.none()
     mas = get_retail_manager_master_agents(user)
-    sas = get_retail_manager_super_agents(user, master_agents_qs=mas)
-    agents = get_retail_manager_agents(user, master_agents_qs=mas, super_agents_qs=sas)
+    sas = get_retail_manager_super_agents(user)
+    agents = get_retail_manager_agents(user, super_agents_qs=sas)
     q = Q(id__in=list(mas.values_list('id', flat=True)))
     q |= Q(id__in=list(sas.values_list('id', flat=True)))
     q |= Q(id__in=list(agents.values_list('id', flat=True)))
-    q |= Q(agent__in=agents) | Q(super_agent__in=sas) | Q(master_agent__in=mas)
+    q |= Q(agent__in=agents) | Q(super_agent__in=sas)
     return User.objects.filter(q).distinct()
 
 
@@ -7444,6 +7436,45 @@ def crm_dashboard(request):
             )
         audit_logs = list(audit_qs[:100])
 
+    retail_hierarchy = []
+    if active_tab == 'retail_hierarchy':
+        sas_qs = (
+            User.objects.filter(user_type='super_agent')
+            .exclude(master_agent_id__isnull=True)
+            .select_related('state', 'master_agent')
+            .order_by('email')
+        )
+        agents_qs = (
+            User.objects.filter(user_type='agent')
+            .select_related('state', 'master_agent', 'super_agent')
+            .order_by('email')
+        )
+        ma_ids = set(sas_qs.values_list('master_agent_id', flat=True)) | set(
+            agents_qs.exclude(master_agent_id__isnull=True).values_list('master_agent_id', flat=True)
+        )
+        mas_list = list(
+            User.objects.filter(user_type='master_agent', id__in=list(ma_ids)).select_related('state').order_by('email')
+        )
+        sas_list = list(sas_qs)
+        agents_list = list(agents_qs)
+
+        agents_by_sa = {}
+        for ag in agents_list:
+            agents_by_sa.setdefault(getattr(ag, 'super_agent_id', None), []).append(ag)
+        sas_by_ma = {}
+        for sa in sas_list:
+            sas_by_ma.setdefault(getattr(sa, 'master_agent_id', None), []).append(sa)
+        direct_agents_by_ma = {}
+        for ag in agents_list:
+            if ag.super_agent_id is None and ag.master_agent_id is not None:
+                direct_agents_by_ma.setdefault(ag.master_agent_id, []).append(ag)
+
+        for ma in mas_list:
+            node = {'master_agent': ma, 'super_agents': [], 'direct_agents': direct_agents_by_ma.get(ma.id, [])}
+            for sa in sas_by_ma.get(ma.id, []):
+                node['super_agents'].append({'super_agent': sa, 'agents': agents_by_sa.get(sa.id, [])})
+            retail_hierarchy.append(node)
+
     context = {
         'active_tab': active_tab,
         'q': q,
@@ -7480,6 +7511,7 @@ def crm_dashboard(request):
         'can_edit_profiles': crm_can_edit_profiles(request.user),
         'can_view_audit': crm_can_view_audit(request.user),
         'can_message': crm_can_message(request.user),
+        'retail_hierarchy': retail_hierarchy,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 
@@ -7646,7 +7678,7 @@ def retail_dashboard(request):
     total_mapped_agents = agents.count()
     total_active_players = (
         User.objects.filter(user_type='player', is_active=True)
-        .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+        .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents))
         .distinct()
         .count()
     )

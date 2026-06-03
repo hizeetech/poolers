@@ -505,6 +505,9 @@
                           <thead class="table-light">
                             <tr>
                               <th>Agent</th>
+                              <th class="text-muted small">Username</th>
+                              <th class="text-muted small">Phone</th>
+                              <th class="text-muted small">Last Bet</th>
                               <th class="text-muted small">State</th>
                             </tr>
                           </thead>
@@ -512,10 +515,13 @@
                             {% for ag in n.direct_agents %}
                             <tr>
                               <td class="text-muted small">{{ ag.email|default:ag.username }}</td>
+                              <td class="text-muted small">{{ ag.username|default:"-" }}</td>
+                              <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
+                              <td class="text-muted small">{% if ag.last_bet_at %}{{ ag.last_bet_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
                               <td class="text-muted small">{{ ag.state.state_name|default:"-" }}</td>
                             </tr>
                             {% empty %}
-                            <tr><td colspan="2" class="text-center text-muted">No agents.</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted">No agents.</td></tr>
                             {% endfor %}
                           </tbody>
                         </table>
@@ -538,6 +544,9 @@
                                 <thead class="table-light">
                                   <tr>
                                     <th>Agent</th>
+                                    <th class="text-muted small">Username</th>
+                                    <th class="text-muted small">Phone</th>
+                                    <th class="text-muted small">Last Bet</th>
                                     <th class="text-muted small">State</th>
                                   </tr>
                                 </thead>
@@ -545,10 +554,13 @@
                                   {% for ag in sa_node.agents %}
                                   <tr>
                                     <td class="text-muted small">{{ ag.email|default:ag.username }}</td>
+                                    <td class="text-muted small">{{ ag.username|default:"-" }}</td>
+                                    <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
+                                    <td class="text-muted small">{% if ag.last_bet_at %}{{ ag.last_bet_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
                                     <td class="text-muted small">{{ ag.state.state_name|default:"-" }}</td>
                                   </tr>
                                   {% empty %}
-                                  <tr><td colspan="2" class="text-center text-muted">No agents.</td></tr>
+                                  <tr><td colspan="5" class="text-center text-muted">No agents.</td></tr>
                                   {% endfor %}
                                 </tbody>
                               </table>

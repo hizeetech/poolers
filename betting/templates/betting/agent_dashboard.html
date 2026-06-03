@@ -111,6 +111,9 @@
                 <div class="card-body">
                     <h5 class="card-title text-muted">Pending Commission</h5>
                     <p class="card-text fs-3 fw-bold text-warning">₦{{ pending_commission|floatformat:2 }}</p>
+                    {% if user.user_type == 'agent' %}
+                    <div class="text-muted small">Single: ₦{{ pending_commission_single|floatformat:2 }} • Multiple: ₦{{ pending_commission_multiple|floatformat:2 }}</div>
+                    {% endif %}
                 </div>
             </div>
         </div>

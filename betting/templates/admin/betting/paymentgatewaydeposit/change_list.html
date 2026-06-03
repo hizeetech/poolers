@@ -1,0 +1,80 @@
+{% extends "admin/change_list.html" %}
+
+{% block content %}
+  <div class="content">
+    {% with base_query=pgd_base_query|default:"" %}
+      {% if base_query %}
+        {% with base_q="?"|add:base_query %}
+          <div style="margin-bottom: 12px;">
+            <a class="button{% if pgd_tab == 'list' %} default{% endif %}" href="{{ base_q }}&tab=list">List</a>
+            <a class="button{% if pgd_tab == 'summary' %} default{% endif %}" href="{{ base_q }}&tab=summary">Summary</a>
+          </div>
+        {% endwith %}
+      {% else %}
+        <div style="margin-bottom: 12px;">
+          <a class="button{% if pgd_tab == 'list' %} default{% endif %}" href="?tab=list">List</a>
+          <a class="button{% if pgd_tab == 'summary' %} default{% endif %}" href="?tab=summary">Summary</a>
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% if pgd_tab == 'summary' %}
+      <div class="module" style="margin-bottom: 16px;">
+        <h2>Total Successful Deposits By Gateway</h2>
+        <div style="padding: 12px;">
+          <form method="get" style="display:flex; gap: 8px; align-items: end; flex-wrap: wrap;">
+            <input type="hidden" name="tab" value="summary">
+            <div>
+              <label for="id_start_date">From</label><br>
+              <input type="date" id="id_start_date" name="start_date" value="{{ pgd_start_date }}">
+            </div>
+            <div>
+              <label for="id_end_date">To</label><br>
+              <input type="date" id="id_end_date" name="end_date" value="{{ pgd_end_date }}">
+            </div>
+            <div>
+              <button class="button" type="submit">Apply</button>
+              <a class="button" href="?tab=summary">Reset</a>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="module">
+        <h2>Summary</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Payment Gateway</th>
+              <th style="text-align:right;">Successful Deposits</th>
+              <th style="text-align:right;">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in pgd_gateway_totals %}
+              <tr>
+                <td>{{ row.payment_gateway_label }}</td>
+                <td style="text-align:right;">{{ row.total_count }}</td>
+                <td style="text-align:right;">₦{{ row.total_amount|floatformat:2 }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3" style="text-align:center; padding: 16px;">No data.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th style="text-align:right;">{{ pgd_total_count }}</th>
+              <th style="text-align:right;">₦{{ pgd_total_amount|floatformat:2 }}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    {% else %}
+      {{ block.super }}
+    {% endif %}
+  </div>
+{% endblock %}
+

@@ -3,8 +3,8 @@ import os
 import sys
 from django import forms
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Q, IntegerField, Sum
-from django.db.models.functions import Cast
+from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -1073,6 +1073,7 @@ class TransactionAdmin(admin.ModelAdmin):
     payment_gateway_used.admin_order_field = 'payment_gateway'
 
 class PaymentGatewayDepositAdmin(admin.ModelAdmin):
+    change_list_template = 'admin/betting/paymentgatewaydeposit/change_list.html'
     list_display = ('timestamp', 'user', 'payment_gateway', 'amount', 'status', 'is_successful', 'external_reference')
     list_filter = ('payment_gateway', 'status', 'is_successful', 'timestamp')
     search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
@@ -1083,6 +1084,50 @@ class PaymentGatewayDepositAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.filter(transaction_type='deposit', payment_gateway__in=['monnify', 'paystack', 'kora'])
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        tab = (request.GET.get('tab') or 'list').strip() or 'list'
+        start_date = (request.GET.get('start_date') or '').strip()
+        end_date = (request.GET.get('end_date') or '').strip()
+
+        qs = self.get_queryset(request).filter(is_successful=True, status='completed')
+        if start_date:
+            qs = qs.filter(timestamp__date__gte=start_date)
+        if end_date:
+            qs = qs.filter(timestamp__date__lte=end_date)
+
+        totals = list(
+            qs.values('payment_gateway')
+            .annotate(
+                total_amount=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()),
+                total_count=Count('id'),
+            )
+            .order_by('payment_gateway')
+        )
+        for row in totals:
+            label_map = {'paystack': 'Paystack', 'monnify': 'Monnify', 'kora': 'Kora'}
+            row['payment_gateway_label'] = label_map.get(row['payment_gateway'], row['payment_gateway'])
+
+        base_qd = request.GET.copy()
+        try:
+            base_qd.pop('tab', None)
+        except Exception:
+            pass
+        base_query = base_qd.urlencode()
+
+        extra_context.update(
+            {
+                'pgd_tab': tab,
+                'pgd_start_date': start_date,
+                'pgd_end_date': end_date,
+                'pgd_gateway_totals': totals,
+                'pgd_total_amount': qs.aggregate(v=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['v'],
+                'pgd_total_count': qs.count(),
+                'pgd_base_query': base_query,
+            }
+        )
+        return super().changelist_view(request, extra_context=extra_context)
 
 class PendingCashierRegistrationAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'agent', 'cashier_code', 'cashier_email', 'cashier_username', 'status', 'actions_buttons')

@@ -60,7 +60,7 @@ from .models import (
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
     ScheduledFinanceReport
 )
-from commission.models import WeeklyAgentCommission, MonthlyNetworkCommission
+from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
 from .forms import (
     UserRegistrationForm, LoginForm, PasswordChangeForm, ProfileEditForm, 
@@ -4442,6 +4442,47 @@ def admin_dashboard(request):
         .aggregate(total=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['total']
     )
 
+    selected_commission_period = None
+    commission_period_id = (request.GET.get('commission_period_id') or '').strip()
+    commission_periods = list(CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')[:104])
+    if commission_period_id:
+        try:
+            selected_commission_period = CommissionPeriod.objects.filter(period_type='weekly', id=int(commission_period_id)).first()
+        except Exception:
+            selected_commission_period = None
+    if selected_commission_period is None and commission_periods:
+        selected_commission_period = commission_periods[0]
+
+    period_turnover = Decimal('0.00')
+    period_winnings = Decimal('0.00')
+    period_ggr = Decimal('0.00')
+    period_commission_paid = Decimal('0.00')
+    period_ngr = Decimal('0.00')
+    if selected_commission_period:
+        period_start_dt = timezone.make_aware(datetime.combine(selected_commission_period.start_date, datetime.min.time()))
+        period_end_dt = timezone.make_aware(datetime.combine(selected_commission_period.end_date, datetime.max.time()))
+        tickets_qs = (
+            BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+            .filter(placed_at__gte=period_start_dt, placed_at__lte=period_end_dt)
+        )
+        period_turnover = tickets_qs.aggregate(total=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['total']
+        period_winnings = (
+            tickets_qs.filter(status='won')
+            .aggregate(total=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['total']
+        )
+        period_ggr = (period_turnover or Decimal('0.00')) - (period_winnings or Decimal('0.00'))
+        period_commission_paid = (
+            Transaction.objects.filter(
+                transaction_type='commission_payout',
+                status='completed',
+                is_successful=True,
+                timestamp__gte=period_start_dt,
+                timestamp__lte=period_end_dt,
+            )
+            .aggregate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['total']
+        )
+        period_ngr = (period_ggr or Decimal('0.00')) - (period_commission_paid or Decimal('0.00'))
+
     context = {
         'total_users': total_users,
         'total_players': total_players,
@@ -4467,6 +4508,14 @@ def admin_dashboard(request):
         'top_exposure_agents': top_exposure_agents,
         'platform_exposure_today': platform_exposure_today,
         'platform_sales_today': platform_sales_today,
+        'commission_periods': commission_periods,
+        'selected_commission_period': selected_commission_period,
+        'commission_period_id': str(getattr(selected_commission_period, 'id', '') or ''),
+        'period_turnover': period_turnover,
+        'period_winnings': period_winnings,
+        'period_ggr': period_ggr,
+        'period_commission_paid': period_commission_paid,
+        'period_ngr': period_ngr,
     }
     return render(request, 'betting/admin/dashboard.html', context)
 

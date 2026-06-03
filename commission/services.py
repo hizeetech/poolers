@@ -819,18 +819,24 @@ def calculate_monthly_network_commission_data(user, period):
 
     # 1. Total Stake & Winnings (Downlines)
     # Tickets placed in this month
+    excluded_statuses = ['pending', 'cancelled', 'deleted']
     if user.user_type == 'super_agent':
         tickets = BetTicket.objects.filter(
-            user__super_agent=user,
+            Q(user=user) |
+            Q(user__super_agent=user) |
+            Q(user__agent__super_agent=user),
             placed_at__date__gte=start_date,
-            placed_at__date__lte=end_date
-        ).exclude(status__in=['cancelled', 'deleted'])
+            placed_at__date__lte=end_date,
+        ).exclude(status__in=excluded_statuses)
     elif user.user_type == 'master_agent':
         tickets = BetTicket.objects.filter(
-            user__master_agent=user,
+            Q(user=user) |
+            Q(user__master_agent=user) |
+            Q(user__super_agent__master_agent=user) |
+            Q(user__agent__super_agent__master_agent=user),
             placed_at__date__gte=start_date,
-            placed_at__date__lte=end_date
-        ).exclude(status__in=['cancelled', 'deleted'])
+            placed_at__date__lte=end_date,
+        ).exclude(status__in=excluded_statuses)
     
     downline_stake = tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)
     downline_winnings = tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)

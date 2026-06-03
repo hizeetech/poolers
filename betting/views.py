@@ -361,12 +361,24 @@ def finance_can_view_pin_logs(user):
 def get_retail_manager_master_agents(user):
     if not is_retail_manager(user):
         return User.objects.none()
-    ma_ids = list(
+    ma_ids = set(
         RetailManagerMasterAgentMapping.objects.filter(retail_manager=user).values_list('master_agent_id', flat=True)
     )
+    derived_from_super = set(
+        RetailManagerSuperAgentMapping.objects.filter(retail_manager=user)
+        .exclude(super_agent__master_agent_id__isnull=True)
+        .values_list('super_agent__master_agent_id', flat=True)
+    )
+    derived_from_agents = set(
+        RetailManagerAgentMapping.objects.filter(retail_manager=user)
+        .exclude(agent__master_agent_id__isnull=True)
+        .values_list('agent__master_agent_id', flat=True)
+    )
+    ma_ids |= derived_from_super
+    ma_ids |= derived_from_agents
     if not ma_ids:
         return User.objects.none()
-    return User.objects.filter(id__in=ma_ids, user_type='master_agent')
+    return User.objects.filter(id__in=list(ma_ids), user_type='master_agent')
 
 def get_retail_manager_super_agents(user, *, master_agents_qs=None):
     if not is_retail_manager(user):

@@ -4499,14 +4499,8 @@ def admin_dashboard(request):
         )
         period_ggr = (period_turnover or Decimal('0.00')) - (period_winnings or Decimal('0.00'))
         period_commission_paid = (
-            Transaction.objects.filter(
-                transaction_type='commission_payout',
-                status='completed',
-                is_successful=True,
-                timestamp__gte=period_start_dt,
-                timestamp__lte=period_end_dt,
-            )
-            .aggregate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['total']
+            WeeklyAgentCommission.objects.filter(period=selected_commission_period, status='paid')
+            .aggregate(total=Coalesce(Sum('commission_total_amount'), Value(0), output_field=DecimalField()))['total']
         )
         period_ngr = (period_ggr or Decimal('0.00')) - (period_commission_paid or Decimal('0.00'))
 

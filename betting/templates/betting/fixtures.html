@@ -575,9 +575,31 @@
     }
 
     // Function to update the bet slip display and calculations
+    function normalizeSelectedBets(input) {
+        const arr = Array.isArray(input) ? input : [];
+        const byFixture = new Map();
+        for (const raw of arr) {
+            if (!raw) continue;
+            const fixtureId = String(raw.fixture_id ?? raw.fixtureId ?? '');
+            if (!fixtureId) continue;
+            const betType = String(raw.bet_type ?? raw.outcome ?? '');
+            if (!betType) continue;
+
+            byFixture.set(fixtureId, {
+                ...raw,
+                fixture_id: fixtureId,
+                bet_type: betType,
+                odd: raw.odd,
+            });
+        }
+        return Array.from(byFixture.values());
+    }
+
     function updateBetslip() {
         betslipSelectionsDiv.innerHTML = ''; // Clear current selections
         let currentTotalOdds = 1;
+
+        selectedBets = normalizeSelectedBets(selectedBets);
 
         // Save to localStorage
         localStorage.setItem('selectedBets', JSON.stringify(selectedBets));
@@ -850,7 +872,7 @@
             const betType = button.dataset.betType;
 
             // Check if this button's selection is in the selectedBets array
-            const isSelected = selectedBets.some(bet => bet.fixture_id === fixtureId && bet.bet_type === betType);
+            const isSelected = selectedBets.some(bet => String(bet.fixture_id) === String(fixtureId) && String(bet.bet_type) === String(betType));
 
             if (isSelected) {
                 button.classList.add('btn-success'); // Highlight in green for selected
@@ -916,20 +938,20 @@
                 const matchDate = this.dataset.matchDate;
                 const matchTime = this.dataset.matchTime;
 
-                const existing = selectedBets.find(bet => bet.fixture_id === fixtureId);
-                if (existing && existing.bet_type === betType) {
-                    selectedBets = selectedBets.filter(bet => !(bet.fixture_id === fixtureId && bet.bet_type === betType));
+                const existing = selectedBets.find(bet => String(bet.fixture_id) === String(fixtureId));
+                if (existing && String(existing.bet_type) === String(betType)) {
+                    selectedBets = selectedBets.filter(bet => !(String(bet.fixture_id) === String(fixtureId) && String(bet.bet_type) === String(betType)));
                     displayMessage('Selection removed.', 'info');
                     updateBetslip();
                     return;
                 }
 
                 // Replace any existing selection for this fixture before adding
-                selectedBets = selectedBets.filter(bet => bet.fixture_id !== fixtureId);
+                selectedBets = selectedBets.filter(bet => String(bet.fixture_id) !== String(fixtureId));
 
                 // Add the new selection with full details
                 selectedBets.push({
-                    fixture_id: fixtureId,
+                    fixture_id: String(fixtureId),
                     bet_type: betType,
                     bet_type_display: getBetTypeDisplay(betType), // Add display name
                     odd: odd,
@@ -1074,7 +1096,7 @@
         const savedBets = localStorage.getItem('selectedBets');
         if (savedBets) {
             try {
-                selectedBets = JSON.parse(savedBets);
+                selectedBets = normalizeSelectedBets(JSON.parse(savedBets));
                 updateBetslip();
             } catch (e) {
                 console.error('Error loading saved bets:', e);
@@ -1107,9 +1129,10 @@
 
         // Event listener for removing selections from bet slip
         betslipSelectionsDiv.addEventListener('click', function(event) {
-            if (event.target.classList.contains('remove-selection-btn')) {
-                const fixtureIdToRemove = event.target.dataset.fixtureId;
-                selectedBets = selectedBets.filter(bet => bet.fixture_id !== fixtureIdToRemove);
+            const btn = event.target.closest ? event.target.closest('.remove-selection-btn') : null;
+            if (btn) {
+                const fixtureIdToRemove = String(btn.dataset.fixtureId || '');
+                selectedBets = selectedBets.filter(bet => String(bet.fixture_id) !== fixtureIdToRemove);
                 displayMessage('Selection removed.', 'info');
                 updateBetslip();
             }
@@ -1421,23 +1444,27 @@
         loadBettingLimits();
 
         function applyRebetTicket(ticket) {
-            selectedBets = [];
+            const list = (ticket && Array.isArray(ticket.selections)) ? ticket.selections : [];
+            const byFixture = new Map();
 
-            ticket.selections.forEach(sel => {
-                if (sel.is_active) {
-                    selectedBets.push({
-                        fixture_id: sel.fixture_id,
-                        fixture_home_team: sel.fixture_home_team,
-                        fixture_away_team: sel.fixture_away_team,
-                        fixture_match_date: sel.fixture_match_date,
-                        fixture_match_time: sel.fixture_match_time,
-                        bet_type: sel.bet_type,
-                        bet_type_display: sel.bet_type_display,
-                        odd: sel.odd,
-                        fixture_period_name: sel.fixture_period_name
-                    });
-                }
+            list.forEach(sel => {
+                if (!sel || !sel.is_active) return;
+                const fixtureId = String(sel.fixture_id ?? '');
+                if (!fixtureId) return;
+                byFixture.set(fixtureId, {
+                    fixture_id: fixtureId,
+                    fixture_home_team: sel.fixture_home_team,
+                    fixture_away_team: sel.fixture_away_team,
+                    fixture_match_date: sel.fixture_match_date,
+                    fixture_match_time: sel.fixture_match_time,
+                    bet_type: sel.bet_type,
+                    bet_type_display: sel.bet_type_display,
+                    odd: sel.odd,
+                    fixture_period_name: sel.fixture_period_name
+                });
             });
+
+            selectedBets = Array.from(byFixture.values());
 
             if (selectedBets.length > 0) {
                 if (ticket.bet_type === 'system' && ticket.system_min_count) {

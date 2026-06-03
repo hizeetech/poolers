@@ -1319,11 +1319,17 @@ def place_bet(request):
 
                     # Basic Validation of selections
                     valid_selections = []
+                    seen_fixtures = set()
                     for sel in selections_data:
                         # Support both camelCase (legacy/API) and snake_case (frontend) keys
                         fixture_id = sel.get('fixtureId') or sel.get('fixture_id')
                         if not fixture_id:
                             return fail_response('Missing fixture ID.')
+
+                        fixture_key = str(fixture_id)
+                        if fixture_key in seen_fixtures:
+                            return fail_response('Duplicate event selected. Remove duplicate selections and try again.')
+                        seen_fixtures.add(fixture_key)
 
                         try:
                             fixture = Fixture.objects.get(id=fixture_id)
@@ -11241,8 +11247,15 @@ def get_ticket_details_json(request):
         return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
 
     selections_data = []
+    seen_fixture_ids = set()
     for sel in ticket.selections.select_related('fixture', 'fixture__betting_period').all():
         fixture = sel.fixture
+        if mode == 'rebet':
+            fixture_key = str(getattr(fixture, 'id', '') or '')
+            if fixture_key and fixture_key in seen_fixture_ids:
+                continue
+            if fixture_key:
+                seen_fixture_ids.add(fixture_key)
         
         # Determine Odd Value
         odd_value = sel.odd_selected # Default to stored odd for reprint
@@ -11276,7 +11289,7 @@ def get_ticket_details_json(request):
                 is_active = False
                 
         selections_data.append({
-            'fixture_id': fixture.id,
+            'fixture_id': str(fixture.id),
             'fixture_home_team': fixture.home_team,
             'fixture_away_team': fixture.away_team,
             'fixture_match_date': fixture.match_date.strftime('%Y-%m-%d'),

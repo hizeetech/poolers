@@ -1994,20 +1994,19 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     except Exception:
         pass
 
-    if not created:
+    status = str(getattr(instance, 'status', '') or '').strip().lower()
+    scores_present = getattr(instance, 'home_score', None) is not None and getattr(instance, 'away_score', None) is not None
+    should_recalculate = scores_present or status in {'finished', 'settled', 'cancelled', 'postponed', 'abandoned', 'no_result'}
+
+    if should_recalculate:
         try:
-            # Import task locally to avoid circular import
             from .tasks import recalculate_tickets_for_fixture
-            
-            # Offload heavy ticket recalculation to Celery
-            # This returns immediately, preventing admin save timeouts
             recalculate_tickets_for_fixture.delay(instance.id)
-            
-        except Exception as e:
-            # Log the error but don't stop the save
-            print(f"Error initiating ticket update task for fixture {instance.id}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            try:
+                recalculate_tickets_for_fixture(instance.id)
+            except Exception:
+                pass
 
 class CreditRequest(models.Model):
     STATUS_CHOICES = (

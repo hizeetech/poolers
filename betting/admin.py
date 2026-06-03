@@ -1024,11 +1024,19 @@ class ResultAdmin(admin.ModelAdmin):
     list_filter = ('status', 'match_date', 'betting_period')
     search_fields = ('home_team', 'away_team', 'serial_number')
     
+    def has_add_permission(self, request):
+        return False
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         # Only show fixtures from active betting periods, similar to FixtureAdmin
         qs = qs.filter(betting_period__is_active=True)
         return qs.order_by('serial_number')
+
+    def save_model(self, request, obj, form, change):
+        if obj.home_score is not None and obj.away_score is not None and obj.status in ('scheduled', 'live'):
+            obj.status = 'finished'
+        super().save_model(request, obj, form, change)
 
     def serial_number_display(self, obj):
         return obj.serial_number

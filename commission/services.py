@@ -670,20 +670,33 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
     total_winnings = (tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)).quantize(Decimal('0.01'))
     ggr = (total_stake - total_winnings).quantize(Decimal('0.01'))
 
-    from django.db.models import Count
-    tickets_with_count = tickets.annotate(num_selections=Count('selections'))
+    from django.db.models import Count, IntegerField
+    from django.db.models.functions import Coalesce
+    tickets_with_count = list(
+        tickets.annotate(
+            num_selections=Coalesce(
+                "original_selections_count",
+                Count("selections", distinct=True),
+                output_field=IntegerField(),
+            )
+        )
+    )
 
     single_stake = Decimal('0.00')
     single_winnings = Decimal('0.00')
     multiple_stake = Decimal('0.00')
     multiple_winnings = Decimal('0.00')
 
-    hybrid_rules = list(plan.hybrid_rules.all()) if plan.is_hybrid_active else []
+    hybrid_rules = list(plan.hybrid_rules.all().order_by("min_selections"))
 
     for ticket in tickets_with_count:
         stake = (ticket.stake_amount or Decimal('0.00'))
         winnings = (ticket.max_winning or Decimal('0.00')) if ticket.status == 'won' else Decimal('0.00')
-        if getattr(ticket, 'num_selections', 0) == 1:
+        n = int(getattr(ticket, "num_selections", 0) or 0)
+        if n <= 0:
+            bt = (getattr(ticket, "bet_type", "") or "").strip().lower()
+            n = 2 if bt in ("multiple", "system") else 1
+        if n == 1:
             single_stake += stake
             single_winnings += winnings
         else:
@@ -700,22 +713,59 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
 
     commission_single_amount = Decimal('0.00')
     if single_ggr > 0:
-        commission_single_amount = (single_ggr * (plan.ggr_percent or Decimal('0.00')) / Decimal('100.00')).quantize(Decimal('0.01'))
+        single_pct = (plan.ggr_percent or Decimal('0.00'))
+        if getattr(plan, "enable_single_selection_override", False):
+            calc_type = (getattr(plan, "single_selection_calc_type", "") or "").strip().lower()
+            val = (getattr(plan, "single_selection_value", None) or Decimal("0.00"))
+            if calc_type == "percentage_ggr":
+                single_pct = val
+            elif calc_type == "percentage_stake":
+                commission_single_amount = (single_stake * val / Decimal("100.00")).quantize(Decimal("0.01"))
+                single_pct = None
+            elif calc_type == "fixed_value":
+                commission_single_amount = val.quantize(Decimal("0.01"))
+                single_pct = None
+
+        if single_pct is not None:
+            commission_single_amount = (single_ggr * single_pct / Decimal('100.00')).quantize(Decimal('0.01'))
 
     commission_multiple_amount = Decimal('0.00')
-    if plan.is_hybrid_active and multiple_ggr > 0 and hybrid_rules:
-        multi_pct = Decimal('0.00')
-        for rule in hybrid_rules:
-            if rule.max_selections:
-                if rule.min_selections <= 2 <= rule.max_selections:
-                    multi_pct = rule.commission_percent or Decimal('0.00')
-                    break
-            else:
-                if 2 >= rule.min_selections:
-                    multi_pct = rule.commission_percent or Decimal('0.00')
-                    break
-        if multi_pct > 0:
-            commission_multiple_amount = (multiple_ggr * multi_pct / Decimal('100.00')).quantize(Decimal('0.01'))
+    if hybrid_rules:
+        commission_multiple_amount_raw = Decimal("0.00")
+
+        def _match_hybrid_percent(selection_count: int) -> Decimal:
+            pct = Decimal("0.00")
+            for r in hybrid_rules:
+                max_sel = getattr(r, "max_selections", None)
+                if selection_count < int(getattr(r, "min_selections", 0) or 0):
+                    continue
+                if max_sel is not None and selection_count > int(max_sel):
+                    continue
+                pct = r.commission_percent or Decimal("0.00")
+            return pct
+
+        for ticket in tickets_with_count:
+            n = int(getattr(ticket, "num_selections", 0) or 0)
+            if n <= 0:
+                bt = (getattr(ticket, "bet_type", "") or "").strip().lower()
+                n = 2 if bt in ("multiple", "system") else 1
+            if n < 2:
+                continue
+            stake = (ticket.stake_amount or Decimal("0.00"))
+            winnings = (ticket.max_winning or Decimal("0.00")) if ticket.status == "won" else Decimal("0.00")
+            ticket_ggr = stake - winnings
+            if ticket_ggr <= 0:
+                continue
+
+            pct = _match_hybrid_percent(n)
+            if pct <= 0:
+                continue
+
+            commission_multiple_amount_raw += (ticket_ggr * pct / Decimal("100.00"))
+
+        commission_multiple_amount = commission_multiple_amount_raw.quantize(Decimal("0.01"))
+    elif getattr(plan, "is_hybrid_active", False) and multiple_ggr > 0 and (plan.ggr_percent or Decimal("0.00")) > 0:
+        commission_multiple_amount = (multiple_ggr * (plan.ggr_percent or Decimal("0.00")) / Decimal("100.00")).quantize(Decimal("0.01"))
 
     commission_total_amount = (commission_single_amount + commission_multiple_amount).quantize(Decimal('0.01'))
 

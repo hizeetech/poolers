@@ -378,18 +378,27 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
     def add_view(self, request, form_url='', extra_context=None):
         from django.template.response import TemplateResponse
         from django.shortcuts import redirect
+        from urllib.parse import quote
         from .models import CommissionPeriod, AgentCommissionProfile
         from .services import calculate_weekly_agent_commission_data
 
         periods = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
         selected_period_id = request.GET.get('period_id') or request.POST.get('period_id')
+        search_q = (request.GET.get('q') or request.POST.get('q') or '').strip()
         
         agent_data = []
         if selected_period_id:
             try:
                 period = CommissionPeriod.objects.get(id=selected_period_id)
                 # Find all agents with active profiles
-                profiles = AgentCommissionProfile.objects.filter(is_active=True).select_related('user')
+                profiles = AgentCommissionProfile.objects.filter(is_active=True).select_related('user', 'plan')
+                if search_q:
+                    profiles = profiles.filter(
+                        Q(user__username__icontains=search_q) |
+                        Q(user__first_name__icontains=search_q) |
+                        Q(user__last_name__icontains=search_q) |
+                        Q(user__other_name__icontains=search_q)
+                    )
                 
                 for profile in profiles:
                     agent = profile.user
@@ -441,13 +450,17 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
                         continue
                 
                 self.message_user(request, f"Paid {count} agents successfully.")
-                return redirect(request.path + f"?period_id={selected_period_id}")
+                suffix = f"?period_id={selected_period_id}"
+                if search_q:
+                    suffix += f"&q={quote(search_q)}"
+                return redirect(request.path + suffix)
 
         context = {
             **self.admin_site.each_context(request),
             'opts': self.model._meta,
             'periods': periods,
             'selected_period_id': selected_period_id,
+            'search_query': search_q,
             'agent_data': agent_data,
             'title': 'Bulk Weekly Commission Payment',
         }

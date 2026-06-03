@@ -27,6 +27,13 @@
                         <option value="{{ p.id }}" {% if p.id|stringformat:"s" == selected_period_id %}selected{% endif %}>{{ p }}</option>
                     {% endfor %}
                 </select>
+                {% if selected_period_id %}
+                <span style="margin-left: 12px;">
+                    <label for="id_q" style="font-weight: bold; margin-right: 8px;">Search:</label>
+                    <input type="text" name="q" id="id_q" value="{{ search_query|default:'' }}" placeholder="Name or username" style="padding: 6px; min-width: 220px;">
+                    <button type="submit" class="button" style="margin-left: 6px;">Search</button>
+                </span>
+                {% endif %}
             </div>
         </fieldset>
     </form>
@@ -35,6 +42,7 @@
     <form action="" method="post">
         {% csrf_token %}
         <input type="hidden" name="period_id" value="{{ selected_period_id }}">
+        <input type="hidden" name="q" value="{{ search_query|default:'' }}">
         
         {% if agent_data %}
         <div class="results">

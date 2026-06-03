@@ -311,3 +311,63 @@ class SystemBetTestCase(TestCase):
         self.assertEqual(data['commission_single_amount'], Decimal('5.00'))
         self.assertEqual(data['multiple_ggr'], Decimal('200.00'))
         self.assertEqual(data['commission_multiple_amount'], Decimal('70.00'))
+
+    def test_monthly_network_commission_excludes_pending_and_voided_tickets(self):
+        from commission.models import CommissionPeriod, NetworkCommissionSettings
+        from commission.services import calculate_monthly_network_commission_data
+
+        ma = User.objects.create_user(
+            email='ma1@example.com',
+            password='password123',
+            user_type='master_agent',
+        )
+        sa = User.objects.create_user(
+            email='sa1@example.com',
+            password='password123',
+            user_type='super_agent',
+            master_agent=ma,
+        )
+        agent = User.objects.create_user(
+            email='agent-monthly@example.com',
+            password='password123',
+            user_type='agent',
+            master_agent=ma,
+            super_agent=sa,
+        )
+        cashier = User.objects.create_user(
+            email='cashier-monthly@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=cashier)
+
+        NetworkCommissionSettings.objects.create(role='super_agent', commission_percent=Decimal('10.00'))
+        NetworkCommissionSettings.objects.create(role='master_agent', commission_percent=Decimal('10.00'))
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=today - datetime.timedelta(days=1),
+            end_date=today + datetime.timedelta(days=1),
+        )
+
+        t_pending = BetTicket.objects.create(user=cashier, stake_amount=Decimal('100.00'), max_winning=Decimal('0.00'), status='pending', bet_type='single')
+        t_lost = BetTicket.objects.create(user=cashier, stake_amount=Decimal('200.00'), max_winning=Decimal('0.00'), status='lost', bet_type='single')
+        t_won = BetTicket.objects.create(user=cashier, stake_amount=Decimal('300.00'), max_winning=Decimal('500.00'), status='won', bet_type='single')
+        t_deleted = BetTicket.objects.create(user=cashier, stake_amount=Decimal('400.00'), max_winning=Decimal('0.00'), status='deleted', bet_type='single')
+        t_cancelled = BetTicket.objects.create(user=cashier, stake_amount=Decimal('500.00'), max_winning=Decimal('0.00'), status='cancelled', bet_type='single')
+
+        for t in (t_pending, t_lost, t_won, t_deleted, t_cancelled):
+            t.placed_at = timezone.now()
+            t.save(update_fields=['placed_at'])
+
+        sa_data = calculate_monthly_network_commission_data(sa, period)
+        self.assertIsNotNone(sa_data)
+        self.assertEqual(sa_data['downline_stake'], Decimal('500.00'))
+        self.assertEqual(sa_data['downline_winnings'], Decimal('500.00'))
+
+        ma_data = calculate_monthly_network_commission_data(ma, period)
+        self.assertIsNotNone(ma_data)
+        self.assertEqual(ma_data['downline_stake'], Decimal('500.00'))
+        self.assertEqual(ma_data['downline_winnings'], Decimal('500.00'))

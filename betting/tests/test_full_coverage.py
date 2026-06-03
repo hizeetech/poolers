@@ -1,6 +1,17 @@
 from django.test import TestCase, Client
 from django.urls import reverse
-from betting.models import User, Wallet, Fixture, BettingPeriod, BetTicket, UserWithdrawal, Transaction, ActivityLog
+from betting.models import (
+    User,
+    Wallet,
+    Fixture,
+    BettingPeriod,
+    BetTicket,
+    UserWithdrawal,
+    Transaction,
+    ActivityLog,
+    RetailManagerSuperAgentMapping,
+    RetailManagerAgentMapping,
+)
 from django.utils import timezone
 import datetime
 
@@ -138,3 +149,35 @@ class FullCoverageTests(TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, f"Public page {url_name} failed")
 
+    def test_retail_manager_hierarchy_limits_to_mapped_super_agents(self):
+        from betting.views import get_retail_manager_super_agents, get_retail_manager_agents, get_retail_network_users_qs
+
+        password = "pass12345"
+        retail_manager = User.objects.create_user(email="rm@test.com", password=password, user_type="retail_manager")
+
+        master = User.objects.create_user(email="ma@test.com", password=password, user_type="master_agent")
+        sa_mapped = User.objects.create_user(
+            email="sa1@test.com", password=password, user_type="super_agent", master_agent=master
+        )
+        sa_unmapped = User.objects.create_user(
+            email="sa2@test.com", password=password, user_type="super_agent", master_agent=master
+        )
+
+        agent_under_mapped = User.objects.create_user(
+            email="a1@test.com", password=password, user_type="agent", master_agent=master, super_agent=sa_mapped
+        )
+        User.objects.create_user(
+            email="a2@test.com", password=password, user_type="agent", master_agent=master, super_agent=sa_unmapped
+        )
+
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=sa_mapped)
+
+        sas = get_retail_manager_super_agents(retail_manager)
+        self.assertEqual(set(sas.values_list("id", flat=True)), {sa_mapped.id})
+
+        agents = get_retail_manager_agents(retail_manager, super_agents_qs=sas)
+        self.assertEqual(set(agents.values_list("id", flat=True)), {agent_under_mapped.id})
+
+        network = get_retail_network_users_qs(retail_manager)
+        self.assertIn(sa_mapped.id, set(network.values_list("id", flat=True)))
+        self.assertNotIn(sa_unmapped.id, set(network.values_list("id", flat=True)))

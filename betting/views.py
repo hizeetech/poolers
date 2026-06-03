@@ -2099,12 +2099,24 @@ def check_ticket_status(request):
         except (ValueError, TypeError): pass
 
     # Apply limit after filtering
-    tickets = tickets[:50]
+    tickets = tickets.select_related('user').prefetch_related('selections')[:50]
+    tickets_list = list(tickets)
+    try:
+        TicketVoidRequest = apps.get_model('void_requests', 'TicketVoidRequest')
+        req_rows = TicketVoidRequest.objects.filter(ticket_id__in=[t.id for t in tickets_list]).values('ticket_id', 'status')
+        req_map = {r['ticket_id']: r['status'] for r in req_rows}
+        for t in tickets_list:
+            t.void_request_status = req_map.get(t.id, '')
+            t.has_void_request = bool(t.void_request_status)
+    except Exception:
+        for t in tickets_list:
+            t.void_request_status = ''
+            t.has_void_request = False
 
     # AJAX Polling Check
     if request.method == 'GET' and request.GET.get('action') == 'poll_tickets':
         return render(request, 'betting/partials/ticket_list_rows.html', {
-            'tickets': tickets,
+            'tickets': tickets_list,
             'void_window': void_window,
             'now': timezone.now()
         })
@@ -2112,7 +2124,7 @@ def check_ticket_status(request):
     context = {
         'form': form, 
         'ticket': ticket, 
-        'tickets': tickets,
+        'tickets': tickets_list,
         'void_window': void_window,
         'now': timezone.now(),
         'bet_type_choices': BetTicket.BET_TYPE_CHOICES,

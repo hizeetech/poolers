@@ -3738,6 +3738,8 @@ def agent_dashboard(request):
     # Commission calculations
     total_commission_paid = Decimal('0.00')
     pending_commission = Decimal('0.00')
+    pending_commission_single = Decimal('0.00')
+    pending_commission_multiple = Decimal('0.00')
 
     if user.user_type == 'agent':
         weekly_comms = WeeklyAgentCommission.objects.filter(agent=user)
@@ -3745,6 +3747,29 @@ def agent_dashboard(request):
         pending_total = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
         pending_paid = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
         pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
+
+        pending_rows = list(
+            weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).values(
+                'commission_single_amount',
+                'commission_multiple_amount',
+                'commission_total_amount',
+                'amount_paid',
+            )
+        )
+        for r in pending_rows:
+            single_amt = r.get('commission_single_amount') or Decimal('0.00')
+            multiple_amt = r.get('commission_multiple_amount') or Decimal('0.00')
+            total_amt = r.get('commission_total_amount') or (single_amt + multiple_amt) or Decimal('0.00')
+            paid_amt = r.get('amount_paid') or Decimal('0.00')
+            if total_amt > 0 and paid_amt > 0:
+                single_paid_share = (paid_amt * (single_amt / total_amt))
+                multiple_paid_share = (paid_amt * (multiple_amt / total_amt))
+            else:
+                single_paid_share = Decimal('0.00')
+                multiple_paid_share = Decimal('0.00')
+
+            pending_commission_single += max(Decimal('0.00'), single_amt - single_paid_share)
+            pending_commission_multiple += max(Decimal('0.00'), multiple_amt - multiple_paid_share)
     elif user.user_type in ['super_agent', 'master_agent']:
         monthly_comms = MonthlyNetworkCommission.objects.filter(user=user)
         total_commission_paid = monthly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
@@ -3830,6 +3855,8 @@ def agent_dashboard(request):
         'current_sort_dir': sort_dir,
         'total_commission_paid': total_commission_paid,
         'pending_commission': pending_commission,
+        'pending_commission_single': pending_commission_single,
+        'pending_commission_multiple': pending_commission_multiple,
         'top_performers': top_performers,
         'recent_downline_transactions': recent_downline_transactions,
         'show_reports': True,
@@ -7487,6 +7514,12 @@ def crm_dashboard(request):
 
     retail_hierarchy = []
     if active_tab == 'retail_hierarchy':
+        last_bet_at_subq = Subquery(
+            BetTicket.objects.filter(user__agent_id=OuterRef('id'))
+            .exclude(status__in=['deleted', 'cancelled'])
+            .order_by('-placed_at')
+            .values('placed_at')[:1]
+        )
         sas_qs = (
             User.objects.filter(user_type='super_agent')
             .exclude(master_agent_id__isnull=True)
@@ -7496,6 +7529,7 @@ def crm_dashboard(request):
         agents_qs = (
             User.objects.filter(user_type='agent')
             .select_related('state', 'master_agent', 'super_agent')
+            .annotate(last_bet_at=last_bet_at_subq)
             .order_by('email')
         )
         ma_ids = set(sas_qs.values_list('master_agent_id', flat=True)) | set(
@@ -7838,9 +7872,19 @@ def retail_dashboard(request):
 
     hierarchy = []
     if active_tab == 'hierarchy':
+        last_bet_at_subq = Subquery(
+            BetTicket.objects.filter(user__agent_id=OuterRef('id'))
+            .exclude(status__in=['deleted', 'cancelled'])
+            .order_by('-placed_at')
+            .values('placed_at')[:1]
+        )
         mas_list = list(master_agents.select_related('state').order_by('email'))
         sas_list = list(super_agents.select_related('state', 'master_agent').order_by('email'))
-        agents_list = list(agents.select_related('state', 'master_agent', 'super_agent').order_by('email'))
+        agents_list = list(
+            agents.select_related('state', 'master_agent', 'super_agent')
+            .annotate(last_bet_at=last_bet_at_subq)
+            .order_by('email')
+        )
         agents_by_sa = {}
         for ag in agents_list:
             agents_by_sa.setdefault(getattr(ag, 'super_agent_id', None), []).append(ag)

@@ -72,13 +72,17 @@
 
             {% if request.user.user_type == 'agent' and t.status == 'pending' %}
                 {% if t.user.user_type == 'cashier' and t.user.agent == request.user %}
-                    {% if t|is_within_void_window:void_window and not t.has_computed_results %}
-                        <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
-                           class="btn btn-sm btn-danger"
-                           onclick="return confirm('Are you sure you want to void this ticket? This action cannot be undone.');"
-                           title="Void">
-                           <i class="fas fa-ban"></i> <span class="d-none d-md-inline">Void</span>
-                        </a>
+                    {% if t.void_request_status == 'pending' %}
+                        <span class="badge bg-info text-dark ticket-action-badge">Pending Void Approval</span>
+                    {% else %}
+                        {% if t|is_within_void_window:void_window and not t.has_computed_results %}
+                            <a href="{% url 'betting:agent_void_ticket' t.ticket_id %}" 
+                               class="btn btn-sm btn-danger"
+                               onclick="return confirm('Are you sure you want to void this ticket? This action cannot be undone.');"
+                               title="Void">
+                               <i class="fas fa-ban"></i> <span class="d-none d-md-inline">Void</span>
+                            </a>
+                        {% endif %}
                     {% endif %}
                 {% endif %}
             {% endif %}

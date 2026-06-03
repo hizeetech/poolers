@@ -19,6 +19,102 @@
         display: inline-block;
         vertical-align: middle;
     }
+    .ticket-actions-cell {
+        white-space: normal !important;
+        min-width: 140px;
+    }
+    .ticket-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 0.25rem;
+        width: 100%;
+    }
+    .ticket-actions .btn {
+        white-space: nowrap;
+    }
+    .ticket-action-badge {
+        white-space: normal;
+        max-width: 140px;
+        text-align: center;
+        line-height: 1.1;
+    }
+    .ticket-user-td {
+        overflow: hidden;
+    }
+    .ticket-user-td .user-col-truncate {
+        display: block;
+        max-width: 100%;
+        white-space: normal;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .ticket-date-td {
+        white-space: nowrap !important;
+    }
+    .my-recent-tickets-wrap {
+        width: 100%;
+        max-width: 100%;
+    }
+    .my-recent-tickets-wrap .table-responsive {
+        overflow-x: visible;
+    }
+    .ticket-history-table {
+        width: 100%;
+        table-layout: fixed;
+    }
+    .ticket-history-table th,
+    .ticket-history-table td {
+        white-space: normal !important;
+        word-break: break-word;
+    }
+    @media (max-width: 768px) {
+        .table-custom-compact th, .table-custom-compact td {
+            font-size: 0.78rem;
+            padding: 0.35rem 0.25rem;
+        }
+        .ticket-actions-cell {
+            min-width: 120px;
+        }
+        .user-col-truncate {
+            max-width: 90px;
+        }
+        .ticket-history-table thead {
+            display: none;
+        }
+        .ticket-history-table,
+        .ticket-history-table tbody,
+        .ticket-history-table tr,
+        .ticket-history-table td {
+            display: block;
+            width: 100%;
+        }
+        .ticket-history-table tr {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+        }
+        .ticket-history-table td {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.25rem 0;
+        }
+        .ticket-history-table td::before {
+            content: attr(data-label);
+            flex: 0 0 44%;
+            font-weight: 700;
+            color: rgba(0,0,0,0.6);
+        }
+        .ticket-actions-cell::before {
+            content: "";
+            display: none;
+        }
+        .ticket-actions {
+            justify-content: flex-start;
+        }
+    }
 </style>
 <div class="container py-5">
     <div class="row justify-content-center">
@@ -176,7 +272,7 @@
 
     <!-- Ticket History / Downline Tickets Section -->
     {% if request.user.is_authenticated %}
-    <div class="container-fluid px-2 pb-5">
+    <div class="container-fluid px-0 px-md-2 pb-5 my-recent-tickets-wrap">
         <div class="row justify-content-center mt-5">
             <div class="col-12">
                 <div class="card app-glass-card shadow-sm rounded-lg">
@@ -236,7 +332,7 @@
 
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-hover table-striped table-sm table-custom-compact mb-0">
+                            <table class="table table-hover table-striped table-sm table-custom-compact mb-0 ticket-history-table">
                                 <thead class="table-light">
                                     <tr class="text-nowrap">
                                         <th>Ticket ID</th>
@@ -491,6 +587,44 @@
     }
 
     document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('click', async function (e) {
+            const btn = e.target.closest('.void-request-btn');
+            if (!btn) return;
+            e.preventDefault();
+
+            const ticketId = (btn.getAttribute('data-ticket-id') || '').trim();
+            if (!ticketId) return;
+
+            const res = await Swal.fire({
+                icon: 'warning',
+                title: 'Are you sure you want to request this ticket to be voided?',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, Request Void',
+                cancelButtonText: 'Cancel'
+            });
+            if (!res.isConfirmed) return;
+
+            try {
+                btn.disabled = true;
+                const fd = new FormData();
+                fd.append('ticket_id', ticketId);
+                const resp = await fetch("{% url 'betting:create_ticket_void_request' %}", {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+                    body: fd
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.message || 'Unable to create void request.');
+                }
+                await Swal.fire({ icon: 'success', title: 'Success', text: data.message || 'Ticket has been sent for void approval.' });
+                btn.outerHTML = '<span class="badge bg-info text-dark">Pending Void Approval</span>';
+            } catch (err) {
+                btn.disabled = false;
+                Swal.fire({ icon: 'error', title: 'Error', text: (err && err.message) ? err.message : 'Unable to create void request.' });
+            }
+        });
+
         // Poll for ticket updates every 5 seconds
         setInterval(function() {
             // Get current URL search params

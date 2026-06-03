@@ -2,6 +2,7 @@
 
 from django.urls import path
 from . import views
+from void_requests import views as void_request_views
 
 app_name = 'betting' # <--- ADDED THIS LINE
 
@@ -146,6 +147,7 @@ urlpatterns = [
     path('api/admin-user-search/', views.api_admin_user_search, name='api_admin_user_search'),
     path('api/ticket-details/<str:ticket_id>/', views.get_ticket_details_json, name='get_ticket_details_json'),
     path('api/log-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
+    path('api/void-requests/create/', void_request_views.create_ticket_void_request, name='create_ticket_void_request'),
 
     path('api/bet-tickets/', views.api_bet_tickets, name='api_bet_tickets'),
     path('api/void-ticket/', views.api_void_ticket, name='api_void_ticket'),

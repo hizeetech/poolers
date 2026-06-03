@@ -143,4 +143,24 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS('Confirmed task: Notifications Deposit Reminders'))
 
+        schedule_every_minute, _ = CrontabSchedule.objects.get_or_create(
+            minute='*',
+            hour='*',
+            day_of_week='*',
+            day_of_month='*',
+            month_of_year='*',
+            timezone='Africa/Lagos'
+        )
+
+        PeriodicTask.objects.update_or_create(
+            name='Process Ticket Void Requests',
+            defaults={
+                'crontab': schedule_every_minute,
+                'task': 'void_requests.tasks.process_void_requests',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Process Ticket Void Requests'))
+
         self.stdout.write(self.style.SUCCESS('All periodic tasks configured successfully!'))

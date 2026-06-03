@@ -1811,6 +1811,12 @@ betting_admin_site.register(RetailManagerAgentMapping, RetailManagerAgentMapping
 betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
 betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
 
+from void_requests.models import TicketVoidRequest, TicketVoidAuditLog
+from void_requests.admin import TicketVoidRequestAdmin, TicketVoidAuditLogAdmin
+
+betting_admin_site.register(TicketVoidRequest, TicketVoidRequestAdmin)
+betting_admin_site.register(TicketVoidAuditLog, TicketVoidAuditLogAdmin)
+
 from risk.models import (
     RiskEngineSettings,
     FixtureRiskState,

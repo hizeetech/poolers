@@ -1,10 +1,10 @@
 {% load betting_extras %}
 {% for t in tickets %}
 <tr>
-    <td>{{ t.ticket_id }}</td>
-    <td>{{ t.get_bet_type_display|title }}</td>
-    <td class="text-center">{{ t.selections.count }}</td>
-    <td>
+    <td data-label="Ticket ID">{{ t.ticket_id }}</td>
+    <td data-label="Type">{{ t.get_bet_type_display|title }}</td>
+    <td data-label="Sel." class="text-center">{{ t.selections.count }}</td>
+    <td data-label="Status">
         <span class="badge 
             {% if t.status == 'pending' %}bg-warning text-dark
             {% elif t.status == 'won' %}bg-success
@@ -14,24 +14,24 @@
             {{ t.get_status_display }}
         </span>
     </td>
-    <td>₦{{ t.stake_amount|floatformat:0 }}</td>
-    <td>{{ t.total_odd|floatformat:2 }}</td>
-    <td>₦{{ t.potential_winning|floatformat:0 }}</td>
-    <td>₦{{ t.max_winning|sub:t.potential_winning|floatformat:0 }}</td>
-    <td>₦{{ t.get_min_potential_winning|floatformat:0 }}</td>
-    <td>₦{{ t.max_winning|floatformat:0 }}</td>
-    <td>
+    <td data-label="Stake">₦{{ t.stake_amount|floatformat:0 }}</td>
+    <td data-label="Odds">{{ t.total_odd|floatformat:2 }}</td>
+    <td data-label="Pot. Win">₦{{ t.potential_winning|floatformat:0 }}</td>
+    <td data-label="Bonus">₦{{ t.max_winning|sub:t.potential_winning|floatformat:0 }}</td>
+    <td data-label="Min Pot. Win">₦{{ t.get_min_potential_winning|floatformat:0 }}</td>
+    <td data-label="Max Pot. Win">₦{{ t.max_winning|floatformat:0 }}</td>
+    <td data-label="Won Amt">
         {% if t.status == 'won' or t.status == 'cashed_out' %}
             <span class="text-success fw-bold">₦{{ t.max_winning|floatformat:0 }}</span>
         {% else %}
             <span class="text-muted">-</span>
         {% endif %}
     </td>
-    <td class="small">{% if t.status != 'pending' %}{{ t.last_updated|date:"y-m-d H:i" }}{% else %}-{% endif %}</td>
-    <td><span class="user-col-truncate" title="{{ t.user.email }}">{{ t.user.email }}</span></td>
-    <td class="small">{{ t.placed_at|date:"y-m-d H:i" }}</td>
-    <td class="text-end">
-        <div class="d-flex gap-1 justify-content-end align-items-center flex-wrap">
+    <td data-label="Settled At" class="small">{% if t.status != 'pending' %}{{ t.last_updated|date:"y-m-d H:i" }}{% else %}-{% endif %}</td>
+    <td data-label="User" class="ticket-user-td"><span class="user-col-truncate" title="{{ t.user.email }}">{{ t.user.email }}</span></td>
+    <td data-label="Date" class="small ticket-date-td">{{ t.placed_at|date:"y-m-d H:i" }}</td>
+    <td class="text-end ticket-actions-cell">
+        <div class="ticket-actions">
             <!-- Rebet & Reprint (Cashier/Agent Only) -->
             {% if request.user.user_type == 'cashier' or request.user.user_type == 'agent' %}
             <button type="button" class="btn btn-sm btn-outline-primary rebet-btn-{{ t.ticket_id }}" onclick="rebetTicket('{{ t.ticket_id }}')" title="Rebet">
@@ -52,6 +52,24 @@
             </form>
 
             <!-- Void Button Logic -->
+            {% if request.user.user_type == 'cashier' %}
+                {% if t.status == 'cancelled' or t.status == 'deleted' %}
+                    <span class="badge bg-secondary ticket-action-badge">Voided</span>
+                {% elif t.void_request_status == 'pending' %}
+                    <span class="badge bg-info text-dark ticket-action-badge">Pending Void Approval</span>
+                {% elif t.void_request_status == 'rejected' %}
+                    <span class="badge bg-danger ticket-action-badge">Void Rejected</span>
+                {% elif t.void_request_status == 'approved' or t.void_request_status == 'auto_voided' %}
+                    <span class="badge bg-secondary ticket-action-badge">Voided</span>
+                {% else %}
+                    {% if t.status == 'pending' %}
+                        <button type="button" class="btn btn-sm btn-outline-warning void-request-btn" data-ticket-id="{{ t.ticket_id }}">
+                            <i class="fas fa-ban"></i> <span class="d-none d-md-inline">Void</span>
+                        </button>
+                    {% endif %}
+                {% endif %}
+            {% endif %}
+
             {% if request.user.user_type == 'agent' and t.status == 'pending' %}
                 {% if t.user.user_type == 'cashier' and t.user.agent == request.user %}
                     {% if t|is_within_void_window:void_window and not t.has_computed_results %}

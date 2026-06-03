@@ -14,6 +14,7 @@ from betting.models import (
 )
 from django.utils import timezone
 import datetime
+from decimal import Decimal
 
 class FullCoverageTests(TestCase):
     def setUp(self):
@@ -181,3 +182,31 @@ class FullCoverageTests(TestCase):
         network = get_retail_network_users_qs(retail_manager)
         self.assertIn(sa_mapped.id, set(network.values_list("id", flat=True)))
         self.assertNotIn(sa_unmapped.id, set(network.values_list("id", flat=True)))
+
+    def test_cashier_void_request_auto_voids_and_refunds(self):
+        from void_requests.services import create_void_request, process_due_void_requests
+
+        cashier = User.objects.create_user(
+            email="cashier@test.com",
+            password=self.password,
+            user_type="cashier",
+            agent=self.agent,
+        )
+        Wallet.objects.create(user=cashier, balance=Decimal("0.00"))
+        ticket = BetTicket.objects.create(user=cashier, stake_amount=Decimal("100.00"), bet_type="single")
+
+        vr = create_void_request(ticket=ticket, cashier=cashier, reason="")
+        vr.auto_void_at = timezone.now() - datetime.timedelta(minutes=5)
+        vr.save(update_fields=["auto_void_at"])
+
+        processed = process_due_void_requests(limit=10)
+        self.assertEqual(processed, 1)
+
+        ticket.refresh_from_db()
+        vr.refresh_from_db()
+        self.assertEqual(ticket.status, "deleted")
+        self.assertEqual(vr.status, "auto_voided")
+        self.assertTrue(vr.is_processed)
+
+        wallet = Wallet.objects.get(user=cashier)
+        self.assertEqual(wallet.balance, Decimal("100.00"))

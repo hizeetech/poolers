@@ -1576,3 +1576,13 @@ class CashierVoidPermissionForm(forms.Form):
         field = self.fields["cashiers"]
         field.queryset = CustomUser.objects.filter(user_type="cashier", agent=agent).order_by("username", "email")
         field.label_from_instance = lambda u: f"{(u.username or u.email)} • {u.phone_number or '-'}"
+
+
+class AgentMinStakeOverrideForm(forms.Form):
+    min_stake = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        widget=forms.NumberInput(attrs={"class": "form-control", "placeholder": "e.g. 200"}),
+    )

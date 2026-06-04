@@ -34,6 +34,7 @@ from django.contrib.auth import authenticate, login, logout # Ensure these are i
 from django_ratelimit.decorators import ratelimit
 from django.core.cache import cache
 import hashlib
+import hmac
 
 from risk.services import (
     is_suspended as risk_is_suspended,
@@ -104,6 +105,81 @@ def _notify_admin_deposit_success(user, transaction_record, amount, gateway):
         recipient_list=[admin_email],
         fail_silently=True
     )
+
+
+def _quantize_amount(amount):
+    try:
+        return Decimal(str(amount)).quantize(Decimal("0.01"))
+    except Exception:
+        return None
+
+
+def _complete_deposit_transaction(*, tx, amount, gateway, reference, source, payload=None, http_status=None, message=""):
+    amount_q = _quantize_amount(amount)
+    if amount_q is None or amount_q <= 0:
+        raise ValueError("Invalid amount.")
+
+    tx = Transaction.objects.select_for_update().select_related("user").get(pk=tx.pk)
+    if tx.transaction_type != "deposit":
+        raise ValueError("Not a deposit transaction.")
+
+    if tx.status == "completed" and tx.is_successful:
+        PaymentGatewayEventLog.objects.create(
+            gateway=gateway,
+            event_type=source,
+            reference=reference or (tx.external_reference or tx.paystack_reference or str(tx.id)),
+            transaction=tx,
+            user=tx.user,
+            amount=tx.amount,
+            success=True,
+            http_status=http_status,
+            message=(message or "Already completed"),
+            payload=(payload or {}),
+        )
+        return False
+
+    if amount_q != _quantize_amount(tx.amount):
+        tx.status = "failed"
+        tx.is_successful = False
+        tx.description = f"Amount mismatch: Expected {tx.amount}, Got {amount_q}"
+        tx.save(update_fields=["status", "is_successful", "description"])
+        PaymentGatewayEventLog.objects.create(
+            gateway=gateway,
+            event_type=source,
+            reference=reference or (tx.external_reference or tx.paystack_reference or str(tx.id)),
+            transaction=tx,
+            user=tx.user,
+            amount=tx.amount,
+            success=False,
+            http_status=http_status,
+            message="Amount mismatch",
+            payload=(payload or {}),
+        )
+        raise ValueError("Amount mismatch.")
+
+    wallet, _ = Wallet.objects.select_for_update().get_or_create(user=tx.user, defaults={"balance": Decimal("0.00")})
+    wallet.balance = (wallet.balance or Decimal("0.00")) + amount_q
+    wallet.save(update_fields=["balance"])
+
+    tx.status = "completed"
+    tx.is_successful = True
+    tx.description = f"Online deposit via {gateway} successful."
+    tx.timestamp = timezone.now()
+    tx.save(update_fields=["status", "is_successful", "description", "timestamp"])
+
+    PaymentGatewayEventLog.objects.create(
+        gateway=gateway,
+        event_type=source,
+        reference=reference or (tx.external_reference or tx.paystack_reference or str(tx.id)),
+        transaction=tx,
+        user=tx.user,
+        amount=amount_q,
+        success=True,
+        http_status=http_status,
+        message=(message or "Completed"),
+        payload=(payload or {}),
+    )
+    return True
 
 
 def _build_agent_total_wallet_map(agents_qs):
@@ -2273,10 +2349,13 @@ def initiate_deposit(request):
         if request.content_type == 'application/json' or request.headers.get('Content-Type', '').startswith('application/json'):
             try:
                 data = json.loads(request.body)
-                amount = float(data.get('amount', 0))
-                gateway = data.get('gateway', 'paystack') # Default to paystack
+                gateway = (data.get('gateway') or 'paystack').strip().lower()
+                if gateway not in {'paystack', 'monnify', 'kora'}:
+                    return JsonResponse({'status': 'error', 'message': 'Unsupported gateway.'}, status=400)
+
+                amount = _quantize_amount(data.get('amount', 0))
                 
-                if amount <= 0:
+                if not amount or amount <= 0:
                      return JsonResponse({'status': 'error', 'message': 'Invalid amount.'}, status=400)
                 
                 reference = str(uuid.uuid4())
@@ -2298,9 +2377,9 @@ def initiate_deposit(request):
                     reference=reference,
                     transaction=tx,
                     user=request.user,
-                    amount=Decimal(str(amount)),
+                    amount=amount,
                     success=True,
-                    payload={'mode': 'json', 'email': request.user.email, 'amount': amount},
+                    payload={'mode': 'json', 'email': request.user.email, 'amount': str(amount)},
                 )
                 
                 # Logic for different gateways
@@ -2309,7 +2388,7 @@ def initiate_deposit(request):
                         'status': 'success',
                         'gateway': 'paystack',
                         'email': request.user.email,
-                        'amount': int(amount * 100), # Amount in kobo
+                        'amount': int(amount * Decimal("100")), # Amount in kobo
                         'reference': reference,
                         'public_key': settings.PAYSTACK_PUBLIC_KEY
                     })
@@ -2325,7 +2404,7 @@ def initiate_deposit(request):
                         'status': 'success',
                         'gateway': 'monnify',
                         'email': request.user.email,
-                        'amount': float(amount),
+                        'amount': str(amount),
                         'reference': reference,
                         'apiKey': os.getenv('MONNIFY_API_KEY'),
                         'contractCode': os.getenv('MONNIFY_CONTRACT_CODE')
@@ -2338,7 +2417,7 @@ def initiate_deposit(request):
                         'status': 'success',
                         'gateway': 'kora',
                         'email': request.user.email,
-                        'amount': float(amount),
+                        'amount': str(amount),
                         'reference': reference,
                         'publicKey': public_key
                     })
@@ -2508,7 +2587,7 @@ def initiate_deposit(request):
                     "amount": float(amount),
                     "currency": "NGN",
                     "reference": reference,
-                    "notification_url": request.build_absolute_uri(reverse('betting:verify_kora_deposit')),
+                    "notification_url": request.build_absolute_uri(reverse('betting:kora_webhook')),
                     "redirect_url": request.build_absolute_uri(reverse('betting:verify_kora_deposit')),
                     "customer": {
                         "name": f"{request.user.first_name} {request.user.last_name}",
@@ -2576,10 +2655,6 @@ def verify_monnify_deposit(request):
         messages.success(request, "This deposit has already been successfully verified.")
         return redirect('betting:wallet')
     
-    if transaction_record.status == 'failed':
-        messages.error(request, "This deposit previously failed.")
-        return redirect('betting:wallet')
-
     # Monnify API verification
     api_key = os.getenv('MONNIFY_API_KEY')
     secret_key = os.getenv('MONNIFY_SECRET_KEY')
@@ -2601,6 +2676,40 @@ def verify_monnify_deposit(request):
             verify_url = f"{base_url}/api/v1/merchant/transactions/query?paymentReference={reference}"
             verify_response = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
             verify_data = verify_response.json()
+            
+            if verify_data.get('requestSuccessful') and verify_data['responseBody']['paymentStatus'] == 'PAID':
+                amount_verified = Decimal(str(verify_data['responseBody']['amountPaid']))
+                completed = _complete_deposit_transaction(
+                    tx=transaction_record,
+                    amount=amount_verified,
+                    gateway="monnify",
+                    reference=reference,
+                    source="verify",
+                    payload={"response": verify_data},
+                    http_status=getattr(verify_response, "status_code", None),
+                    message=str(verify_data.get("responseMessage") or ""),
+                )
+                if completed:
+                    _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "monnify")
+                    messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+                else:
+                    messages.success(request, "This deposit has already been successfully verified.")
+            else:
+                msg = verify_data.get('responseMessage', 'Payment not successful')
+                PaymentGatewayEventLog.objects.create(
+                    gateway='monnify',
+                    event_type='verify',
+                    reference=reference,
+                    transaction=transaction_record,
+                    user=request.user,
+                    amount=transaction_record.amount,
+                    success=False,
+                    http_status=getattr(verify_response, 'status_code', None),
+                    message=str(msg or ''),
+                    payload={'response': verify_data},
+                )
+                messages.error(request, f"Monnify verification failed: {msg}")
+        else:
             PaymentGatewayEventLog.objects.create(
                 gateway='monnify',
                 event_type='verify',
@@ -2608,41 +2717,11 @@ def verify_monnify_deposit(request):
                 transaction=transaction_record,
                 user=request.user,
                 amount=transaction_record.amount,
-                success=bool(verify_data.get('requestSuccessful')),
-                http_status=getattr(verify_response, 'status_code', None),
-                message=str(verify_data.get('responseMessage') or ''),
-                payload={'response': verify_data},
+                success=False,
+                http_status=getattr(auth_response, 'status_code', None),
+                message=str(auth_data.get('responseMessage') or 'Authentication failed'),
+                payload={'response': auth_data},
             )
-            
-            if verify_data.get('requestSuccessful') and verify_data['responseBody']['paymentStatus'] == 'PAID':
-                amount_verified = Decimal(str(verify_data['responseBody']['amountPaid']))
-                
-                # Check if amount matches to prevent tampering
-                if amount_verified != transaction_record.amount:
-                    transaction_record.status = 'failed'
-                    transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
-                    transaction_record.save()
-                    messages.error(request, "Deposit verification failed: Amount mismatch.")
-                    return redirect('betting:wallet')
-
-                # Update wallet balance
-                user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
-                user_wallet.balance += amount_verified
-                user_wallet.save()
-
-                # Update transaction record
-                transaction_record.status = 'completed'
-                transaction_record.is_successful = True
-                transaction_record.description = "Online deposit via Monnify successful."
-                transaction_record.timestamp = timezone.now()
-                transaction_record.save()
-
-                _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "monnify")
-                messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
-            else:
-                msg = verify_data.get('responseMessage', 'Payment not successful')
-                messages.error(request, f"Monnify verification failed: {msg}")
-        else:
             messages.error(request, "Monnify authentication failed during verification.")
             
     except Exception as e:
@@ -2670,10 +2749,6 @@ def verify_kora_deposit(request):
         messages.success(request, "This deposit has already been successfully verified.")
         return redirect('betting:wallet')
     
-    if transaction_record.status == 'failed':
-        messages.error(request, "This deposit previously failed.")
-        return redirect('betting:wallet')
-
     # Kora API verification
     secret_key = os.getenv('KORA_SECRET_KEY') or os.getenv('KORAPAY_SECRET_KEY')
     base_url = os.getenv('KORA_BASE_URL') or os.getenv('KORAPAY_BASE_URL') or "https://api.korapay.com/merchant/api/v1"
@@ -2689,6 +2764,42 @@ def verify_kora_deposit(request):
         
         response = requests.get(verify_url, headers=headers, timeout=10)
         response_data = response.json()
+        
+        if response_data.get('status') and response_data['data']['status'] == 'success':
+            amount_verified = Decimal(str(response_data['data']['amount']))
+            completed = _complete_deposit_transaction(
+                tx=transaction_record,
+                amount=amount_verified,
+                gateway="kora",
+                reference=reference,
+                source="verify",
+                payload={"response": response_data},
+                http_status=getattr(response, "status_code", None),
+                message=str(response_data.get("message") or ""),
+            )
+            if completed:
+                _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "kora")
+                messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+            else:
+                messages.success(request, "This deposit has already been successfully verified.")
+        else:
+            msg = response_data.get('message', 'Payment not successful')
+            PaymentGatewayEventLog.objects.create(
+                gateway='kora',
+                event_type='verify',
+                reference=reference,
+                transaction=transaction_record,
+                user=request.user,
+                amount=transaction_record.amount,
+                success=False,
+                http_status=getattr(response, 'status_code', None),
+                message=str(msg or ''),
+                payload={'response': response_data},
+            )
+            messages.error(request, f"Kora verification failed: {msg}")
+            
+    except Exception as e:
+        logger.error(f"Kora verification error: {str(e)}")
         PaymentGatewayEventLog.objects.create(
             gateway='kora',
             event_type='verify',
@@ -2696,43 +2807,10 @@ def verify_kora_deposit(request):
             transaction=transaction_record,
             user=request.user,
             amount=transaction_record.amount,
-            success=bool(response_data.get('status')),
-            http_status=getattr(response, 'status_code', None),
-            message=str(response_data.get('message') or ''),
-            payload={'response': response_data},
+            success=False,
+            message=str(e),
+            payload={},
         )
-        
-        if response_data.get('status') and response_data['data']['status'] == 'success':
-            amount_verified = Decimal(str(response_data['data']['amount']))
-            
-            # Check if amount matches to prevent tampering
-            if amount_verified != transaction_record.amount:
-                transaction_record.status = 'failed'
-                transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
-                transaction_record.save()
-                messages.error(request, "Deposit verification failed: Amount mismatch.")
-                return redirect('betting:wallet')
-
-            # Update wallet balance
-            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=user)
-            user_wallet.balance += amount_verified
-            user_wallet.save()
-
-            # Update transaction record
-            transaction_record.status = 'completed'
-            transaction_record.is_successful = True
-            transaction_record.description = "Online deposit via Kora successful."
-            transaction_record.timestamp = timezone.now()
-            transaction_record.save()
-
-            _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "kora")
-            messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
-        else:
-            msg = response_data.get('message', 'Payment not successful')
-            messages.error(request, f"Kora verification failed: {msg}")
-            
-    except Exception as e:
-        logger.error(f"Kora verification error: {str(e)}")
         messages.error(request, f"Error verifying Kora payment: {str(e)}")
 
     return redirect('betting:wallet')
@@ -2757,10 +2835,6 @@ def verify_deposit(request):
         messages.success(request, "This deposit has already been successfully verified.")
         return redirect('betting:wallet')
     
-    if transaction_record.status == 'failed':
-        messages.error(request, "This deposit previously failed.")
-        return redirect('betting:wallet')
-
     paystack_secret_key = settings.PAYSTACK_SECRET_KEY
     url = f"https://api.paystack.co/transaction/verify/{reference}"
     headers = {
@@ -2772,6 +2846,42 @@ def verify_deposit(request):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         response_data = response.json()
+
+        data = response_data.get("data") or {}
+        if response_data.get('status') and data.get('status') == 'success':
+            amount_verified = (Decimal(str(data.get("amount") or "0")) / Decimal("100")).quantize(Decimal("0.01"))
+            completed = _complete_deposit_transaction(
+                tx=transaction_record,
+                amount=amount_verified,
+                gateway="paystack",
+                reference=reference,
+                source="verify",
+                payload={"response": response_data},
+                http_status=getattr(response, "status_code", None),
+                message=str(data.get("gateway_response") or data.get("message") or ""),
+            )
+            if completed:
+                _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "paystack")
+                messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
+            else:
+                messages.success(request, "This deposit has already been successfully verified.")
+        else:
+            msg = str(data.get('gateway_response') or data.get('message') or response_data.get('message') or 'Payment not successful')
+            PaymentGatewayEventLog.objects.create(
+                gateway='paystack',
+                event_type='verify',
+                reference=reference,
+                transaction=transaction_record,
+                user=request.user,
+                amount=transaction_record.amount,
+                success=False,
+                http_status=getattr(response, 'status_code', None),
+                message=msg,
+                payload={'response': response_data},
+            )
+            messages.error(request, f"Payment verification failed: {msg}")
+            
+    except requests.exceptions.Timeout:
         PaymentGatewayEventLog.objects.create(
             gateway='paystack',
             event_type='verify',
@@ -2779,60 +2889,216 @@ def verify_deposit(request):
             transaction=transaction_record,
             user=request.user,
             amount=transaction_record.amount,
-            success=bool(response_data.get('status')),
-            http_status=getattr(response, 'status_code', None),
-            message=str((response_data.get('data') or {}).get('message') or ''),
-            payload={'response': response_data},
+            success=False,
+            message="Paystack verification timed out.",
+            payload={},
         )
-
-        if response_data['status'] and response_data['data']['status'] == 'success':
-            amount_verified = Decimal(response_data['data']['amount'] / 100) # Convert kobo to naira
-            
-            if amount_verified != transaction_record.amount:
-                # Mismatch between initiated and verified amount
-                messages.error(request, "Amount mismatch during verification. Please contact support.")
-                transaction_record.status = 'failed'
-                transaction_record.description = f"Amount mismatch: Expected {transaction_record.amount}, Got {amount_verified}"
-                transaction_record.save()
-                return redirect('betting:wallet')
-
-            # Update wallet balance
-            user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=request.user)
-            user_wallet.balance += amount_verified
-            user_wallet.save()
-
-            # Update transaction record
-            transaction_record.status = 'completed'
-            transaction_record.is_successful = True
-            transaction_record.description = "Online deposit via Paystack successful."
-            transaction_record.timestamp = timezone.now() # Update timestamp to completion time
-            transaction_record.save()
-
-            _notify_admin_deposit_success(request.user, transaction_record, amount_verified, "paystack")
-            messages.success(request, f"Deposit of ₦{amount_verified:.2f} successful! Your wallet has been credited.")
-        else:
-            messages.error(request, f"Payment verification failed: {response_data['data'].get('message', 'Unknown error')}")
-            transaction_record.status = 'failed'
-            transaction_record.description = f"Paystack verification failed: {response_data['data'].get('message', 'Unknown error')}"
-            transaction_record.save()
-            
-    except requests.exceptions.Timeout:
-        messages.error(request, "Paystack verification timed out. Please try again.")
-        transaction_record.status = 'failed'
-        transaction_record.description = "Paystack verification timed out."
-        transaction_record.save()
+        messages.error(request, "Paystack verification timed out. Please try again (your payment will be credited once confirmed).")
     except requests.exceptions.RequestException as e:
+        PaymentGatewayEventLog.objects.create(
+            gateway='paystack',
+            event_type='verify',
+            reference=reference,
+            transaction=transaction_record,
+            user=request.user,
+            amount=transaction_record.amount,
+            success=False,
+            message=str(e),
+            payload={},
+        )
         messages.error(request, f"Error verifying payment with Paystack: {e}")
-        transaction_record.status = 'failed'
-        transaction_record.description = f"Error verifying payment with Paystack: {e}"
-        transaction_record.save()
     except json.JSONDecodeError:
+        PaymentGatewayEventLog.objects.create(
+            gateway='paystack',
+            event_type='verify',
+            reference=reference,
+            transaction=transaction_record,
+            user=request.user,
+            amount=transaction_record.amount,
+            success=False,
+            message="Invalid JSON response from Paystack during verification.",
+            payload={},
+        )
         messages.error(request, "Invalid response from Paystack during verification.")
-        transaction_record.status = 'failed'
-        transaction_record.description = "Invalid JSON response from Paystack during verification."
-        transaction_record.save()
 
     return redirect('betting:wallet')
+
+
+@csrf_exempt
+@require_POST
+def paystack_webhook(request):
+    secret = (getattr(settings, "PAYSTACK_WEBHOOK_SECRET", None) or getattr(settings, "PAYSTACK_SECRET_KEY", None) or "").strip()
+    if not secret:
+        return HttpResponse(status=500)
+
+    raw = request.body or b""
+    signature = (request.META.get("HTTP_X_PAYSTACK_SIGNATURE") or "").strip()
+    expected = hmac.new(secret.encode("utf-8"), raw, hashlib.sha512).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        return HttpResponse(status=400)
+
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponse(status=400)
+
+    data = payload.get("data") or {}
+    reference = (data.get("reference") or "").strip()
+    amount_kobo = data.get("amount")
+    status = (data.get("status") or "").strip().lower()
+
+    tx = None
+    try:
+        tx = Transaction.objects.filter(transaction_type="deposit", external_reference=reference).first() if reference else None
+    except Exception:
+        tx = None
+
+    with db_transaction.atomic():
+        if not tx:
+            PaymentGatewayEventLog.objects.create(
+                gateway="paystack",
+                event_type="webhook",
+                reference=reference,
+                transaction=None,
+                user=None,
+                amount=None,
+                success=False,
+                http_status=200,
+                message="Transaction not found for reference.",
+                payload=payload,
+            )
+            return HttpResponse(status=200)
+
+        if status == "success":
+            try:
+                amount_verified = (Decimal(str(amount_kobo or "0")) / Decimal("100")).quantize(Decimal("0.01"))
+                _complete_deposit_transaction(
+                    tx=tx,
+                    amount=amount_verified,
+                    gateway="paystack",
+                    reference=reference,
+                    source="webhook",
+                    payload=payload,
+                    http_status=200,
+                    message=str(payload.get("event") or ""),
+                )
+            except Exception as e:
+                PaymentGatewayEventLog.objects.create(
+                    gateway="paystack",
+                    event_type="webhook",
+                    reference=reference,
+                    transaction=tx,
+                    user=tx.user,
+                    amount=tx.amount,
+                    success=False,
+                    http_status=200,
+                    message=str(e),
+                    payload=payload,
+                )
+        else:
+            PaymentGatewayEventLog.objects.create(
+                gateway="paystack",
+                event_type="webhook",
+                reference=reference,
+                transaction=tx,
+                user=tx.user,
+                amount=tx.amount,
+                success=False,
+                http_status=200,
+                message=f"Non-success status: {status}",
+                payload=payload,
+            )
+
+    return HttpResponse(status=200)
+
+
+@csrf_exempt
+@require_POST
+def kora_webhook(request):
+    secret = (os.getenv("KORA_SECRET_KEY") or os.getenv("KORAPAY_SECRET_KEY") or "").strip()
+    if not secret:
+        return HttpResponse(status=500)
+
+    raw = request.body or b""
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponse(status=400)
+
+    data = payload.get("data") or {}
+    signature = (request.META.get("HTTP_X_KORAPAY_SIGNATURE") or "").strip()
+    data_bytes = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    expected = hmac.new(secret.encode("utf-8"), data_bytes, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        return HttpResponse(status=400)
+
+    reference = (data.get("reference") or data.get("transaction_reference") or "").strip()
+    status = (data.get("status") or "").strip().lower()
+    amount_raw = data.get("amount") or data.get("amount_paid") or data.get("amountPaid")
+
+    tx = None
+    try:
+        tx = Transaction.objects.filter(transaction_type="deposit", external_reference=reference).first() if reference else None
+    except Exception:
+        tx = None
+
+    with db_transaction.atomic():
+        if not tx:
+            PaymentGatewayEventLog.objects.create(
+                gateway="kora",
+                event_type="webhook",
+                reference=reference,
+                transaction=None,
+                user=None,
+                amount=None,
+                success=False,
+                http_status=200,
+                message="Transaction not found for reference.",
+                payload=payload,
+            )
+            return HttpResponse(status=200)
+
+        if status == "success":
+            try:
+                amount_verified = Decimal(str(amount_raw or "0"))
+                _complete_deposit_transaction(
+                    tx=tx,
+                    amount=amount_verified,
+                    gateway="kora",
+                    reference=reference,
+                    source="webhook",
+                    payload=payload,
+                    http_status=200,
+                    message=str(payload.get("event") or ""),
+                )
+            except Exception as e:
+                PaymentGatewayEventLog.objects.create(
+                    gateway="kora",
+                    event_type="webhook",
+                    reference=reference,
+                    transaction=tx,
+                    user=tx.user,
+                    amount=tx.amount,
+                    success=False,
+                    http_status=200,
+                    message=str(e),
+                    payload=payload,
+                )
+        else:
+            PaymentGatewayEventLog.objects.create(
+                gateway="kora",
+                event_type="webhook",
+                reference=reference,
+                transaction=tx,
+                user=tx.user,
+                amount=tx.amount,
+                success=False,
+                http_status=200,
+                message=f"Non-success status: {status}",
+                payload=payload,
+            )
+
+    return HttpResponse(status=200)
 
 
 @login_required
@@ -6170,11 +6436,11 @@ def api_user_wallet(request):
 
 @csrf_exempt
 def api_initiate_deposit(request):
-    return JsonResponse({'status': 'success', 'message': 'API endpoint for initiate deposit (placeholder).'})
+    raise Http404()
 
 @csrf_exempt
 def api_verify_deposit(request):
-    return JsonResponse({'status': 'success', 'message': 'API endpoint for verify deposit (placeholder).'})
+    raise Http404()
 
 @login_required
 def api_withdraw_funds(request):

@@ -9,16 +9,20 @@ from django.db.models import Q
 from django.db.models import Sum, Value, DecimalField
 from django.db.models.functions import Coalesce
 from django.core.cache import cache
+from django.db import transaction as db_transaction
 from decimal import Decimal
 from datetime import datetime, timedelta
 import io
+import os
 import pandas as pd
+import requests
 
 from .models import (
     Fixture,
     ScheduledFinanceReport,
     Transaction,
     User,
+    Wallet,
     UserWithdrawal,
     WithdrawalReport,
     FinanceAuditLog,
@@ -587,3 +591,120 @@ def run_scheduled_finance_reports():
         r.save(update_fields=['last_status', 'last_error', 'last_run_at', 'next_run_at', 'updated_at'])
         ran += 1
     return ran
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 3})
+def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
+    now = timezone.now()
+    cutoff = now - timedelta(minutes=max(int(minutes or 1440), 1))
+    gateway = (gateway or "all").strip().lower()
+
+    qs = Transaction.objects.filter(
+        transaction_type="deposit",
+        status__in=["pending", "failed"],
+        is_successful=False,
+        timestamp__gte=cutoff,
+    ).exclude(external_reference__isnull=True).exclude(external_reference="")
+    if gateway != "all":
+        qs = qs.filter(payment_gateway=gateway)
+    candidates = list(qs.order_by("timestamp")[: int(limit or 50)])
+    credited = 0
+
+    for tx in candidates:
+        ref = (tx.external_reference or "").strip()
+        gw = (getattr(tx, "payment_gateway", "") or "paystack").strip().lower()
+        try:
+            ok, amount_verified, payload, http_status, msg = _verify_deposit_gateway(gateway=gw, reference=ref)
+        except Exception as e:
+            PaymentGatewayEventLog.objects.create(
+                gateway=gw,
+                event_type="reconcile",
+                reference=ref,
+                transaction=tx,
+                user=tx.user,
+                amount=tx.amount,
+                success=False,
+                message=str(e),
+                payload={},
+            )
+            continue
+
+        PaymentGatewayEventLog.objects.create(
+            gateway=gw,
+            event_type="reconcile",
+            reference=ref,
+            transaction=tx,
+            user=tx.user,
+            amount=tx.amount,
+            success=bool(ok),
+            http_status=http_status,
+            message=(msg or ""),
+            payload=payload or {},
+        )
+
+        if not ok:
+            continue
+
+        try:
+            amount_q = Decimal(str(amount_verified)).quantize(Decimal("0.01"))
+        except Exception:
+            continue
+
+        with db_transaction.atomic():
+            locked = Transaction.objects.select_for_update().select_related("user").get(pk=tx.pk)
+            if locked.status == "completed" and locked.is_successful:
+                continue
+            if Decimal(str(locked.amount)).quantize(Decimal("0.01")) != amount_q:
+                locked.status = "failed"
+                locked.is_successful = False
+                locked.description = f"Amount mismatch: Expected {locked.amount}, Got {amount_q}"
+                locked.save(update_fields=["status", "is_successful", "description"])
+                continue
+            wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked.user, defaults={"balance": Decimal("0.00")})
+            wallet.balance = (wallet.balance or Decimal("0.00")) + amount_q
+            wallet.save(update_fields=["balance"])
+            locked.status = "completed"
+            locked.is_successful = True
+            locked.description = f"Online deposit via {gw} successful."
+            locked.timestamp = now
+            locked.save(update_fields=["status", "is_successful", "description", "timestamp"])
+            credited += 1
+
+    return credited
+
+
+def _verify_deposit_gateway(*, gateway, reference):
+    gateway = (gateway or "").strip().lower()
+    reference = (reference or "").strip()
+    if not reference:
+        raise ValueError("Missing reference")
+
+    if gateway == "paystack":
+        secret = (getattr(settings, "PAYSTACK_SECRET_KEY", None) or "").strip()
+        if not secret:
+            raise RuntimeError("Missing PAYSTACK_SECRET_KEY")
+        url = f"https://api.paystack.co/transaction/verify/{reference}"
+        resp = requests.get(url, headers={"Authorization": f"Bearer {secret}"}, timeout=15)
+        payload = resp.json()
+        data = payload.get("data") or {}
+        ok = bool(payload.get("status") and data.get("status") == "success")
+        amount_verified = (Decimal(str(data.get("amount") or "0")) / Decimal("100")).quantize(Decimal("0.01"))
+        msg = str(data.get("gateway_response") or data.get("message") or payload.get("message") or "")
+        return ok, amount_verified, {"response": payload}, getattr(resp, "status_code", None), msg
+
+    if gateway == "kora":
+        secret_key = (os.getenv("KORA_SECRET_KEY") or os.getenv("KORAPAY_SECRET_KEY") or "").strip()
+        base_url = os.getenv("KORA_BASE_URL") or os.getenv("KORAPAY_BASE_URL") or "https://api.korapay.com/merchant/api/v1"
+        if base_url.rstrip("/").endswith("/merchant/api"):
+            base_url = f"{base_url.rstrip('/')}/v1"
+        if not secret_key:
+            raise RuntimeError("Missing KORA_SECRET_KEY")
+        url = f"{base_url.rstrip('/')}/charges/{reference}"
+        resp = requests.get(url, headers={"Authorization": f"Bearer {secret_key}"}, timeout=15)
+        payload = resp.json()
+        ok = bool(payload.get("status") and (payload.get("data") or {}).get("status") == "success")
+        amount_verified = Decimal(str((payload.get("data") or {}).get("amount") or "0"))
+        msg = str(payload.get("message") or "")
+        return ok, amount_verified, {"response": payload}, getattr(resp, "status_code", None), msg
+
+    raise RuntimeError(f"Unsupported gateway: {gateway}")

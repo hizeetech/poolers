@@ -163,4 +163,16 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS('Confirmed task: Process Ticket Void Requests'))
 
+        PeriodicTask.objects.update_or_create(
+            name='Reconcile Pending Deposits',
+            defaults={
+                'crontab': schedule_10m,
+                'task': 'betting.tasks.reconcile_recent_deposits',
+                'args': json.dumps([]),
+                'kwargs': json.dumps({'gateway': 'all', 'minutes': 1440, 'limit': 50}),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Reconcile Pending Deposits'))
+
         self.stdout.write(self.style.SUCCESS('All periodic tasks configured successfully!'))

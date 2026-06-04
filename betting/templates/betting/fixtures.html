@@ -495,6 +495,18 @@
                 currentBettingLimits = payload.limits;
                 updateBettingLimitsHint();
 
+                const minStakeNum = parseFloat(currentBettingLimits.min_stake || '0') || 0;
+                if (stakeAmountInput && minStakeNum > 0) {
+                    stakeAmountInput.placeholder = minStakeNum.toFixed(2);
+                    const rawVal = (stakeAmountInput.value || '').trim();
+                    const currentVal = parseFloat(rawVal || '0') || 0;
+                    const isDefault100 = rawVal === '100' || rawVal === '100.00';
+                    if (!rawVal || isDefault100 || currentVal < minStakeNum) {
+                        stakeAmountInput.value = minStakeNum.toFixed(2);
+                        calculateSystemAndWinnings('per_line');
+                    }
+                }
+
                 const bettingEnabled = !(currentBettingLimits.is_active === false || currentBettingLimits.betting_enabled === false);
                 if (!bettingEnabled) {
                     placeBetBtn.disabled = true;

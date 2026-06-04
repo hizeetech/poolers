@@ -54,6 +54,36 @@
 
             {% if request.user.user_type == 'agent' %}
             <div class="card app-glass-card shadow-sm rounded-lg mb-4">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0">Minimum Stake Override</h5>
+                </div>
+                <div class="card-body">
+                    <div class="text-muted small mb-3">
+                        Set a custom minimum stake amount for your downline. Leave empty to use the global minimum stake.
+                    </div>
+                    <form method="post" action="{% url 'betting:profile' %}">
+                        {% csrf_token %}
+                        {% if agent_min_stake_form %}
+                            <div class="mb-3">
+                                <label class="form-label fw-bold text-muted mb-1">Minimum Stake (₦)</label>
+                                {{ agent_min_stake_form.min_stake }}
+                                {% if agent_min_stake_form.min_stake.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in agent_min_stake_form.min_stake.errors %} {{ error }} {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                        <div class="d-grid gap-2">
+                            <button type="submit" name="agent_min_stake_submit" class="btn btn-secondary btn-lg rounded-pill shadow-sm fw-bold">
+                                Save Minimum Stake
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-warning text-dark">
                     <h5 class="mb-0">Allow/Permit Cashiers To Void Tickets</h5>
                 </div>

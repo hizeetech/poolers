@@ -72,7 +72,7 @@ from .forms import (
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
-    CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm
+    CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm
 )
 
 # Setup logger for this app
@@ -3665,6 +3665,7 @@ def profile_view(request):
     global_cashier_voiding_enabled = bool(getattr(site_config, "enable_global_cashier_voiding", False))
 
     cashier_void_permission_form = None
+    agent_min_stake_form = None
     if request.user.user_type == "agent":
         if request.method == "POST" and "cashier_void_permissions_submit" in request.POST:
             cashier_void_permission_form = CashierVoidPermissionForm(request.POST, agent=request.user)
@@ -3678,6 +3679,16 @@ def profile_view(request):
                 cashier_void_permission_form.initial = {"cashiers": allowed_ids}
             except Exception:
                 pass
+        try:
+            override = AgentBettingLimitOverride.objects.filter(agent=request.user, is_active=True, custom_limits_enabled=True).first()
+        except Exception:
+            override = None
+        if request.method == "POST" and "agent_min_stake_submit" in request.POST:
+            agent_min_stake_form = AgentMinStakeOverrideForm(request.POST)
+        else:
+            agent_min_stake_form = AgentMinStakeOverrideForm(
+                initial={"min_stake": getattr(override, "min_stake", None)}
+            )
 
 
     if request.method == 'POST':
@@ -3791,6 +3802,36 @@ def profile_view(request):
             else:
                 for error in cashier_void_permission_form.non_field_errors():
                     messages.error(request, error)
+        elif "agent_min_stake_submit" in request.POST:
+            if request.user.user_type != "agent":
+                return HttpResponseForbidden("Not allowed.")
+            if not agent_min_stake_form:
+                agent_min_stake_form = AgentMinStakeOverrideForm(request.POST)
+            if agent_min_stake_form.is_valid():
+                min_stake = agent_min_stake_form.cleaned_data.get("min_stake")
+                with db_transaction.atomic():
+                    override, created = AgentBettingLimitOverride.objects.select_for_update().get_or_create(
+                        agent=request.user,
+                        defaults={
+                            "is_active": True,
+                            "custom_limits_enabled": True,
+                            "created_by": request.user,
+                            "updated_by": request.user,
+                        },
+                    )
+                    override.is_active = True
+                    override.custom_limits_enabled = True
+                    override.min_stake = min_stake
+                    if created and not override.created_by_id:
+                        override.created_by = request.user
+                    override.updated_by = request.user
+                    override.save()
+
+                messages.success(request, "Minimum stake override updated.")
+                return redirect("betting:profile")
+            else:
+                for error in agent_min_stake_form.non_field_errors():
+                    messages.error(request, error)
     else:
         profile_form = ProfileEditForm(instance=request.user)
         password_form = PasswordChangeForm(request.user)
@@ -3809,6 +3850,7 @@ def profile_view(request):
         'total_withdrawals': total_withdrawals, # Add to context
         'global_cashier_voiding_enabled': global_cashier_voiding_enabled,
         'cashier_void_permission_form': cashier_void_permission_form,
+        'agent_min_stake_form': agent_min_stake_form,
     }
     return render(request, 'betting/profile.html', context)
 

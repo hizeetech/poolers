@@ -73,6 +73,12 @@ class SiteConfiguration(models.Model):
         default=True,
         help_text='Allow users to place multiple bets (3 or more selections).'
     )
+
+    enable_global_cashier_voiding = models.BooleanField(
+        default=False,
+        verbose_name="Enable Ticket Voiding For All Cashiers",
+        help_text="If enabled, all cashiers can submit ticket void requests. If disabled, agent-level cashier permissions apply.",
+    )
     
     def save(self, *args, **kwargs):
         self.pk = 1

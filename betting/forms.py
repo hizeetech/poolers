@@ -1562,3 +1562,17 @@ class SuperAdminFundAccountUserForm(forms.Form):
         if amount and amount <= 0:
             raise ValidationError("Amount must be greater than zero.")
         return cleaned_data
+
+
+class CashierVoidPermissionForm(forms.Form):
+    cashiers = forms.ModelMultipleChoiceField(
+        queryset=CustomUser.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args, agent=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields["cashiers"]
+        field.queryset = CustomUser.objects.filter(user_type="cashier", agent=agent).order_by("username", "email")
+        field.label_from_instance = lambda u: f"{(u.username or u.email)} • {u.phone_number or '-'}"

@@ -71,7 +71,7 @@ from .forms import (
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
-    CRMUserProfileForm, CRMWithdrawalDecisionForm
+    CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm
 )
 
 # Setup logger for this app
@@ -2113,12 +2113,22 @@ def check_ticket_status(request):
             t.void_request_status = ''
             t.has_void_request = False
 
+    cashier_can_request_void = False
+    if request.user.is_authenticated and request.user.user_type == "cashier":
+        try:
+            from void_requests.services import can_cashier_request_void
+
+            cashier_can_request_void = bool(can_cashier_request_void(request.user))
+        except Exception:
+            cashier_can_request_void = False
+
     # AJAX Polling Check
     if request.method == 'GET' and request.GET.get('action') == 'poll_tickets':
         return render(request, 'betting/partials/ticket_list_rows.html', {
             'tickets': tickets_list,
             'void_window': void_window,
-            'now': timezone.now()
+            'now': timezone.now(),
+            'cashier_can_request_void': cashier_can_request_void,
         })
 
     context = {
@@ -2127,6 +2137,7 @@ def check_ticket_status(request):
         'tickets': tickets_list,
         'void_window': void_window,
         'now': timezone.now(),
+        'cashier_can_request_void': cashier_can_request_void,
         'bet_type_choices': BetTicket.BET_TYPE_CHOICES,
         'status_choices': BetTicket.STATUS_CHOICES,
         'ticket_bonus_percent': (ticket.bonus_percentage_applied * Decimal('100')) if ticket else Decimal('0.00'),
@@ -3380,6 +3391,28 @@ def profile_view(request):
         status='approved'
     ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
 
+    site_config = None
+    try:
+        site_config = SiteConfiguration.load()
+    except Exception:
+        site_config = None
+    global_cashier_voiding_enabled = bool(getattr(site_config, "enable_global_cashier_voiding", False))
+
+    cashier_void_permission_form = None
+    if request.user.user_type == "agent":
+        if request.method == "POST" and "cashier_void_permissions_submit" in request.POST:
+            cashier_void_permission_form = CashierVoidPermissionForm(request.POST, agent=request.user)
+        else:
+            cashier_void_permission_form = CashierVoidPermissionForm(agent=request.user)
+            try:
+                CashierVoidPermission = apps.get_model("void_requests", "CashierVoidPermission")
+                allowed_ids = list(
+                    CashierVoidPermission.objects.filter(agent=request.user, can_request_void=True).values_list("cashier_id", flat=True)
+                )
+                cashier_void_permission_form.initial = {"cashiers": allowed_ids}
+            except Exception:
+                pass
+
 
     if request.method == 'POST':
         profile_form = ProfileEditForm(request.POST, instance=request.user)
@@ -3439,6 +3472,59 @@ def profile_view(request):
             else:
                 for error in pin_reset_form.non_field_errors():
                     messages.error(request, error)
+        elif "cashier_void_permissions_submit" in request.POST:
+            if request.user.user_type != "agent":
+                return HttpResponseForbidden("Not allowed.")
+            if not cashier_void_permission_form:
+                cashier_void_permission_form = CashierVoidPermissionForm(request.POST, agent=request.user)
+            if cashier_void_permission_form.is_valid():
+                selected_cashiers = set(cashier_void_permission_form.cleaned_data.get("cashiers").values_list("id", flat=True))
+                scoped_cashiers = list(cashier_void_permission_form.fields["cashiers"].queryset.values_list("id", flat=True))
+
+                try:
+                    CashierVoidPermission = apps.get_model("void_requests", "CashierVoidPermission")
+                    existing = {
+                        row["cashier_id"]: row["can_request_void"]
+                        for row in CashierVoidPermission.objects.filter(agent=request.user, cashier_id__in=scoped_cashiers).values(
+                            "cashier_id", "can_request_void"
+                        )
+                    }
+                    to_create = []
+                    to_update_ids_true = []
+                    to_update_ids_false = []
+                    now_selected = selected_cashiers
+
+                    for cid in scoped_cashiers:
+                        desired = cid in now_selected
+                        if cid not in existing:
+                            to_create.append(CashierVoidPermission(agent=request.user, cashier_id=cid, can_request_void=desired))
+                        elif bool(existing[cid]) != desired:
+                            if desired:
+                                to_update_ids_true.append(cid)
+                            else:
+                                to_update_ids_false.append(cid)
+
+                    with db_transaction.atomic():
+                        if to_create:
+                            CashierVoidPermission.objects.bulk_create(to_create, ignore_conflicts=True)
+                        if to_update_ids_true:
+                            CashierVoidPermission.objects.filter(agent=request.user, cashier_id__in=to_update_ids_true).update(
+                                can_request_void=True
+                            )
+                        if to_update_ids_false:
+                            CashierVoidPermission.objects.filter(agent=request.user, cashier_id__in=to_update_ids_false).update(
+                                can_request_void=False
+                            )
+
+                    if global_cashier_voiding_enabled:
+                        messages.warning(request, "Global cashier voiding is enabled. Agent-level settings are currently ignored.")
+                    messages.success(request, "Cashier void permissions updated.")
+                    return redirect("betting:profile")
+                except Exception:
+                    messages.error(request, "Unable to update cashier void permissions.")
+            else:
+                for error in cashier_void_permission_form.non_field_errors():
+                    messages.error(request, error)
     else:
         profile_form = ProfileEditForm(instance=request.user)
         password_form = PasswordChangeForm(request.user)
@@ -3455,6 +3541,8 @@ def profile_view(request):
         'transactions': transactions,
         'total_deposits': total_deposits,       # Add to context
         'total_withdrawals': total_withdrawals, # Add to context
+        'global_cashier_voiding_enabled': global_cashier_voiding_enabled,
+        'cashier_void_permission_form': cashier_void_permission_form,
     }
     return render(request, 'betting/profile.html', context)
 

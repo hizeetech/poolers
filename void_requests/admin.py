@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib import messages
 
-from .models import TicketVoidRequest, TicketVoidAuditLog
+from .models import CashierVoidPermission, TicketVoidAuditLog, TicketVoidRequest
 from .services import approve_and_void_request, reject_void_request
 
 
@@ -56,3 +56,11 @@ class TicketVoidAuditLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+class CashierVoidPermissionAdmin(admin.ModelAdmin):
+    list_display = ("agent", "cashier", "can_request_void", "updated_at")
+    list_filter = ("can_request_void", "updated_at")
+    search_fields = ("agent__email", "agent__username", "cashier__email", "cashier__username")
+    autocomplete_fields = ("agent", "cashier")
+    readonly_fields = ("created_at", "updated_at")

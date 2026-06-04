@@ -68,3 +68,17 @@ class TicketVoidAuditLog(models.Model):
     def __str__(self):
         return f"VoidAudit({self.ticket.ticket_id}) {self.action}"
 
+
+class CashierVoidPermission(models.Model):
+    agent = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cashier_void_permissions_as_agent")
+    cashier = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cashier_void_permissions_as_cashier")
+    can_request_void = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("agent", "cashier")
+        ordering = ("-updated_at",)
+
+    def __str__(self):
+        return f"CashierVoidPermission({self.agent_id}->{self.cashier_id})={self.can_request_void}"

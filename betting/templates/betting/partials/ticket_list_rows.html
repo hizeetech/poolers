@@ -62,7 +62,7 @@
                 {% elif t.void_request_status == 'approved' or t.void_request_status == 'auto_voided' %}
                     <span class="badge bg-secondary ticket-action-badge">Voided</span>
                 {% else %}
-                    {% if t.status == 'pending' %}
+                    {% if t.status == 'pending' and cashier_can_request_void %}
                         <button type="button" class="btn btn-sm btn-outline-warning void-request-btn" data-ticket-id="{{ t.ticket_id }}">
                             <i class="fas fa-ban"></i> <span class="d-none d-md-inline">Void</span>
                         </button>

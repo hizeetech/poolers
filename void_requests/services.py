@@ -3,11 +3,29 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-from betting.models import BetTicket, SystemSetting
+from betting.models import BetTicket, SiteConfiguration, SystemSetting
 from notifications.services import create_notification
 
-from .models import TicketVoidRequest, TicketVoidAuditLog
+from .models import CashierVoidPermission, TicketVoidRequest, TicketVoidAuditLog
 from datetime import timedelta
+
+
+def can_cashier_request_void(cashier) -> bool:
+    if not cashier or getattr(cashier, "user_type", None) != "cashier":
+        return False
+    try:
+        config = SiteConfiguration.load()
+        if getattr(config, "enable_global_cashier_voiding", False):
+            return True
+    except Exception:
+        return False
+
+    agent_id = getattr(cashier, "agent_id", None)
+    if not agent_id:
+        return False
+    return bool(
+        CashierVoidPermission.objects.filter(agent_id=agent_id, cashier_id=cashier.id, can_request_void=True).exists()
+    )
 
 
 def compute_auto_void_at(*, requested_at):
@@ -26,6 +44,8 @@ def create_void_request(*, ticket, cashier, reason=""):
     ticket = BetTicket.objects.select_for_update().select_related("user").get(pk=ticket.pk)
     if cashier.user_type != "cashier":
         raise ValueError("Only cashiers can request void.")
+    if not can_cashier_request_void(cashier):
+        raise PermissionError("You are not permitted to request ticket voids.")
     if ticket.user_id != cashier.id:
         raise PermissionError("You can only request void for your own tickets.")
     if ticket.status != "pending":

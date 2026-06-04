@@ -52,6 +52,47 @@
                 </div>
             </div>
 
+            {% if request.user.user_type == 'agent' %}
+            <div class="card app-glass-card shadow-sm rounded-lg mb-4">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">Allow/Permit Cashiers To Void Tickets</h5>
+                </div>
+                <div class="card-body">
+                    {% if global_cashier_voiding_enabled %}
+                        <div class="alert alert-info mb-3">
+                            Global cashier voiding is enabled. All cashiers can request voids and agent-level settings are ignored.
+                        </div>
+                    {% else %}
+                        <div class="text-muted small mb-3">
+                            Select which of your cashiers are allowed to submit ticket void requests.
+                        </div>
+                    {% endif %}
+
+                    <form method="post" action="{% url 'betting:profile' %}">
+                        {% csrf_token %}
+                        {% if cashier_void_permission_form %}
+                            <div class="d-flex flex-column gap-2">
+                                {% for checkbox in cashier_void_permission_form.cashiers %}
+                                    <label class="d-flex align-items-center gap-2">
+                                        {{ checkbox.tag }}
+                                        <span>{{ checkbox.choice_label }}</span>
+                                    </label>
+                                {% empty %}
+                                    <div class="text-muted">No cashiers mapped to your account.</div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+
+                        <div class="d-grid gap-2 mt-3">
+                            <button type="submit" name="cashier_void_permissions_submit" class="btn btn-warning btn-lg rounded-pill shadow-sm fw-bold">
+                                Save Cashier Void Permissions
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+
             <div class="card app-glass-card shadow-sm rounded-lg mb-4">
                 <div class="card-header bg-info text-white">
                     <h5 class="mb-0">Change Password</h5>

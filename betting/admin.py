@@ -1811,11 +1811,12 @@ betting_admin_site.register(RetailManagerAgentMapping, RetailManagerAgentMapping
 betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
 betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
 
-from void_requests.models import TicketVoidRequest, TicketVoidAuditLog
-from void_requests.admin import TicketVoidRequestAdmin, TicketVoidAuditLogAdmin
+from void_requests.models import CashierVoidPermission, TicketVoidAuditLog, TicketVoidRequest
+from void_requests.admin import CashierVoidPermissionAdmin, TicketVoidAuditLogAdmin, TicketVoidRequestAdmin
 
 betting_admin_site.register(TicketVoidRequest, TicketVoidRequestAdmin)
 betting_admin_site.register(TicketVoidAuditLog, TicketVoidAuditLogAdmin)
+betting_admin_site.register(CashierVoidPermission, CashierVoidPermissionAdmin)
 
 from risk.models import (
     RiskEngineSettings,
@@ -2169,6 +2170,9 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         }),
         ('Commission Settings', {
             'fields': ('commission_payment_source', 'account_user_commission_authority', 'require_commission_recall_approval')
+        }),
+        ('Ticket Void Settings', {
+            'fields': ('enable_global_cashier_voiding',),
         }),
         ('Bet Permission Settings', {
             'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),

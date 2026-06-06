@@ -2204,9 +2204,14 @@ def check_ticket_status(request):
             tickets = tickets.filter(last_updated__date__lte=settled_date_to).exclude(status='pending')
         except (ValueError, TypeError): pass
 
-    # Apply limit after filtering
-    tickets = tickets.select_related('user').prefetch_related('selections')[:50]
-    tickets_list = list(tickets)
+    tickets_qs = tickets.select_related('user').prefetch_related('selections')
+    tickets_paginator = Paginator(tickets_qs, 50)
+    page_num = (request.GET.get('page') or '1').strip() or '1'
+    try:
+        tickets_page = tickets_paginator.page(page_num)
+    except Exception:
+        tickets_page = tickets_paginator.page(1)
+    tickets_list = list(tickets_page.object_list)
     try:
         TicketVoidRequest = apps.get_model('void_requests', 'TicketVoidRequest')
         req_rows = TicketVoidRequest.objects.filter(ticket_id__in=[t.id for t in tickets_list]).values('ticket_id', 'status')
@@ -2241,6 +2246,7 @@ def check_ticket_status(request):
         'form': form, 
         'ticket': ticket, 
         'tickets': tickets_list,
+        'tickets_page': tickets_page,
         'void_window': void_window,
         'now': timezone.now(),
         'cashier_can_request_void': cashier_can_request_void,

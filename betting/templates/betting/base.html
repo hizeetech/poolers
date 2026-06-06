@@ -1122,11 +1122,14 @@
                         padding: var(--pad-y) var(--pad-x);
                         margin: 0 auto;
                     }
-                    .ticket-logo {
+                    .thermal-logo {
                         display: block;
                         margin: 0 auto 1.0mm auto;
                         max-width: calc(var(--content-width) - 1mm);
-                        filter: grayscale(1) contrast(320%);
+                        filter: grayscale(1) contrast(500%) brightness(0);
+                    }
+                    .ticket-print .ticket-logo {
+                        display: none !important;
                     }
                     .thermal-flag {
                         border: var(--rule) solid #000;
@@ -1196,7 +1199,7 @@
 
                 const css = buildThermalCss(paperMm);
                 const safeLogoUrl = logoUrl.replace(/"/g, '&quot;').replace(/</g, '%3C').replace(/>/g, '%3E');
-                const logoHtml = showLogo ? `<img class="ticket-logo" src="${safeLogoUrl}" alt="">` : '';
+                const logoHtml = showLogo ? `<img class="thermal-logo" src="${safeLogoUrl}" alt="">` : '';
                 const wrapped = `
                     <div class="thermal-root">
                         ${logoHtml}

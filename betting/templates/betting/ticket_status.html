@@ -142,8 +142,7 @@
                 window.openThermalPrintWindow({
                     title: 'Ticket',
                     html: html,
-                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80',
-                    showLogo: false
+                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80'
                 });
             } else {
                 window.print();

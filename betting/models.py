@@ -10,6 +10,7 @@ import string
 import re
 import hashlib
 import math
+import sys
 from datetime import timedelta
 from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
@@ -17,6 +18,7 @@ from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.db import transaction
 import threading
+from django.conf import settings
 from django_ckeditor_5.fields import CKEditor5Field
 from django.apps import apps
 
@@ -2069,10 +2071,23 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
             from .tasks import recalculate_tickets_for_fixture
             ticket_count = BetTicket.objects.filter(selections__fixture=instance).distinct().count()
             is_test_run = any(arg in ('test', 'pytest') for arg in getattr(sys, 'argv', []) or [])
-            if is_test_run or ticket_count <= 200:
+
+            def _run_in_background():
+                try:
+                    recalculate_tickets_for_fixture.run(instance.id)
+                except Exception:
+                    return
+
+            if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
                 recalculate_tickets_for_fixture.run(instance.id)
-            else:
+                return
+
+            try:
                 recalculate_tickets_for_fixture.delay(instance.id)
+            except Exception:
+                t = threading.Thread(target=_run_in_background)
+                t.daemon = True
+                t.start()
         except Exception:
             try:
                 recalculate_tickets_for_fixture.run(instance.id)

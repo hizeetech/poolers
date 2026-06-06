@@ -772,15 +772,13 @@ class FixtureAdmin(admin.ModelAdmin):
         'away_team',
         'match_date',
         'match_time',
-        'home_win_odd',
         'draw_odd',
-        'away_win_odd',
         'betting_period',
         'serial_number_display',
         'status',
         'is_active',
     )
-    list_editable = ('match_date', 'match_time', 'home_win_odd', 'draw_odd', 'away_win_odd', 'is_active')
+    list_editable = ('match_date', 'match_time', 'draw_odd', 'is_active')
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
     

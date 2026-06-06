@@ -1,0 +1,102 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Tickets By Event - Admin{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Tickets By Event</h2>
+
+    <div class="card border-0 shadow-sm mb-4 p-4">
+        <h4 class="card-title fw-semibold mb-3">Filter</h4>
+        <form method="GET" action="{% url 'betting_admin:admin_tickets_by_event_report' %}" class="row g-3 align-items-end" id="ticketsByEventForm">
+            <div class="col-md-6">
+                <label for="betting_period" class="form-label">Betting Period:</label>
+                <select name="betting_period" id="betting_period" class="form-select rounded-md">
+                    <option value="">Select Betting Period</option>
+                    {% for p in periods %}
+                        <option value="{{ p.id }}" {% if p.id|stringformat:"s" == selected_betting_period %}selected{% endif %}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label for="fixture" class="form-label">Event:</label>
+                <select name="fixture" id="fixture" class="form-select rounded-md" {% if not fixtures %}disabled{% endif %}>
+                    <option value="">Select Event</option>
+                    {% for f in fixtures %}
+                        <option value="{{ f.id }}" {% if f.id|stringformat:"s" == selected_fixture %}selected{% endif %}>
+                            #{{ f.serial_number }} - {{ f.home_team }} vs {{ f.away_team }} ({{ f.match_date }})
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
+    </div>
+
+    {% if tickets %}
+        <div class="table-responsive">
+            <table class="table table-hover table-striped bg-white rounded-md overflow-hidden shadow-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Ticket ID</th>
+                        <th scope="col">Username</th>
+                        <th scope="col">Stake Amount</th>
+                        <th scope="col">Winnings</th>
+                        <th scope="col">Date & Time Played</th>
+                        <th scope="col">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ticket in tickets %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'betting_admin:admin_ticket_details' ticket.id %}" class="text-decoration-none">
+                                {{ ticket.ticket_id }}
+                            </a>
+                        </td>
+                        <td>{{ ticket.user.username|default:ticket.user.email }}</td>
+                        <td>₦{{ ticket.stake_amount|floatformat:2 }}</td>
+                        <td>₦{{ ticket.potential_winning|floatformat:2 }}</td>
+                        <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
+                        <td>
+                            <span class="badge 
+                                {% if ticket.status == 'pending' %}bg-secondary
+                                {% elif ticket.status == 'won' %}bg-success
+                                {% elif ticket.status == 'lost' %}bg-danger
+                                {% elif ticket.status == 'deleted' %}bg-warning text-dark
+                                {% elif ticket.status == 'cashed_out' %}bg-info
+                                {% elif ticket.status == 'cancelled' %}bg-dark
+                                {% endif %}">
+                                {{ ticket.get_status_display }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info text-center rounded-md" role="alert">
+            Select a betting period and an event to view matching tickets.
+        </div>
+    {% endif %}
+</div>
+
+<script>
+    (function () {
+        const form = document.getElementById('ticketsByEventForm');
+        const period = document.getElementById('betting_period');
+        const fixture = document.getElementById('fixture');
+        if (!form || !period || !fixture) return;
+
+        period.addEventListener('change', function () {
+            fixture.value = '';
+            form.submit();
+        });
+        fixture.addEventListener('change', function () {
+            form.submit();
+        });
+    })();
+</script>
+{% endblock %}
+

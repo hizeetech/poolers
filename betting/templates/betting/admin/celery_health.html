@@ -1,0 +1,141 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Celery Health - Admin{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="h3 mb-4 text-dark fw-semibold">Celery / Beat Health</h2>
+
+    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-4 g-3 mb-4">
+        <div class="col">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Beat Installed</div>
+                    <div class="fs-5 fw-bold">{% if beat_ok %}Yes{% else %}No{% endif %}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Results Installed</div>
+                    <div class="fs-5 fw-bold">{% if results_ok %}Yes{% else %}No{% endif %}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Workers Online</div>
+                    <div class="fs-5 fw-bold">
+                        {% if worker_ping %}
+                            {{ worker_ping|length }}
+                        {% else %}
+                            0
+                        {% endif %}
+                    </div>
+                    {% if inspect_error %}
+                        <div class="text-muted small">{{ inspect_error }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Queue (Approx)</div>
+                    <div class="small">
+                        Active: {{ inspect_counts.active|default:"-" }}<br>
+                        Reserved: {{ inspect_counts.reserved|default:"-" }}<br>
+                        Scheduled: {{ inspect_counts.scheduled|default:"-" }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <div class="fw-semibold mb-2">Periodic Tasks</div>
+            {% if periodic_tasks %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped mb-0">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Enabled</th>
+                                <th>Task</th>
+                                <th>Last Run</th>
+                                <th>Total Runs</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for t in periodic_tasks %}
+                            <tr>
+                                <td class="fw-semibold">{{ t.name }}</td>
+                                <td>{% if t.enabled %}Yes{% else %}No{% endif %}</td>
+                                <td class="text-muted">{{ t.task }}</td>
+                                <td>{% if t.last_run_at %}{{ t.last_run_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+                                <td>{{ t.total_run_count }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-muted">No periodic tasks found (or celery beat is not installed).</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <div class="fw-semibold mb-2">Recent Task Results</div>
+            {% if task_results %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped mb-0">
+                        <thead>
+                            <tr>
+                                <th>Done</th>
+                                <th>Task</th>
+                                <th>Status</th>
+                                <th>Runtime</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in task_results %}
+                            <tr>
+                                <td>{% if r.date_done %}{{ r.date_done|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+                                <td class="text-muted">{{ r.task_name }}</td>
+                                <td class="fw-semibold">{{ r.status }}</td>
+                                <td>{% if r.runtime %}{{ r.runtime }}s{% else %}-{% endif %}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-muted">No recent task results found (or celery results is not installed).</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <div class="fw-semibold mb-2">DB Backup Restore Test Checklist</div>
+            <div class="text-muted small mb-2">
+                Use the daily DB backup task and periodically validate restores to a separate database/staging environment.
+            </div>
+            <ol class="mb-0">
+                <li>Confirm a new backup file exists for today and has a non-zero size.</li>
+                <li>Validate the backup file can be parsed (pg_restore --list for custom-format dumps).</li>
+                <li>Restore into a non-production database (staging/restore-test) and run migrations/health checks.</li>
+                <li>Run a quick spot-check: user login, place bet, deposit verify/webhook flow.</li>
+                <li>Document success/failure and keep at least the retention window of backups.</li>
+            </ol>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

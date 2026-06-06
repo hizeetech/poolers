@@ -199,6 +199,21 @@
                         <i class="fas fa-calendar-alt"></i> Betting Periods
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_reconciliation_dashboard' %}active{% endif %}" href="{% url 'betting_admin:admin_reconciliation_dashboard' %}">
+                        <i class="fas fa-sync-alt"></i> Reconciliation
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_celery_health' %}active{% endif %}" href="{% url 'betting_admin:admin_celery_health' %}">
+                        <i class="fas fa-heartbeat"></i> Celery Health
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_tickets_by_event_report' %}active{% endif %}" href="{% url 'betting_admin:admin_tickets_by_event_report' %}">
+                        <i class="fas fa-ticket-alt"></i> Tickets By Event
+                    </a>
+                </li>
                  <li class="nav-item">
                     <a class="nav-link {% if 'payout' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_agent_payouts' %}">
                         <i class="fas fa-hand-holding-dollar"></i> Agent Payouts
@@ -207,13 +222,16 @@
 
                 <!-- Reporting Section - Collapsible -->
                 <li class="nav-item">
-                    <div class="collapsible-header {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#reportsCollapse" aria-expanded="{% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}true{% else %}false{% endif %}" aria-controls="reportsCollapse">
+                    <div class="collapsible-header {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#reportsCollapse" aria-expanded="{% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}true{% else %}false{% endif %}" aria-controls="reportsCollapse">
                         <i class="fas fa-chart-line"></i> Reports <i class="fas fa-caret-down float-end mt-1"></i>
                     </div>
-                    <div class="collapse collapsible-content {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}show{% endif %}" id="reportsCollapse">
+                    <div class="collapse collapsible-content {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}show{% endif %}" id="reportsCollapse">
                         <ul class="nav flex-column ps-3">
                             <li class="nav-item">
                                 <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_ticket_report' %}active{% endif %}" href="{% url 'betting_admin:admin_ticket_report' %}">Ticket Report</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_tickets_by_event_report' %}active{% endif %}" href="{% url 'betting_admin:admin_tickets_by_event_report' %}">Tickets By Event</a>
                             </li>
                             <li class="nav-item">
                                 <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_wallet_report' %}active{% endif %}" href="{% url 'betting_admin:admin_wallet_report' %}">Wallet Report</a>

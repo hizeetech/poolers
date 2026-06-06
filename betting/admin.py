@@ -50,7 +50,7 @@ from datetime import datetime, time, timedelta
 import math
 
 from .models import (
-    User, Wallet, Transaction, BettingPeriod, Fixture, PopularPick, BetTicket,
+    User, Wallet, WalletLedgerEntry, Transaction, BettingPeriod, Fixture, PopularPick, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
     SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
@@ -124,6 +124,9 @@ class BettingAdminSite(admin.AdminSite):
             path('reports/ticket/<uuid:ticket_id>/', self.admin_view(views.admin_ticket_details), name='admin_ticket_details'), 
             path('reports/ticket/void/<uuid:ticket_id>/', self.admin_view(views.admin_void_ticket_single), name='admin_void_ticket_single'), 
             path('reports/ticket/settle-won/<uuid:ticket_id>/', self.admin_view(views.admin_settle_won_ticket_single), name='admin_settle_won_ticket_single'), 
+            path('reports/tickets-by-event/', self.admin_view(views.admin_tickets_by_event_report), name='admin_tickets_by_event_report'),
+            path('ops/reconciliation/', self.admin_view(views.admin_reconciliation_dashboard), name='admin_reconciliation_dashboard'),
+            path('ops/celery-health/', self.admin_view(views.admin_celery_health), name='admin_celery_health'),
             path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
 
             path('reports/wallet/', self.admin_view(views.admin_wallet_report), name='admin_wallet_report'),
@@ -681,10 +684,7 @@ class BetTicketAdmin(admin.ModelAdmin):
 
                     user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
                     winnings_amount = ticket.max_winning
-                    user_wallet.balance += winnings_amount
-                    user_wallet.save()
-
-                    Transaction.objects.create(
+                    tx = Transaction.objects.create(
                         user=ticket.user,
                         initiating_user=request.user,
                         target_user=ticket.user,
@@ -695,6 +695,14 @@ class BetTicketAdmin(admin.ModelAdmin):
                         description=f"Admin payout: Winnings for Bet Ticket {ticket.ticket_id}",
                         related_bet_ticket=ticket,
                         timestamp=timezone.now()
+                    )
+                    user_wallet.apply_delta(
+                        amount=winnings_amount,
+                        actor=request.user,
+                        transaction_obj=tx,
+                        reference=str(ticket.ticket_id),
+                        reason=tx.description,
+                        metadata={"ticket_id": ticket.ticket_id, "source": "admin_action"},
                     )
                     tickets_settled += 1
                     views.log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON and paid out winnings.") 
@@ -1050,6 +1058,13 @@ class WalletAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email')
     list_select_related = ('user',)
     readonly_fields = ('last_updated',)
+
+class WalletLedgerEntryAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "user", "direction", "amount", "balance_before", "balance_after", "actor", "reference")
+    list_filter = ("direction", "created_at")
+    search_fields = ("user__email", "user__username", "actor__email", "reference", "reason")
+    date_hierarchy = "created_at"
+    list_select_related = ("user", "actor", "wallet", "transaction")
 
 # --- Transaction Admin ---
 class TransactionAdmin(admin.ModelAdmin):
@@ -1788,6 +1803,7 @@ class CRMActionLogAdmin(admin.ModelAdmin):
 # Register your models with the CUSTOM admin site
 betting_admin_site.register(User, CustomUserAdmin)
 betting_admin_site.register(Wallet, WalletAdmin)
+betting_admin_site.register(WalletLedgerEntry, WalletLedgerEntryAdmin)
 betting_admin_site.register(Transaction, TransactionAdmin)
 betting_admin_site.register(PaymentGatewayDeposit, PaymentGatewayDepositAdmin)
 betting_admin_site.register(PendingCashierRegistration, PendingCashierRegistrationAdmin)

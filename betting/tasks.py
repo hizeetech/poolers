@@ -14,6 +14,10 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 import io
 import os
+import base64
+import shutil
+import subprocess
+from pathlib import Path
 import pandas as pd
 import requests
 
@@ -34,6 +38,8 @@ from .models import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+from notifications.services import create_notification, create_broadcast_notification
 
 
 def _fmt_money(value):
@@ -594,10 +600,12 @@ def run_scheduled_finance_reports():
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 3})
-def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
+def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50, stuck_minutes=30, alert_cooldown_minutes=360):
     now = timezone.now()
     cutoff = now - timedelta(minutes=max(int(minutes or 1440), 1))
     gateway = (gateway or "all").strip().lower()
+    stuck_cutoff = now - timedelta(minutes=max(int(stuck_minutes or 30), 1))
+    alert_ttl = int(max(int(alert_cooldown_minutes or 360), 5) * 60)
 
     qs = Transaction.objects.filter(
         transaction_type="deposit",
@@ -627,6 +635,8 @@ def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
                 message=str(e),
                 payload={},
             )
+            if tx.timestamp and tx.timestamp <= stuck_cutoff:
+                _maybe_alert_stuck_deposit(tx=tx, now=now, ttl_seconds=alert_ttl)
             continue
 
         PaymentGatewayEventLog.objects.create(
@@ -643,6 +653,8 @@ def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
         )
 
         if not ok:
+            if tx.timestamp and tx.timestamp <= stuck_cutoff:
+                _maybe_alert_stuck_deposit(tx=tx, now=now, ttl_seconds=alert_ttl)
             continue
 
         try:
@@ -661,8 +673,14 @@ def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
                 locked.save(update_fields=["status", "is_successful", "description"])
                 continue
             wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked.user, defaults={"balance": Decimal("0.00")})
-            wallet.balance = (wallet.balance or Decimal("0.00")) + amount_q
-            wallet.save(update_fields=["balance"])
+            wallet.apply_delta(
+                amount=amount_q,
+                actor=None,
+                transaction_obj=locked,
+                reference=ref,
+                reason=f"Deposit via {gw} (reconcile)",
+                metadata={"gateway": gw, "source": "reconcile"},
+            )
             locked.status = "completed"
             locked.is_successful = True
             locked.description = f"Online deposit via {gw} successful."
@@ -671,6 +689,88 @@ def reconcile_recent_deposits(self, gateway="all", minutes=1440, limit=50):
             credited += 1
 
     return credited
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 2})
+def backup_database(self, validate_restore=True, retention_days=7):
+    db = (getattr(settings, "DATABASES", None) or {}).get("default") or {}
+    engine = (db.get("ENGINE") or "").strip().lower()
+    if "postgresql" not in engine:
+        raise RuntimeError("DB backup task supports PostgreSQL only.")
+
+    db_name = (db.get("NAME") or "").strip()
+    db_user = (db.get("USER") or "").strip()
+    db_password = db.get("PASSWORD") or ""
+    db_host = (db.get("HOST") or "localhost").strip() or "localhost"
+    db_port = str(db.get("PORT") or "5432").strip() or "5432"
+
+    pg_dump = (os.getenv("PG_DUMP_PATH") or "").strip() or (shutil.which("pg_dump") or "")
+    if not pg_dump:
+        raise RuntimeError("pg_dump not found. Set PG_DUMP_PATH or install PostgreSQL client tools.")
+
+    out_dir = (os.getenv("DB_BACKUP_DIR") or "").strip()
+    if out_dir:
+        out_path = Path(out_dir)
+    else:
+        out_path = Path(getattr(settings, "BASE_DIR", Path.cwd())) / "db_backups"
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    ts = timezone.now().strftime("%Y%m%d_%H%M%S")
+    safe_db_name = (db_name or "database").replace(" ", "_")
+    file_path = out_path / f"{safe_db_name}_{ts}.dump"
+
+    env = os.environ.copy()
+    env["PGPASSWORD"] = str(db_password)
+
+    cmd = [
+        pg_dump,
+        "-Fc",
+        "--no-owner",
+        "--no-privileges",
+        "-h",
+        db_host,
+        "-p",
+        db_port,
+        "-U",
+        db_user,
+        "-f",
+        str(file_path),
+        db_name,
+    ]
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "pg_dump failed").strip()[:500])
+
+    size_bytes = file_path.stat().st_size if file_path.exists() else 0
+    if size_bytes <= 0:
+        raise RuntimeError("Backup file is empty.")
+
+    restore_check_ok = None
+    if bool(validate_restore):
+        pg_restore = (os.getenv("PG_RESTORE_PATH") or "").strip() or (shutil.which("pg_restore") or "")
+        if pg_restore:
+            proc2 = subprocess.run([pg_restore, "--list", str(file_path)], env=env, capture_output=True, text=True)
+            restore_check_ok = proc2.returncode == 0
+            if proc2.returncode != 0:
+                raise RuntimeError((proc2.stderr or proc2.stdout or "pg_restore --list failed").strip()[:500])
+        else:
+            restore_check_ok = False
+
+    retention = int(os.getenv("DB_BACKUP_RETENTION_DAYS") or retention_days or 7)
+    cutoff = timezone.now() - timedelta(days=max(retention, 1))
+    for p in out_path.glob("*.dump"):
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.get_current_timezone())
+            if mtime < cutoff:
+                p.unlink(missing_ok=True)
+        except Exception:
+            continue
+
+    return {
+        "file": str(file_path),
+        "size_bytes": int(size_bytes),
+        "restore_check_ok": restore_check_ok,
+    }
 
 
 def _verify_deposit_gateway(*, gateway, reference):
@@ -707,4 +807,73 @@ def _verify_deposit_gateway(*, gateway, reference):
         msg = str(payload.get("message") or "")
         return ok, amount_verified, {"response": payload}, getattr(resp, "status_code", None), msg
 
+    if gateway == "monnify":
+        api_key = (os.getenv("MONNIFY_API_KEY") or "").strip()
+        secret_key = (os.getenv("MONNIFY_SECRET_KEY") or "").strip()
+        base_url = (os.getenv("MONNIFY_BASE_URL") or "").strip()
+        if not base_url:
+            raise RuntimeError("Missing MONNIFY_BASE_URL")
+        if not api_key or not secret_key:
+            raise RuntimeError("Missing MONNIFY credentials")
+
+        auth_str = base64.b64encode(f"{api_key}:{secret_key}".encode()).decode()
+        auth_url = f"{base_url.rstrip('/')}/api/v1/auth/login"
+        auth_resp = requests.post(auth_url, headers={"Authorization": f"Basic {auth_str}"}, timeout=15)
+        auth_payload = auth_resp.json() if auth_resp.content else {}
+        if not bool(auth_payload.get("requestSuccessful")):
+            msg = str(auth_payload.get("responseMessage") or "Authentication failed")
+            return False, Decimal("0.00"), {"auth": auth_payload}, getattr(auth_resp, "status_code", None), msg
+
+        token = ((auth_payload.get("responseBody") or {}).get("accessToken") or "").strip()
+        if not token:
+            return False, Decimal("0.00"), {"auth": auth_payload}, getattr(auth_resp, "status_code", None), "Missing access token"
+
+        verify_url = f"{base_url.rstrip('/')}/api/v1/merchant/transactions/query?paymentReference={reference}"
+        verify_resp = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        verify_payload = verify_resp.json() if verify_resp.content else {}
+        body = verify_payload.get("responseBody") or {}
+        ok = bool(verify_payload.get("requestSuccessful") and body.get("paymentStatus") == "PAID")
+        amount_verified = Decimal(str(body.get("amountPaid") or "0"))
+        msg = str(verify_payload.get("responseMessage") or body.get("paymentStatus") or "")
+        return ok, amount_verified, {"response": verify_payload}, getattr(verify_resp, "status_code", None), msg
+
     raise RuntimeError(f"Unsupported gateway: {gateway}")
+
+
+def _deposit_admin_queryset():
+    return User.objects.filter(is_active=True).filter(Q(is_superuser=True) | Q(user_type__in=["admin", "finance", "account_user"]))
+
+
+def _maybe_alert_stuck_deposit(*, tx, now, ttl_seconds):
+    lock_key = f"deposit_stuck_alert:{tx.pk}"
+    if not cache.add(lock_key, 1, timeout=ttl_seconds):
+        return
+
+    ref = (tx.external_reference or tx.paystack_reference or str(tx.id) or "").strip()
+    gateway = (getattr(tx, "payment_gateway", "") or "").strip().lower() or "paystack"
+    title_user = "Deposit pending verification"
+    msg_user = f"Your deposit is still pending confirmation. Reference: {ref}. If your payment was successful, it will be credited automatically once confirmed."
+    try:
+        create_notification(
+            recipient=tx.user,
+            notification_type="DEPOSIT_REMINDER",
+            title=title_user,
+            message=msg_user,
+            data={"transaction_id": str(tx.id), "reference": ref, "gateway": gateway, "status": tx.status},
+        )
+    except Exception:
+        pass
+
+    admins = _deposit_admin_queryset()
+    title_admin = "Pending deposit requires attention"
+    msg_admin = f"A deposit has been pending beyond the configured threshold. User: {getattr(tx.user, 'email', '')}. Reference: {ref}. Gateway: {gateway}. Amount: {_fmt_money(tx.amount)}."
+    try:
+        create_broadcast_notification(
+            queryset=admins,
+            notification_type="SYSTEM_ANNOUNCEMENT",
+            title=title_admin,
+            message=msg_admin,
+            data={"transaction_id": str(tx.id), "reference": ref, "gateway": gateway, "status": tx.status},
+        )
+    except Exception:
+        pass

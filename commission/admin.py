@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.shortcuts import render
 from django.utils import timezone
 from django.contrib import messages
+from decimal import Decimal
 from betting.admin import betting_admin_site
 from .models import (
     CommissionPlan, HybridCommissionRule, AgentCommissionProfile,
@@ -408,26 +409,28 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
                     calc = calculate_weekly_agent_commission_data(agent, period, include_breakdown=True) or {}
                     
                     if existing:
+                        calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
+                        existing_total = getattr(existing, 'commission_total_amount', None) or Decimal('0.00')
                         row = {
                             'agent': agent,
                             'plan': profile.plan.name,
                             'calc': calc,
                             'status': existing.get_status_display(),
-                            'is_paid': existing.status == 'paid'
+                            'is_paid': existing.status == 'paid',
+                            'can_pay': (existing.status != 'paid') and ((calc_total > 0) or (existing_total > 0)),
                         }
-                        # Show if paid or if amount > 0
-                        if existing.status == 'paid' or calc.get('commission_total_amount', 0) > 0 or existing.commission_total_amount > 0:
-                            agent_data.append(row)
+                        agent_data.append(row)
                     else:
-                        if calc.get('commission_total_amount', 0) > 0:
-                            row = {
-                                'agent': agent,
-                                'plan': profile.plan.name,
-                                'calc': calc,
-                                'status': 'Pending (Calculated)',
-                                'is_paid': False
-                            }
-                            agent_data.append(row)
+                        calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
+                        row = {
+                            'agent': agent,
+                            'plan': profile.plan.name,
+                            'calc': calc,
+                            'status': 'Pending (Calculated)',
+                            'is_paid': False,
+                            'can_pay': calc_total > 0,
+                        }
+                        agent_data.append(row)
                             
             except CommissionPeriod.DoesNotExist:
                 pass

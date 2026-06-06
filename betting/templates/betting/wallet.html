@@ -294,6 +294,7 @@
                                     <th scope="col">Amount</th>
                                     <th scope="col">Status</th>
                                     <th scope="col">Description</th>
+                                    <th scope="col">Details</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -310,6 +311,13 @@
                                                 </span>
                                     </td>
                                     <td>{{ transaction.description }}</td>
+                                    <td class="text-nowrap">
+                                        {% if transaction.transaction_type == 'deposit' and transaction.external_reference %}
+                                            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:deposit_status' transaction.external_reference %}">View</a>
+                                        {% else %}
+                                            <span class="text-muted small">-</span>
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

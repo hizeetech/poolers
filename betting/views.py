@@ -11,7 +11,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -35,6 +35,7 @@ from django_ratelimit.decorators import ratelimit
 from django.core.cache import cache
 import hashlib
 import hmac
+import ipaddress
 
 from risk.services import (
     is_suspended as risk_is_suspended,
@@ -77,6 +78,18 @@ from .forms import (
 
 # Setup logger for this app
 logger = logging.getLogger('betting') # Use the 'betting' logger defined in settings.py
+
+
+def _ratelimit_key_user_or_ip(group, request):
+    user = getattr(request, "user", None)
+    if getattr(user, "is_authenticated", False):
+        return f"user:{user.pk}"
+    ip = (request.META.get("HTTP_X_REAL_IP") or "").strip()
+    if not ip:
+        ip = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    if not ip:
+        ip = (request.META.get("REMOTE_ADDR") or "").strip()
+    return f"ip:{ip}" if ip else "ip:unknown"
 
 
 def _get_admin_notification_email():
@@ -158,8 +171,14 @@ def _complete_deposit_transaction(*, tx, amount, gateway, reference, source, pay
         raise ValueError("Amount mismatch.")
 
     wallet, _ = Wallet.objects.select_for_update().get_or_create(user=tx.user, defaults={"balance": Decimal("0.00")})
-    wallet.balance = (wallet.balance or Decimal("0.00")) + amount_q
-    wallet.save(update_fields=["balance"])
+    wallet.apply_delta(
+        amount=amount_q,
+        actor=None,
+        transaction_obj=tx,
+        reference=reference or (tx.external_reference or tx.paystack_reference or str(tx.id)),
+        reason=f"Deposit via {gateway} ({source})",
+        metadata={"gateway": gateway, "source": source},
+    )
 
     tx.status = "completed"
     tx.is_successful = True
@@ -1711,9 +1730,6 @@ def place_bet(request):
                     if user_wallet.balance < total_stake:
                         return fail_response(f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}')
 
-                    user_wallet.balance -= total_stake
-                    user_wallet.save()
-
                     # Create Single BetTicket
                     ip = get_client_ip(request)
                     bonus_rule_obj = BonusRule.objects.filter(id=rule_dict['id']).first() if rule_dict else None
@@ -1823,7 +1839,7 @@ def place_bet(request):
                         pass
 
                     # Transaction Record (Summary)
-                    Transaction.objects.create(
+                    tx = Transaction.objects.create(
                         user=request.user,
                         transaction_type='bet_placement',
                         amount=total_stake,
@@ -1832,6 +1848,14 @@ def place_bet(request):
                         description=f"Placed bet. Type: {bet_type.title()}. Ticket ID: {bet_ticket.ticket_id}",
                         related_bet_ticket=bet_ticket,
                         timestamp=timezone.now()
+                    )
+                    user_wallet.apply_delta(
+                        amount=-total_stake,
+                        actor=request.user,
+                        transaction_obj=tx,
+                        reference=str(bet_ticket.ticket_id),
+                        reason=tx.description,
+                        metadata={"ticket_id": bet_ticket.ticket_id, "bet_type": bet_type},
                     )
 
                     # Refresh wallet to get the latest balance
@@ -1980,10 +2004,6 @@ def place_bet(request):
                         messages.error(request, e.message)
                         return redirect('betting:fixtures')
 
-                    # Deduct stake from wallet
-                    user_wallet.balance -= stake_amount
-                    user_wallet.save()
-
                     # Create BetTicket
                     limits_snapshot = serialize_limits(limits)
                     limits_snapshot.update({
@@ -2027,7 +2047,7 @@ def place_bet(request):
                     )
 
                     # Record Transaction
-                    Transaction.objects.create(
+                    tx = Transaction.objects.create(
                         user=request.user,
                         transaction_type='bet_placement',
                         amount=stake_amount,
@@ -2036,6 +2056,14 @@ def place_bet(request):
                         description=f"Bet placed on {fixture.home_team} vs {fixture.away_team} for {selected_outcome}",
                         related_bet_ticket=bet_ticket,
                         timestamp=timezone.now()
+                    )
+                    user_wallet.apply_delta(
+                        amount=-stake_amount,
+                        actor=request.user,
+                        transaction_obj=tx,
+                        reference=str(bet_ticket.ticket_id),
+                        reason=tx.description,
+                        metadata={"ticket_id": bet_ticket.ticket_id, "bet_type": "single"},
                     )
 
                     release_ticket_placement_lock(placement_lock_key)
@@ -2341,7 +2369,38 @@ def wallet_view(request):
     }
     return render(request, 'betting/wallet.html', context)
 
+
 @login_required
+def deposit_status(request, reference):
+    reference = (reference or "").strip()
+    if not reference:
+        raise Http404("Missing reference")
+
+    tx = (
+        Transaction.objects.filter(transaction_type="deposit")
+        .filter(Q(external_reference=reference) | Q(paystack_reference=reference))
+        .select_related("user")
+        .first()
+    )
+    if not tx:
+        raise Http404("Deposit not found")
+
+    is_admin_viewer = bool(request.user.is_superuser or request.user.user_type in ["admin", "finance", "account_user"])
+    if not is_admin_viewer and tx.user_id != request.user.id:
+        return HttpResponseForbidden("Not allowed.")
+
+    logs = PaymentGatewayEventLog.objects.filter(transaction=tx).order_by("-created_at")[:200]
+
+    context = {
+        "tx": tx,
+        "reference": reference,
+        "gateway_logs": logs,
+        "is_admin_viewer": is_admin_viewer,
+    }
+    return render(request, "betting/deposit_status.html", context)
+
+@login_required
+@ratelimit(key=_ratelimit_key_user_or_ip, rate="10/m", method="POST", block=True)
 @db_transaction.atomic
 def initiate_deposit(request):
     if request.method == 'POST':
@@ -2637,6 +2696,7 @@ def initiate_deposit(request):
     return redirect('betting:wallet')
 
 @login_required
+@ratelimit(key=_ratelimit_key_user_or_ip, rate="20/m", method="GET", block=True)
 @db_transaction.atomic
 def verify_monnify_deposit(request):
     reference = request.GET.get('paymentReference')
@@ -2676,8 +2736,9 @@ def verify_monnify_deposit(request):
             verify_url = f"{base_url}/api/v1/merchant/transactions/query?paymentReference={reference}"
             verify_response = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
             verify_data = verify_response.json()
-            
-            if verify_data.get('requestSuccessful') and verify_data['responseBody']['paymentStatus'] == 'PAID':
+
+            payment_status = str((verify_data.get('responseBody') or {}).get('paymentStatus') or '').strip().upper()
+            if verify_data.get('requestSuccessful') and payment_status == 'PAID':
                 amount_verified = Decimal(str(verify_data['responseBody']['amountPaid']))
                 completed = _complete_deposit_transaction(
                     tx=transaction_record,
@@ -2705,10 +2766,13 @@ def verify_monnify_deposit(request):
                     amount=transaction_record.amount,
                     success=False,
                     http_status=getattr(verify_response, 'status_code', None),
-                    message=str(msg or ''),
+                    message=str(msg or '') or f"Status: {payment_status}",
                     payload={'response': verify_data},
                 )
-                messages.error(request, f"Monnify verification failed: {msg}")
+                if payment_status and payment_status not in {"FAILED", "CANCELLED", "EXPIRED"}:
+                    messages.info(request, "Payment received, awaiting confirmation. Your wallet will be credited once confirmed.")
+                else:
+                    messages.error(request, f"Monnify verification failed: {msg}")
         else:
             PaymentGatewayEventLog.objects.create(
                 gateway='monnify',
@@ -2731,6 +2795,7 @@ def verify_monnify_deposit(request):
     return redirect('betting:wallet')
 
 @login_required
+@ratelimit(key=_ratelimit_key_user_or_ip, rate="20/m", method="GET", block=True)
 @db_transaction.atomic
 def verify_kora_deposit(request):
     reference = request.GET.get('reference')
@@ -2765,7 +2830,9 @@ def verify_kora_deposit(request):
         response = requests.get(verify_url, headers=headers, timeout=10)
         response_data = response.json()
         
-        if response_data.get('status') and response_data['data']['status'] == 'success':
+        data = response_data.get('data') or {}
+        status = str(data.get('status') or '').strip().lower()
+        if response_data.get('status') and status == 'success':
             amount_verified = Decimal(str(response_data['data']['amount']))
             completed = _complete_deposit_transaction(
                 tx=transaction_record,
@@ -2796,7 +2863,10 @@ def verify_kora_deposit(request):
                 message=str(msg or ''),
                 payload={'response': response_data},
             )
-            messages.error(request, f"Kora verification failed: {msg}")
+            if status and status not in {"failed", "cancelled"}:
+                messages.info(request, "Payment received, awaiting confirmation. Your wallet will be credited once confirmed.")
+            else:
+                messages.error(request, f"Kora verification failed: {msg}")
             
     except Exception as e:
         logger.error(f"Kora verification error: {str(e)}")
@@ -2817,6 +2887,7 @@ def verify_kora_deposit(request):
 
 
 @login_required
+@ratelimit(key=_ratelimit_key_user_or_ip, rate="20/m", method="GET", block=True)
 @db_transaction.atomic
 def verify_deposit(request):
     reference = request.GET.get('trxref') or request.GET.get('reference')
@@ -2848,7 +2919,8 @@ def verify_deposit(request):
         response_data = response.json()
 
         data = response_data.get("data") or {}
-        if response_data.get('status') and data.get('status') == 'success':
+        paystack_status = str(data.get('status') or '').strip().lower()
+        if response_data.get('status') and paystack_status == 'success':
             amount_verified = (Decimal(str(data.get("amount") or "0")) / Decimal("100")).quantize(Decimal("0.01"))
             completed = _complete_deposit_transaction(
                 tx=transaction_record,
@@ -2879,7 +2951,10 @@ def verify_deposit(request):
                 message=msg,
                 payload={'response': response_data},
             )
-            messages.error(request, f"Payment verification failed: {msg}")
+            if paystack_status and paystack_status not in {"failed", "abandoned", "reversed"}:
+                messages.info(request, "Payment received, awaiting confirmation. Your wallet will be credited once confirmed.")
+            else:
+                messages.error(request, f"Payment verification failed: {msg}")
             
     except requests.exceptions.Timeout:
         PaymentGatewayEventLog.objects.create(
@@ -2924,9 +2999,59 @@ def verify_deposit(request):
     return redirect('betting:wallet')
 
 
+def _request_ip(request):
+    ip = (request.META.get("HTTP_X_REAL_IP") or "").strip()
+    if not ip:
+        ip = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    if not ip:
+        ip = (request.META.get("REMOTE_ADDR") or "").strip()
+    return ip
+
+
+def _ip_allowed(ip, allowlist):
+    if not allowlist:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+    except Exception:
+        return False
+    for entry in allowlist:
+        entry = (entry or "").strip()
+        if not entry:
+            continue
+        try:
+            if "/" in entry:
+                if ip_obj in ipaddress.ip_network(entry, strict=False):
+                    return True
+            else:
+                if ip_obj == ipaddress.ip_address(entry):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _enforce_webhook_allowlist(request, gateway):
+    gateway = (gateway or "").strip().lower()
+    if gateway == "paystack":
+        allowlist = list(getattr(settings, "PAYSTACK_WEBHOOK_IP_ALLOWLIST", []) or [])
+    elif gateway == "kora":
+        allowlist = list(getattr(settings, "KORA_WEBHOOK_IP_ALLOWLIST", []) or [])
+    elif gateway == "monnify":
+        allowlist = list(getattr(settings, "MONNIFY_WEBHOOK_IP_ALLOWLIST", []) or [])
+    else:
+        allowlist = []
+    if not allowlist:
+        return True
+    return _ip_allowed(_request_ip(request), allowlist)
+
+
 @csrf_exempt
 @require_POST
+@ratelimit(key="ip", rate="300/m", method="POST", block=True)
 def paystack_webhook(request):
+    if not _enforce_webhook_allowlist(request, "paystack"):
+        return HttpResponseForbidden("Not allowed.")
     secret = (getattr(settings, "PAYSTACK_WEBHOOK_SECRET", None) or getattr(settings, "PAYSTACK_SECRET_KEY", None) or "").strip()
     if not secret:
         return HttpResponse(status=500)
@@ -3014,7 +3139,10 @@ def paystack_webhook(request):
 
 @csrf_exempt
 @require_POST
+@ratelimit(key="ip", rate="300/m", method="POST", block=True)
 def kora_webhook(request):
+    if not _enforce_webhook_allowlist(request, "kora"):
+        return HttpResponseForbidden("Not allowed.")
     secret = (os.getenv("KORA_SECRET_KEY") or os.getenv("KORAPAY_SECRET_KEY") or "").strip()
     if not secret:
         return HttpResponse(status=500)
@@ -3095,6 +3223,99 @@ def kora_webhook(request):
                 success=False,
                 http_status=200,
                 message=f"Non-success status: {status}",
+                payload=payload,
+            )
+
+    return HttpResponse(status=200)
+
+
+@csrf_exempt
+@require_POST
+@ratelimit(key="ip", rate="300/m", method="POST", block=True)
+def monnify_webhook(request):
+    if not _enforce_webhook_allowlist(request, "monnify"):
+        return HttpResponseForbidden("Not allowed.")
+
+    secret = (os.getenv("MONNIFY_SECRET_KEY") or "").strip()
+    if not secret:
+        return HttpResponse(status=500)
+
+    raw = request.body or b""
+    signature = (request.META.get("HTTP_MONNIFY_SIGNATURE") or "").strip()
+    expected = hmac.new(secret.encode("utf-8"), raw, hashlib.sha512).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        return HttpResponse(status=400)
+
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponse(status=400)
+
+    event_type = (payload.get("eventType") or "").strip()
+    data = payload.get("eventData") or {}
+    reference = (data.get("paymentReference") or "").strip()
+    status = (data.get("paymentStatus") or "").strip().upper()
+    amount_raw = data.get("amountPaid") or data.get("totalPayable")
+
+    tx = None
+    try:
+        tx = Transaction.objects.filter(transaction_type="deposit", external_reference=reference).first() if reference else None
+    except Exception:
+        tx = None
+
+    with db_transaction.atomic():
+        if not tx:
+            PaymentGatewayEventLog.objects.create(
+                gateway="monnify",
+                event_type="webhook",
+                reference=reference,
+                transaction=None,
+                user=None,
+                amount=None,
+                success=False,
+                http_status=200,
+                message=f"Transaction not found for reference. ({event_type})",
+                payload=payload,
+            )
+            return HttpResponse(status=200)
+
+        if status == "PAID":
+            try:
+                amount_verified = Decimal(str(amount_raw or "0")).quantize(Decimal("0.01"))
+                _complete_deposit_transaction(
+                    tx=tx,
+                    amount=amount_verified,
+                    gateway="monnify",
+                    reference=reference,
+                    source="webhook",
+                    payload=payload,
+                    http_status=200,
+                    message=event_type,
+                )
+            except Exception as e:
+                PaymentGatewayEventLog.objects.create(
+                    gateway="monnify",
+                    event_type="webhook",
+                    reference=reference,
+                    transaction=tx,
+                    user=tx.user,
+                    amount=tx.amount,
+                    success=False,
+                    http_status=200,
+                    message=str(e),
+                    payload=payload,
+                )
+        else:
+            PaymentGatewayEventLog.objects.create(
+                gateway="monnify",
+                event_type="webhook",
+                reference=reference,
+                transaction=tx,
+                user=tx.user,
+                amount=tx.amount,
+                success=False,
+                http_status=200,
+                message=f"Non-PAID status: {status} ({event_type})",
                 payload=payload,
             )
 
@@ -3201,8 +3422,6 @@ def withdraw_funds(request):
 
             balance_before = user_wallet.balance
             balance_after = balance_before - amount
-            user_wallet.balance = balance_after
-            user_wallet.save()
 
             withdrawal = UserWithdrawal.objects.create(
                 user=user,
@@ -3215,7 +3434,7 @@ def withdraw_funds(request):
                 status='pending' # Set to pending for admin approval
             )
 
-            Transaction.objects.create(
+            tx = Transaction.objects.create(
                 user=user,
                 initiating_user=user,
                 target_user=user,
@@ -3226,6 +3445,14 @@ def withdraw_funds(request):
                 description=f"Withdrawal request {withdrawal.id} created (deducted from wallet).",
                 related_withdrawal_request=withdrawal,
                 timestamp=timezone.now()
+            )
+            user_wallet.apply_delta(
+                amount=-amount,
+                actor=user,
+                transaction_obj=tx,
+                reference=str(withdrawal.id),
+                reason=tx.description,
+                metadata={"withdrawal_id": withdrawal.id, "source": "withdraw_request"},
             )
             _clear_withdrawal_pin_verified(request)
             if expects_json:
@@ -3388,24 +3615,23 @@ def wallet_transfer(request):
             recipient_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=recipient)
 
             if transaction_type == 'credit':
-                sender_wallet.balance -= amount
-                recipient_wallet.balance += amount
+                if sender_wallet.balance < amount:
+                    messages.error(request, "Insufficient balance to complete this transfer.")
+                    return redirect('betting:wallet')
                 transfer_description_sender = f"Sent funds to {recipient.email}: {description}"
                 transfer_description_recipient = f"Received funds from {request.user.email}: {description}"
                 transaction_type_sender = 'wallet_transfer_out' # Corrected type
                 transaction_type_recipient = 'wallet_transfer_in' # Corrected type
             elif transaction_type == 'debit':
-                sender_wallet.balance += amount
-                recipient_wallet.balance -= amount
+                if recipient_wallet.balance < amount:
+                    messages.error(request, "Recipient has insufficient balance for this debit.")
+                    return redirect('betting:wallet')
                 transfer_description_sender = f"Received funds from {recipient.email}: {description}"
                 transfer_description_recipient = f"Sent funds to {request.user.email}: {description}"
                 transaction_type_sender = 'wallet_transfer_in' # From sender's perspective
                 transaction_type_recipient = 'wallet_transfer_out' # From recipient's perspective
-            
-            sender_wallet.save()
-            recipient_wallet.save()
 
-            Transaction.objects.create(
+            tx_sender = Transaction.objects.create(
                 user=request.user,
                 initiating_user=request.user,
                 target_user=recipient,
@@ -3416,7 +3642,7 @@ def wallet_transfer(request):
                 description=transfer_description_sender,
                 timestamp=timezone.now()
             )
-            Transaction.objects.create(
+            tx_recipient = Transaction.objects.create(
                 user=recipient,
                 initiating_user=request.user, # The one who initiated it
                 target_user=recipient,
@@ -3427,6 +3653,40 @@ def wallet_transfer(request):
                 description=transfer_description_recipient,
                 timestamp=timezone.now()
             )
+            if transaction_type == 'credit':
+                sender_wallet.apply_delta(
+                    amount=-amount,
+                    actor=request.user,
+                    transaction_obj=tx_sender,
+                    reference=str(tx_sender.id),
+                    reason=tx_sender.description,
+                    metadata={"transfer": "out", "counterparty": recipient.id},
+                )
+                recipient_wallet.apply_delta(
+                    amount=amount,
+                    actor=request.user,
+                    transaction_obj=tx_recipient,
+                    reference=str(tx_sender.id),
+                    reason=tx_recipient.description,
+                    metadata={"transfer": "in", "counterparty": request.user.id},
+                )
+            elif transaction_type == 'debit':
+                sender_wallet.apply_delta(
+                    amount=amount,
+                    actor=request.user,
+                    transaction_obj=tx_sender,
+                    reference=str(tx_sender.id),
+                    reason=tx_sender.description,
+                    metadata={"transfer": "in", "counterparty": recipient.id},
+                )
+                recipient_wallet.apply_delta(
+                    amount=-amount,
+                    actor=request.user,
+                    transaction_obj=tx_recipient,
+                    reference=str(tx_sender.id),
+                    reason=tx_recipient.description,
+                    metadata={"transfer": "out", "counterparty": request.user.id},
+                )
             messages.success(request, f'Successfully completed transfer of ₦{amount:.2f} to/from {recipient.email}.')
         else:
             for field, errors in form.errors.items():
@@ -3511,12 +3771,6 @@ def approve_credit_request(request, request_id):
             if lender_wallet.balance < credit_req.amount:
                 messages.error(request, "Insufficient funds to approve this request.")
                 return redirect('betting:manage_credit_requests')
-                
-            lender_wallet.balance -= credit_req.amount
-            borrower_wallet.balance += credit_req.amount
-            
-            lender_wallet.save()
-            borrower_wallet.save()
             
             credit_req.status = 'approved'
             credit_req.save()
@@ -3532,7 +3786,7 @@ def approve_credit_request(request, request_id):
                     due_date=timezone.now() + timedelta(days=7)
                 )
                 
-            Transaction.objects.create(
+            tx_out = Transaction.objects.create(
                 user=request.user,
                 transaction_type='wallet_transfer_out',
                 amount=credit_req.amount,
@@ -3542,7 +3796,7 @@ def approve_credit_request(request, request_id):
                 description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
             )
             
-            Transaction.objects.create(
+            tx_in = Transaction.objects.create(
                 user=credit_req.requester,
                 transaction_type='wallet_transfer_in',
                 amount=credit_req.amount,
@@ -3550,6 +3804,22 @@ def approve_credit_request(request, request_id):
                 is_successful=True,
                 initiating_user=request.user,
                 description=f"Received {credit_req.request_type} from {request.user.email}"
+            )
+            lender_wallet.apply_delta(
+                amount=-credit_req.amount,
+                actor=request.user,
+                transaction_obj=tx_out,
+                reference=str(credit_req.id),
+                reason=tx_out.description,
+                metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+            )
+            borrower_wallet.apply_delta(
+                amount=credit_req.amount,
+                actor=request.user,
+                transaction_obj=tx_in,
+                reference=str(credit_req.id),
+                reason=tx_in.description,
+                metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
             )
             
             CreditLog.objects.create(
@@ -3585,17 +3855,11 @@ def settle_loan(request, loan_id):
                     messages.error(request, "Insufficient wallet balance.")
                     return redirect('betting:wallet')
                 
-                borrower_wallet.balance -= amount_to_pay
-                lender_wallet.balance += amount_to_pay
-                
-                borrower_wallet.save()
-                lender_wallet.save()
-                
                 loan.outstanding_balance = Decimal('0.00')
                 loan.status = 'settled'
                 loan.save()
                 
-                Transaction.objects.create(
+                tx_out = Transaction.objects.create(
                     user=request.user,
                     transaction_type='wallet_transfer_out',
                     amount=amount_to_pay,
@@ -3605,7 +3869,7 @@ def settle_loan(request, loan_id):
                     description=f"Loan repayment to {loan.lender.email}"
                 )
                 
-                Transaction.objects.create(
+                tx_in = Transaction.objects.create(
                     user=loan.lender,
                     transaction_type='wallet_transfer_in',
                     amount=amount_to_pay,
@@ -3613,6 +3877,22 @@ def settle_loan(request, loan_id):
                     is_successful=True,
                     initiating_user=request.user,
                     description=f"Loan repayment received from {request.user.email}"
+                )
+                borrower_wallet.apply_delta(
+                    amount=-amount_to_pay,
+                    actor=request.user,
+                    transaction_obj=tx_out,
+                    reference=str(loan.id),
+                    reason=tx_out.description,
+                    metadata={"loan_id": loan.id, "settlement": "wallet"},
+                )
+                lender_wallet.apply_delta(
+                    amount=amount_to_pay,
+                    actor=request.user,
+                    transaction_obj=tx_in,
+                    reference=str(loan.id),
+                    reason=tx_in.description,
+                    metadata={"loan_id": loan.id, "settlement": "wallet"},
                 )
                 
                 CreditLog.objects.create(
@@ -3923,8 +4203,15 @@ def user_dashboard(request):
 def agent_dashboard(request):
     user = request.user
     today = timezone.now().date()
-    start_of_week = today - timedelta(days=today.weekday()) # Monday
-    start_of_month = today.replace(day=1)
+    days_since_monday = today.weekday()
+    if days_since_monday == 0:
+        days_since_monday = 7
+    last_monday = today - timedelta(days=days_since_monday)
+    start_of_week = last_monday - timedelta(days=6)
+
+    first_day_this_month = today.replace(day=1)
+    last_day_last_month = first_day_this_month - timedelta(days=1)
+    start_of_month = last_day_last_month.replace(day=1)
     start_date_str = request.GET.get('start_date') or ''
     end_date_str = request.GET.get('end_date') or ''
     start_date = None
@@ -4101,15 +4388,15 @@ def agent_dashboard(request):
             period = (
                 CommissionPeriod.objects.filter(
                     period_type='weekly',
-                    start_date__lte=today,
-                    end_date__gte=today,
+                    start_date=start_of_week,
+                    end_date=last_monday,
                 )
                 .order_by('-start_date')
                 .first()
             )
 
         metrics_start = period.start_date if period else start_of_week
-        metrics_end = period.end_date if period else today
+        metrics_end = period.end_date if period else last_monday
         downline_bet_tickets = downline_bet_tickets.filter(
             placed_at__date__gte=metrics_start,
             placed_at__date__lte=metrics_end,
@@ -4126,15 +4413,15 @@ def agent_dashboard(request):
             period = (
                 CommissionPeriod.objects.filter(
                     period_type='monthly',
-                    start_date__lte=today,
-                    end_date__gte=today,
+                    start_date=start_of_month,
+                    end_date=last_day_last_month,
                 )
                 .order_by('-start_date')
                 .first()
             )
 
         metrics_start = period.start_date if period else start_of_month
-        metrics_end = period.end_date if period else today
+        metrics_end = period.end_date if period else last_day_last_month
         downline_bet_tickets = downline_bet_tickets.filter(
             placed_at__date__gte=metrics_start,
             placed_at__date__lte=metrics_end,
@@ -4159,7 +4446,9 @@ def agent_dashboard(request):
     pending_commission_multiple = Decimal('0.00')
 
     if user.user_type == 'agent':
-        weekly_comms = WeeklyAgentCommission.objects.filter(agent=user)
+        weekly_comms = WeeklyAgentCommission.objects.filter(agent=user).select_related('period')
+        if metrics_start and metrics_end:
+            weekly_comms = weekly_comms.filter(period__end_date__gte=metrics_start, period__start_date__lte=metrics_end)
         total_commission_paid = weekly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
         pending_total = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
         pending_paid = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
@@ -4187,8 +4476,38 @@ def agent_dashboard(request):
 
             pending_commission_single += max(Decimal('0.00'), single_amt - single_paid_share)
             pending_commission_multiple += max(Decimal('0.00'), multiple_amt - multiple_paid_share)
+        if metrics_start and metrics_end and not weekly_comms.exists():
+            try:
+                from commission.services import calculate_weekly_agent_commission_data
+            except Exception:
+                calculate_weekly_agent_commission_data = None
+            if calculate_weekly_agent_commission_data is not None:
+                try:
+                    from commission.models import CommissionPeriod as CommissionPeriodModel
+                except Exception:
+                    CommissionPeriodModel = None
+
+                period_for_calc = None
+                if CommissionPeriodModel is not None:
+                    period_for_calc = CommissionPeriodModel.objects.filter(
+                        period_type='weekly',
+                        start_date=metrics_start,
+                        end_date=metrics_end,
+                    ).first()
+                if period_for_calc is None:
+                    class CommissionPeriodStub:
+                        pass
+                    period_for_calc = CommissionPeriodStub()
+                    period_for_calc.start_date = metrics_start
+                    period_for_calc.end_date = metrics_end
+                calc = calculate_weekly_agent_commission_data(user, period_for_calc, include_breakdown=True) or {}
+                pending_commission = (calc.get("commission_total_amount") or Decimal("0.00"))
+                pending_commission_single = (calc.get("commission_single_amount") or Decimal("0.00"))
+                pending_commission_multiple = (calc.get("commission_multiple_amount") or Decimal("0.00"))
     elif user.user_type in ['super_agent', 'master_agent']:
-        monthly_comms = MonthlyNetworkCommission.objects.filter(user=user)
+        monthly_comms = MonthlyNetworkCommission.objects.filter(user=user).select_related('period')
+        if metrics_start and metrics_end:
+            monthly_comms = monthly_comms.filter(period__end_date__gte=metrics_start, period__start_date__lte=metrics_end)
         total_commission_paid = monthly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
         pending_total = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
         pending_paid = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
@@ -5083,15 +5402,12 @@ def delete_user(request, user_id):
         try:
             # Transfer wallet balance of deleted user to admin's wallet (or specific system account)
             # Find or create an an admin wallet for receiving funds
-            admin_user_wallet = Wallet.objects.get_or_create(user=request.user)[0]
-            deleted_user_wallet = Wallet.objects.get(user=user_to_delete)
+            admin_user_wallet = Wallet.objects.select_for_update().get_or_create(user=request.user)[0]
+            deleted_user_wallet = Wallet.objects.select_for_update().get(user=user_to_delete)
 
             if deleted_user_wallet.balance > Decimal('0.00'):
-                admin_user_wallet.balance += deleted_user_wallet.balance
-                admin_user_wallet.save()
-
                 # Record transaction for the transfer
-                Transaction.objects.create(
+                tx = Transaction.objects.create(
                     user=user_to_delete,
                     initiating_user=request.user,
                     target_user=request.user,
@@ -5101,6 +5417,14 @@ def delete_user(request, user_id):
                     status='completed',
                     description=f"Wallet balance of {user_email} transferred to admin upon deletion.",
                     timestamp=timezone.now()
+                )
+                admin_user_wallet.apply_delta(
+                    amount=deleted_user_wallet.balance,
+                    actor=request.user,
+                    transaction_obj=tx,
+                    reference=str(user_to_delete.id),
+                    reason=tx.description,
+                    metadata={"deleted_user_id": user_to_delete.id, "source": "user_deletion"},
                 )
                 messages.info(request, f"Wallet balance of {user_email} (₦{deleted_user_wallet.balance:.2f}) transferred to your wallet.")
 
@@ -5115,10 +5439,7 @@ def delete_user(request, user_id):
                 ticket.save()
                 
                 user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                user_wallet.balance += ticket.stake_amount
-                user_wallet.save()
-
-                Transaction.objects.create(
+                refund_tx = Transaction.objects.create(
                     user=ticket.user,
                     initiating_user=request.user,
                     target_user=request.user,
@@ -5129,6 +5450,14 @@ def delete_user(request, user_id):
                     description=f"Refund for stake on ticket {ticket.id} due to fixture deletion: {fixture_name}",
                     related_bet_ticket=ticket,
                     timestamp=timezone.now()
+                )
+                user_wallet.apply_delta(
+                    amount=ticket.stake_amount,
+                    actor=request.user,
+                    transaction_obj=refund_tx,
+                    reference=str(ticket.ticket_id),
+                    reason=refund_tx.description,
+                    metadata={"ticket_id": ticket.ticket_id, "source": "user_deletion_refund"},
                 )
                 log_admin_activity(request, f"Refunded ticket {ticket.id} due to deletion of fixture {fixture_name}.")
 
@@ -5265,10 +5594,7 @@ def delete_fixture(request, fixture_id):
                 ticket.save()
 
                 user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                user_wallet.balance += ticket.stake_amount
-                user_wallet.save()
-
-                Transaction.objects.create(
+                refund_tx = Transaction.objects.create(
                     user=ticket.user,
                     initiating_user=request.user,
                     target_user=request.user,
@@ -5279,6 +5605,14 @@ def delete_fixture(request, fixture_id):
                     description=f"Refund for stake on ticket {ticket.id} due to fixture deletion: {fixture_name}",
                     related_bet_ticket=ticket,
                     timestamp=timezone.now()
+                )
+                user_wallet.apply_delta(
+                    amount=ticket.stake_amount,
+                    actor=request.user,
+                    transaction_obj=refund_tx,
+                    reference=str(ticket.ticket_id),
+                    reason=refund_tx.description,
+                    metadata={"ticket_id": ticket.ticket_id, "source": "fixture_deletion"},
                 )
                 log_admin_activity(request, f"Refunded ticket {ticket.id} due to deletion of fixture {fixture_name}.")
 
@@ -5375,9 +5709,7 @@ def declare_result(request, fixture_id):
                             ticket.status = 'cancelled'
                             # Refund stake for cancelled tickets
                             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                            user_wallet.balance += ticket.stake_amount
-                            user_wallet.save()
-                            Transaction.objects.create(
+                            refund_tx = Transaction.objects.create(
                                 user=ticket.user,
                                 initiating_user=request.user, 
                                 target_user=ticket.user,
@@ -5389,6 +5721,14 @@ def declare_result(request, fixture_id):
                                 related_bet_ticket=ticket,
                                 timestamp=timezone.now()
                             )
+                            user_wallet.apply_delta(
+                                amount=ticket.stake_amount,
+                                actor=request.user,
+                                transaction_obj=refund_tx,
+                                reference=str(ticket.ticket_id),
+                                reason=refund_tx.description,
+                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_cancelled"},
+                            )
                             messages.info(request, f"Ticket {ticket.id} is CANCELLED (stake refunded) due to fixture {fixture.home_team} vs {fixture.away_team} resulting in a void.")
                             log_admin_activity(request, f"Ticket {ticket.id} CANCELLED and refunded due to fixture {fixture.id} void result.")
                         elif ticket_still_winning:
@@ -5396,10 +5736,7 @@ def declare_result(request, fixture_id):
                             ticket.save()
 
                             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                            user_wallet.balance += ticket.max_winning
-                            user_wallet.save()
-
-                            Transaction.objects.create(
+                            payout_tx = Transaction.objects.create(
                                 user=ticket.user,
                                 initiating_user=request.user, 
                                 target_user=ticket.user,
@@ -5410,6 +5747,14 @@ def declare_result(request, fixture_id):
                                 description=f"Winnings for bet ticket {ticket.id} on {fixture.home_team} vs {fixture.away_team}",
                                 related_bet_ticket=ticket,
                                 timestamp=timezone.now()
+                            )
+                            user_wallet.apply_delta(
+                                amount=ticket.max_winning,
+                                actor=request.user,
+                                transaction_obj=payout_tx,
+                                reference=str(ticket.ticket_id),
+                                reason=payout_tx.description,
+                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_won"},
                             )
                             messages.success(request, f"Ticket {ticket.id} is WON! Winnings of ₦{ticket.max_winning:.2f} paid to {ticket.user.email}.")
                             log_admin_activity(request, f"Declared fixture {fixture.id} as WON for ticket {ticket.id} and paid out.")
@@ -5522,11 +5867,9 @@ def approve_reject_withdrawal(request, withdrawal_id):
                 withdrawal_request._skip_signal_refund = True # Skip signal processing since we handle it manually here
                 # Refund funds to user's wallet
                 user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=withdrawal_request.user)
-                user_wallet.balance += withdrawal_request.amount
-                user_wallet.save()
 
                 # Record the refund transaction
-                Transaction.objects.create(
+                refund_tx = Transaction.objects.create(
                     user=withdrawal_request.user,
                     initiating_user=request.user, 
                     target_user=withdrawal_request.user,
@@ -5536,6 +5879,14 @@ def approve_reject_withdrawal(request, withdrawal_id):
                     status='completed',
                     description=f"Refund for rejected withdrawal request {withdrawal_id}. Reason: {reason or 'No reason provided.'}",
                     timestamp=timezone.now()
+                )
+                user_wallet.apply_delta(
+                    amount=withdrawal_request.amount,
+                    actor=request.user,
+                    transaction_obj=refund_tx,
+                    reference=str(withdrawal_request.id),
+                    reason=refund_tx.description,
+                    metadata={"withdrawal_id": withdrawal_request.id, "source": "admin_reject"},
                 )
                 messages.info(request, f"Withdrawal request {withdrawal_id} rejected. Funds (₦{withdrawal_request.amount:.2f}) returned to {withdrawal_request.user.email}'s wallet. Reason: {reason or 'No reason provided.'}")
                 log_admin_activity(request, f"Rejected withdrawal request {withdrawal_id} for user {withdrawal_request.user.email}. Reason: {reason}")
@@ -5784,6 +6135,202 @@ def admin_ticket_report(request):
     }
     return render(request, 'betting/admin/ticket_report.html', context)
 
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_reconciliation_dashboard(request):
+    gateway = (request.GET.get("gateway") or "all").strip().lower()
+    if gateway not in {"all", "paystack", "kora", "monnify"}:
+        gateway = "all"
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "").strip().lower()
+        post_gateway = (request.POST.get("gateway") or gateway or "all").strip().lower()
+        if post_gateway not in {"all", "paystack", "kora", "monnify"}:
+            post_gateway = "all"
+
+        if action == "reconcile_now":
+            try:
+                from betting.tasks import reconcile_recent_deposits
+                result = reconcile_recent_deposits.delay(
+                    gateway=post_gateway,
+                    minutes=1440,
+                    limit=200,
+                    stuck_minutes=30,
+                    alert_cooldown_minutes=360,
+                )
+                messages.success(request, f"Reconciliation started (gateway={post_gateway}). Task ID: {result.id}")
+            except Exception as e:
+                messages.error(request, f"Unable to start reconciliation via Celery: {e}")
+            return redirect(f"{reverse('betting_admin:admin_reconciliation_dashboard')}?gateway={post_gateway}")
+
+    deposits_qs = Transaction.objects.filter(transaction_type="deposit").select_related("user").order_by("timestamp")
+    pending_qs = deposits_qs.filter(status="pending", is_successful=False)
+    failed_qs = deposits_qs.filter(status="failed", is_successful=False)
+
+    if gateway != "all":
+        pending_qs = pending_qs.filter(payment_gateway=gateway)
+        failed_qs = failed_qs.filter(payment_gateway=gateway)
+
+    now = timezone.now()
+    stuck_cutoff = now - timedelta(minutes=30)
+    pending_total = pending_qs.count()
+    failed_total = failed_qs.count()
+    pending_stuck_total = pending_qs.filter(timestamp__lte=stuck_cutoff).count()
+    oldest_pending = pending_qs.first()
+
+    pending_rows = list(pending_qs.order_by("timestamp")[:200])
+    failed_rows = list(failed_qs.order_by("-timestamp")[:200])
+
+    last_webhook = dict(
+        PaymentGatewayEventLog.objects.filter(event_type="webhook")
+        .values("gateway")
+        .annotate(last=Max("created_at"))
+        .values_list("gateway", "last")
+    )
+    last_reconcile = dict(
+        PaymentGatewayEventLog.objects.filter(event_type="reconcile")
+        .values("gateway")
+        .annotate(last=Max("created_at"))
+        .values_list("gateway", "last")
+    )
+
+    context = {
+        "gateway": gateway,
+        "pending_total": pending_total,
+        "failed_total": failed_total,
+        "pending_stuck_total": pending_stuck_total,
+        "oldest_pending": oldest_pending,
+        "pending_rows": pending_rows,
+        "failed_rows": failed_rows,
+        "last_webhook": last_webhook,
+        "last_reconcile": last_reconcile,
+        "now": now,
+    }
+    return render(request, "betting/admin/reconciliation_dashboard.html", context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_celery_health(request):
+    beat_ok = False
+    results_ok = False
+    periodic_tasks = []
+    task_results = []
+    worker_ping = None
+    inspect_counts = {"active": None, "reserved": None, "scheduled": None}
+    inspect_error = None
+
+    try:
+        from django_celery_beat.models import PeriodicTask
+        beat_ok = True
+        periodic_tasks = list(
+            PeriodicTask.objects.filter(task__in=["betting.tasks.reconcile_recent_deposits", "betting.tasks.backup_database"])
+            .order_by("name")
+        )
+    except Exception:
+        beat_ok = False
+
+    try:
+        from django_celery_results.models import TaskResult
+        results_ok = True
+        task_results = list(
+            TaskResult.objects.filter(task_name__in=["betting.tasks.reconcile_recent_deposits", "betting.tasks.backup_database"])
+            .order_by("-date_done")[:20]
+        )
+    except Exception:
+        results_ok = False
+
+    try:
+        from celery import current_app
+        insp = current_app.control.inspect(timeout=1)
+        worker_ping = insp.ping()
+        active = insp.active() or {}
+        reserved = insp.reserved() or {}
+        scheduled = insp.scheduled() or {}
+        inspect_counts["active"] = sum(len(v or []) for v in active.values())
+        inspect_counts["reserved"] = sum(len(v or []) for v in reserved.values())
+        inspect_counts["scheduled"] = sum(len(v or []) for v in scheduled.values())
+    except Exception as e:
+        inspect_error = str(e)
+
+    context = {
+        "beat_ok": beat_ok,
+        "results_ok": results_ok,
+        "periodic_tasks": periodic_tasks,
+        "task_results": task_results,
+        "worker_ping": worker_ping,
+        "inspect_counts": inspect_counts,
+        "inspect_error": inspect_error,
+    }
+    return render(request, "betting/admin/celery_health.html", context)
+
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_tickets_by_event_report(request):
+    betting_period_id = (request.GET.get("betting_period") or "").strip()
+    fixture_id = (request.GET.get("fixture") or "").strip()
+
+    periods = BettingPeriod.objects.all().order_by("-start_date")
+    fixtures = Fixture.objects.none()
+    selected_period = None
+    selected_fixture = None
+    tickets_qs = BetTicket.objects.none()
+
+    if betting_period_id:
+        try:
+            selected_period = BettingPeriod.objects.get(pk=int(betting_period_id))
+            fixtures = (
+                Fixture.objects.filter(betting_period=selected_period)
+                .order_by("serial_number", "match_date", "match_time", "home_team", "away_team")
+            )
+        except Exception:
+            selected_period = None
+            fixtures = Fixture.objects.none()
+
+    if fixture_id and selected_period:
+        try:
+            selected_fixture = Fixture.objects.get(pk=int(fixture_id), betting_period=selected_period)
+        except Exception:
+            selected_fixture = None
+
+    if selected_fixture:
+        serial = str(getattr(selected_fixture, "serial_number", "") or "").strip()
+        tickets_qs = (
+            BetTicket.objects.filter(
+                Q(selections__fixture_id=selected_fixture.id)
+                | Q(
+                    selections__fixture__isnull=True,
+                    selections__betting_period_id=selected_fixture.betting_period_id,
+                    selections__fixture_serial_number__iexact=serial,
+                )
+            )
+            .select_related("user")
+            .distinct()
+            .order_by("-placed_at")
+        )
+
+    paginator = Paginator(tickets_qs, 50)
+    page_number = request.GET.get("page")
+    try:
+        tickets = paginator.page(page_number)
+    except PageNotAnInteger:
+        tickets = paginator.page(1)
+    except EmptyPage:
+        tickets = paginator.page(paginator.num_pages)
+
+    context = {
+        "periods": periods,
+        "fixtures": fixtures,
+        "tickets": tickets,
+        "selected_betting_period": str(getattr(selected_period, "id", "") or ""),
+        "selected_fixture": str(getattr(selected_fixture, "id", "") or ""),
+    }
+    return render(request, "betting/admin/tickets_by_event_report.html", context)
+
+
 @login_required
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 def admin_limit_rejections_report(request):
@@ -5879,10 +6426,7 @@ def admin_void_ticket_single(request, ticket_id):
             ticket.save()
 
             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-            user_wallet.balance += ticket.stake_amount
-            user_wallet.save()
-
-            Transaction.objects.create(
+            refund_tx = Transaction.objects.create(
                 user=ticket.user,
                 initiating_user=request.user,
                 target_user=ticket.user,
@@ -5893,6 +6437,14 @@ def admin_void_ticket_single(request, ticket_id):
                 description=f"Admin void: Stake refunded for ticket {ticket.ticket_id}",
                 related_bet_ticket=ticket,
                 timestamp=timezone.now()
+            )
+            user_wallet.apply_delta(
+                amount=ticket.stake_amount,
+                actor=request.user,
+                transaction_obj=refund_tx,
+                reference=str(ticket.ticket_id),
+                reason=refund_tx.description,
+                metadata={"ticket_id": ticket.ticket_id, "source": "admin_void"},
             )
             messages.success(request, f"Bet ticket {ticket.ticket_id} successfully voided/deleted and stake refunded to {ticket.user.email}.")
             log_admin_activity(request, f"Voided/Deleted bet ticket {ticket.ticket_id} and refunded stake.")
@@ -5919,10 +6471,7 @@ def admin_settle_won_ticket_single(request, ticket_id):
 
             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
             winnings_amount = ticket.max_winning
-            user_wallet.balance += winnings_amount
-            user_wallet.save()
-
-            Transaction.objects.create(
+            payout_tx = Transaction.objects.create(
                 user=ticket.user,
                 initiating_user=request.user,
                 target_user=ticket.user,
@@ -5933,6 +6482,14 @@ def admin_settle_won_ticket_single(request, ticket_id):
                 description=f"Admin payout: Winnings for Bet Ticket {ticket.ticket_id}",
                 related_bet_ticket=ticket,
                 timestamp=timezone.now()
+            )
+            user_wallet.apply_delta(
+                amount=winnings_amount,
+                actor=request.user,
+                transaction_obj=payout_tx,
+                reference=str(ticket.ticket_id),
+                reason=payout_tx.description,
+                metadata={"ticket_id": ticket.ticket_id, "source": "admin_settle_won"},
             )
             messages.success(request, f"Bet ticket {ticket.ticket_id} settled as WON and winnings of ₦{winnings_amount:.2f} paid to {ticket.user.email}.")
             log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON and paid out winnings.")
@@ -6412,15 +6969,8 @@ def agent_credit_cashier(request, cashier_id):
             
             cashier_wallet = Wallet.objects.select_for_update().get(user=cashier)
             
-            # Perform transfer
-            agent_wallet.balance -= amount
-            agent_wallet.save()
-            
-            cashier_wallet.balance += amount
-            cashier_wallet.save()
-            
             # Create transactions
-            Transaction.objects.create(
+            tx_out = Transaction.objects.create(
                 user=request.user,
                 transaction_type='wallet_transfer_out',
                 amount=amount,
@@ -6430,7 +6980,7 @@ def agent_credit_cashier(request, cashier_id):
                 description=f"Transfer to cashier {cashier.email}"
             )
             
-            Transaction.objects.create(
+            tx_in = Transaction.objects.create(
                 user=cashier,
                 transaction_type='wallet_transfer_in',
                 amount=amount,
@@ -6438,6 +6988,22 @@ def agent_credit_cashier(request, cashier_id):
                 is_successful=True,
                 initiating_user=request.user,
                 description=f"Received credit from agent {request.user.email}"
+            )
+            agent_wallet.apply_delta(
+                amount=-amount,
+                actor=request.user,
+                transaction_obj=tx_out,
+                reference=str(tx_out.id),
+                reason=tx_out.description,
+                metadata={"cashier_id": cashier.id, "source": "agent_credit_cashier"},
+            )
+            cashier_wallet.apply_delta(
+                amount=amount,
+                actor=request.user,
+                transaction_obj=tx_in,
+                reference=str(tx_out.id),
+                reason=tx_in.description,
+                metadata={"agent_id": request.user.id, "source": "agent_credit_cashier"},
             )
             
             messages.success(request, f"Successfully credited ₦{amount} to {cashier.email}.")
@@ -6930,13 +7496,7 @@ def account_user_dashboard(request):
                                 
                                 # Capture Approver Balances
                                 withdrawal.approver_balance_before = processor_wallet.balance
-                                processor_wallet.balance += withdrawal.amount
-                                withdrawal.approver_balance_after = processor_wallet.balance
-                                withdrawal.save()
-
-                                processor_wallet.save()
-
-                                Transaction.objects.create(
+                                tx = Transaction.objects.create(
                                     user=request.user,
                                     initiating_user=request.user,
                                     transaction_type='account_user_credit',
@@ -6946,6 +7506,17 @@ def account_user_dashboard(request):
                                     description=f"Reimbursement for processing withdrawal {withdrawal.id} for {withdrawal.user.email}",
                                     timestamp=timezone.now()
                                 )
+                                before, after = processor_wallet.apply_delta(
+                                    amount=withdrawal.amount,
+                                    actor=request.user,
+                                    transaction_obj=tx,
+                                    reference=str(withdrawal.id),
+                                    reason=tx.description,
+                                    metadata={"withdrawal_id": withdrawal.id, "source": "withdrawal_reimbursement"},
+                                )
+                                withdrawal.approver_balance_before = before
+                                withdrawal.approver_balance_after = after
+                                withdrawal.save(update_fields=["approver_balance_before", "approver_balance_after"])
 
                                 success_count += 1
 
@@ -7035,27 +7606,16 @@ def account_user_dashboard(request):
                             if action == 'credit':
                                 if account_wallet.balance < amount:
                                     raise InvalidOperation("Insufficient funds in your account wallet.")
-                                
-                                account_wallet.balance -= amount
-                                target_wallet.balance += amount
-                                
                                 tx_type_account = 'account_user_debit'
                                 tx_type_target = 'account_user_credit'
 
                             elif action == 'debit':
                                 if target_wallet.balance < amount:
                                     raise InvalidOperation("User has insufficient funds.")
-                                
-                                target_wallet.balance -= amount
-                                account_wallet.balance += amount
-                                
                                 tx_type_account = 'account_user_credit'
                                 tx_type_target = 'account_user_debit'
-
-                            account_wallet.save()
-                            target_wallet.save()
                             
-                            Transaction.objects.create(
+                            tx_account = Transaction.objects.create(
                                 user=request.user,
                                 initiating_user=request.user,
                                 transaction_type=tx_type_account,
@@ -7065,7 +7625,7 @@ def account_user_dashboard(request):
                                 description=f"{action.title()} for user {target_user.email}: {description}"
                             )
                             
-                            Transaction.objects.create(
+                            tx_target = Transaction.objects.create(
                                 user=target_user,
                                 initiating_user=request.user,
                                 transaction_type=tx_type_target,
@@ -7074,6 +7634,41 @@ def account_user_dashboard(request):
                                 is_successful=True,
                                 description=f"{action.title()} by Account Manager: {description}"
                             )
+                            
+                            if action == 'credit':
+                                account_wallet.apply_delta(
+                                    amount=-amount,
+                                    actor=request.user,
+                                    transaction_obj=tx_account,
+                                    reference=str(tx_account.id),
+                                    reason=tx_account.description,
+                                    metadata={"target_user_id": target_user.id, "source": "account_user_dashboard"},
+                                )
+                                target_wallet.apply_delta(
+                                    amount=amount,
+                                    actor=request.user,
+                                    transaction_obj=tx_target,
+                                    reference=str(tx_account.id),
+                                    reason=tx_target.description,
+                                    metadata={"account_user_id": request.user.id, "source": "account_user_dashboard"},
+                                )
+                            elif action == 'debit':
+                                target_wallet.apply_delta(
+                                    amount=-amount,
+                                    actor=request.user,
+                                    transaction_obj=tx_target,
+                                    reference=str(tx_account.id),
+                                    reason=tx_target.description,
+                                    metadata={"account_user_id": request.user.id, "source": "account_user_dashboard"},
+                                )
+                                account_wallet.apply_delta(
+                                    amount=amount,
+                                    actor=request.user,
+                                    transaction_obj=tx_account,
+                                    reference=str(tx_account.id),
+                                    reason=tx_account.description,
+                                    metadata={"target_user_id": target_user.id, "source": "account_user_dashboard"},
+                                )
                             
                             # Log to Admin Activity Log
                             log_admin_activity(
@@ -9337,9 +9932,7 @@ def finance_dashboard(request):
                 w.save(update_fields=['status', 'approved_rejected_time', 'approved_rejected_by', 'admin_notes'])
                 with db_transaction.atomic():
                     wallet = Wallet.objects.select_for_update().get(user=w.user)
-                    wallet.balance += w.amount
-                    wallet.save(update_fields=['balance'])
-                    Transaction.objects.create(
+                    refund_tx = Transaction.objects.create(
                         user=w.user,
                         initiating_user=request.user,
                         target_user=w.user,
@@ -9350,6 +9943,14 @@ def finance_dashboard(request):
                         description=f"Refund for rejected withdrawal request {w.id}",
                         related_withdrawal_request=w,
                         timestamp=timezone.now(),
+                    )
+                    wallet.apply_delta(
+                        amount=w.amount,
+                        actor=request.user,
+                        transaction_obj=refund_tx,
+                        reference=str(w.id),
+                        reason=refund_tx.description,
+                        metadata={"withdrawal_id": w.id, "source": "finance_reject"},
                     )
                 FinanceAuditLog.objects.create(
                     actor=request.user,
@@ -9451,8 +10052,14 @@ def finance_dashboard(request):
                 return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
             with db_transaction.atomic():
                 w = Wallet.objects.select_for_update().get(user=tx.user)
-                w.balance += tx.amount
-                w.save(update_fields=['balance'])
+                w.apply_delta(
+                    amount=tx.amount,
+                    actor=request.user,
+                    transaction_obj=tx,
+                    reference=(tx.external_reference or tx.paystack_reference or str(tx.id)),
+                    reason="Manual deposit completion",
+                    metadata={"source": "finance_manual_complete", "reason": reason},
+                )
                 tx.status = 'completed'
                 tx.is_successful = True
                 tx.description = (reason or tx.description or '').strip()
@@ -9511,9 +10118,7 @@ def finance_dashboard(request):
                     if wallet.balance < tx.amount:
                         messages.error(request, 'Insufficient wallet balance to reverse this credit.')
                         return redirect(f"{reverse('betting:finance_dashboard')}?tab=transactions")
-                    wallet.balance -= tx.amount
-                    wallet.save(update_fields=['balance'])
-                    Transaction.objects.create(
+                    reversal_tx = Transaction.objects.create(
                         user=tx.user,
                         initiating_user=request.user,
                         target_user=tx.user,
@@ -9524,10 +10129,16 @@ def finance_dashboard(request):
                         description=f"Reversal of {tx.transaction_type} {tx.id}. {reason}".strip(),
                         timestamp=timezone.now(),
                     )
+                    wallet.apply_delta(
+                        amount=-tx.amount,
+                        actor=request.user,
+                        transaction_obj=reversal_tx,
+                        reference=str(tx.id),
+                        reason=reversal_tx.description,
+                        metadata={"reversed_tx_id": str(tx.id), "source": "finance_reverse"},
+                    )
                 elif tx.transaction_type in ['withdrawal', 'wallet_transfer_out']:
-                    wallet.balance += tx.amount
-                    wallet.save(update_fields=['balance'])
-                    Transaction.objects.create(
+                    reversal_tx = Transaction.objects.create(
                         user=tx.user,
                         initiating_user=request.user,
                         target_user=tx.user,
@@ -9537,6 +10148,14 @@ def finance_dashboard(request):
                         status='completed',
                         description=f"Reversal of {tx.transaction_type} {tx.id}. {reason}".strip(),
                         timestamp=timezone.now(),
+                    )
+                    wallet.apply_delta(
+                        amount=tx.amount,
+                        actor=request.user,
+                        transaction_obj=reversal_tx,
+                        reference=str(tx.id),
+                        reason=reversal_tx.description,
+                        metadata={"reversed_tx_id": str(tx.id), "source": "finance_reverse"},
                     )
                 tx.status = 'reversed'
                 tx.is_successful = False
@@ -9587,12 +10206,9 @@ def finance_dashboard(request):
                     messages.error(request, 'Insufficient wallet balance.')
                     return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
                 if direction == 'credit':
-                    wallet.balance += amount
                     tx_type = 'wallet_transfer_in'
                 else:
-                    wallet.balance -= amount
                     tx_type = 'wallet_transfer_out'
-                wallet.save(update_fields=['balance'])
                 tx = Transaction.objects.create(
                     user=target_user,
                     initiating_user=request.user,
@@ -9603,6 +10219,14 @@ def finance_dashboard(request):
                     status='completed',
                     description=(f"Manual wallet {direction}: {reason}".strip() if reason else f"Manual wallet {direction}"),
                     timestamp=timezone.now(),
+                )
+                wallet.apply_delta(
+                    amount=(amount if direction == "credit" else -amount),
+                    actor=request.user,
+                    transaction_obj=tx,
+                    reference=str(tx.id),
+                    reason=tx.description,
+                    metadata={"direction": direction, "source": "finance_wallet_adjust"},
                 )
                 FinanceAuditLog.objects.create(
                     actor=request.user,
@@ -9716,8 +10340,6 @@ def finance_dashboard(request):
                         try:
                             with db_transaction.atomic():
                                 wallet = Wallet.objects.select_for_update().get(user=item.beneficiary)
-                                wallet.balance += item.amount
-                                wallet.save(update_fields=['balance'])
                                 tx = Transaction.objects.create(
                                     user=item.beneficiary,
                                     initiating_user=request.user,
@@ -9728,6 +10350,14 @@ def finance_dashboard(request):
                                     status='completed',
                                     description=f"Commission settlement {batch.id}",
                                     timestamp=timezone.now(),
+                                )
+                                wallet.apply_delta(
+                                    amount=item.amount,
+                                    actor=request.user,
+                                    transaction_obj=tx,
+                                    reference=str(batch.id),
+                                    reason=tx.description,
+                                    metadata={"settlement_batch_id": str(batch.id), "settlement_item_id": item.id},
                                 )
                                 if item.weekly_commission_id:
                                     wc = WeeklyAgentCommission.objects.select_for_update().get(id=item.weekly_commission_id)
@@ -10797,16 +11427,13 @@ def crm_user_detail(request, user_id):
                     messages.error(request, 'Insufficient wallet balance for debit.')
                     return redirect('betting:crm_user_detail', user_id=target.id)
                 if action == 'credit':
-                    locked_wallet.balance += amount
                     txn_type = 'wallet_transfer_in'
                     crm_action = 'WALLET_CREDITED'
                 else:
-                    locked_wallet.balance -= amount
                     txn_type = 'wallet_transfer_out'
                     crm_action = 'WALLET_DEBITED'
-                locked_wallet.save(update_fields=['balance'])
 
-                Transaction.objects.create(
+                tx = Transaction.objects.create(
                     user=wallet_target,
                     initiating_user=request.user,
                     target_user=wallet_target,
@@ -10816,6 +11443,14 @@ def crm_user_detail(request, user_id):
                     status='completed',
                     description=description or f"CRM wallet {action}. {reason}".strip(),
                     timestamp=timezone.now(),
+                )
+                locked_wallet.apply_delta(
+                    amount=(amount if action == "credit" else -amount),
+                    actor=request.user,
+                    transaction_obj=tx,
+                    reference=str(tx.id),
+                    reason=tx.description,
+                    metadata={"source": "crm_wallet_adjust", "action": action},
                 )
 
             CRMActionLog.objects.create(
@@ -11166,10 +11801,7 @@ def crm_withdrawal_action(request, withdrawal_id):
         withdrawal_request.admin_notes = reason
 
         user_wallet = get_object_or_404(Wallet.objects.select_for_update(), user=withdrawal_request.user)
-        user_wallet.balance += withdrawal_request.amount
-        user_wallet.save()
-
-        Transaction.objects.create(
+        refund_tx = Transaction.objects.create(
             user=withdrawal_request.user,
             initiating_user=request.user,
             target_user=withdrawal_request.user,
@@ -11179,6 +11811,14 @@ def crm_withdrawal_action(request, withdrawal_id):
             status='completed',
             description=f"Refund for rejected withdrawal request {withdrawal_id}. Reason: {reason or 'No reason provided.'}",
             timestamp=timezone.now()
+        )
+        user_wallet.apply_delta(
+            amount=withdrawal_request.amount,
+            actor=request.user,
+            transaction_obj=refund_tx,
+            reference=str(withdrawal_request.id),
+            reason=refund_tx.description,
+            metadata={"withdrawal_id": withdrawal_request.id, "source": "crm_reject"},
         )
         withdrawal_request.save()
 
@@ -11464,17 +12104,13 @@ def super_admin_fund_account_user(request):
                     wallet = Wallet.objects.select_for_update().get(user=account_user)
                     
                     if action == 'credit':
-                        wallet.balance += amount
                         tx_type = 'account_user_credit'
                     else: # debit
                         if wallet.balance < amount:
                             raise InvalidOperation("Account User has insufficient funds.")
-                        wallet.balance -= amount
                         tx_type = 'account_user_debit'
-                    
-                    wallet.save()
-                    
-                    Transaction.objects.create(
+
+                    tx = Transaction.objects.create(
                         user=account_user,
                         initiating_user=request.user,
                         transaction_type=tx_type,
@@ -11482,6 +12118,14 @@ def super_admin_fund_account_user(request):
                         status='completed',
                         is_successful=True,
                         description=f"Super Admin Action ({action}): {description}"
+                    )
+                    wallet.apply_delta(
+                        amount=(amount if action == "credit" else -amount),
+                        actor=request.user,
+                        transaction_obj=tx,
+                        reference=str(tx.id),
+                        reason=tx.description,
+                        metadata={"source": "super_admin_fund_account_user", "action": action},
                     )
                     
                     messages.success(request, f"Successfully {action}ed {amount} for {account_user.email}.")
@@ -12046,17 +12690,13 @@ def admin_manual_wallet_manager(request):
                             target_wallet = Wallet.objects.select_for_update().get(user=target_user)
                             
                             if action == 'credit':
-                                target_wallet.balance += amount
                                 tx_type = 'manual_credit'
                             elif action == 'debit':
                                 if target_wallet.balance < amount:
                                     raise InvalidOperation("User has insufficient funds.")
-                                target_wallet.balance -= amount
                                 tx_type = 'manual_debit'
-
-                            target_wallet.save()
                             
-                            Transaction.objects.create(
+                            tx = Transaction.objects.create(
                                 user=target_user,
                                 initiating_user=request.user,
                                 transaction_type=tx_type,
@@ -12064,6 +12704,14 @@ def admin_manual_wallet_manager(request):
                                 status='completed',
                                 is_successful=True,
                                 description=f"Admin Manual {action.title()}: {description}"
+                            )
+                            target_wallet.apply_delta(
+                                amount=(amount if action == "credit" else -amount),
+                                actor=request.user,
+                                transaction_obj=tx,
+                                reference=str(tx.id),
+                                reason=tx.description,
+                                metadata={"source": "admin_manual_wallet_manager", "action": action},
                             )
                             
                             log_admin_activity(

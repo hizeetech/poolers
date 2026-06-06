@@ -31,10 +31,12 @@ urlpatterns = [
     # Wallet & Payments
     path('wallet/', views.wallet_view, name='wallet'),
     path('deposit/initiate/', views.initiate_deposit, name='initiate_deposit'),
+    path('deposit/status/<str:reference>/', views.deposit_status, name='deposit_status'),
     path('deposit/verify/', views.verify_deposit, name='verify_deposit'),
     path('deposit/monnify/verify/', views.verify_monnify_deposit, name='verify_monnify_deposit'),
     path('deposit/kora/verify/', views.verify_kora_deposit, name='verify_kora_deposit'),
     path('webhooks/paystack/', views.paystack_webhook, name='paystack_webhook'),
+    path('webhooks/monnify/', views.monnify_webhook, name='monnify_webhook'),
     path('webhooks/kora/', views.kora_webhook, name='kora_webhook'),
     path('withdraw/', views.withdraw_funds, name='withdraw_funds'),
     path('withdraw/verify-pin/', views.verify_withdrawal_pin, name='verify_withdrawal_pin'),

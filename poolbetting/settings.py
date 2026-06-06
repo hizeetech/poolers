@@ -362,6 +362,22 @@ PAYSTACK_PUBLIC_KEY = os.getenv('PAYSTACK_PUBLIC_KEY')
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY')
 PAYSTACK_WEBHOOK_SECRET = os.getenv('PAYSTACK_WEBHOOK_SECRET')
 
+PAYSTACK_WEBHOOK_IP_ALLOWLIST = [
+    ip.strip()
+    for ip in (os.getenv("PAYSTACK_WEBHOOK_IP_ALLOWLIST") or "").split(",")
+    if ip and ip.strip()
+]
+KORA_WEBHOOK_IP_ALLOWLIST = [
+    ip.strip()
+    for ip in (os.getenv("KORA_WEBHOOK_IP_ALLOWLIST") or os.getenv("KORAPAY_WEBHOOK_IP_ALLOWLIST") or "").split(",")
+    if ip and ip.strip()
+]
+MONNIFY_WEBHOOK_IP_ALLOWLIST = [
+    ip.strip()
+    for ip in (os.getenv("MONNIFY_WEBHOOK_IP_ALLOWLIST") or "").split(",")
+    if ip and ip.strip()
+]
+
 # Flutterwave API Keys
 FLUTTERWAVE_PUBLIC_KEY = os.getenv('FLUTTERWAVE_PUBLIC_KEY')
 FLUTTERWAVE_SECRET_KEY = os.getenv('FLUTTERWAVE_SECRET_KEY')

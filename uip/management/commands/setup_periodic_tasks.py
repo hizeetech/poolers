@@ -50,11 +50,11 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS('Confirmed task: Hourly Risk Scan'))
 
-        # 3. Weekly Agent Commission Processing (Monday 1:00 AM)
+        # 3. Weekly Agent Commission Processing (Tuesday 1:00 AM)
         schedule_weekly, _ = CrontabSchedule.objects.get_or_create(
             minute='0',
             hour='1',
-            day_of_week='1', # Monday
+            day_of_week='2', # Tuesday
             day_of_month='*',
             month_of_year='*',
             timezone='Africa/Lagos'
@@ -169,10 +169,30 @@ class Command(BaseCommand):
                 'crontab': schedule_10m,
                 'task': 'betting.tasks.reconcile_recent_deposits',
                 'args': json.dumps([]),
-                'kwargs': json.dumps({'gateway': 'all', 'minutes': 1440, 'limit': 50}),
+                'kwargs': json.dumps({'gateway': 'all', 'minutes': 1440, 'limit': 50, 'stuck_minutes': 30, 'alert_cooldown_minutes': 360}),
                 'enabled': True
             }
         )
         self.stdout.write(self.style.SUCCESS('Confirmed task: Reconcile Pending Deposits'))
+
+        schedule_backup, _ = CrontabSchedule.objects.get_or_create(
+            minute='30',
+            hour='2',
+            day_of_week='*',
+            day_of_month='*',
+            month_of_year='*',
+            timezone='Africa/Lagos'
+        )
+        PeriodicTask.objects.update_or_create(
+            name='Daily DB Backup',
+            defaults={
+                'crontab': schedule_backup,
+                'task': 'betting.tasks.backup_database',
+                'args': json.dumps([]),
+                'kwargs': json.dumps({'validate_restore': True}),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Daily DB Backup'))
 
         self.stdout.write(self.style.SUCCESS('All periodic tasks configured successfully!'))

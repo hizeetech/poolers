@@ -275,10 +275,7 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
             if instance.status == 'rejected' and old_instance.status != 'rejected' and not skip_refund:
                 with transaction.atomic():
                     wallet = Wallet.objects.select_for_update().get(user=instance.user)
-                    wallet.balance += instance.amount
-                    wallet.save()
-                    
-                    Transaction.objects.create(
+                    tx = Transaction.objects.create(
                         user=instance.user,
                         initiating_user=user if user and user.is_authenticated else None,
                         target_user=instance.user,
@@ -289,6 +286,14 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                         description=f"Refund for rejected withdrawal request {instance.id}",
                         timestamp=timezone.now()
                     )
+                    wallet.apply_delta(
+                        amount=instance.amount,
+                        actor=user if user and user.is_authenticated else None,
+                        transaction_obj=tx,
+                        reference=str(instance.id),
+                        reason=tx.description,
+                        metadata={"withdrawal_id": instance.id, "status_change": "rejected"},
+                    )
             
             # If was rejected, and now not rejected (re-opening), deduct again.
             elif old_instance.status == 'rejected' and instance.status != 'rejected':
@@ -298,9 +303,14 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                         # Prevent status change if insufficient funds
                         # Raising error here will abort the save
                         raise ValueError("Insufficient funds to reopen withdrawal request.")
-                    
-                    wallet.balance -= instance.amount
-                    wallet.save()
+                    wallet.apply_delta(
+                        amount=-instance.amount,
+                        actor=user if user and user.is_authenticated else None,
+                        transaction_obj=None,
+                        reference=str(instance.id),
+                        reason=f"Reopen withdrawal request {instance.id} (re-deduct)",
+                        metadata={"withdrawal_id": instance.id, "status_change": "reopened"},
+                    )
             
             # Update audit fields
             if instance.status in ['approved', 'rejected', 'completed']:

@@ -59,35 +59,45 @@ def pay_weekly_commission(commission_record, actor=None):
             if payer_wallet.balance < outstanding:
                 # Should be caught by pre-check, but for safety in race conditions
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
-            
-            payer_wallet.balance -= outstanding
-            payer_wallet.save()
 
-            Transaction.objects.create(
+            payer_tx = Transaction.objects.create(
                 user=account_user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=commission_record.agent,
                 transaction_type='account_user_debit',
                 amount=outstanding,
                 is_successful=True,
                 status='completed',
                 description=f"Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
             )
+            payer_wallet.apply_delta(
+                amount=-outstanding,
+                actor=actor,
+                transaction_obj=payer_tx,
+                reference=str(commission_record.pk),
+                reason=payer_tx.description,
+                metadata={"commission_id": commission_record.pk, "type": "weekly_commission"},
+            )
 
         # Handle Payee Credit
-        wallet, _ = Wallet.objects.get_or_create(user=commission_record.agent)
-        # Ensure balance is Decimal (handle float default edge case)
-        if isinstance(wallet.balance, float):
-            wallet.balance = Decimal(str(wallet.balance))
-            
-        wallet.balance += outstanding
-        wallet.save()
-        
-        Transaction.objects.create(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.agent)
+        payee_tx = Transaction.objects.create(
             user=commission_record.agent,
+            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+            target_user=commission_record.agent,
             transaction_type='commission_payout',
             amount=outstanding,
             is_successful=True,
             status='completed',
             description=f"Weekly Commission for {commission_record.period}",
+        )
+        wallet.apply_delta(
+            amount=outstanding,
+            actor=actor,
+            transaction_obj=payee_tx,
+            reference=str(commission_record.pk),
+            reason=payee_tx.description,
+            metadata={"commission_id": commission_record.pk, "type": "weekly_commission"},
         )
         
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + outstanding
@@ -151,32 +161,43 @@ def pay_weekly_commission_amount(commission_record, amount, actor=None):
             if payer_wallet.balance < pay_amount:
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
-            payer_wallet.balance -= pay_amount
-            payer_wallet.save()
-
-            Transaction.objects.create(
+            payer_tx = Transaction.objects.create(
                 user=account_user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=commission_record.agent,
                 transaction_type='account_user_debit',
                 amount=pay_amount,
                 is_successful=True,
                 status='completed',
                 description=f"Adjusted Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
             )
+            payer_wallet.apply_delta(
+                amount=-pay_amount,
+                actor=actor,
+                transaction_obj=payer_tx,
+                reference=str(commission_record.pk),
+                reason=payer_tx.description,
+                metadata={"commission_id": commission_record.pk, "type": "weekly_commission_adjusted"},
+            )
 
-        wallet, _ = Wallet.objects.get_or_create(user=commission_record.agent)
-        if isinstance(wallet.balance, float):
-            wallet.balance = Decimal(str(wallet.balance))
-
-        wallet.balance += pay_amount
-        wallet.save()
-
-        Transaction.objects.create(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.agent)
+        payee_tx = Transaction.objects.create(
             user=commission_record.agent,
+            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+            target_user=commission_record.agent,
             transaction_type='commission_payout',
             amount=pay_amount,
             is_successful=True,
             status='completed',
             description=f"Adjusted Weekly Commission for {commission_record.period}",
+        )
+        wallet.apply_delta(
+            amount=pay_amount,
+            actor=actor,
+            transaction_obj=payee_tx,
+            reference=str(commission_record.pk),
+            reason=payee_tx.description,
+            metadata={"commission_id": commission_record.pk, "type": "weekly_commission_adjusted"},
         )
 
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
@@ -233,34 +254,45 @@ def pay_monthly_network_commission(commission_record, actor=None):
             payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
             if payer_wallet.balance < outstanding:
                  raise ValueError("Insufficient funds in Account User wallet during transaction.")
-            
-            payer_wallet.balance -= outstanding
-            payer_wallet.save()
 
-            Transaction.objects.create(
+            payer_tx = Transaction.objects.create(
                 user=account_user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=commission_record.user,
                 transaction_type='account_user_debit',
                 amount=outstanding,
                 is_successful=True,
                 status='completed',
                 description=f"Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
             )
+            payer_wallet.apply_delta(
+                amount=-outstanding,
+                actor=actor,
+                transaction_obj=payer_tx,
+                reference=str(commission_record.pk),
+                reason=payer_tx.description,
+                metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission", "role": commission_record.role},
+            )
 
         # Handle Payee Credit
-        wallet, _ = Wallet.objects.get_or_create(user=commission_record.user)
-        if isinstance(wallet.balance, float):
-            wallet.balance = Decimal(str(wallet.balance))
-            
-        wallet.balance += outstanding
-        wallet.save()
-        
-        Transaction.objects.create(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.user)
+        payee_tx = Transaction.objects.create(
             user=commission_record.user,
+            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+            target_user=commission_record.user,
             transaction_type='commission_payout',
             amount=outstanding,
             is_successful=True,
             status='completed',
             description=f"Monthly Network Commission ({commission_record.role}) for {commission_record.period}",
+        )
+        wallet.apply_delta(
+            amount=outstanding,
+            actor=actor,
+            transaction_obj=payee_tx,
+            reference=str(commission_record.pk),
+            reason=payee_tx.description,
+            metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission", "role": commission_record.role},
         )
         
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + outstanding
@@ -324,32 +356,43 @@ def pay_monthly_network_commission_amount(commission_record, amount, actor=None)
             if payer_wallet.balance < pay_amount:
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
-            payer_wallet.balance -= pay_amount
-            payer_wallet.save()
-
-            Transaction.objects.create(
+            payer_tx = Transaction.objects.create(
                 user=account_user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=commission_record.user,
                 transaction_type='account_user_debit',
                 amount=pay_amount,
                 is_successful=True,
                 status='completed',
                 description=f"Adjusted Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
             )
+            payer_wallet.apply_delta(
+                amount=-pay_amount,
+                actor=actor,
+                transaction_obj=payer_tx,
+                reference=str(commission_record.pk),
+                reason=payer_tx.description,
+                metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission_adjusted", "role": commission_record.role},
+            )
 
-        wallet, _ = Wallet.objects.get_or_create(user=commission_record.user)
-        if isinstance(wallet.balance, float):
-            wallet.balance = Decimal(str(wallet.balance))
-
-        wallet.balance += pay_amount
-        wallet.save()
-
-        Transaction.objects.create(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.user)
+        payee_tx = Transaction.objects.create(
             user=commission_record.user,
+            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+            target_user=commission_record.user,
             transaction_type='commission_payout',
             amount=pay_amount,
             is_successful=True,
             status='completed',
             description=f"Adjusted Monthly Network Commission ({commission_record.role}) for {commission_record.period}",
+        )
+        wallet.apply_delta(
+            amount=pay_amount,
+            actor=actor,
+            transaction_obj=payee_tx,
+            reference=str(commission_record.pk),
+            reason=payee_tx.description,
+            metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission_adjusted", "role": commission_record.role},
         )
 
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
@@ -458,10 +501,7 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
             recall.save(update_fields=['status', 'decision_note'])
             return False, "Insufficient agent wallet balance to recall this amount."
 
-        agent_wallet.balance -= amount
-        agent_wallet.save(update_fields=['balance'])
-
-        Transaction.objects.create(
+        debit_tx = Transaction.objects.create(
             user=beneficiary,
             initiating_user=actor,
             target_user=payer,
@@ -472,15 +512,21 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
             description=f"Commission recall debit for {period} ({commission_type})",
             timestamp=now,
         )
+        agent_wallet.apply_delta(
+            amount=-amount,
+            actor=actor,
+            transaction_obj=debit_tx,
+            reference=str(recall.id),
+            reason=debit_tx.description,
+            metadata={"recall_id": recall.id, "commission_type": commission_type, "payer_source": payer_source},
+        )
 
         if payer:
             payer_wallet = Wallet.objects.select_for_update().filter(user=payer).first()
             if not payer_wallet:
                 payer_wallet = Wallet.objects.create(user=payer, balance=Decimal('0.00'))
                 payer_wallet = Wallet.objects.select_for_update().get(user=payer)
-            payer_wallet.balance += amount
-            payer_wallet.save(update_fields=['balance'])
-            Transaction.objects.create(
+            credit_tx = Transaction.objects.create(
                 user=payer,
                 initiating_user=actor,
                 target_user=beneficiary,
@@ -490,6 +536,14 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
                 status='completed',
                 description=f"Commission recall credit from {beneficiary.username or beneficiary.email} ({period})",
                 timestamp=now,
+            )
+            payer_wallet.apply_delta(
+                amount=amount,
+                actor=actor,
+                transaction_obj=credit_tx,
+                reference=str(recall.id),
+                reason=credit_tx.description,
+                metadata={"recall_id": recall.id, "commission_type": commission_type, "payer_source": payer_source},
             )
 
         new_amount_paid = amount_paid - amount
@@ -744,6 +798,7 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
                 pct = r.commission_percent or Decimal("0.00")
             return pct
 
+        bucket_ggr_by_pct = {}
         for ticket in tickets_with_count:
             n = int(getattr(ticket, "num_selections", 0) or 0)
             if n <= 0:
@@ -751,17 +806,19 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
                 n = 2 if bt in ("multiple", "system") else 1
             if n < 2:
                 continue
-            stake = (ticket.stake_amount or Decimal("0.00"))
-            winnings = (ticket.max_winning or Decimal("0.00")) if ticket.status == "won" else Decimal("0.00")
-            ticket_ggr = stake - winnings
-            if ticket_ggr <= 0:
-                continue
-
             pct = _match_hybrid_percent(n)
             if pct <= 0:
                 continue
 
-            commission_multiple_amount_raw += (ticket_ggr * pct / Decimal("100.00"))
+            stake = (ticket.stake_amount or Decimal("0.00"))
+            winnings = (ticket.max_winning or Decimal("0.00")) if ticket.status == "won" else Decimal("0.00")
+            ticket_ggr = stake - winnings
+            bucket_ggr_by_pct[pct] = bucket_ggr_by_pct.get(pct, Decimal("0.00")) + ticket_ggr
+
+        for pct, bucket_ggr in bucket_ggr_by_pct.items():
+            if bucket_ggr <= 0:
+                continue
+            commission_multiple_amount_raw += (bucket_ggr * pct / Decimal("100.00"))
 
         commission_multiple_amount = commission_multiple_amount_raw.quantize(Decimal("0.01"))
     elif getattr(plan, "is_hybrid_active", False) and multiple_ggr > 0 and (plan.ggr_percent or Decimal("0.00")) > 0:

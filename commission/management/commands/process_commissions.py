@@ -20,18 +20,17 @@ class Command(BaseCommand):
         # 1. Identify and create/get relevant periods
         today = timezone.now().date()
         
-        # Determine last completed week (assuming Monday-Sunday)
-        # If today is Monday (0), last week ended yesterday.
-        # If today is Tuesday (1), last week ended 2 days ago.
-        days_since_sunday = (today.weekday() + 1) % 7
-        last_sunday = today - timedelta(days=days_since_sunday)
-        last_monday = last_sunday - timedelta(days=6)
+        days_since_monday = today.weekday()
+        if days_since_monday == 0:
+            days_since_monday = 7
+        last_monday = today - timedelta(days=days_since_monday)
+        last_tuesday = last_monday - timedelta(days=6)
         
         # Check if weekly period exists for last week, if not create it
         weekly_period, created = CommissionPeriod.objects.get_or_create(
             period_type='weekly',
-            start_date=last_monday,
-            end_date=last_sunday
+            start_date=last_tuesday,
+            end_date=last_monday
         )
         
         if not weekly_period.is_processed:

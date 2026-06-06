@@ -18,6 +18,7 @@ from django.dispatch import receiver
 from django.db import transaction
 import threading
 from django_ckeditor_5.fields import CKEditor5Field
+from django.apps import apps
 
 
 class SiteConfiguration(models.Model):
@@ -584,8 +585,67 @@ class Wallet(models.Model):
     balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
     last_updated = models.DateTimeField(auto_now=True)
 
+    def apply_delta(self, *, amount, actor=None, transaction_obj=None, reference="", reason="", metadata=None):
+        amount_q = Decimal(str(amount)).quantize(Decimal("0.01"))
+        with transaction.atomic():
+            locked = Wallet.objects.select_for_update().select_related("user").get(pk=self.pk)
+            before = Decimal(str(locked.balance or Decimal("0.00"))).quantize(Decimal("0.01"))
+            after = (before + amount_q).quantize(Decimal("0.01"))
+            if after < Decimal("0.00"):
+                raise ValueError("Wallet balance cannot be negative.")
+            locked.balance = after
+            locked.save(update_fields=["balance", "last_updated"])
+
+            WalletLedgerEntry = apps.get_model("betting", "WalletLedgerEntry")
+            WalletLedgerEntry.objects.create(
+                wallet=locked,
+                user=locked.user,
+                actor=actor if getattr(actor, "is_authenticated", False) else None,
+                transaction=transaction_obj,
+                direction="credit" if amount_q >= 0 else "debit",
+                amount=abs(amount_q),
+                balance_before=before,
+                balance_after=after,
+                reference=(reference or "")[:120],
+                reason=(reason or "")[:255],
+                metadata=metadata or {},
+            )
+
+            self.balance = locked.balance
+            return before, after
+
     def __str__(self):
         return f"Wallet for {self.user.email} (Balance: {self.balance})"
+
+
+class WalletLedgerEntry(models.Model):
+    DIRECTION_CHOICES = (
+        ("credit", "Credit"),
+        ("debit", "Debit"),
+    )
+
+    wallet = models.ForeignKey("Wallet", on_delete=models.CASCADE, related_name="ledger_entries")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="wallet_ledger_entries")
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="wallet_ledger_actions")
+    transaction = models.ForeignKey("Transaction", on_delete=models.SET_NULL, null=True, blank=True, related_name="wallet_ledger_entries")
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
+    reference = models.CharField(max_length=120, blank=True, default="", db_index=True)
+    reason = models.CharField(max_length=255, blank=True, default="")
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"], name="bet_wl_user_created_idx"),
+            models.Index(fields=["wallet", "created_at"], name="bet_wl_wallet_created_idx"),
+        ]
+
+    def __str__(self):
+        return f"WalletLedger({self.user_id}) {self.direction} ₦{self.amount}"
 
 class Transaction(models.Model):
     TRANSACTION_TYPES = (

@@ -1,5 +1,6 @@
 import json
 import os
+import base64
 from decimal import Decimal
 from datetime import timedelta
 
@@ -121,8 +122,14 @@ class Command(BaseCommand):
                 if locked.status == "completed" and locked.is_successful:
                     continue
                 wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked.user, defaults={"balance": Decimal("0.00")})
-                wallet.balance = (wallet.balance or Decimal("0.00")) + amount_q
-                wallet.save(update_fields=["balance"])
+                wallet.apply_delta(
+                    amount=amount_q,
+                    actor=None,
+                    transaction_obj=locked,
+                    reference=ref,
+                    reason=f"Deposit via {gw} (reconcile)",
+                    metadata={"gateway": gw, "source": "reconcile"},
+                )
                 locked.status = "completed"
                 locked.is_successful = True
                 locked.description = f"Online deposit via {gw} successful."
@@ -172,6 +179,33 @@ class Command(BaseCommand):
             return ok, amount_verified, {"response": payload}, getattr(resp, "status_code", None), msg
 
         if gateway == "monnify":
-            raise RuntimeError("Monnify reconciliation is not implemented in this command.")
+            api_key = (os.getenv("MONNIFY_API_KEY") or "").strip()
+            secret_key = (os.getenv("MONNIFY_SECRET_KEY") or "").strip()
+            base_url = (os.getenv("MONNIFY_BASE_URL") or "").strip()
+            if not base_url:
+                raise RuntimeError("Missing MONNIFY_BASE_URL")
+            if not api_key or not secret_key:
+                raise RuntimeError("Missing MONNIFY credentials")
+
+            auth_str = base64.b64encode(f"{api_key}:{secret_key}".encode()).decode()
+            auth_url = f"{base_url.rstrip('/')}/api/v1/auth/login"
+            auth_resp = requests.post(auth_url, headers={"Authorization": f"Basic {auth_str}"}, timeout=15)
+            auth_payload = auth_resp.json() if auth_resp.content else {}
+            if not bool(auth_payload.get("requestSuccessful")):
+                msg = str(auth_payload.get("responseMessage") or "Authentication failed")
+                return False, Decimal("0.00"), {"auth": auth_payload}, getattr(auth_resp, "status_code", None), msg
+
+            token = ((auth_payload.get("responseBody") or {}).get("accessToken") or "").strip()
+            if not token:
+                return False, Decimal("0.00"), {"auth": auth_payload}, getattr(auth_resp, "status_code", None), "Missing access token"
+
+            verify_url = f"{base_url.rstrip('/')}/api/v1/merchant/transactions/query?paymentReference={reference}"
+            verify_resp = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            verify_payload = verify_resp.json() if verify_resp.content else {}
+            body = verify_payload.get("responseBody") or {}
+            ok = bool(verify_payload.get("requestSuccessful") and body.get("paymentStatus") == "PAID")
+            amount_verified = Decimal(str(body.get("amountPaid") or "0"))
+            msg = str(verify_payload.get("responseMessage") or body.get("paymentStatus") or "")
+            return ok, amount_verified, {"response": verify_payload}, getattr(verify_resp, "status_code", None), msg
 
         raise RuntimeError(f"Unsupported gateway: {gateway}")

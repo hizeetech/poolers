@@ -178,6 +178,12 @@
                     <div class="mb-3">
                         <label for="stake_amount" class="form-label fw-bold" id="stake-label">Stake Amount (per line) (₦)</label>
                         <input type="number" step="0.01" min="0.01" id="stake_amount" class="form-control rounded-pill" value="100">
+                        <div class="d-flex flex-wrap gap-2 mt-2" id="stake-presets">
+                            <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill stake-preset-btn" data-amount="100">₦100</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill stake-preset-btn" data-amount="200">₦200</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill stake-preset-btn" data-amount="500">₦500</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill stake-preset-btn" data-amount="1000">₦1000</button>
+                        </div>
                         <div class="text-muted small mt-1" id="betting-limits-hint"></div>
                     </div>
                     <div class="d-flex justify-content-between mb-2" id="lines-count-div" style="display: none !important;">
@@ -476,12 +482,34 @@
         if (maxSel) parts.push(`Max Selections: ${maxSel}`);
         if (maxOdds) parts.push(`Max Odds: ${formatCurrency(maxOdds)}`);
 
-        if (currentBettingLimits.has_agent_override) {
-            parts.push('Agent Limits Applied');
-        }
-
         bettingLimitsHint.textContent = parts.join(' • ');
     }
+
+    function clampStakeValue(value) {
+        const v = parseFloat(String(value ?? '').trim());
+        if (!Number.isFinite(v) || v <= 0) return null;
+        if (!currentBettingLimits) return v;
+        const minStake = parseFloat(currentBettingLimits.min_stake || '0') || 0;
+        const maxStake = parseFloat(currentBettingLimits.max_stake_effective || currentBettingLimits.max_stake || '0') || 0;
+        let out = v;
+        if (minStake > 0 && out < minStake) out = minStake;
+        if (maxStake > 0 && out > maxStake) out = maxStake;
+        return out;
+    }
+
+    function applyStakeValue(value) {
+        if (!stakeAmountInput) return;
+        const clamped = clampStakeValue(value);
+        if (clamped === null) return;
+        stakeAmountInput.value = Number(clamped).toFixed(2);
+        calculateSystemAndWinnings('per_line');
+    }
+
+    document.querySelectorAll('.stake-preset-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            applyStakeValue(btn.dataset.amount);
+        });
+    });
 
     async function loadBettingLimits(ticketType) {
         try {

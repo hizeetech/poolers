@@ -358,6 +358,19 @@
                             </table>
                         </div>
                     </div>
+                    {% if tickets_page %}
+                    <div class="d-flex justify-content-between align-items-center p-2">
+                        <div class="text-muted small">Page {{ tickets_page.number }} of {{ tickets_page.paginator.num_pages }}</div>
+                        <div class="d-flex gap-2">
+                            {% if tickets_page.has_previous %}
+                            <a class="btn btn-sm btn-outline-secondary" href="?ticket_id={{ request.GET.ticket_id|default:'' }}&status={{ request.GET.status|default:'all' }}&bet_type={{ request.GET.bet_type|default:'all' }}&date_from={{ request.GET.date_from|default:'' }}&date_to={{ request.GET.date_to|default:'' }}&settled_date_from={{ request.GET.settled_date_from|default:'' }}&settled_date_to={{ request.GET.settled_date_to|default:'' }}&page={{ tickets_page.previous_page_number }}">Prev</a>
+                            {% endif %}
+                            {% if tickets_page.has_next %}
+                            <a class="btn btn-sm btn-outline-secondary" href="?ticket_id={{ request.GET.ticket_id|default:'' }}&status={{ request.GET.status|default:'all' }}&bet_type={{ request.GET.bet_type|default:'all' }}&date_from={{ request.GET.date_from|default:'' }}&date_to={{ request.GET.date_to|default:'' }}&settled_date_from={{ request.GET.settled_date_from|default:'' }}&settled_date_to={{ request.GET.settled_date_to|default:'' }}&page={{ tickets_page.next_page_number }}">Next</a>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

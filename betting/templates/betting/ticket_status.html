@@ -11,7 +11,7 @@
             <p><strong>Potential Winning:</strong> {{ bet_ticket.potential_winning }} NGN</p>
             <p><strong>Bonus Amount:</strong> {{ bet_ticket.bonus_amount }} NGN</p>
             <p><strong>Maximum Winning:</strong> {{ bet_ticket.max_winning }} NGN</p>
-            <p><strong>Bet Time:</strong> {{ bet_ticket.bet_time|date:"F d, Y H:i" }}</p>
+            <p><strong>Bet Time:</strong> {{ bet_ticket.placed_at|date:"F d, Y H:i" }}</p>
 
             <h4 class="mt-4">Selections:</h4>
             <ul class="list-group">
@@ -62,7 +62,7 @@
                             </tr>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 700;">DATE</td>
-                                <td style="border: 1px solid #000;" class="text-end ticket-num">{{ bet_ticket.bet_time|date:"Y-m-d H:i" }}</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num">{{ bet_ticket.placed_at|date:"Y-m-d H:i" }}</td>
                             </tr>
                         </tbody>
                     </table>

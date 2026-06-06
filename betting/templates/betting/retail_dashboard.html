@@ -603,7 +603,8 @@
             <tr>
               <th>Time</th>
               <th>Ticket</th>
-              <th>User</th>
+              <th>Agent</th>
+              <th>Cashier Username</th>
               <th class="text-end">Stake</th>
               <th>Status</th>
             </tr>
@@ -614,13 +615,18 @@
               <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
               <td class="fw-semibold">{{ t.ticket_id }}</td>
               <td class="text-muted small">
-                <div class="fw-semibold text-dark">{{ t.user.email|default:t.user.username }}</div>
+                <div class="fw-semibold text-dark">
+                  {{ t.user.agent.get_full_name|default:t.user.agent.email|default:t.user.agent.username|default:"-" }}
+                </div>
+              </td>
+              <td class="text-muted small">
+                <div class="fw-semibold text-dark">{{ t.user.username|default:"-" }}</div>
               </td>
               <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
               <td class="text-uppercase small">{{ t.status }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted py-4">No bets found.</td></tr>
+            <tr><td colspan="6" class="text-center text-muted py-4">No bets found.</td></tr>
             {% endfor %}
           </tbody>
         </table>

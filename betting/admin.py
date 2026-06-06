@@ -635,7 +635,33 @@ class BetTicketAdmin(admin.ModelAdmin):
                  obj.deleted_at = timezone.now()
         super().save_model(request, obj, form, change)
 
-    actions = ['void_selected_tickets', 'settle_won_selected_tickets']
+    actions = ['recalculate_selected_tickets', 'void_selected_tickets', 'settle_won_selected_tickets']
+
+    @admin.action(description='Recalculate selected pending tickets (refresh odds/status)')
+    def recalculate_selected_tickets(self, request, queryset):
+        updated = 0
+        skipped = 0
+        failed = 0
+
+        qs = queryset.select_related('user').prefetch_related('selections__fixture')
+        for ticket in qs:
+            if ticket.status != 'pending':
+                skipped += 1
+                continue
+            try:
+                ticket.recalculate_ticket()
+                ticket.check_and_update_status()
+                updated += 1
+            except Exception as e:
+                failed += 1
+                messages.error(request, f"Failed to recalculate ticket {ticket.ticket_id}: {e}")
+
+        if updated:
+            messages.success(request, f"Recalculated {updated} pending ticket(s).")
+        if skipped:
+            messages.info(request, f"Skipped {skipped} non-pending ticket(s).")
+        if failed:
+            messages.warning(request, f"Failed to recalculate {failed} ticket(s).")
 
     @admin.action(description='Void/Delete selected bet tickets and refund stake')
     def void_selected_tickets(self, request, queryset):

@@ -1436,7 +1436,9 @@ def place_bet(request):
                             return fail_response('Fixture not found.')
 
                         # Validate fixture status
-                        if fixture.status != 'scheduled': # Assuming 'scheduled' is the status for open matches
+                        status = str(getattr(fixture, "status", "") or "").strip().lower()
+                        closed_statuses = {'finished', 'settled', 'cancelled', 'postponed', 'abandoned', 'no_result'}
+                        if status in closed_statuses:
                             return fail_response(f'Betting closed for {fixture.home_team} vs {fixture.away_team}')
                         
                         # Validate match time (Strict Date/Time Enforcement)

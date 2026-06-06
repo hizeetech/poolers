@@ -42,11 +42,11 @@
 
             <div class="d-none" id="ticket-receipt-template">
                 <div class="ticket-print">
-                    <div class="text-center mb-2">
+                    <div class="text-center mb-1">
                         {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
                         {% else %}
-                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
                         {% endif %}
                     </div>
 
@@ -142,7 +142,8 @@
                 window.openThermalPrintWindow({
                     title: 'Ticket',
                     html: html,
-                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80'
+                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80',
+                    showLogo: false
                 });
             } else {
                 window.print();

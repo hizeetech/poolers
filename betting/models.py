@@ -19,6 +19,7 @@ from django.dispatch import receiver
 from django.db import transaction
 import threading
 from django.conf import settings
+from django.core.cache import cache
 from django_ckeditor_5.fields import CKEditor5Field
 from django.apps import apps
 
@@ -2045,13 +2046,16 @@ def refund_stake_on_void(sender, instance, **kwargs):
 def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
     try:
         serial = str(getattr(instance, 'serial_number', '') or '').strip()
-        relink_q = Q(fixture__isnull=True, betting_period=instance.betting_period)
+        period_id = getattr(instance, "betting_period_id", None)
+        relink_q = Q(bet_ticket__status="pending")
+        if period_id:
+            relink_q &= (Q(betting_period_id=period_id) | Q(betting_period__isnull=True))
         if serial:
             relink_q &= (Q(fixture_serial_number__iexact=serial) | Q(fixture_home_team__iexact=instance.home_team, fixture_away_team__iexact=instance.away_team, fixture_match_date=instance.match_date, fixture_match_time=instance.match_time))
         else:
             relink_q &= Q(fixture_home_team__iexact=instance.home_team, fixture_away_team__iexact=instance.away_team, fixture_match_date=instance.match_date, fixture_match_time=instance.match_time)
 
-        Selection.objects.filter(relink_q).update(
+        Selection.objects.filter(relink_q).exclude(fixture_id=instance.id).update(
             fixture=instance,
             fixture_serial_number=serial or '',
             fixture_home_team=instance.home_team,
@@ -2072,6 +2076,22 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
             ticket_count = BetTicket.objects.filter(selections__fixture=instance).distinct().count()
             is_test_run = any(arg in ('test', 'pytest') for arg in getattr(sys, 'argv', []) or [])
 
+            def _celery_workers_available():
+                cache_key = "betting:celery_workers_available"
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    return bool(cached)
+                ok = False
+                try:
+                    from celery import current_app
+                    insp = current_app.control.inspect(timeout=0.5)
+                    res = insp.ping() if insp else None
+                    ok = bool(res)
+                except Exception:
+                    ok = False
+                cache.set(cache_key, ok, timeout=15)
+                return ok
+
             def _run_in_background():
                 try:
                     recalculate_tickets_for_fixture.run(instance.id)
@@ -2082,12 +2102,17 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
                 recalculate_tickets_for_fixture.run(instance.id)
                 return
 
-            try:
-                recalculate_tickets_for_fixture.delay(instance.id)
-            except Exception:
-                t = threading.Thread(target=_run_in_background)
-                t.daemon = True
-                t.start()
+            use_celery = _celery_workers_available()
+            if use_celery:
+                try:
+                    recalculate_tickets_for_fixture.delay(instance.id)
+                    return
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_run_in_background)
+            t.daemon = True
+            t.start()
         except Exception:
             try:
                 recalculate_tickets_for_fixture.run(instance.id)

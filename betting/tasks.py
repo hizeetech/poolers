@@ -318,7 +318,7 @@ def recalculate_tickets_for_fixture(fixture_id):
     Background task to recalculate all tickets associated with a changed fixture.
     This prevents timeouts when saving results in the admin.
     """
-    from .models import BetTicket  # Local import to avoid circular dependency
+    from .models import BetTicket, Selection  # Local import to avoid circular dependency
     try:
         # Get fixture - if it doesn't exist anymore, just return
         try:
@@ -327,7 +327,34 @@ def recalculate_tickets_for_fixture(fixture_id):
             logger.warning(f"Fixture {fixture_id} not found during ticket recalculation task.")
             return
 
-        tickets = BetTicket.objects.filter(selections__fixture=fixture).distinct()
+        try:
+            serial = str(getattr(fixture, "serial_number", "") or "").strip()
+            period_id = getattr(fixture, "betting_period_id", None)
+            relink_q = Q(bet_ticket__status="pending")
+            if period_id:
+                relink_q &= (Q(betting_period_id=period_id) | Q(betting_period__isnull=True))
+            if serial:
+                relink_q &= Q(fixture_serial_number__iexact=serial)
+            else:
+                relink_q &= Q(
+                    fixture_home_team__iexact=fixture.home_team,
+                    fixture_away_team__iexact=fixture.away_team,
+                    fixture_match_date=fixture.match_date,
+                    fixture_match_time=fixture.match_time,
+                )
+
+            Selection.objects.filter(relink_q).exclude(fixture_id=fixture.id).update(
+                fixture=fixture,
+                fixture_serial_number=serial or "",
+                fixture_home_team=fixture.home_team,
+                fixture_away_team=fixture.away_team,
+                fixture_match_date=fixture.match_date,
+                fixture_match_time=fixture.match_time,
+            )
+        except Exception:
+            pass
+
+        tickets = BetTicket.objects.filter(status="pending", selections__fixture=fixture).distinct()
         count = tickets.count()
         logger.info(f"Starting recalculation for {count} tickets for fixture {fixture}")
 

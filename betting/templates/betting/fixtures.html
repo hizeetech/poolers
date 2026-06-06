@@ -139,6 +139,54 @@
             color: rgba(255, 255, 255, 0.88);
             text-align: right;
         }
+        .smart-pick-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 10px;
+            justify-items: center;
+        }
+        .smart-pick-number[data-tt-type="circle"] {
+            width: 100%;
+            max-width: 44px;
+            aspect-ratio: 1 / 1;
+            border-radius: 9999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid rgba(15, 23, 42, 0.18);
+            background: rgba(255, 255, 255, 0.92);
+            color: #0f172a;
+            font-weight: 800;
+            font-size: 13px;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+        }
+        .smart-pick-number[data-tt-type="circle"]:hover {
+            border-color: rgba(13, 110, 253, 0.65);
+            transform: translateY(-1px);
+        }
+        .smart-pick-number.is-selected[data-tt-type="circle"] {
+            background: #0d6efd;
+            border-color: #0d6efd;
+            color: #ffffff;
+        }
+        .smart-pick-number.is-disabled[data-tt-type="circle"] {
+            background: rgba(148, 163, 184, 0.35);
+            border-color: rgba(148, 163, 184, 0.55);
+            color: rgba(15, 23, 42, 0.55);
+            cursor: not-allowed;
+            transform: none;
+        }
+        @media (max-width: 420px) {
+            .smart-pick-grid {
+                gap: 8px;
+            }
+            .smart-pick-number[data-tt-type="circle"] {
+                max-width: 38px;
+                font-size: 12px;
+            }
+        }
     </style>
 
     <div class="row">
@@ -149,6 +197,18 @@
         </div>
 
         <div class="col-md-4">
+            <div class="card app-glass-card shadow-lg rounded-3 mb-3">
+                <div class="card-header bg-primary text-center rounded-top-3">
+                    <h5 class="mb-0 text-white">Smart Pick</h5>
+                </div>
+                <div class="card-body">
+                    <div id="smart-pick-grid" class="smart-pick-grid">
+                        {% for fixture in fixtures %}
+                            <div class="smart-pick-number" data-event-number="{{ fixture.serial_number }}" data-tt-type="circle">{{ fixture.serial_number }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
             <div class="card app-glass-card shadow-lg rounded-3 sticky-top" style="top: 20px;">
                 <div class="card-header bg-primary text-center rounded-top-3">
                     <h4 class="mb-0 text-white d-flex align-items-center justify-content-center">
@@ -285,11 +345,11 @@
             </div>
             <div class="modal-body" id="ticket-content-to-print">
                 <div class="ticket-print">
-                    <div class="text-center mb-2">
+                    <div class="text-center mb-1">
                         {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
                         {% else %}
-                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo mb-1" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;">
+                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
                         {% endif %}
                     </div>
 
@@ -566,6 +626,84 @@
             responseMessageDiv.classList.add('d-none');
             responseMessageDiv.innerHTML = '';
         }, 5000); // Hide after 5 seconds
+    }
+
+    const smartPickGrid = document.getElementById('smart-pick-grid');
+    let smartPickEventToFixtureId = {};
+    const cssEscape = (value) => {
+        const s = String(value ?? '');
+        if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(s);
+        return s.replace(/"/g, '\\"');
+    };
+
+    function rebuildSmartPickFromFixtures() {
+        if (!smartPickGrid) return;
+        const buttons = Array.from(document.querySelectorAll('.bet-selection-btn[data-event-number][data-fixture-id]'));
+        const map = {};
+        for (const btn of buttons) {
+            const ev = String(btn.dataset.eventNumber || '').trim();
+            const fid = String(btn.dataset.fixtureId || '').trim();
+            if (!ev || !fid) continue;
+            if (!map[ev]) {
+                map[ev] = fid;
+            }
+        }
+
+        smartPickEventToFixtureId = map;
+        const eventNumbers = Object.keys(map).sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
+        smartPickGrid.innerHTML = eventNumbers.map((n) => (
+            `<div class="smart-pick-number" data-event-number="${n}" data-tt-type="circle">${n}</div>`
+        )).join('');
+        updateSmartPickHighlights();
+    }
+
+    function updateSmartPickHighlights() {
+        if (!smartPickGrid) return;
+        const selectedFixtureIds = new Set((selectedBets || []).map(b => String(b.fixture_id)));
+        smartPickGrid.querySelectorAll('.smart-pick-number[data-event-number]').forEach((el) => {
+            const ev = String(el.dataset.eventNumber || '').trim();
+            const fid = smartPickEventToFixtureId[ev];
+            const isSelected = fid ? selectedFixtureIds.has(String(fid)) : false;
+            el.classList.toggle('is-selected', isSelected);
+        });
+    }
+
+    function findPreferredButtonForFixtureId(fixtureId) {
+        const fid = String(fixtureId || '').trim();
+        if (!fid) return null;
+        const preferred = ['home_win', 'draw', 'away_win'];
+        for (const bt of preferred) {
+            const btn = document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"][data-bet-type="${cssEscape(bt)}"]`);
+            if (btn) return btn;
+        }
+        return document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"]`);
+    }
+
+    function findButtonForFixtureAndBetType(fixtureId, betType) {
+        const fid = String(fixtureId || '').trim();
+        const bt = String(betType || '').trim();
+        if (!fid || !bt) return null;
+        return document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"][data-bet-type="${cssEscape(bt)}"]`);
+    }
+
+    if (smartPickGrid) {
+        smartPickGrid.addEventListener('click', (e) => {
+            const target = e.target && e.target.closest ? e.target.closest('.smart-pick-number[data-event-number]') : null;
+            if (!target) return;
+            const ev = String(target.dataset.eventNumber || '').trim();
+            const fid = smartPickEventToFixtureId[ev];
+            if (!fid) return;
+
+            const existing = (selectedBets || []).find(bet => String(bet.fixture_id) === String(fid));
+            if (existing) {
+                const removeBtn = findButtonForFixtureAndBetType(fid, existing.bet_type);
+                if (removeBtn) removeBtn.click();
+                return;
+            }
+
+            const addBtn = findPreferredButtonForFixtureId(fid);
+            if (addBtn) addBtn.click();
+        });
     }
 
     // Helper function to generate combinations
@@ -933,6 +1071,7 @@
                 button.classList.remove('btn-success'); // Remove highlight
             }
         });
+        updateSmartPickHighlights();
     }
 
     // Helper to get display text for bet type
@@ -1098,6 +1237,7 @@
                 if (fixturesResp.ok) {
                     const html = await fixturesResp.text();
                     document.getElementById('fixtures-container').innerHTML = html;
+                    rebuildSmartPickFromFixtures();
                 }
 
                 if (picksResp.ok) {
@@ -1165,6 +1305,8 @@
 
         // Initial attachment and polling
         attachBetButtonListeners();
+        rebuildSmartPickFromFixtures();
+        updateButtonHighlights();
         pollFixtures();
 
         // Event listener for removing selections from bet slip
@@ -1397,11 +1539,10 @@
                                     tr.innerHTML = `
                                         <td style="border: 1px solid #000;">
                                             <div class="fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</div>
-                                            <div class="text-muted small">${bet.fixture_match_date} ${bet.fixture_match_time}</div>
                                         </td>
                                         <td style="border: 1px solid #000;">
                                             <div class="fw-bold">${bet.bet_type_display}</div>
-                                            <div class="text-muted small">Period: ${bet.fixture_period_name}</div>
+                                            <div class="text-muted small">${bet.fixture_match_date} ${bet.fixture_match_time}</div>
                                         </td>
                                         <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num">${parseFloat(bet.odd).toFixed(2)}</td>
                                     `;
@@ -1471,7 +1612,8 @@
                 window.openThermalPrintWindow({
                     title: 'Bet Ticket',
                     html: html,
-                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80'
+                    paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80',
+                    showLogo: false
                 });
             } else {
                 window.print();

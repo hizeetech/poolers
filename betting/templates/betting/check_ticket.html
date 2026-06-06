@@ -374,11 +374,11 @@
                 </div>
                 <div class="modal-body p-4" id="ticket-content-to-print">
                     <div class="ticket-print">
-                        <div class="text-center mb-3">
+                        <div class="text-center mb-1">
                             {% if site_config.logo %}
-                                <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="ticket-logo mb-1">
+                                <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;" class="ticket-logo">
                             {% else %}
-                                <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain;" class="ticket-logo mb-1">
+                                <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;" class="ticket-logo">
                             {% endif %}
                             <small class="text-muted d-block">Reprinted Copy</small>
                         </div>
@@ -556,7 +556,8 @@
                                 title: 'Ticket Copy',
                                 html: html,
                                 paperMm: (typeof window.getThermalPaperMm === 'function') ? window.getThermalPaperMm() : '80',
-                                flagText: flagText
+                                flagText: flagText,
+                                showLogo: false
                             });
                         } else {
                             window.print();

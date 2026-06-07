@@ -8973,13 +8973,48 @@ def retail_dashboard(request):
             withdrawals_page = w_p.page(1)
 
     commission_rows = []
+    commission_period_options = []
+    selected_commission_period_id = ''
     if active_tab == 'commissions':
-        commission_rows = list(
-            Transaction.objects.filter(user__in=agents, transaction_type='commission_payout', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
-            .values('user_id', 'user__email')
-            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
-            .order_by('-total')[:200]
-        )
+        selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
+        try:
+            CommissionPeriod = apps.get_model('commission', 'CommissionPeriod')
+            WeeklyAgentCommission = apps.get_model('commission', 'WeeklyAgentCommission')
+
+            period_qs = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
+            commission_period_options = list(period_qs[:200])
+
+            selected_period = None
+            if selected_commission_period_id:
+                try:
+                    selected_period = CommissionPeriod.objects.filter(id=int(selected_commission_period_id), period_type='weekly').first()
+                except Exception:
+                    selected_period = None
+
+            if selected_period is None:
+                selected_period = period_qs.first()
+                selected_commission_period_id = str(selected_period.id) if selected_period else ''
+
+            comm_qs = WeeklyAgentCommission.objects.filter(agent__in=agents).select_related('agent', 'period')
+            if selected_period:
+                comm_qs = comm_qs.filter(period=selected_period)
+
+            comm_map = {c.agent_id: c for c in comm_qs}
+            commission_rows = []
+            for ag in agents.only('id', 'username', 'email', 'phone_number').order_by('email'):
+                rec = comm_map.get(ag.id)
+                commission_rows.append(
+                    {
+                        'agent_username': (ag.username or '').strip() or (ag.email or '').strip() or '-',
+                        'agent_phone_number': (ag.phone_number or '').strip() or '-',
+                        'total': getattr(rec, 'commission_total_amount', Decimal('0.00')) if rec else Decimal('0.00'),
+                        'status': getattr(rec, 'status', 'pending') if rec else 'pending',
+                    }
+                )
+        except Exception:
+            commission_rows = []
+            commission_period_options = []
+            selected_commission_period_id = ''
 
     risk_logs_page = None
     risk_kind = (request.GET.get('risk_kind') or '').strip()
@@ -9105,6 +9140,8 @@ def retail_dashboard(request):
         'tx_page': tx_page,
         'withdrawals_page': withdrawals_page,
         'commission_rows': commission_rows,
+        'commission_period_options': commission_period_options,
+        'selected_commission_period_id': selected_commission_period_id,
         'risk_kind': risk_kind,
         'risk_logs_page': risk_logs_page,
         'shop_q': shop_q,

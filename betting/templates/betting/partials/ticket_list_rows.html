@@ -14,9 +14,8 @@
             {{ t.get_status_display }}
         </span>
     </td>
-    <td data-label="Stake">₦{{ t.stake_amount|floatformat:0 }}</td>
-    <td data-label="Odds">{{ t.total_odd|floatformat:2 }}</td>
     <td data-label="Stake">₦{{ t.stake_amount|floatformat:2 }}</td>
+    <td data-label="Odds">{{ t.total_odd|floatformat:2 }}</td>
     <td data-label="Pot. Win">₦{{ t.potential_winning|floatformat:2 }}</td>
     <td data-label="Bonus">₦{{ t.max_winning|sub:t.potential_winning|floatformat:2 }}</td>
     <td data-label="Min Pot. Win">₦{{ t.get_min_potential_winning|floatformat:2 }}</td>

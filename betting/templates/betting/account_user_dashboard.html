@@ -819,6 +819,7 @@ $(document).ready(function() {
                                     <tr>
                                         <th style="width: 40px;"><input type="checkbox" id="selectAll" class="form-check-input"></th>
                                         <th>Agent/User</th>
+                                        <th>Phone</th>
                                         <th>Type</th>
                                         <th>Period</th>
                                         <th>GGR/NGR</th>
@@ -834,9 +835,10 @@ $(document).ready(function() {
                                             <input type="checkbox" name="selected_commissions" value="{{ comm.id_str }}" class="form-check-input commission-checkbox">
                                         </td>
                                         <td>
-                                            <div class="fw-bold">{{ comm.user.get_full_name|default:comm.user.email }}</div>
-                                            <div class="small text-muted">{{ comm.user.email }}</div>
+                                            <div class="fw-bold">{{ comm.user.username|default:comm.user.get_username|default:"-" }}</div>
+                                            <div class="small text-muted">{{ comm.user.email|default:"-" }}</div>
                                         </td>
+                                        <td class="text-muted small">{{ comm.user.phone_number|default:"-" }}</td>
                                         <td><span class="badge bg-info text-dark">{{ comm.type }}</span></td>
                                         <td>
                                             <div>{{ comm.period.start_date|date:"M d" }} - {{ comm.period.end_date|date:"M d, Y" }}</div>
@@ -863,7 +865,7 @@ $(document).ready(function() {
                                     </tr>
                                     {% empty %}
                                     <tr>
-                                        <td colspan="8" class="text-center py-4 text-muted">No pending commissions found.</td>
+                                        <td colspan="9" class="text-center py-4 text-muted">No pending commissions found.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>

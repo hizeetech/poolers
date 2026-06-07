@@ -441,6 +441,7 @@
             <tr>
               <th>Time</th>
               <th>Agent</th>
+              <th>Phone</th>
               <th class="text-end">Amount</th>
               <th>Status</th>
             </tr>
@@ -449,12 +450,13 @@
             {% for tx in commissions_page %}
             <tr>
               <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.user.username|default:tx.user.get_username|default:"-" }}</td>
+              <td class="text-muted small">{{ tx.user.phone_number|default:"-" }}</td>
               <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
               <td class="text-uppercase small">{{ tx.status }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="4" class="text-center text-muted py-4">No commissions.</td></tr>
+            <tr><td colspan="5" class="text-center text-muted py-4">No commissions.</td></tr>
             {% endfor %}
           </tbody>
         </table>

@@ -8980,6 +8980,7 @@ def retail_dashboard(request):
         try:
             CommissionPeriod = apps.get_model('commission', 'CommissionPeriod')
             WeeklyAgentCommission = apps.get_model('commission', 'WeeklyAgentCommission')
+            from commission.services import calculate_weekly_agent_commission_data
 
             period_qs = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
             commission_period_options = list(period_qs[:200])
@@ -9003,11 +9004,19 @@ def retail_dashboard(request):
             commission_rows = []
             for ag in agents.only('id', 'username', 'email', 'phone_number').order_by('email'):
                 rec = comm_map.get(ag.id)
+                calc = calculate_weekly_agent_commission_data(ag, selected_period) if selected_period else None
+                calc_total = None
+                if isinstance(calc, dict):
+                    calc_total = calc.get('commission_total_amount', None)
+                if calc_total is None:
+                    calc_total = getattr(rec, 'commission_total_amount', None) if rec else None
+                if calc_total is None:
+                    calc_total = Decimal('0.00')
                 commission_rows.append(
                     {
                         'agent_username': (ag.username or '').strip() or (ag.email or '').strip() or '-',
                         'agent_phone_number': (ag.phone_number or '').strip() or '-',
-                        'total': getattr(rec, 'commission_total_amount', Decimal('0.00')) if rec else Decimal('0.00'),
+                        'total': calc_total,
                         'status': getattr(rec, 'status', 'pending') if rec else 'pending',
                     }
                 )

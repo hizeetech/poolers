@@ -8082,6 +8082,60 @@ def account_user_activity_feed(request):
     events.sort(key=lambda e: e.get('ts') or '', reverse=True)
     return JsonResponse({'events': events[:limit]})
 
+def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
+    commission_rows = []
+    commission_period_options = []
+    selected_commission_period_id = ''
+    try:
+        CommissionPeriod = apps.get_model('commission', 'CommissionPeriod')
+        WeeklyAgentCommission = apps.get_model('commission', 'WeeklyAgentCommission')
+        from commission.services import calculate_weekly_agent_commission_data
+
+        period_qs = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
+        commission_period_options = list(period_qs[:200])
+
+        selected_period = None
+        if selected_period_id_raw:
+            try:
+                selected_period = CommissionPeriod.objects.filter(
+                    id=int(selected_period_id_raw),
+                    period_type='weekly',
+                ).first()
+            except Exception:
+                selected_period = None
+
+        if selected_period is None:
+            selected_period = period_qs.first()
+
+        selected_commission_period_id = str(selected_period.id) if selected_period else ''
+
+        comm_qs = WeeklyAgentCommission.objects.filter(agent__in=agent_qs).select_related('agent', 'period')
+        if selected_period:
+            comm_qs = comm_qs.filter(period=selected_period)
+
+        comm_map = {rec.agent_id: rec for rec in comm_qs}
+        for ag in agent_qs.only('id', 'username', 'email', 'phone_number').order_by('username', 'email'):
+            rec = comm_map.get(ag.id)
+            calc = calculate_weekly_agent_commission_data(ag, selected_period) if selected_period else None
+            calc_total = calc.get('commission_total_amount') if isinstance(calc, dict) else None
+            if calc_total is None:
+                calc_total = getattr(rec, 'commission_total_amount', None) if rec else None
+            if calc_total is None:
+                calc_total = Decimal('0.00')
+
+            commission_rows.append({
+                'agent_username': (ag.username or '').strip() or (ag.email or '').strip() or '-',
+                'agent_phone_number': (ag.phone_number or '').strip() or '-',
+                'total': calc_total,
+                'status': getattr(rec, 'status', 'pending') if rec else 'pending',
+            })
+    except Exception:
+        commission_rows = []
+        commission_period_options = []
+        selected_commission_period_id = ''
+
+    return commission_rows, commission_period_options, selected_commission_period_id
+
 @login_required
 @user_passes_test(is_crm_user)
 def crm_dashboard(request):
@@ -8572,6 +8626,17 @@ def crm_dashboard(request):
                 node['super_agents'].append({'super_agent': sa, 'agents': agents_by_sa.get(sa.id, [])})
             retail_hierarchy.append(node)
 
+    commission_rows = []
+    commission_period_options = []
+    selected_commission_period_id = ''
+    if active_tab == 'commissions':
+        selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
+        crm_agents_qs = User.objects.filter(user_type='agent', is_superuser=False)
+        commission_rows, commission_period_options, selected_commission_period_id = build_weekly_commission_dashboard_rows(
+            crm_agents_qs,
+            selected_commission_period_id,
+        )
+
     context = {
         'active_tab': active_tab,
         'q': q,
@@ -8609,6 +8674,9 @@ def crm_dashboard(request):
         'can_view_audit': crm_can_view_audit(request.user),
         'can_message': crm_can_message(request.user),
         'retail_hierarchy': retail_hierarchy,
+        'commission_rows': commission_rows,
+        'commission_period_options': commission_period_options,
+        'selected_commission_period_id': selected_commission_period_id,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 
@@ -9927,6 +9995,7 @@ def finance_dashboard(request):
     pin_success = (request.GET.get('pin_success') or '').strip()
     recon_filter = (request.GET.get('recon') or '').strip()
     fraud_filter = (request.GET.get('fraud') or '').strip()
+    selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -10705,6 +10774,8 @@ def finance_dashboard(request):
     withdrawals_page = None
     wallets_page = None
     commissions_page = None
+    commission_rows = []
+    commission_period_options = []
     bonuses_page = None
     audit_page = None
     settlements_page = None
@@ -10796,16 +10867,11 @@ def finance_dashboard(request):
             wallets_page = wp.page(1)
 
     if active_tab == 'commissions':
-        cq = Transaction.objects.filter(transaction_type='commission_payout').select_related('user').order_by('-timestamp')
-        if start_dt:
-            cq = cq.filter(timestamp__gte=start_dt)
-        if end_dt:
-            cq = cq.filter(timestamp__lte=end_dt)
-        cp = Paginator(cq, 50)
-        try:
-            commissions_page = cp.page(request.GET.get('com_page') or 1)
-        except Exception:
-            commissions_page = cp.page(1)
+        finance_agents_qs = User.objects.filter(user_type='agent', is_superuser=False)
+        commission_rows, commission_period_options, selected_commission_period_id = build_weekly_commission_dashboard_rows(
+            finance_agents_qs,
+            selected_commission_period_id,
+        )
 
     if active_tab == 'bonuses':
         bq = Transaction.objects.filter(transaction_type='bonus').select_related('user').order_by('-timestamp')
@@ -11052,6 +11118,9 @@ def finance_dashboard(request):
         'withdrawals_page': withdrawals_page,
         'wallets_page': wallets_page,
         'commissions_page': commissions_page,
+        'commission_rows': commission_rows,
+        'commission_period_options': commission_period_options,
+        'selected_commission_period_id': selected_commission_period_id,
         'bonuses_page': bonuses_page,
         'audit_page': audit_page,
         'settlements_page': settlements_page,

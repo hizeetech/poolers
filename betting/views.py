@@ -7140,6 +7140,7 @@ def account_user_dashboard(request):
     end_date_str = (request.GET.get('end_date') or '').strip()
     commission_period_id_raw = (request.GET.get('commission_period') or '').strip()
     commission_search = (request.GET.get('commission_search') or '').strip()
+    selected_top_period_id_raw = (request.GET.get('top_period') or '').strip()
 
     # --- NEW: Fetch Credit/Loan Data ---
     all_incoming_credit_requests = CreditRequest.objects.filter(
@@ -7210,6 +7211,7 @@ def account_user_dashboard(request):
 
     metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
     metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+    top_fixtures, top_period_options, selected_top_period_id = build_top_fixtures_by_betting_period(selected_top_period_id_raw)
 
     platform_users_qs = User.objects.filter(is_superuser=False)
     kpi_cache_key = f"account_user:kpis:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
@@ -7352,6 +7354,9 @@ def account_user_dashboard(request):
             ],
         }
         cache.set(chart_cache_key, charts_data, 60)
+
+    charts_data = dict(charts_data or {})
+    charts_data['top_fixtures'] = top_fixtures
 
     # Handle View User via GET
     if request.method == 'GET' and 'view_user_id' in request.GET:
@@ -8022,6 +8027,8 @@ def account_user_dashboard(request):
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
         'commission_search': commission_search,
+        'top_period_options': top_period_options,
+        'selected_top_period_id': selected_top_period_id,
     }
     return render(request, 'betting/account_user_dashboard.html', context)
 
@@ -8168,6 +8175,44 @@ def build_dashboard_bets_page(base_qs, bet_q='', bet_status='', bet_agent_id='',
     )
     return bets_page, agent_filter_options
 
+def build_top_fixtures_by_betting_period(selected_period_id_raw=''):
+    top_period_options = list(BettingPeriod.objects.order_by('-start_date')[:200])
+    selected_top_period_id = ''
+    selected_period = None
+
+    if selected_period_id_raw:
+        try:
+            selected_period = BettingPeriod.objects.filter(id=int(selected_period_id_raw)).first()
+        except Exception:
+            selected_period = None
+
+    if selected_period is None and top_period_options:
+        selected_period = top_period_options[0]
+
+    if selected_period:
+        selected_top_period_id = str(selected_period.id)
+
+    top_fixtures = []
+    if selected_period:
+        selection_top = (
+            Selection.objects.filter(
+                Q(betting_period=selected_period) |
+                Q(betting_period__isnull=True, fixture__betting_period=selected_period)
+            )
+            .values('fixture_home_team', 'fixture_away_team')
+            .annotate(picks=Count('id'))
+            .order_by('-picks')[:5]
+        )
+        top_fixtures = [
+            {
+                'label': f"{(row.get('fixture_home_team') or '').strip()} vs {(row.get('fixture_away_team') or '').strip()}".strip() or 'Fixture',
+                'picks': int(row['picks'] or 0),
+            }
+            for row in selection_top
+        ]
+
+    return top_fixtures, top_period_options, selected_top_period_id
+
 @login_required
 @user_passes_test(is_crm_user)
 def crm_dashboard(request):
@@ -8181,6 +8226,7 @@ def crm_dashboard(request):
     bet_q = (request.GET.get('bet_q') or '').strip()
     bet_status = (request.GET.get('bet_status') or '').strip()
     bet_agent_id = (request.GET.get('bet_agent') or '').strip()
+    selected_top_period_id_raw = (request.GET.get('top_period') or '').strip()
     segment_key = (request.GET.get('segment') or '').strip()
     comm_msg_title = (request.POST.get('campaign_title') or '').strip()
     comm_msg_body = (request.POST.get('campaign_message') or '').strip()
@@ -8226,6 +8272,7 @@ def crm_dashboard(request):
 
     metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
     metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
+    top_fixtures, top_period_options, selected_top_period_id = build_top_fixtures_by_betting_period(selected_top_period_id_raw)
 
     if request.method == 'POST' and active_tab == 'communications':
         if not crm_can_message(request.user):
@@ -8439,6 +8486,9 @@ def crm_dashboard(request):
             ],
         }
         cache.set(chart_cache_key, cached_charts, 60)
+
+    cached_charts = dict(cached_charts or {})
+    cached_charts['top_fixtures'] = top_fixtures
 
     bet_tickets_page = None
     agent_filter_options = []
@@ -8683,6 +8733,8 @@ def crm_dashboard(request):
         'commission_rows': commission_rows,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
+        'top_period_options': top_period_options,
+        'selected_top_period_id': selected_top_period_id,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 

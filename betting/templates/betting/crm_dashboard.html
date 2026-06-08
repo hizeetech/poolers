@@ -334,7 +334,7 @@
       <div class="card shadow-sm mb-3">
         <div class="card-header bg-light">
           <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
-            <div class="fw-semibold">Betting Intelligence</div>
+            <div class="fw-semibold">Bet Monitoring</div>
             <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
               <input type="hidden" name="tab" value="bets">
               <input type="hidden" name="start_date" value="{{ start_date }}">
@@ -351,8 +351,6 @@
                   <option value="won" {% if bet_status == 'won' %}selected{% endif %}>Won</option>
                   <option value="lost" {% if bet_status == 'lost' %}selected{% endif %}>Lost</option>
                   <option value="cashed_out" {% if bet_status == 'cashed_out' %}selected{% endif %}>Cashed Out</option>
-                  <option value="cancelled" {% if bet_status == 'cancelled' %}selected{% endif %}>Cancelled</option>
-                  <option value="deleted" {% if bet_status == 'deleted' %}selected{% endif %}>Deleted</option>
                 </select>
               </div>
               <div>
@@ -375,10 +373,10 @@
                 <tr>
                   <th>Time</th>
                   <th>Ticket</th>
-                  <th>User</th>
+                  <th>Agent</th>
+                  <th>Cashier Username</th>
                   <th class="text-end">Stake</th>
                   <th>Status</th>
-                  <th>Agent</th>
                 </tr>
               </thead>
               <tbody>
@@ -387,12 +385,13 @@
                   <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
                   <td class="fw-semibold">{{ t.ticket_id }}</td>
                   <td class="text-muted small">
-                    <div class="fw-semibold text-dark">{{ t.user.email|default:t.user.username }}</div>
-                    <a href="{% url 'betting:crm_user_detail' t.user.id %}">Open</a>
+                    <div class="fw-semibold text-dark">
+                      {{ t.user.agent.get_full_name|default:t.user.agent.email|default:t.user.agent.username|default:"-" }}
+                    </div>
                   </td>
+                  <td class="text-muted small"><div class="fw-semibold text-dark">{{ t.user.username|default:"-" }}</div></td>
                   <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
                   <td class="text-uppercase small">{{ t.status }}</td>
-                  <td class="text-muted small">{{ t.user.agent.email|default:"-" }}</td>
                 </tr>
                 {% empty %}
                 <tr><td colspan="6" class="text-center text-muted py-4">No bets found.</td></tr>

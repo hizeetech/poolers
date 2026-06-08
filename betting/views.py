@@ -7873,50 +7873,42 @@ def account_user_dashboard(request):
             
         activity_log.sort(key=lambda x: x['timestamp'], reverse=True)
 
-    # --- Bet Ticket Management (Admin-like View) ---
+    # --- Bet Ticket Management ---
     ticket_search_query = request.GET.get('ticket_search', '').strip()
     ticket_status_filter = request.GET.get('ticket_status', '').strip()
     ticket_date_from = request.GET.get('ticket_date_from', '').strip()
     ticket_date_to = request.GET.get('ticket_date_to', '').strip()
+    bet_q = (request.GET.get('bet_q') or ticket_search_query).strip()
+    bet_status = (request.GET.get('bet_status') or ticket_status_filter).strip()
+    bet_agent_id = (request.GET.get('bet_agent') or '').strip()
 
-    all_tickets = BetTicket.objects.all().select_related('user').order_by('-placed_at')
-
-    if ticket_search_query:
-        all_tickets = all_tickets.filter(
-            Q(ticket_id__icontains=ticket_search_query) |
-            Q(user__email__icontains=ticket_search_query) |
-            Q(user__first_name__icontains=ticket_search_query) |
-            Q(user__last_name__icontains=ticket_search_query)
-        )
-    
-    if ticket_status_filter:
-        all_tickets = all_tickets.filter(status=ticket_status_filter)
+    all_tickets = BetTicket.objects.filter(
+        placed_at__gte=metrics_start_dt,
+        placed_at__lte=metrics_end_dt,
+    )
 
     if ticket_date_from:
         try:
             date_from = datetime.strptime(ticket_date_from, '%Y-%m-%d')
             all_tickets = all_tickets.filter(placed_at__gte=timezone.make_aware(date_from))
         except ValueError:
-            pass 
-            
+            pass
+
     if ticket_date_to:
         try:
             date_to = datetime.strptime(ticket_date_to, '%Y-%m-%d')
-            # Add 1 day to include the end date fully (end of day)
             date_to = date_to.replace(hour=23, minute=59, second=59)
             all_tickets = all_tickets.filter(placed_at__lte=timezone.make_aware(date_to))
         except ValueError:
             pass
 
-    tickets_paginator = Paginator(all_tickets, 20) # 20 tickets per page
-    tickets_page_num = request.GET.get('tickets_page')
-    try:
-        tickets_page = tickets_paginator.page(tickets_page_num)
-    except PageNotAnInteger:
-        tickets_page = tickets_paginator.page(1)
-    except EmptyPage:
-        tickets_page = tickets_paginator.page(tickets_paginator.num_pages)
-    # -----------------------------------------------
+    tickets_page, ticket_agent_filter_options = build_dashboard_bets_page(
+        all_tickets,
+        bet_q=bet_q,
+        bet_status=bet_status,
+        bet_agent_id=bet_agent_id,
+        page_number=(request.GET.get('bets_page') or request.GET.get('tickets_page') or 1),
+    )
 
     # --- Wallets Management ---
     wallet_search = request.GET.get('wallet_search', '')
@@ -8007,6 +7999,11 @@ def account_user_dashboard(request):
         'pw_search': pw_search,
         'pw_status_filter': pw_status_filter,
         'tickets_page': tickets_page,
+        'bet_tickets_page': tickets_page,
+        'bet_q': bet_q,
+        'bet_status': bet_status,
+        'bet_agent': bet_agent_id,
+        'agent_filter_options': ticket_agent_filter_options,
         'ticket_search_query': ticket_search_query,
         'ticket_status_filter': ticket_status_filter,
         'ticket_date_from': ticket_date_from,
@@ -8135,6 +8132,41 @@ def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
         selected_commission_period_id = ''
 
     return commission_rows, commission_period_options, selected_commission_period_id
+
+def build_dashboard_bets_page(base_qs, bet_q='', bet_status='', bet_agent_id='', page_number=1):
+    bets_qs = (
+        base_qs.exclude(status__in=['deleted'])
+        .select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent')
+        .order_by('-placed_at')
+    )
+
+    if bet_q:
+        bets_qs = bets_qs.filter(
+            Q(ticket_id__icontains=bet_q) |
+            Q(user__email__icontains=bet_q) |
+            Q(user__username__icontains=bet_q) |
+            Q(user__phone_number__icontains=bet_q)
+        )
+    if bet_status:
+        bets_qs = bets_qs.filter(status=bet_status)
+    if bet_agent_id:
+        try:
+            bets_qs = bets_qs.filter(user__agent_id=int(bet_agent_id))
+        except Exception:
+            pass
+
+    paginator = Paginator(bets_qs, 50)
+    try:
+        bets_page = paginator.page(page_number or 1)
+    except Exception:
+        bets_page = paginator.page(1)
+
+    agent_filter_options = list(
+        User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent'])
+        .only('id', 'email', 'username')
+        .order_by('email')[:200]
+    )
+    return bets_page, agent_filter_options
 
 @login_required
 @user_passes_test(is_crm_user)
@@ -8411,38 +8443,12 @@ def crm_dashboard(request):
     bet_tickets_page = None
     agent_filter_options = []
     if active_tab == 'bets':
-        bets_qs = (
-            BetTicket.objects.exclude(status__in=['deleted'])
-            .select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent')
-            .filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
-            .order_by('-placed_at')
-        )
-        if bet_q:
-            bets_qs = bets_qs.filter(
-                Q(ticket_id__icontains=bet_q) |
-                Q(user__email__icontains=bet_q) |
-                Q(user__username__icontains=bet_q) |
-                Q(user__phone_number__icontains=bet_q)
-            )
-        if bet_status:
-            bets_qs = bets_qs.filter(status=bet_status)
-        if bet_agent_id:
-            try:
-                bets_qs = bets_qs.filter(user__agent_id=int(bet_agent_id))
-            except Exception:
-                pass
-
-        bet_paginator = Paginator(bets_qs, 50)
-        bet_page_num = request.GET.get('bets_page') or 1
-        try:
-            bet_tickets_page = bet_paginator.page(bet_page_num)
-        except Exception:
-            bet_tickets_page = bet_paginator.page(1)
-
-        agent_filter_options = list(
-            User.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent'])
-            .only('id', 'email', 'username')
-            .order_by('email')[:200]
+        bet_tickets_page, agent_filter_options = build_dashboard_bets_page(
+            BetTicket.objects.filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt),
+            bet_q=bet_q,
+            bet_status=bet_status,
+            bet_agent_id=bet_agent_id,
+            page_number=(request.GET.get('bets_page') or 1),
         )
 
     segment_stats = None
@@ -9978,6 +9984,9 @@ def finance_dashboard(request):
     start_date_str = (request.GET.get('start_date') or '').strip()
     end_date_str = (request.GET.get('end_date') or '').strip()
     q = (request.GET.get('q') or '').strip()
+    bet_q = (request.GET.get('bet_q') or '').strip()
+    bet_status = (request.GET.get('bet_status') or '').strip()
+    bet_agent_id = (request.GET.get('bet_agent') or '').strip()
     tx_type = (request.GET.get('tx_type') or '').strip()
     tx_status = (request.GET.get('tx_status') or '').strip()
     tx_gateway = (request.GET.get('tx_gateway') or '').strip()
@@ -10770,6 +10779,8 @@ def finance_dashboard(request):
         cache.set(charts_cache_key, charts_data, 60)
 
     tx_page = None
+    bet_tickets_page = None
+    agent_filter_options = []
     deposits_page = None
     withdrawals_page = None
     wallets_page = None
@@ -10791,6 +10802,15 @@ def finance_dashboard(request):
     fraud_suspicious_withdrawals = []
     fraud_large_withdrawals = []
     scheduled_reports = None
+
+    if active_tab == 'bets':
+        bet_tickets_page, agent_filter_options = build_dashboard_bets_page(
+            BetTicket.objects.filter(placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt),
+            bet_q=bet_q,
+            bet_status=bet_status,
+            bet_agent_id=bet_agent_id,
+            page_number=(request.GET.get('bets_page') or 1),
+        )
 
     if active_tab == 'transactions':
         tx_qs = Transaction.objects.select_related('user', 'initiating_user').order_by('-timestamp')
@@ -11078,6 +11098,9 @@ def finance_dashboard(request):
         'end_date': end_date_str,
         'metrics_label': metrics_label,
         'q': q,
+        'bet_q': bet_q,
+        'bet_status': bet_status,
+        'bet_agent': bet_agent_id,
         'tx_type': tx_type,
         'tx_status': tx_status,
         'tx_gateway': tx_gateway,
@@ -11113,6 +11136,8 @@ def finance_dashboard(request):
         },
         'charts_data': charts_data,
         'initial_events_json': json.dumps(recent_events),
+        'bet_tickets_page': bet_tickets_page,
+        'agent_filter_options': agent_filter_options,
         'tx_page': tx_page,
         'deposits_page': deposits_page,
         'withdrawals_page': withdrawals_page,

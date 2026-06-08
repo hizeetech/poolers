@@ -198,6 +198,9 @@ $(document).ready(function() {
             <a class="nav-link active" href="#acct-overview-section">Overview</a>
         </li>
         <li class="nav-item">
+            <a class="nav-link" href="#acct-bets-section">Bets</a>
+        </li>
+        <li class="nav-item">
             <a class="nav-link" href="#acct-commissions-section">Commissions</a>
         </li>
     </ul>
@@ -731,7 +734,7 @@ $(document).ready(function() {
     </div>
 
     {% if found_user and activity_log %}
-    <div class="row mt-4" id="acct-commissions-section">
+    <div class="row mt-4">
         <div class="col-12">
             <div class="card shadow-sm">
                 <div class="card-header bg-info text-white">
@@ -993,125 +996,91 @@ $(document).ready(function() {
         </div>
     </div>
 
-    <div class="row mt-4">
+    <div class="row mt-4" id="acct-bets-section">
         <div class="col-12">
             <div class="card shadow-sm">
                 <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#allBetTicketsBody" aria-expanded="true" aria-controls="allBetTicketsBody" style="cursor: pointer;">
-                    <h5 class="mb-0"><i class="fas fa-ticket-alt me-2"></i>All Bet Tickets Management</h5>
+                    <h5 class="mb-0"><i class="fas fa-ticket-alt me-2"></i>Bet Monitoring</h5>
                     <i class="fas fa-chevron-down"></i>
                 </div>
                 <div class="card-body collapse show" id="allBetTicketsBody">
-                    <!-- Filters -->
-                    <form method="get" class="mb-4 row g-3">
-                        <!-- Preserve other pagination params if needed, or better, keep them separate. 
-                             Since we are using separate params (tickets_page), filtering here resets tickets_page to 1. -->
-                        
-                        <div class="col-md-3">
-                            <label class="form-label small fw-bold">Search (Ticket ID/User)</label>
-                            <input type="text" name="ticket_search" class="form-control form-control-sm" value="{{ ticket_search_query }}" placeholder="Search...">
+                    <form method="get" class="mb-4 d-flex flex-wrap gap-2 align-items-end">
+                        <input type="hidden" name="start_date" value="{{ start_date }}">
+                        <input type="hidden" name="end_date" value="{{ end_date }}">
+                        <div>
+                            <label class="form-label small text-muted mb-1">Search</label>
+                            <input type="text" name="bet_q" value="{{ bet_q }}" class="form-control form-control-sm" placeholder="Ticket/User/Phone">
                         </div>
-                        <div class="col-md-2">
-                            <label class="form-label small fw-bold">Status</label>
-                            <select name="ticket_status" class="form-select form-select-sm">
-                                <option value="">All Statuses</option>
-                                <option value="pending" {% if ticket_status_filter == 'pending' %}selected{% endif %}>Pending</option>
-                                <option value="won" {% if ticket_status_filter == 'won' %}selected{% endif %}>Won</option>
-                                <option value="lost" {% if ticket_status_filter == 'lost' %}selected{% endif %}>Lost</option>
-                                <option value="cancelled" {% if ticket_status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                        <div>
+                            <label class="form-label small text-muted mb-1">Status</label>
+                            <select name="bet_status" class="form-select form-select-sm">
+                                <option value="">All</option>
+                                <option value="pending" {% if bet_status == 'pending' %}selected{% endif %}>Pending</option>
+                                <option value="won" {% if bet_status == 'won' %}selected{% endif %}>Won</option>
+                                <option value="lost" {% if bet_status == 'lost' %}selected{% endif %}>Lost</option>
+                                <option value="cashed_out" {% if bet_status == 'cashed_out' %}selected{% endif %}>Cashed Out</option>
                             </select>
                         </div>
-                        <div class="col-md-2">
-                            <label class="form-label small fw-bold">From Date</label>
-                            <input type="date" name="ticket_date_from" class="form-control form-control-sm" value="{{ ticket_date_from }}">
+                        <div>
+                            <label class="form-label small text-muted mb-1">Agent</label>
+                            <select name="bet_agent" class="form-select form-select-sm">
+                                <option value="">All</option>
+                                {% for ag in agent_filter_options %}
+                                <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+                                {% endfor %}
+                            </select>
                         </div>
-                        <div class="col-md-2">
-                            <label class="form-label small fw-bold">To Date</label>
-                            <input type="date" name="ticket_date_to" class="form-control form-control-sm" value="{{ ticket_date_to }}">
-                        </div>
-                        <div class="col-md-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary btn-sm w-100"><i class="fas fa-filter me-1"></i>Filter Tickets</button>
-                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm">Filter</button>
                     </form>
 
                     <div class="table-responsive">
-                        <table class="table table-hover table-sm align-middle">
+                        <table class="table table-sm mb-0">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Ticket ID</th>
-                                    <th>User</th>
-                                    <th>Stake</th>
-                                    <th>Total Odd</th>
-                                    <th>Pot. Win</th>
+                                    <th>Time</th>
+                                    <th>Ticket</th>
+                                    <th>Agent</th>
+                                    <th>Cashier Username</th>
+                                    <th class="text-end">Stake</th>
                                     <th>Status</th>
-                                    <th>Date</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for ticket in tickets_page %}
+                                {% for ticket in bet_tickets_page %}
                                 <tr>
-                                    <td><span class="font-monospace fw-bold text-primary">{{ ticket.ticket_id }}</span></td>
-                                    <td>
-                                        <div class="fw-bold small">{{ ticket.user.get_full_name|default:ticket.user.email }}</div>
-                                        <div class="text-muted" style="font-size: 0.7rem;">{{ ticket.user.email }}</div>
+                                    <td class="text-nowrap">{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>
+                                    <td class="fw-semibold">{{ ticket.ticket_id }}</td>
+                                    <td class="text-muted small">
+                                        <div class="fw-semibold text-dark">
+                                            {{ ticket.user.agent.get_full_name|default:ticket.user.agent.email|default:ticket.user.agent.username|default:"-" }}
+                                        </div>
                                     </td>
-                                    <td class="fw-bold">₦{{ ticket.stake_amount|floatformat:2 }}</td>
-                                    <td>{{ ticket.total_odd|floatformat:2 }}</td>
-                                    <td class="fw-bold text-success">₦{{ ticket.potential_winning|floatformat:2 }}</td>
-                                    <td>
-                                        {% if ticket.status == 'won' %}
-                                        <span class="badge bg-success">WON</span>
-                                        {% elif ticket.status == 'lost' %}
-                                        <span class="badge bg-danger">LOST</span>
-                                        {% elif ticket.status == 'pending' %}
-                                        <span class="badge bg-warning text-dark">PENDING</span>
-                                        {% else %}
-                                        <span class="badge bg-secondary">{{ ticket.status|upper }}</span>
-                                        {% endif %}
-                                    </td>
-                                    <td class="small">{{ ticket.placed_at|date:"M d, H:i" }}</td>
+                                    <td class="text-muted small"><div class="fw-semibold text-dark">{{ ticket.user.username|default:"-" }}</div></td>
+                                    <td class="text-end fw-semibold">₦{{ ticket.stake_amount|floatformat:2 }}</td>
+                                    <td class="text-uppercase small">{{ ticket.status }}</td>
                                 </tr>
                                 {% empty %}
                                 <tr>
-                                    <td colspan="7" class="text-center py-4 text-muted">No tickets found matching filters.</td>
+                                    <td colspan="6" class="text-center py-4 text-muted">No bets found.</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
                         </table>
                     </div>
 
-                    {% if tickets_page.has_other_pages %}
+                    {% if bet_tickets_page %}
                     <div class="card-footer py-2">
-                        <nav aria-label="Tickets Pagination">
-                            <ul class="pagination pagination-sm justify-content-center mb-0">
-                                {% if tickets_page.has_previous %}
-                                <li class="page-item">
-                                    <a class="page-link" href="?tickets_page=1&ticket_search={{ ticket_search_query }}&ticket_status={{ ticket_status_filter }}&ticket_date_from={{ ticket_date_from }}&ticket_date_to={{ ticket_date_to }}">First</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?tickets_page={{ tickets_page.previous_page_number }}&ticket_search={{ ticket_search_query }}&ticket_status={{ ticket_status_filter }}&ticket_date_from={{ ticket_date_from }}&ticket_date_to={{ ticket_date_to }}">Previous</a>
-                                </li>
-                                {% else %}
-                                <li class="page-item disabled"><span class="page-link">First</span></li>
-                                <li class="page-item disabled"><span class="page-link">Previous</span></li>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="text-muted small">Page {{ bet_tickets_page.number }} of {{ bet_tickets_page.paginator.num_pages }}</div>
+                            <div class="d-flex gap-2">
+                                {% if bet_tickets_page.has_previous %}
+                                <a class="btn btn-sm btn-outline-secondary" href="?start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
                                 {% endif %}
-                                
-                                <li class="page-item disabled">
-                                    <span class="page-link text-dark fw-bold">Page {{ tickets_page.number }} of {{ tickets_page.paginator.num_pages }}</span>
-                                </li>
-                                
-                                {% if tickets_page.has_next %}
-                                <li class="page-item">
-                                    <a class="page-link" href="?tickets_page={{ tickets_page.next_page_number }}&ticket_search={{ ticket_search_query }}&ticket_status={{ ticket_status_filter }}&ticket_date_from={{ ticket_date_from }}&ticket_date_to={{ ticket_date_to }}">Next</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?tickets_page={{ tickets_page.paginator.num_pages }}&ticket_search={{ ticket_search_query }}&ticket_status={{ ticket_status_filter }}&ticket_date_from={{ ticket_date_from }}&ticket_date_to={{ ticket_date_to }}">Last</a>
-                                </li>
-                                {% else %}
-                                <li class="page-item disabled"><span class="page-link">Next</span></li>
-                                <li class="page-item disabled"><span class="page-link">Last</span></li>
+                                {% if bet_tickets_page.has_next %}
+                                <a class="btn btn-sm btn-outline-secondary" href="?start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
                                 {% endif %}
-                            </ul>
-                        </nav>
+                            </div>
+                        </div>
                     </div>
                     {% endif %}
                 </div>

@@ -65,6 +65,7 @@
 
   <ul class="nav nav-tabs fin-tabs mb-3">
     <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'bets' %}active{% endif %}" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}">Bets</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'transactions' %}active{% endif %}" href="?tab=transactions&start_date={{ start_date }}&end_date={{ end_date }}">Transactions</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'deposits' %}active{% endif %}" href="?tab=deposits&start_date={{ start_date }}&end_date={{ end_date }}">Deposits</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'withdrawals' %}active{% endif %}" href="?tab=withdrawals&start_date={{ start_date }}&end_date={{ end_date }}">Withdrawals</a></li>
@@ -132,6 +133,92 @@
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {% if active_tab == 'bets' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Bet Monitoring</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="bets">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="bet_q" value="{{ bet_q }}" class="form-control form-control-sm" placeholder="Ticket/User/Phone">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="bet_status" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="pending" {% if bet_status == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="won" {% if bet_status == 'won' %}selected{% endif %}>Won</option>
+              <option value="lost" {% if bet_status == 'lost' %}selected{% endif %}>Lost</option>
+              <option value="cashed_out" {% if bet_status == 'cashed_out' %}selected{% endif %}>Cashed Out</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Agent</label>
+            <select name="bet_agent" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for ag in agent_filter_options %}
+              <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Time</th>
+              <th>Ticket</th>
+              <th>Agent</th>
+              <th>Cashier Username</th>
+              <th class="text-end">Stake</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in bet_tickets_page %}
+            <tr>
+              <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+              <td class="fw-semibold">{{ t.ticket_id }}</td>
+              <td class="text-muted small">
+                <div class="fw-semibold text-dark">
+                  {{ t.user.agent.get_full_name|default:t.user.agent.email|default:t.user.agent.username|default:"-" }}
+                </div>
+              </td>
+              <td class="text-muted small"><div class="fw-semibold text-dark">{{ t.user.username|default:"-" }}</div></td>
+              <td class="text-end fw-semibold">₦{{ t.stake_amount|floatformat:2 }}</td>
+              <td class="text-uppercase small">{{ t.status }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">No bets found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% if bet_tickets_page %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ bet_tickets_page.number }} of {{ bet_tickets_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if bet_tickets_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if bet_tickets_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if active_tab == 'transactions' %}

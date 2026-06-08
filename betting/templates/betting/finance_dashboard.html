@@ -433,30 +433,56 @@
 
   {% if active_tab == 'commissions' %}
   <div class="card shadow-sm">
-    <div class="card-header bg-light fw-semibold">Commission Payouts</div>
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+        <div class="fw-semibold">Commission Breakdown (weekly periods)</div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="commissions">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Commission Period</label>
+            <select name="commission_period" class="form-select form-select-sm">
+              {% for p in commission_period_options %}
+              <option value="{{ p.id }}" {% if selected_commission_period_id == p.id|stringformat:"s" %}selected{% endif %}>{{ p }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead class="table-light">
             <tr>
-              <th>Time</th>
               <th>Agent</th>
               <th>Phone</th>
-              <th class="text-end">Amount</th>
+              <th class="text-end">Total Commission</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody>
-            {% for tx in commissions_page %}
+            {% for r in commission_rows %}
             <tr>
-              <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ tx.user.username|default:tx.user.get_username|default:"-" }}</td>
-              <td class="text-muted small">{{ tx.user.phone_number|default:"-" }}</td>
-              <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
-              <td class="text-uppercase small">{{ tx.status }}</td>
+              <td class="text-muted small">{{ r.agent_username|default:"-" }}</td>
+              <td class="text-muted small">{{ r.agent_phone_number|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ r.total|floatformat:2 }}</td>
+              <td class="text-uppercase small">
+                {% if r.status == 'paid' %}
+                  <span class="badge bg-success">Paid</span>
+                {% elif r.status == 'partially_paid' %}
+                  <span class="badge bg-warning text-dark">Partially Paid</span>
+                {% elif r.status == 'approved' %}
+                  <span class="badge bg-info text-dark">Approved</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark">Pending</span>
+                {% endif %}
+              </td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted py-4">No commissions.</td></tr>
+            <tr><td colspan="4" class="text-center text-muted py-4">No commissions.</td></tr>
             {% endfor %}
           </tbody>
         </table>

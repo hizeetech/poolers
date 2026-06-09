@@ -287,6 +287,53 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 )
                 raise
 
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 3})
+def backfill_withdrawal_notification_emails(self, withdrawal_ids):
+    attempted = 0
+    sent = 0
+    skipped = 0
+    failed = 0
+
+    qs = UserWithdrawal.objects.filter(id__in=list(withdrawal_ids or [])).select_related('user').order_by('id')
+    for w in qs.iterator():
+        needed_events = []
+
+        if w.email_request_admin_sent_at is None or w.email_request_user_sent_at is None:
+            needed_events.append('requested')
+
+        status_key = (w.status or '').strip().lower()
+        if status_key in ('approved', 'completed'):
+            status_field_map = {
+                'approved': ('email_approved_admin_sent_at', 'email_approved_user_sent_at'),
+                'completed': ('email_completed_admin_sent_at', 'email_completed_user_sent_at'),
+            }
+            admin_field, user_field = status_field_map[status_key]
+            if getattr(w, admin_field, None) is None or getattr(w, user_field, None) is None:
+                needed_events.append(status_key)
+        elif status_key == 'rejected':
+            if w.email_rejected_admin_sent_at is None or w.email_rejected_user_sent_at is None:
+                needed_events.append('rejected')
+
+        needed_events = list(dict.fromkeys(needed_events))
+        if not needed_events:
+            skipped += 1
+            continue
+
+        for ev in needed_events:
+            attempted += 1
+            try:
+                send_withdrawal_notification_emails(w.id, ev)
+                sent += 1
+            except Exception:
+                failed += 1
+
+    return {
+        'attempted': attempted,
+        'sent': sent,
+        'skipped': skipped,
+        'failed': failed,
+    }
+
 @shared_task
 def update_started_fixtures_status():
     """

@@ -1352,56 +1352,26 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
 
     def resend_emails_backfill_email_timestamps(self, request, queryset):
         try:
-            from .tasks import send_withdrawal_notification_emails
-        except Exception:
-            send_withdrawal_notification_emails = None
+            from .tasks import backfill_withdrawal_notification_emails
+        except Exception as exc:
+            self.message_user(request, f"Could not queue resend/backfill task: {exc}", level=messages.ERROR)
+            return
 
-        attempted = 0
-        sent = 0
-        skipped = 0
-        failed = 0
+        withdrawal_ids = list(queryset.values_list('id', flat=True))
+        if not withdrawal_ids:
+            self.message_user(request, "No withdrawals selected.", level=messages.WARNING)
+            return
 
-        for w in queryset.select_related('user').iterator():
-            needed_events = []
-
-            if w.email_request_admin_sent_at is None or w.email_request_user_sent_at is None:
-                needed_events.append('requested')
-
-            status_key = (w.status or '').strip().lower()
-            if status_key in ('approved', 'completed'):
-                status_field_map = {
-                    'approved': ('email_approved_admin_sent_at', 'email_approved_user_sent_at'),
-                    'completed': ('email_completed_admin_sent_at', 'email_completed_user_sent_at'),
-                }
-                admin_field, user_field = status_field_map[status_key]
-                if getattr(w, admin_field, None) is None or getattr(w, user_field, None) is None:
-                    needed_events.append(status_key)
-            elif status_key == 'rejected':
-                if w.email_rejected_admin_sent_at is None or w.email_rejected_user_sent_at is None:
-                    needed_events.append('rejected')
-
-            needed_events = list(dict.fromkeys(needed_events))
-            if not needed_events:
-                skipped += 1
-                continue
-
-            if not send_withdrawal_notification_emails:
-                failed += 1
-                continue
-
-            for ev in needed_events:
-                try:
-                    attempted += 1
-                    send_withdrawal_notification_emails(w.id, ev)
-                    sent += 1
-                except Exception:
-                    failed += 1
-
-        self.message_user(
-            request,
-            f"Resend/backfill attempted={attempted}, sent={sent}, skipped={skipped}, failed={failed}.",
-            level=messages.INFO if failed == 0 else messages.WARNING,
-        )
+        try:
+            job = backfill_withdrawal_notification_emails.delay(withdrawal_ids)
+            self.message_user(
+                request,
+                f"Resend/backfill queued for {len(withdrawal_ids)} withdrawal(s). Task ID: {job.id}",
+                level=messages.INFO,
+            )
+        except Exception as exc:
+            self.message_user(request, f"Failed to queue resend/backfill task: {exc}", level=messages.ERROR)
+            return
 
     resend_emails_backfill_email_timestamps.short_description = "Resend emails / backfill email timestamps (missing only)"
 

@@ -92,12 +92,17 @@ def _ratelimit_key_user_or_ip(group, request):
     return f"ip:{ip}" if ip else "ip:unknown"
 
 
-def _get_admin_notification_email():
-    return os.getenv('ADMIN_NOTIFICATION_EMAIL') or settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+def _get_deposit_notification_email():
+    return (
+        os.getenv('DEPOSIT_ADMIN_NOTIFICATION_EMAIL')
+        or os.getenv('ADMIN_NOTIFICATION_EMAIL')
+        or settings.DEFAULT_FROM_EMAIL
+        or settings.EMAIL_HOST_USER
+    )
 
 
 def _notify_admin_deposit_success(user, transaction_record, amount, gateway):
-    admin_email = _get_admin_notification_email()
+    admin_email = _get_deposit_notification_email()
     from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
     if not admin_email or not from_email:
         return

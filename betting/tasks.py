@@ -312,7 +312,14 @@ def backfill_withdrawal_notification_emails(self, withdrawal_ids):
                 'completed': ('email_completed_admin_sent_at', 'email_completed_user_sent_at'),
             }
             admin_field, user_field = status_field_map[status_key]
-            if getattr(w, admin_field, None) is None or getattr(w, user_field, None) is None:
+            needs_status_backfill = getattr(w, admin_field, None) is None or getattr(w, user_field, None) is None
+            if status_key == 'completed':
+                needs_status_backfill = (
+                    needs_status_backfill
+                    or getattr(w, 'email_approved_admin_sent_at', None) is None
+                    or getattr(w, 'email_approved_user_sent_at', None) is None
+                )
+            if needs_status_backfill:
                 needed_events.append(status_key)
         elif status_key == 'rejected':
             if w.email_rejected_admin_sent_at is None or w.email_rejected_user_sent_at is None:

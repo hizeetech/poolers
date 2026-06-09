@@ -130,14 +130,14 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
     }
     user_field_map = {
         'requested': 'email_request_user_sent_at',
-        'approved': 'email_success_user_sent_at',
-        'completed': 'email_success_user_sent_at',
+        'approved': 'email_approved_user_sent_at',
+        'completed': 'email_completed_user_sent_at',
         'rejected': 'email_rejected_user_sent_at',
     }
     admin_field_map = {
         'requested': 'email_request_admin_sent_at',
-        'approved': 'email_success_admin_sent_at',
-        'completed': 'email_success_admin_sent_at',
+        'approved': 'email_approved_admin_sent_at',
+        'completed': 'email_completed_admin_sent_at',
         'rejected': 'email_rejected_admin_sent_at',
     }
 
@@ -211,7 +211,10 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 msg = EmailMultiAlternatives(subject=subject, body=text, to=to_emails, cc=cc_emails)
                 msg.attach_alternative(html, "text/html")
                 msg.send(fail_silently=False)
-                UserWithdrawal.objects.filter(id=withdrawal.id).update(**{user_field: now, 'last_email_error': ''})
+                update_fields = {user_field: now, 'last_email_error': ''}
+                if event_key in ['approved', 'completed']:
+                    update_fields['email_success_user_sent_at'] = now
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(**update_fields)
                 save_report_entry(
                     is_admin_copy=False,
                     to_emails=to_emails,
@@ -258,7 +261,10 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 msg = EmailMultiAlternatives(subject=subject, body=text, to=recipients)
                 msg.attach_alternative(html, "text/html")
                 msg.send(fail_silently=False)
-                UserWithdrawal.objects.filter(id=withdrawal.id).update(**{admin_field: now, 'last_email_error': ''})
+                update_fields = {admin_field: now, 'last_email_error': ''}
+                if event_key in ['approved', 'completed']:
+                    update_fields['email_success_admin_sent_at'] = now
+                UserWithdrawal.objects.filter(id=withdrawal.id).update(**update_fields)
                 save_report_entry(
                     is_admin_copy=True,
                     to_emails=recipients,

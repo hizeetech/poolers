@@ -26,6 +26,10 @@ def _enqueue_withdrawal_email(withdrawal_id, event):
             w = UserWithdrawal.objects.filter(pk=withdrawal_id).only(
                 'email_request_user_sent_at',
                 'email_request_admin_sent_at',
+                'email_approved_user_sent_at',
+                'email_approved_admin_sent_at',
+                'email_completed_user_sent_at',
+                'email_completed_admin_sent_at',
                 'email_success_user_sent_at',
                 'email_success_admin_sent_at',
                 'email_rejected_user_sent_at',
@@ -37,8 +41,8 @@ def _enqueue_withdrawal_email(withdrawal_id, event):
             ek = (event or '').strip().lower()
             event_to_fields = {
                 'requested': ('email_request_user_sent_at', 'email_request_admin_sent_at'),
-                'approved': ('email_success_user_sent_at', 'email_success_admin_sent_at'),
-                'completed': ('email_success_user_sent_at', 'email_success_admin_sent_at'),
+                'approved': ('email_approved_user_sent_at', 'email_approved_admin_sent_at'),
+                'completed': ('email_completed_user_sent_at', 'email_completed_admin_sent_at'),
                 'rejected': ('email_rejected_user_sent_at', 'email_rejected_admin_sent_at'),
             }
             fields = event_to_fields.get(ek)

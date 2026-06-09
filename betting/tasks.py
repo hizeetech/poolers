@@ -214,6 +214,8 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 update_fields = {user_field: now, 'last_email_error': ''}
                 if event_key in ['approved', 'completed']:
                     update_fields['email_success_user_sent_at'] = now
+                if event_key == 'completed' and getattr(withdrawal, 'email_approved_user_sent_at', None) is None:
+                    update_fields['email_approved_user_sent_at'] = now
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(**update_fields)
                 save_report_entry(
                     is_admin_copy=False,
@@ -264,6 +266,8 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 update_fields = {admin_field: now, 'last_email_error': ''}
                 if event_key in ['approved', 'completed']:
                     update_fields['email_success_admin_sent_at'] = now
+                if event_key == 'completed' and getattr(withdrawal, 'email_approved_admin_sent_at', None) is None:
+                    update_fields['email_approved_admin_sent_at'] = now
                 UserWithdrawal.objects.filter(id=withdrawal.id).update(**update_fields)
                 save_report_entry(
                     is_admin_copy=True,

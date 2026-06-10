@@ -1,0 +1,49 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+    <div class="module aligned">
+        <h1>{{ action_label }} CRM Wallet Approval Request</h1>
+        <p>Confirm this CRM wallet request before proceeding.</p>
+
+        <table class="adminlist table">
+            <tbody>
+                <tr>
+                    <th>Requester</th>
+                    <td>{{ request_obj.requester.email }}</td>
+                </tr>
+                <tr>
+                    <th>Approver</th>
+                    <td>{{ request.user.email }}</td>
+                </tr>
+                <tr>
+                    <th>Type</th>
+                    <td>{{ request_obj.get_request_type_display }}</td>
+                </tr>
+                <tr>
+                    <th>Amount</th>
+                    <td>N{{ request_obj.amount|floatformat:2 }}</td>
+                </tr>
+                <tr>
+                    <th>Reason</th>
+                    <td>{{ request_obj.reason|default:"-" }}</td>
+                </tr>
+                <tr>
+                    <th>Status</th>
+                    <td>{{ request_obj.get_status_display }}</td>
+                </tr>
+                <tr>
+                    <th>Requested At</th>
+                    <td>{{ request_obj.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <form method="post" style="margin-top: 16px;">
+            {% csrf_token %}
+            <input type="submit" value="{{ action_label }}" class="default">
+            <a href="{{ changelist_url }}" class="button cancel-link">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

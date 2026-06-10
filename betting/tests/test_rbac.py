@@ -159,6 +159,42 @@ class RBACTests(TestCase):
         self.player.wallet.refresh_from_db()
         self.assertEqual(self.account_user.wallet.balance, Decimal('375.00'))
         self.assertEqual(self.player.wallet.balance, Decimal('135.00'))
+        crm_log = CRMActionLog.objects.filter(target_user=self.player, action_type='WALLET_CREDITED').latest('created_at')
+        self.assertEqual(crm_log.actor, self.account_user)
+        self.assertEqual(crm_log.data.get('approved_by_role'), 'account_user')
+
+    def test_admin_can_approve_crm_wallet_request_from_admin_site_and_is_logged_as_admin(self):
+        Wallet.objects.filter(user=self.admin).update(balance=Decimal('600.00'))
+        Wallet.objects.filter(user=self.player).update(balance=Decimal('20.00'))
+
+        credit_req = CreditRequest.objects.create(
+            requester=self.player,
+            recipient=self.account_user,
+            amount=Decimal('150.00'),
+            reason='Admin approved CRM top-up',
+            request_type='crm_credit',
+            status='pending',
+        )
+
+        self.client.force_login(self.admin)
+        admin_index = self.client.get(reverse('betting_admin:index'))
+        self.assertContains(admin_index, 'CRM Wallet Approval Requests')
+        self.assertContains(admin_index, '>1<', html=False)
+        self.assertContains(admin_index, 'Open Queue')
+
+        process_url = reverse('betting_admin:betting_crmwalletapprovalrequest_process', args=[credit_req.id, 'approve'])
+        resp = self.client.post(process_url)
+        self.assertNotEqual(resp.status_code, 500)
+
+        credit_req.refresh_from_db()
+        self.assertEqual(credit_req.status, 'approved')
+        self.admin.wallet.refresh_from_db()
+        self.player.wallet.refresh_from_db()
+        self.assertEqual(self.admin.wallet.balance, Decimal('450.00'))
+        self.assertEqual(self.player.wallet.balance, Decimal('170.00'))
+        crm_log = CRMActionLog.objects.filter(target_user=self.player, action_type='WALLET_CREDITED').latest('created_at')
+        self.assertEqual(crm_log.actor, self.admin)
+        self.assertEqual(crm_log.data.get('approved_by_role'), 'admin')
 
     def test_crm_agent_detail_includes_downline_tickets_and_withdrawal_reports(self):
         self.player.agent = self.agent

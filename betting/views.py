@@ -391,6 +391,236 @@ def get_default_wallet_request_approver():
     return User.objects.filter(is_active=True).filter(Q(is_superuser=True) | Q(user_type='admin')).order_by('-is_superuser', 'id').first()
 
 
+class CreditRequestProcessError(Exception):
+    pass
+
+
+def get_credit_request_approver_role(user):
+    if getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') == 'admin':
+        return 'admin'
+    if getattr(user, 'user_type', '') == 'account_user':
+        return 'account_user'
+    return getattr(user, 'user_type', '') or 'user'
+
+
+def process_credit_request_decision(*, actor, credit_req, action):
+    if credit_req.status != 'pending':
+        raise CreditRequestProcessError("This request has already been processed.")
+
+    if action == 'decline':
+        credit_req.status = 'declined'
+        credit_req.save(update_fields=['status', 'updated_at'])
+        CreditLog.objects.create(
+            actor=actor,
+            target_user=credit_req.requester,
+            action_type='request_declined',
+            amount=credit_req.amount,
+            status='declined',
+            reference_id=str(credit_req.id)
+        )
+        return "Request declined.", messages.INFO
+
+    if action != 'approve':
+        raise CreditRequestProcessError("Invalid request action.")
+
+    approver_role = get_credit_request_approver_role(actor)
+
+    if credit_req.request_type == 'crm_credit':
+        approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
+        target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
+        if approver_wallet.balance < credit_req.amount:
+            raise CreditRequestProcessError("Insufficient funds in your wallet to approve this credit.")
+
+        tx_out = Transaction.objects.create(
+            user=actor,
+            transaction_type='wallet_transfer_out',
+            amount=credit_req.amount,
+            status='completed',
+            is_successful=True,
+            target_user=credit_req.requester,
+            description=f"Approved CRM credit for {credit_req.requester.email}"
+        )
+        tx_in = Transaction.objects.create(
+            user=credit_req.requester,
+            transaction_type='wallet_transfer_in',
+            amount=credit_req.amount,
+            status='completed',
+            is_successful=True,
+            initiating_user=actor,
+            target_user=actor,
+            description=f"CRM credit approved by {actor.email} ({approver_role})"
+        )
+        approver_wallet.apply_delta(
+            amount=-credit_req.amount,
+            actor=actor,
+            transaction_obj=tx_out,
+            reference=str(credit_req.id),
+            reason=tx_out.description,
+            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+        )
+        target_wallet.apply_delta(
+            amount=credit_req.amount,
+            actor=actor,
+            transaction_obj=tx_in,
+            reference=str(credit_req.id),
+            reason=tx_in.description,
+            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+        )
+        credit_req.status = 'approved'
+        credit_req.save(update_fields=['status', 'updated_at'])
+        CRMActionLog.objects.create(
+            actor=actor,
+            target_user=credit_req.requester,
+            action_type='WALLET_CREDITED',
+            reason=credit_req.reason,
+            data={
+                'amount': str(credit_req.amount),
+                'request_id': credit_req.id,
+                'approved_by': actor.email,
+                'approved_by_role': approver_role,
+            },
+        )
+        CreditLog.objects.create(
+            actor=actor,
+            target_user=credit_req.requester,
+            action_type='request_approved',
+            amount=credit_req.amount,
+            status='approved',
+            reference_id=str(credit_req.id)
+        )
+        return "CRM credit request approved. Funds transferred.", messages.SUCCESS
+
+    if credit_req.request_type == 'crm_debit':
+        approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
+        target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
+        if target_wallet.balance < credit_req.amount:
+            raise CreditRequestProcessError("Target user has insufficient funds for this debit.")
+
+        tx_out = Transaction.objects.create(
+            user=credit_req.requester,
+            transaction_type='wallet_transfer_out',
+            amount=credit_req.amount,
+            status='completed',
+            is_successful=True,
+            initiating_user=actor,
+            target_user=actor,
+            description=f"CRM debit approved by {actor.email} ({approver_role})"
+        )
+        tx_in = Transaction.objects.create(
+            user=actor,
+            transaction_type='wallet_transfer_in',
+            amount=credit_req.amount,
+            status='completed',
+            is_successful=True,
+            initiating_user=actor,
+            target_user=credit_req.requester,
+            description=f"Received CRM debit value from {credit_req.requester.email}"
+        )
+        target_wallet.apply_delta(
+            amount=-credit_req.amount,
+            actor=actor,
+            transaction_obj=tx_out,
+            reference=str(credit_req.id),
+            reason=tx_out.description,
+            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+        )
+        approver_wallet.apply_delta(
+            amount=credit_req.amount,
+            actor=actor,
+            transaction_obj=tx_in,
+            reference=str(credit_req.id),
+            reason=tx_in.description,
+            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+        )
+        credit_req.status = 'approved'
+        credit_req.save(update_fields=['status', 'updated_at'])
+        CRMActionLog.objects.create(
+            actor=actor,
+            target_user=credit_req.requester,
+            action_type='WALLET_DEBITED',
+            reason=credit_req.reason,
+            data={
+                'amount': str(credit_req.amount),
+                'request_id': credit_req.id,
+                'approved_by': actor.email,
+                'approved_by_role': approver_role,
+            },
+        )
+        CreditLog.objects.create(
+            actor=actor,
+            target_user=credit_req.requester,
+            action_type='request_approved',
+            amount=credit_req.amount,
+            status='approved',
+            reference_id=str(credit_req.id)
+        )
+        return "CRM debit request approved. Funds moved to the approver wallet.", messages.SUCCESS
+
+    lender_wallet = Wallet.objects.select_for_update().get(user=actor)
+    borrower_wallet = Wallet.objects.select_for_update().get(user=credit_req.requester)
+
+    if lender_wallet.balance < credit_req.amount:
+        raise CreditRequestProcessError("Insufficient funds to approve this request.")
+
+    if credit_req.request_type == 'loan':
+        Loan.objects.create(
+            borrower=credit_req.requester,
+            lender=actor,
+            amount=credit_req.amount,
+            outstanding_balance=credit_req.amount,
+            status='active',
+            credit_request=credit_req,
+            due_date=timezone.now() + timedelta(days=7)
+        )
+
+    tx_out = Transaction.objects.create(
+        user=actor,
+        transaction_type='wallet_transfer_out',
+        amount=credit_req.amount,
+        status='completed',
+        is_successful=True,
+        target_user=credit_req.requester,
+        description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
+    )
+
+    tx_in = Transaction.objects.create(
+        user=credit_req.requester,
+        transaction_type='wallet_transfer_in',
+        amount=credit_req.amount,
+        status='completed',
+        is_successful=True,
+        initiating_user=actor,
+        description=f"Received {credit_req.request_type} from {actor.email}"
+    )
+    lender_wallet.apply_delta(
+        amount=-credit_req.amount,
+        actor=actor,
+        transaction_obj=tx_out,
+        reference=str(credit_req.id),
+        reason=tx_out.description,
+        metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+    )
+    borrower_wallet.apply_delta(
+        amount=credit_req.amount,
+        actor=actor,
+        transaction_obj=tx_in,
+        reference=str(credit_req.id),
+        reason=tx_in.description,
+        metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+    )
+    credit_req.status = 'approved'
+    credit_req.save(update_fields=['status', 'updated_at'])
+    CreditLog.objects.create(
+        actor=actor,
+        target_user=credit_req.requester,
+        action_type='request_approved',
+        amount=credit_req.amount,
+        status='approved',
+        reference_id=str(credit_req.id)
+    )
+    return "Request approved. Funds transferred.", messages.SUCCESS
+
+
 def attach_wallet_balance_snapshots(transactions):
     tx_list = list(transactions)
     for tx in tx_list:
@@ -3813,199 +4043,15 @@ def approve_credit_request(request, request_id):
     
     if request.method == 'POST':
         action = request.POST.get('action')
-        
-        if credit_req.status != 'pending':
-            messages.error(request, "This request has already been processed.")
-            return redirect('betting:manage_credit_requests')
-            
-        if action == 'decline':
-            credit_req.status = 'declined'
-            credit_req.save()
-            CreditLog.objects.create(
+        try:
+            message_text, message_level = process_credit_request_decision(
                 actor=request.user,
-                target_user=credit_req.requester,
-                action_type='request_declined',
-                amount=credit_req.amount,
-                status='declined',
-                reference_id=str(credit_req.id)
+                credit_req=credit_req,
+                action=action,
             )
-            messages.info(request, "Request declined.")
-            
-        elif action == 'approve':
-            credit_req.status = 'approved'
-            credit_req.save()
-
-            if credit_req.request_type == 'crm_credit':
-                approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
-                target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
-                if approver_wallet.balance < credit_req.amount:
-                    messages.error(request, "Insufficient funds in your wallet to approve this credit.")
-                    credit_req.status = 'pending'
-                    credit_req.save(update_fields=['status', 'updated_at'])
-                    return redirect('betting:manage_credit_requests')
-
-                tx_out = Transaction.objects.create(
-                    user=request.user,
-                    transaction_type='wallet_transfer_out',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    target_user=credit_req.requester,
-                    description=f"Approved CRM credit for {credit_req.requester.email}"
-                )
-                tx_in = Transaction.objects.create(
-                    user=credit_req.requester,
-                    transaction_type='wallet_transfer_in',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    initiating_user=request.user,
-                    target_user=request.user,
-                    description=f"CRM credit approved by {request.user.email}"
-                )
-                approver_wallet.apply_delta(
-                    amount=-credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_out,
-                    reference=str(credit_req.id),
-                    reason=tx_out.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                target_wallet.apply_delta(
-                    amount=credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_in,
-                    reference=str(credit_req.id),
-                    reason=tx_in.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                CRMActionLog.objects.create(
-                    actor=request.user,
-                    target_user=credit_req.requester,
-                    action_type='WALLET_CREDITED',
-                    reason=credit_req.reason,
-                    data={'amount': str(credit_req.amount), 'request_id': credit_req.id, 'approved_by': request.user.email},
-                )
-                messages.success(request, "CRM credit request approved. Funds transferred.")
-            elif credit_req.request_type == 'crm_debit':
-                approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
-                target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
-                if target_wallet.balance < credit_req.amount:
-                    messages.error(request, "Target user has insufficient funds for this debit.")
-                    credit_req.status = 'pending'
-                    credit_req.save(update_fields=['status', 'updated_at'])
-                    return redirect('betting:manage_credit_requests')
-
-                tx_out = Transaction.objects.create(
-                    user=credit_req.requester,
-                    transaction_type='wallet_transfer_out',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    initiating_user=request.user,
-                    target_user=request.user,
-                    description=f"CRM debit approved by {request.user.email}"
-                )
-                tx_in = Transaction.objects.create(
-                    user=request.user,
-                    transaction_type='wallet_transfer_in',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    initiating_user=request.user,
-                    target_user=credit_req.requester,
-                    description=f"Received CRM debit value from {credit_req.requester.email}"
-                )
-                target_wallet.apply_delta(
-                    amount=-credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_out,
-                    reference=str(credit_req.id),
-                    reason=tx_out.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                approver_wallet.apply_delta(
-                    amount=credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_in,
-                    reference=str(credit_req.id),
-                    reason=tx_in.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                CRMActionLog.objects.create(
-                    actor=request.user,
-                    target_user=credit_req.requester,
-                    action_type='WALLET_DEBITED',
-                    reason=credit_req.reason,
-                    data={'amount': str(credit_req.amount), 'request_id': credit_req.id, 'approved_by': request.user.email},
-                )
-                messages.success(request, "CRM debit request approved. Funds moved to the approver wallet.")
-            else:
-                lender_wallet = Wallet.objects.select_for_update().get(user=request.user)
-                borrower_wallet = Wallet.objects.select_for_update().get(user=credit_req.requester)
-                
-                if lender_wallet.balance < credit_req.amount:
-                    messages.error(request, "Insufficient funds to approve this request.")
-                    credit_req.status = 'pending'
-                    credit_req.save(update_fields=['status', 'updated_at'])
-                    return redirect('betting:manage_credit_requests')
-                
-                if credit_req.request_type == 'loan':
-                    Loan.objects.create(
-                        borrower=credit_req.requester,
-                        lender=request.user,
-                        amount=credit_req.amount,
-                        outstanding_balance=credit_req.amount,
-                        status='active',
-                        credit_request=credit_req,
-                        due_date=timezone.now() + timedelta(days=7)
-                    )
-                
-                tx_out = Transaction.objects.create(
-                    user=request.user,
-                    transaction_type='wallet_transfer_out',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    target_user=credit_req.requester,
-                    description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
-                )
-                
-                tx_in = Transaction.objects.create(
-                    user=credit_req.requester,
-                    transaction_type='wallet_transfer_in',
-                    amount=credit_req.amount,
-                    status='completed',
-                    is_successful=True,
-                    initiating_user=request.user,
-                    description=f"Received {credit_req.request_type} from {request.user.email}"
-                )
-                lender_wallet.apply_delta(
-                    amount=-credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_out,
-                    reference=str(credit_req.id),
-                    reason=tx_out.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                borrower_wallet.apply_delta(
-                    amount=credit_req.amount,
-                    actor=request.user,
-                    transaction_obj=tx_in,
-                    reference=str(credit_req.id),
-                    reason=tx_in.description,
-                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-                )
-                messages.success(request, f"Request approved. Funds transferred.")
-
-            CreditLog.objects.create(
-                actor=request.user,
-                target_user=credit_req.requester,
-                action_type='request_approved',
-                amount=credit_req.amount,
-                status='approved',
-                reference_id=str(credit_req.id)
-            )
+            messages.add_message(request, message_level, message_text)
+        except CreditRequestProcessError as exc:
+            messages.error(request, str(exc))
             
     return redirect('betting:manage_credit_requests')
 

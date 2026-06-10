@@ -2150,6 +2150,13 @@ class CreditRequest(models.Model):
     def __str__(self):
         return f"{self.requester} -> {self.recipient}: {self.amount} ({self.status})"
 
+
+class CRMWalletApprovalRequest(CreditRequest):
+    class Meta:
+        proxy = True
+        verbose_name = 'CRM Wallet Approval Request'
+        verbose_name_plural = 'CRM Wallet Approval Requests'
+
 class Loan(models.Model):
     STATUS_CHOICES = (
         ('active', 'Active'),

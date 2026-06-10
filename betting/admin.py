@@ -52,7 +52,7 @@ import math
 from .models import (
     User, Wallet, WalletLedgerEntry, Transaction, BettingPeriod, Fixture, PopularPick, BetTicket,
     BonusRule, SystemSetting, AgentPayout, UserWithdrawal, ActivityLog, Result, Selection,
-    SiteConfiguration, LoginAttempt, CreditRequest, Loan, CreditLog, ImpersonationLog,
+    SiteConfiguration, LoginAttempt, CreditRequest, CRMWalletApprovalRequest, Loan, CreditLog, ImpersonationLog,
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
     PasswordResetRequest, State, FooterPage, FooterBadge,
     GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog,
@@ -69,6 +69,23 @@ class BettingAdminSite(admin.AdminSite):
     site_header = "PoolBetBetting Admin" # Corrected from "PoolBetting Admin" for consistency, but you can change back if intended
     site_title = "PoolBetting Admin Portal"
     index_title = "Welcome to PoolBetting Administration"
+
+    def index(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        try:
+            pending_crm_wallet_approval_count = CreditRequest.objects.filter(
+                status='pending',
+                request_type__in=views.CRM_WALLET_APPROVAL_REQUEST_TYPES,
+            ).count()
+        except Exception:
+            pending_crm_wallet_approval_count = 0
+
+        extra_context.update({
+            'pending_crm_wallet_approval_count': pending_crm_wallet_approval_count,
+            'crm_wallet_approval_admin_url': reverse(f'{self.name}:betting_crmwalletapprovalrequest_changelist'),
+            'crm_wallet_dashboard_url': reverse(f'{self.name}:dashboard'),
+        })
+        return super().index(request, extra_context)
 
     def admin_view(self, view, cacheable=False):
         from django.shortcuts import render
@@ -2288,6 +2305,89 @@ class CreditRequestAdmin(admin.ModelAdmin):
     search_fields = ('requester__email', 'recipient__email', 'reason')
     readonly_fields = ('created_at', 'updated_at')
 
+
+class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'requester', 'recipient', 'request_type', 'amount', 'status', 'approval_actions')
+    list_filter = ('status', 'request_type', 'created_at')
+    search_fields = ('requester__email', 'recipient__email', 'reason')
+    readonly_fields = ('requester', 'recipient', 'amount', 'reason', 'request_type', 'status', 'created_at', 'updated_at')
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .filter(request_type__in=views.CRM_WALLET_APPROVAL_REQUEST_TYPES)
+            .select_related('requester', 'recipient')
+        )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def get_urls(self):
+        opts = self.model._meta
+        custom_urls = [
+            path(
+                '<int:request_id>/<str:action>/',
+                self.admin_site.admin_view(self.process_request_view),
+                name=f'{opts.app_label}_{opts.model_name}_process',
+            ),
+        ]
+        return custom_urls + super().get_urls()
+
+    def approval_actions(self, obj):
+        if obj.status != 'pending':
+            return '-'
+        opts = self.model._meta
+        approve_url = reverse(f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_process', args=[obj.pk, 'approve'])
+        decline_url = reverse(f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_process', args=[obj.pk, 'decline'])
+        return format_html(
+            '<a class="button" href="{}" style="margin-right:6px; background:#198754; color:#fff; padding:4px 8px; border-radius:4px; text-decoration:none;">Approve</a>'
+            '<a class="button" href="{}" style="background:#dc3545; color:#fff; padding:4px 8px; border-radius:4px; text-decoration:none;">Decline</a>',
+            approve_url,
+            decline_url,
+        )
+    approval_actions.short_description = 'Actions'
+
+    @db_transaction.atomic
+    def process_request_view(self, request, request_id, action):
+        credit_req = get_object_or_404(
+            CreditRequest.objects.select_related('requester', 'recipient'),
+            id=request_id,
+            request_type__in=views.CRM_WALLET_APPROVAL_REQUEST_TYPES,
+        )
+        opts = self.model._meta
+        changelist_url = reverse(f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_changelist')
+        action = (action or '').strip().lower()
+        if action not in {'approve', 'decline'}:
+            self.message_user(request, "Invalid request action.", level=messages.ERROR)
+            return redirect(changelist_url)
+
+        if request.method == 'POST':
+            try:
+                message_text, message_level = views.process_credit_request_decision(
+                    actor=request.user,
+                    credit_req=credit_req,
+                    action=action,
+                )
+                self.message_user(request, message_text, level=message_level)
+            except views.CreditRequestProcessError as exc:
+                self.message_user(request, str(exc), level=messages.ERROR)
+            return redirect(changelist_url)
+
+        context = {
+            **self.admin_site.each_context(request),
+            'opts': opts,
+            'title': f'Confirm {"approval" if action == "approve" else "decline"}',
+            'request_obj': credit_req,
+            'action': action,
+            'action_label': 'Approve' if action == 'approve' else 'Decline',
+            'changelist_url': changelist_url,
+        }
+        return render(request, 'admin/betting/crm_wallet_approval_confirm.html', context)
+
 @admin.register(Loan)
 class LoanAdmin(admin.ModelAdmin):
     list_display = ('borrower', 'lender', 'amount', 'outstanding_balance', 'status', 'created_at', 'due_date')
@@ -2303,6 +2403,7 @@ class CreditLogAdmin(admin.ModelAdmin):
 
 # Register these with custom admin site as well if needed
 betting_admin_site.register(CreditRequest, CreditRequestAdmin)
+betting_admin_site.register(CRMWalletApprovalRequest, CRMWalletApprovalRequestAdmin)
 betting_admin_site.register(Loan, LoanAdmin)
 betting_admin_site.register(CreditLog, CreditLogAdmin)
 

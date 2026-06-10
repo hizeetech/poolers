@@ -565,6 +565,59 @@ $(document).ready(function() {
                     {% endif %}
                 </div>
             </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-danger text-white">
+                     <h5 class="mb-0"><i class="fas fa-money-bill-wave me-2"></i>Active Loans (Owed to You)</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                         <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Borrower</th>
+                                    <th>Balance</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for loan in active_loans_given %}
+                                <tr>
+                                    <td>{{ loan.borrower.email|truncatechars:15 }}</td>
+                                    <td class="fw-bold">₦{{ loan.outstanding_balance|floatformat:2 }}</td>
+                                    <td class="small">{{ loan.created_at|date:"M d" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="3" class="text-center text-muted small py-2">No active loans given.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                         </table>
+                    </div>
+                    {% if active_loans_given.has_other_pages %}
+                    <div class="card-footer py-2">
+                        <nav aria-label="Loans Pagination">
+                            <ul class="pagination pagination-sm justify-content-center mb-0">
+                                {% if active_loans_given.has_previous %}
+                                <li class="page-item"><a class="page-link" href="?loans_page={{ active_loans_given.previous_page_number }}">&laquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+                                {% endif %}
+                                
+                                <li class="page-item active"><span class="page-link">{{ active_loans_given.number }}</span></li>
+                                
+                                {% if active_loans_given.has_next %}
+                                <li class="page-item"><a class="page-link" href="?loans_page={{ active_loans_given.next_page_number }}">&raquo;</a></li>
+                                {% else %}
+                                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
         </div>
 
         <!-- Recent Transactions Column -->
@@ -677,59 +730,6 @@ $(document).ready(function() {
                 </div>
             </div>
 
-            <!-- Active Loans Given Section -->
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-danger text-white">
-                     <h5 class="mb-0"><i class="fas fa-money-bill-wave me-2"></i>Active Loans (Owed to You)</h5>
-                </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                         <table class="table table-hover mb-0">
-                            <thead>
-                                <tr>
-                                    <th>Borrower</th>
-                                    <th>Balance</th>
-                                    <th>Date</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for loan in active_loans_given %}
-                                <tr>
-                                    <td>{{ loan.borrower.email|truncatechars:15 }}</td>
-                                    <td class="fw-bold">₦{{ loan.outstanding_balance|floatformat:2 }}</td>
-                                    <td class="small">{{ loan.created_at|date:"M d" }}</td>
-                                </tr>
-                                {% empty %}
-                                <tr>
-                                    <td colspan="3" class="text-center text-muted small py-2">No active loans given.</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                         </table>
-                    </div>
-                    {% if active_loans_given.has_other_pages %}
-                    <div class="card-footer py-2">
-                        <nav aria-label="Loans Pagination">
-                            <ul class="pagination pagination-sm justify-content-center mb-0">
-                                {% if active_loans_given.has_previous %}
-                                <li class="page-item"><a class="page-link" href="?loans_page={{ active_loans_given.previous_page_number }}">&laquo;</a></li>
-                                {% else %}
-                                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
-                                {% endif %}
-                                
-                                <li class="page-item active"><span class="page-link">{{ active_loans_given.number }}</span></li>
-                                
-                                {% if active_loans_given.has_next %}
-                                <li class="page-item"><a class="page-link" href="?loans_page={{ active_loans_given.next_page_number }}">&raquo;</a></li>
-                                {% else %}
-                                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
-                                {% endif %}
-                            </ul>
-                        </nav>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
         </div>
     </div>
 

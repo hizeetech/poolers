@@ -396,14 +396,16 @@ class CreditRequestProcessError(Exception):
 
 
 def get_credit_request_approver_role(user):
-    if getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') == 'admin':
+    if getattr(user, 'is_superuser', False):
+        return 'superadmin'
+    if getattr(user, 'user_type', '') == 'admin':
         return 'admin'
     if getattr(user, 'user_type', '') == 'account_user':
         return 'account_user'
     return getattr(user, 'user_type', '') or 'user'
 
 
-def process_credit_request_decision(*, actor, credit_req, action):
+def process_credit_request_decision(*, actor, credit_req, action, account_user_wallet_user=None):
     if credit_req.status != 'pending':
         raise CreditRequestProcessError("This request has already been processed.")
 
@@ -424,39 +426,93 @@ def process_credit_request_decision(*, actor, credit_req, action):
         raise CreditRequestProcessError("Invalid request action.")
 
     approver_role = get_credit_request_approver_role(actor)
+    admin_actor = approver_role in {'superadmin', 'admin'}
+    selected_account_user = None
+    if account_user_wallet_user is not None:
+        if getattr(account_user_wallet_user, 'user_type', '') != 'account_user' or not getattr(account_user_wallet_user, 'is_active', False):
+            raise CreditRequestProcessError("Selected Account User is not available for wallet processing.")
+        selected_account_user = account_user_wallet_user
 
     if credit_req.request_type == 'crm_credit':
-        approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
         target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
-        if approver_wallet.balance < credit_req.amount:
-            raise CreditRequestProcessError("Insufficient funds in your wallet to approve this credit.")
+        funding_mode = 'approver_wallet'
+        source_wallet_user = actor
+        source_wallet = None
+        tx_out = None
 
-        tx_out = Transaction.objects.create(
-            user=actor,
-            transaction_type='wallet_transfer_out',
-            amount=credit_req.amount,
-            status='completed',
-            is_successful=True,
-            target_user=credit_req.requester,
-            description=f"Approved CRM credit for {credit_req.requester.email}"
-        )
+        if admin_actor:
+            if selected_account_user is not None:
+                source_wallet_user = selected_account_user
+                source_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=source_wallet_user, defaults={'balance': Decimal('0.00')})
+                if source_wallet.balance < credit_req.amount:
+                    raise CreditRequestProcessError("Selected Account User wallet has insufficient funds for this credit.")
+                funding_mode = 'account_user_wallet'
+                tx_out = Transaction.objects.create(
+                    user=source_wallet_user,
+                    initiating_user=actor,
+                    target_user=credit_req.requester,
+                    transaction_type='account_user_debit',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    description=f"CRM credit approved by {actor.email} using Account User {source_wallet_user.email}"
+                )
+            elif approver_role == 'superadmin':
+                funding_mode = 'superadmin_override'
+            else:
+                raise CreditRequestProcessError("Please choose an Account User wallet to debit for this CRM credit approval.")
+        else:
+            source_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
+            if source_wallet.balance < credit_req.amount:
+                raise CreditRequestProcessError("Insufficient funds in your wallet to approve this credit.")
+            tx_out = Transaction.objects.create(
+                user=actor,
+                transaction_type='wallet_transfer_out',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                target_user=credit_req.requester,
+                description=f"Approved CRM credit for {credit_req.requester.email}"
+            )
+
+        if tx_out is not None and source_wallet is not None:
+            source_wallet.apply_delta(
+                amount=-credit_req.amount,
+                actor=actor,
+                transaction_obj=tx_out,
+                reference=str(credit_req.id),
+                reason=tx_out.description,
+                metadata={
+                    "credit_request_id": credit_req.id,
+                    "request_type": credit_req.request_type,
+                    "approved_by_role": approver_role,
+                    "funding_mode": funding_mode,
+                    "funding_account_user_id": getattr(source_wallet_user, 'id', None) if funding_mode == 'account_user_wallet' else None,
+                },
+            )
+
+        if funding_mode == 'superadmin_override':
+            tx_in_type = 'manual_credit'
+            tx_in_description = f"CRM credit approved by superadmin {actor.email} without wallet debit"
+            tx_in_target_user = None
+        elif funding_mode == 'account_user_wallet':
+            tx_in_type = 'account_user_credit'
+            tx_in_description = f"CRM credit approved by {actor.email} using Account User {source_wallet_user.email}"
+            tx_in_target_user = source_wallet_user
+        else:
+            tx_in_type = 'wallet_transfer_in'
+            tx_in_description = f"CRM credit approved by {actor.email} ({approver_role})"
+            tx_in_target_user = actor
+
         tx_in = Transaction.objects.create(
             user=credit_req.requester,
-            transaction_type='wallet_transfer_in',
+            transaction_type=tx_in_type,
             amount=credit_req.amount,
             status='completed',
             is_successful=True,
             initiating_user=actor,
-            target_user=actor,
-            description=f"CRM credit approved by {actor.email} ({approver_role})"
-        )
-        approver_wallet.apply_delta(
-            amount=-credit_req.amount,
-            actor=actor,
-            transaction_obj=tx_out,
-            reference=str(credit_req.id),
-            reason=tx_out.description,
-            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+            target_user=tx_in_target_user,
+            description=tx_in_description
         )
         target_wallet.apply_delta(
             amount=credit_req.amount,
@@ -464,7 +520,13 @@ def process_credit_request_decision(*, actor, credit_req, action):
             transaction_obj=tx_in,
             reference=str(credit_req.id),
             reason=tx_in.description,
-            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+            metadata={
+                "credit_request_id": credit_req.id,
+                "request_type": credit_req.request_type,
+                "approved_by_role": approver_role,
+                "funding_mode": funding_mode,
+                "funding_account_user_id": getattr(source_wallet_user, 'id', None) if funding_mode == 'account_user_wallet' else None,
+            },
         )
         credit_req.status = 'approved'
         credit_req.save(update_fields=['status', 'updated_at'])
@@ -478,6 +540,8 @@ def process_credit_request_decision(*, actor, credit_req, action):
                 'request_id': credit_req.id,
                 'approved_by': actor.email,
                 'approved_by_role': approver_role,
+                'funding_mode': funding_mode,
+                'funding_account_user_email': getattr(source_wallet_user, 'email', '') if funding_mode == 'account_user_wallet' else '',
             },
         )
         CreditLog.objects.create(
@@ -488,49 +552,96 @@ def process_credit_request_decision(*, actor, credit_req, action):
             status='approved',
             reference_id=str(credit_req.id)
         )
+        if funding_mode == 'superadmin_override':
+            return "CRM credit request approved by superadmin without debiting any wallet.", messages.SUCCESS
+        if funding_mode == 'account_user_wallet':
+            return f"CRM credit request approved. Debited Account User {source_wallet_user.email} and credited the target user.", messages.SUCCESS
         return "CRM credit request approved. Funds transferred.", messages.SUCCESS
 
     if credit_req.request_type == 'crm_debit':
-        approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
         target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
         if target_wallet.balance < credit_req.amount:
             raise CreditRequestProcessError("Target user has insufficient funds for this debit.")
 
-        tx_out = Transaction.objects.create(
-            user=credit_req.requester,
-            transaction_type='wallet_transfer_out',
-            amount=credit_req.amount,
-            status='completed',
-            is_successful=True,
-            initiating_user=actor,
-            target_user=actor,
-            description=f"CRM debit approved by {actor.email} ({approver_role})"
-        )
-        tx_in = Transaction.objects.create(
-            user=actor,
-            transaction_type='wallet_transfer_in',
-            amount=credit_req.amount,
-            status='completed',
-            is_successful=True,
-            initiating_user=actor,
-            target_user=credit_req.requester,
-            description=f"Received CRM debit value from {credit_req.requester.email}"
-        )
+        reimbursement_mode = 'approver_wallet'
+        reimbursement_user = actor
+        reimbursement_wallet = None
+
+        if admin_actor:
+            if selected_account_user is None:
+                raise CreditRequestProcessError("Please choose an Account User wallet to reimburse for this CRM debit approval.")
+            reimbursement_user = selected_account_user
+            reimbursement_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=reimbursement_user, defaults={'balance': Decimal('0.00')})
+            reimbursement_mode = 'account_user_wallet'
+            tx_out = Transaction.objects.create(
+                user=credit_req.requester,
+                transaction_type='account_user_debit',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=actor,
+                target_user=reimbursement_user,
+                description=f"CRM debit approved by {actor.email}; reimbursed to Account User {reimbursement_user.email}"
+            )
+            tx_in = Transaction.objects.create(
+                user=reimbursement_user,
+                transaction_type='account_user_credit',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=actor,
+                target_user=credit_req.requester,
+                description=f"Reimbursed from CRM debit approved by {actor.email} for {credit_req.requester.email}"
+            )
+        else:
+            reimbursement_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={'balance': Decimal('0.00')})
+            tx_out = Transaction.objects.create(
+                user=credit_req.requester,
+                transaction_type='wallet_transfer_out',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=actor,
+                target_user=actor,
+                description=f"CRM debit approved by {actor.email} ({approver_role})"
+            )
+            tx_in = Transaction.objects.create(
+                user=actor,
+                transaction_type='wallet_transfer_in',
+                amount=credit_req.amount,
+                status='completed',
+                is_successful=True,
+                initiating_user=actor,
+                target_user=credit_req.requester,
+                description=f"Received CRM debit value from {credit_req.requester.email}"
+            )
         target_wallet.apply_delta(
             amount=-credit_req.amount,
             actor=actor,
             transaction_obj=tx_out,
             reference=str(credit_req.id),
             reason=tx_out.description,
-            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+            metadata={
+                "credit_request_id": credit_req.id,
+                "request_type": credit_req.request_type,
+                "approved_by_role": approver_role,
+                "reimbursement_mode": reimbursement_mode,
+                "reimbursement_account_user_id": getattr(reimbursement_user, 'id', None) if reimbursement_mode == 'account_user_wallet' else None,
+            },
         )
-        approver_wallet.apply_delta(
+        reimbursement_wallet.apply_delta(
             amount=credit_req.amount,
             actor=actor,
             transaction_obj=tx_in,
             reference=str(credit_req.id),
             reason=tx_in.description,
-            metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type, "approved_by_role": approver_role},
+            metadata={
+                "credit_request_id": credit_req.id,
+                "request_type": credit_req.request_type,
+                "approved_by_role": approver_role,
+                "reimbursement_mode": reimbursement_mode,
+                "reimbursement_account_user_id": getattr(reimbursement_user, 'id', None) if reimbursement_mode == 'account_user_wallet' else None,
+            },
         )
         credit_req.status = 'approved'
         credit_req.save(update_fields=['status', 'updated_at'])
@@ -544,6 +655,8 @@ def process_credit_request_decision(*, actor, credit_req, action):
                 'request_id': credit_req.id,
                 'approved_by': actor.email,
                 'approved_by_role': approver_role,
+                'reimbursement_mode': reimbursement_mode,
+                'reimbursement_account_user_email': getattr(reimbursement_user, 'email', '') if reimbursement_mode == 'account_user_wallet' else '',
             },
         )
         CreditLog.objects.create(
@@ -554,6 +667,8 @@ def process_credit_request_decision(*, actor, credit_req, action):
             status='approved',
             reference_id=str(credit_req.id)
         )
+        if reimbursement_mode == 'account_user_wallet':
+            return f"CRM debit request approved. Target user debited and Account User {reimbursement_user.email} reimbursed.", messages.SUCCESS
         return "CRM debit request approved. Funds moved to the approver wallet.", messages.SUCCESS
 
     lender_wallet = Wallet.objects.select_for_update().get(user=actor)
@@ -4043,11 +4158,20 @@ def approve_credit_request(request, request_id):
     
     if request.method == 'POST':
         action = request.POST.get('action')
+        selected_account_user = None
+        selected_account_user_id = (request.POST.get('account_user_wallet_user_id') or '').strip()
+        if selected_account_user_id:
+            selected_account_user = User.objects.filter(
+                id=selected_account_user_id,
+                is_active=True,
+                user_type='account_user',
+            ).first()
         try:
             message_text, message_level = process_credit_request_decision(
                 actor=request.user,
                 credit_req=credit_req,
                 action=action,
+                account_user_wallet_user=selected_account_user,
             )
             messages.add_message(request, message_level, message_text)
         except CreditRequestProcessError as exc:

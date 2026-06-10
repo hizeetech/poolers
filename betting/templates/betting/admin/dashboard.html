@@ -208,7 +208,7 @@
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <h3 class="h5 mb-0 fw-semibold">CRM Wallet Approval Requests</h3>
-                        <a href="{% url 'betting:manage_credit_requests' %}" class="btn btn-sm btn-outline-secondary">Open Full Queue</a>
+                        <a href="{% url 'betting_admin:betting_crmwalletapprovalrequest_changelist' %}" class="btn btn-sm btn-outline-secondary">Open Full Queue</a>
                     </div>
                     {% if pending_crm_wallet_approvals %}
                         <div class="table-responsive">
@@ -237,11 +237,8 @@
                                             <td class="text-end">₦{{ req.amount|floatformat:2 }}</td>
                                             <td class="small text-muted">{{ req.reason|truncatechars:70 }}</td>
                                             <td class="text-end">
-                                                <form action="{% url 'betting:approve_credit_request' req.id %}" method="post" class="d-inline">
-                                                    {% csrf_token %}
-                                                    <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
-                                                    <button type="submit" name="action" value="decline" class="btn btn-danger btn-sm">Decline</button>
-                                                </form>
+                                                <a href="{% url 'betting_admin:betting_crmwalletapprovalrequest_process' req.id 'approve' %}" class="btn btn-success btn-sm">Approve</a>
+                                                <a href="{% url 'betting_admin:betting_crmwalletapprovalrequest_process' req.id 'decline' %}" class="btn btn-danger btn-sm">Decline</a>
                                             </td>
                                         </tr>
                                     {% endfor %}

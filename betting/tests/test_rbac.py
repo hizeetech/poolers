@@ -15,13 +15,15 @@ class RBACTests(TestCase):
         self.super_agent = User.objects.create_user(email='super_agent@test.com', password=self.password, user_type='super_agent')
         self.master_agent = User.objects.create_user(email='master_agent@test.com', password=self.password, user_type='master_agent')
         self.account_user = User.objects.create_user(email='account_user@test.com', password=self.password, user_type='account_user')
+        self.account_user_two = User.objects.create_user(email='account_user_two@test.com', password=self.password, user_type='account_user')
         self.admin = User.objects.create_user(email='admin@test.com', password=self.password, user_type='admin', is_staff=True, is_superuser=True)
+        self.plain_admin = User.objects.create_user(email='plain_admin@test.com', password=self.password, user_type='admin', is_staff=True)
         self.crm_viewer = User.objects.create_user(email='crm_viewer@test.com', password=self.password, user_type='crm', crm_role='viewer')
         self.crm_ops = User.objects.create_user(email='crm_ops@test.com', password=self.password, user_type='crm', crm_role='ops')
         self.crm_compliance = User.objects.create_user(email='crm_compliance@test.com', password=self.password, user_type='crm', crm_role='compliance')
         
         # Create wallets for all users
-        for user in [self.player, self.cashier, self.agent, self.super_agent, self.master_agent, self.account_user, self.admin, self.crm_viewer, self.crm_ops, self.crm_compliance]:
+        for user in [self.player, self.cashier, self.agent, self.super_agent, self.master_agent, self.account_user, self.account_user_two, self.admin, self.plain_admin, self.crm_viewer, self.crm_ops, self.crm_compliance]:
             Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
 
     def test_player_access(self):
@@ -163,7 +165,7 @@ class RBACTests(TestCase):
         self.assertEqual(crm_log.actor, self.account_user)
         self.assertEqual(crm_log.data.get('approved_by_role'), 'account_user')
 
-    def test_admin_can_approve_crm_wallet_request_from_admin_site_and_is_logged_as_admin(self):
+    def test_superadmin_can_approve_crm_wallet_request_without_debiting_any_wallet(self):
         Wallet.objects.filter(user=self.admin).update(balance=Decimal('600.00'))
         Wallet.objects.filter(user=self.player).update(balance=Decimal('20.00'))
 
@@ -190,11 +192,78 @@ class RBACTests(TestCase):
         self.assertEqual(credit_req.status, 'approved')
         self.admin.wallet.refresh_from_db()
         self.player.wallet.refresh_from_db()
-        self.assertEqual(self.admin.wallet.balance, Decimal('450.00'))
+        self.assertEqual(self.admin.wallet.balance, Decimal('600.00'))
         self.assertEqual(self.player.wallet.balance, Decimal('170.00'))
         crm_log = CRMActionLog.objects.filter(target_user=self.player, action_type='WALLET_CREDITED').latest('created_at')
         self.assertEqual(crm_log.actor, self.admin)
+        self.assertEqual(crm_log.data.get('approved_by_role'), 'superadmin')
+        self.assertEqual(crm_log.data.get('funding_mode'), 'superadmin_override')
+        changelist = self.client.get(reverse('betting_admin:betting_crmwalletapprovalrequest_changelist'))
+        self.assertContains(changelist, 'No wallet debit')
+
+    def test_admin_can_approve_crm_credit_by_debiting_selected_account_user_wallet(self):
+        Wallet.objects.filter(user=self.account_user_two).update(balance=Decimal('500.00'))
+        Wallet.objects.filter(user=self.player).update(balance=Decimal('40.00'))
+
+        credit_req = CreditRequest.objects.create(
+            requester=self.player,
+            recipient=self.account_user,
+            amount=Decimal('150.00'),
+            reason='Admin selected account user source',
+            request_type='crm_credit',
+            status='pending',
+        )
+
+        self.client.force_login(self.plain_admin)
+        process_url = reverse('betting_admin:betting_crmwalletapprovalrequest_process', args=[credit_req.id, 'approve'])
+        resp = self.client.post(process_url, {'account_user_wallet_user_id': str(self.account_user_two.id)})
+        self.assertNotEqual(resp.status_code, 500)
+
+        credit_req.refresh_from_db()
+        self.assertEqual(credit_req.status, 'approved')
+        self.account_user_two.wallet.refresh_from_db()
+        self.player.wallet.refresh_from_db()
+        self.assertEqual(self.account_user_two.wallet.balance, Decimal('350.00'))
+        self.assertEqual(self.player.wallet.balance, Decimal('190.00'))
+        crm_log = CRMActionLog.objects.filter(target_user=self.player, action_type='WALLET_CREDITED').latest('created_at')
+        self.assertEqual(crm_log.actor, self.plain_admin)
         self.assertEqual(crm_log.data.get('approved_by_role'), 'admin')
+        self.assertEqual(crm_log.data.get('funding_account_user_email'), self.account_user_two.email)
+        self.client.force_login(self.admin)
+        changelist = self.client.get(reverse('betting_admin:betting_crmwalletapprovalrequest_changelist'))
+        self.assertContains(changelist, self.account_user_two.email)
+
+    def test_admin_can_approve_crm_debit_and_reimburse_selected_account_user(self):
+        Wallet.objects.filter(user=self.account_user_two).update(balance=Decimal('75.00'))
+        Wallet.objects.filter(user=self.player).update(balance=Decimal('300.00'))
+
+        credit_req = CreditRequest.objects.create(
+            requester=self.player,
+            recipient=self.account_user,
+            amount=Decimal('120.00'),
+            reason='Admin debit with reimbursement',
+            request_type='crm_debit',
+            status='pending',
+        )
+
+        self.client.force_login(self.plain_admin)
+        process_url = reverse('betting_admin:betting_crmwalletapprovalrequest_process', args=[credit_req.id, 'approve'])
+        resp = self.client.post(process_url, {'account_user_wallet_user_id': str(self.account_user_two.id)})
+        self.assertNotEqual(resp.status_code, 500)
+
+        credit_req.refresh_from_db()
+        self.assertEqual(credit_req.status, 'approved')
+        self.account_user_two.wallet.refresh_from_db()
+        self.player.wallet.refresh_from_db()
+        self.assertEqual(self.account_user_two.wallet.balance, Decimal('195.00'))
+        self.assertEqual(self.player.wallet.balance, Decimal('180.00'))
+        crm_log = CRMActionLog.objects.filter(target_user=self.player, action_type='WALLET_DEBITED').latest('created_at')
+        self.assertEqual(crm_log.actor, self.plain_admin)
+        self.assertEqual(crm_log.data.get('approved_by_role'), 'admin')
+        self.assertEqual(crm_log.data.get('reimbursement_account_user_email'), self.account_user_two.email)
+        self.client.force_login(self.admin)
+        changelist = self.client.get(reverse('betting_admin:betting_crmwalletapprovalrequest_changelist'))
+        self.assertContains(changelist, self.account_user_two.email)
 
     def test_crm_agent_detail_includes_downline_tickets_and_withdrawal_reports(self):
         self.player.agent = self.agent

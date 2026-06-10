@@ -379,6 +379,49 @@ def crm_can_view_audit(user):
         return True
     return user.crm_role in ['supervisor']
 
+
+CRM_WALLET_APPROVAL_REQUEST_TYPES = ('crm_credit', 'crm_debit')
+
+
+def get_default_wallet_request_approver():
+    approver = User.objects.filter(is_active=True, user_type='account_user').order_by('id').first()
+    if approver:
+        return approver
+    return User.objects.filter(is_active=True).filter(Q(is_superuser=True) | Q(user_type='admin')).order_by('-is_superuser', 'id').first()
+
+
+def attach_wallet_balance_snapshots(transactions):
+    tx_list = list(transactions)
+    for tx in tx_list:
+        tx.wallet_balance_before = None
+        tx.wallet_balance_after = None
+
+    tx_ids = [tx.id for tx in tx_list if getattr(tx, 'id', None)]
+    if not tx_ids:
+        return tx_list
+
+    WalletLedgerEntry = apps.get_model('betting', 'WalletLedgerEntry')
+    ledger_entries = (
+        WalletLedgerEntry.objects
+        .filter(transaction_id__in=tx_ids)
+        .order_by('created_at', 'id')
+    )
+
+    ledger_by_key = {}
+    ledger_by_tx = {}
+    for entry in ledger_entries:
+        key = (entry.transaction_id, entry.user_id)
+        ledger_by_key.setdefault(key, entry)
+        ledger_by_tx.setdefault(entry.transaction_id, entry)
+
+    for tx in tx_list:
+        entry = ledger_by_key.get((tx.id, tx.user_id)) or ledger_by_tx.get(tx.id)
+        if entry:
+            tx.wallet_balance_before = entry.balance_before
+            tx.wallet_balance_after = entry.balance_after
+
+    return tx_list
+
 def is_retail_manager(user):
     return user.is_authenticated and user.user_type == 'retail_manager'
 
@@ -3744,7 +3787,12 @@ def submit_credit_request(request):
 
 @login_required
 def manage_credit_requests(request):
-    received_requests = CreditRequest.objects.filter(recipient=request.user).order_by('-created_at')
+    received_filter = Q(recipient=request.user)
+    if request.user.is_superuser or request.user.user_type == 'admin':
+        received_filter |= Q(request_type__in=CRM_WALLET_APPROVAL_REQUEST_TYPES)
+    elif request.user.user_type == 'account_user':
+        received_filter |= Q(request_type__in=CRM_WALLET_APPROVAL_REQUEST_TYPES, recipient__user_type='account_user')
+    received_requests = CreditRequest.objects.filter(received_filter).select_related('requester', 'recipient').distinct().order_by('-created_at')
     sent_requests = CreditRequest.objects.filter(requester=request.user).order_by('-created_at')
     
     return render(request, 'betting/manage_credit_requests.html', {
@@ -3755,7 +3803,12 @@ def manage_credit_requests(request):
 @login_required
 @db_transaction.atomic
 def approve_credit_request(request, request_id):
-    credit_req = get_object_or_404(CreditRequest, id=request_id, recipient=request.user)
+    credit_req = get_object_or_404(CreditRequest.objects.select_related('requester', 'recipient'), id=request_id)
+    can_process = credit_req.recipient_id == request.user.id
+    if credit_req.request_type in CRM_WALLET_APPROVAL_REQUEST_TYPES:
+        can_process = can_process or request.user.is_superuser or request.user.user_type in ['admin', 'account_user']
+    if not can_process:
+        raise Http404()
     
     if request.method == 'POST':
         action = request.POST.get('action')
@@ -3778,63 +3831,172 @@ def approve_credit_request(request, request_id):
             messages.info(request, "Request declined.")
             
         elif action == 'approve':
-            lender_wallet = Wallet.objects.select_for_update().get(user=request.user)
-            borrower_wallet = Wallet.objects.select_for_update().get(user=credit_req.requester)
-            
-            if lender_wallet.balance < credit_req.amount:
-                messages.error(request, "Insufficient funds to approve this request.")
-                return redirect('betting:manage_credit_requests')
-            
             credit_req.status = 'approved'
             credit_req.save()
-            
-            if credit_req.request_type == 'loan':
-                Loan.objects.create(
-                    borrower=credit_req.requester,
-                    lender=request.user,
+
+            if credit_req.request_type == 'crm_credit':
+                approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
+                target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
+                if approver_wallet.balance < credit_req.amount:
+                    messages.error(request, "Insufficient funds in your wallet to approve this credit.")
+                    credit_req.status = 'pending'
+                    credit_req.save(update_fields=['status', 'updated_at'])
+                    return redirect('betting:manage_credit_requests')
+
+                tx_out = Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='wallet_transfer_out',
                     amount=credit_req.amount,
-                    outstanding_balance=credit_req.amount,
-                    status='active',
-                    credit_request=credit_req,
-                    due_date=timezone.now() + timedelta(days=7)
+                    status='completed',
+                    is_successful=True,
+                    target_user=credit_req.requester,
+                    description=f"Approved CRM credit for {credit_req.requester.email}"
+                )
+                tx_in = Transaction.objects.create(
+                    user=credit_req.requester,
+                    transaction_type='wallet_transfer_in',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    initiating_user=request.user,
+                    target_user=request.user,
+                    description=f"CRM credit approved by {request.user.email}"
+                )
+                approver_wallet.apply_delta(
+                    amount=-credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_out,
+                    reference=str(credit_req.id),
+                    reason=tx_out.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                target_wallet.apply_delta(
+                    amount=credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_in,
+                    reference=str(credit_req.id),
+                    reason=tx_in.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                CRMActionLog.objects.create(
+                    actor=request.user,
+                    target_user=credit_req.requester,
+                    action_type='WALLET_CREDITED',
+                    reason=credit_req.reason,
+                    data={'amount': str(credit_req.amount), 'request_id': credit_req.id, 'approved_by': request.user.email},
+                )
+                messages.success(request, "CRM credit request approved. Funds transferred.")
+            elif credit_req.request_type == 'crm_debit':
+                approver_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
+                target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
+                if target_wallet.balance < credit_req.amount:
+                    messages.error(request, "Target user has insufficient funds for this debit.")
+                    credit_req.status = 'pending'
+                    credit_req.save(update_fields=['status', 'updated_at'])
+                    return redirect('betting:manage_credit_requests')
+
+                tx_out = Transaction.objects.create(
+                    user=credit_req.requester,
+                    transaction_type='wallet_transfer_out',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    initiating_user=request.user,
+                    target_user=request.user,
+                    description=f"CRM debit approved by {request.user.email}"
+                )
+                tx_in = Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='wallet_transfer_in',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    initiating_user=request.user,
+                    target_user=credit_req.requester,
+                    description=f"Received CRM debit value from {credit_req.requester.email}"
+                )
+                target_wallet.apply_delta(
+                    amount=-credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_out,
+                    reference=str(credit_req.id),
+                    reason=tx_out.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                approver_wallet.apply_delta(
+                    amount=credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_in,
+                    reference=str(credit_req.id),
+                    reason=tx_in.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                CRMActionLog.objects.create(
+                    actor=request.user,
+                    target_user=credit_req.requester,
+                    action_type='WALLET_DEBITED',
+                    reason=credit_req.reason,
+                    data={'amount': str(credit_req.amount), 'request_id': credit_req.id, 'approved_by': request.user.email},
+                )
+                messages.success(request, "CRM debit request approved. Funds moved to the approver wallet.")
+            else:
+                lender_wallet = Wallet.objects.select_for_update().get(user=request.user)
+                borrower_wallet = Wallet.objects.select_for_update().get(user=credit_req.requester)
+                
+                if lender_wallet.balance < credit_req.amount:
+                    messages.error(request, "Insufficient funds to approve this request.")
+                    credit_req.status = 'pending'
+                    credit_req.save(update_fields=['status', 'updated_at'])
+                    return redirect('betting:manage_credit_requests')
+                
+                if credit_req.request_type == 'loan':
+                    Loan.objects.create(
+                        borrower=credit_req.requester,
+                        lender=request.user,
+                        amount=credit_req.amount,
+                        outstanding_balance=credit_req.amount,
+                        status='active',
+                        credit_request=credit_req,
+                        due_date=timezone.now() + timedelta(days=7)
+                    )
+                
+                tx_out = Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='wallet_transfer_out',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    target_user=credit_req.requester,
+                    description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
                 )
                 
-            tx_out = Transaction.objects.create(
-                user=request.user,
-                transaction_type='wallet_transfer_out',
-                amount=credit_req.amount,
-                status='completed',
-                is_successful=True,
-                target_user=credit_req.requester,
-                description=f"Approved {credit_req.request_type} request to {credit_req.requester.email}"
-            )
-            
-            tx_in = Transaction.objects.create(
-                user=credit_req.requester,
-                transaction_type='wallet_transfer_in',
-                amount=credit_req.amount,
-                status='completed',
-                is_successful=True,
-                initiating_user=request.user,
-                description=f"Received {credit_req.request_type} from {request.user.email}"
-            )
-            lender_wallet.apply_delta(
-                amount=-credit_req.amount,
-                actor=request.user,
-                transaction_obj=tx_out,
-                reference=str(credit_req.id),
-                reason=tx_out.description,
-                metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-            )
-            borrower_wallet.apply_delta(
-                amount=credit_req.amount,
-                actor=request.user,
-                transaction_obj=tx_in,
-                reference=str(credit_req.id),
-                reason=tx_in.description,
-                metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
-            )
-            
+                tx_in = Transaction.objects.create(
+                    user=credit_req.requester,
+                    transaction_type='wallet_transfer_in',
+                    amount=credit_req.amount,
+                    status='completed',
+                    is_successful=True,
+                    initiating_user=request.user,
+                    description=f"Received {credit_req.request_type} from {request.user.email}"
+                )
+                lender_wallet.apply_delta(
+                    amount=-credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_out,
+                    reference=str(credit_req.id),
+                    reason=tx_out.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                borrower_wallet.apply_delta(
+                    amount=credit_req.amount,
+                    actor=request.user,
+                    transaction_obj=tx_in,
+                    reference=str(credit_req.id),
+                    reason=tx_in.description,
+                    metadata={"credit_request_id": credit_req.id, "request_type": credit_req.request_type},
+                )
+                messages.success(request, f"Request approved. Funds transferred.")
+
             CreditLog.objects.create(
                 actor=request.user,
                 target_user=credit_req.requester,
@@ -3843,8 +4005,6 @@ def approve_credit_request(request, request_id):
                 status='approved',
                 reference_id=str(credit_req.id)
             )
-            
-            messages.success(request, f"Request approved. Funds transferred.")
             
     return redirect('betting:manage_credit_requests')
 
@@ -5218,6 +5378,14 @@ def admin_dashboard(request):
         .aggregate(total=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['total']
     )
 
+    pending_crm_wallet_approvals = list(
+        CreditRequest.objects
+        .filter(status='pending', request_type__in=CRM_WALLET_APPROVAL_REQUEST_TYPES)
+        .select_related('requester', 'recipient')
+        .order_by('-created_at')[:10]
+    )
+    pending_crm_wallet_approval_count = len(pending_crm_wallet_approvals)
+
     selected_commission_period = None
     commission_period_id = (request.GET.get('commission_period_id') or '').strip()
     commission_periods = list(CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')[:104])
@@ -5278,6 +5446,8 @@ def admin_dashboard(request):
         'top_exposure_agents': top_exposure_agents,
         'platform_exposure_today': platform_exposure_today,
         'platform_sales_today': platform_sales_today,
+        'pending_crm_wallet_approvals': pending_crm_wallet_approvals,
+        'pending_crm_wallet_approval_count': pending_crm_wallet_approval_count,
         'commission_periods': commission_periods,
         'selected_commission_period': selected_commission_period,
         'commission_period_id': str(getattr(selected_commission_period, 'id', '') or ''),
@@ -7148,10 +7318,18 @@ def account_user_dashboard(request):
     selected_top_period_id_raw = (request.GET.get('top_period') or '').strip()
 
     # --- NEW: Fetch Credit/Loan Data ---
+    incoming_credit_request_filter = Q(recipient=request.user)
+    incoming_credit_request_filter |= Q(
+        request_type__in=CRM_WALLET_APPROVAL_REQUEST_TYPES,
+        recipient__user_type='account_user',
+    )
     all_incoming_credit_requests = CreditRequest.objects.filter(
-        recipient=request.user, 
+        incoming_credit_request_filter,
         status='pending'
-    ).order_by('-created_at')
+    ).select_related('requester', 'recipient').distinct().order_by('-created_at')
+    crm_wallet_approval_requests = list(
+        all_incoming_credit_requests.filter(request_type__in=CRM_WALLET_APPROVAL_REQUEST_TYPES)[:8]
+    )
     requests_paginator = Paginator(all_incoming_credit_requests, 10)
     requests_page = request.GET.get('requests_page')
     try:
@@ -7175,9 +7353,9 @@ def account_user_dashboard(request):
         active_loans_given = loans_paginator.page(loans_paginator.num_pages)
     # -----------------------------------
 
-    recent_transactions = Transaction.objects.filter(
+    recent_transactions = attach_wallet_balance_snapshots(Transaction.objects.filter(
         Q(initiating_user=request.user) | Q(user=request.user)
-    ).order_by('-timestamp')[:20]
+    ).order_by('-timestamp')[:20])
 
     today = timezone.localdate()
     account_kpis = {
@@ -8021,6 +8199,7 @@ def account_user_dashboard(request):
         'ticket_date_from': ticket_date_from,
         'ticket_date_to': ticket_date_to,
         'incoming_credit_requests': incoming_credit_requests, # NEW
+        'crm_wallet_approval_requests': crm_wallet_approval_requests,
         'active_loans_given': active_loans_given,         # NEW
         'pending_withdrawals': pending_withdrawals,
         'search_form': search_form,
@@ -8135,9 +8314,11 @@ def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
                 calc_total = Decimal('0.00')
 
             commission_rows.append({
+                'agent_id': ag.id,
                 'agent_username': (ag.username or '').strip() or (ag.email or '').strip() or '-',
                 'agent_phone_number': (ag.phone_number or '').strip() or '-',
                 'total': calc_total,
+                'partially_paid': getattr(rec, 'amount_paid', Decimal('0.00')) if rec else Decimal('0.00'),
                 'status': getattr(rec, 'status', 'pending') if rec else 'pending',
             })
     except Exception:
@@ -8233,6 +8414,8 @@ def crm_dashboard(request):
     bet_q = (request.GET.get('bet_q') or '').strip()
     bet_status = (request.GET.get('bet_status') or '').strip()
     bet_agent_id = (request.GET.get('bet_agent') or '').strip()
+    commission_agent_q = (request.GET.get('commission_agent') or '').strip()
+    hierarchy_agent_q = (request.GET.get('hierarchy_agent') or '').strip()
     selected_top_period_id_raw = (request.GET.get('top_period') or '').strip()
     segment_key = (request.GET.get('segment') or '').strip()
     comm_msg_title = (request.POST.get('campaign_title') or '').strip()
@@ -8663,6 +8846,15 @@ def crm_dashboard(request):
             .annotate(last_bet_at=last_bet_at_subq)
             .order_by('email')
         )
+        if hierarchy_agent_q:
+            agents_qs = agents_qs.filter(username__icontains=hierarchy_agent_q)
+            matched_sa_ids = set(
+                agents_qs.exclude(super_agent_id__isnull=True).values_list('super_agent_id', flat=True)
+            )
+            matched_ma_ids = set(
+                agents_qs.exclude(master_agent_id__isnull=True).values_list('master_agent_id', flat=True)
+            )
+            sas_qs = sas_qs.filter(Q(id__in=list(matched_sa_ids)) | Q(master_agent_id__in=list(matched_ma_ids)))
         ma_ids = set(sas_qs.values_list('master_agent_id', flat=True)) | set(
             agents_qs.exclude(master_agent_id__isnull=True).values_list('master_agent_id', flat=True)
         )
@@ -8695,6 +8887,11 @@ def crm_dashboard(request):
     if active_tab == 'commissions':
         selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
         crm_agents_qs = User.objects.filter(user_type='agent', is_superuser=False)
+        if commission_agent_q:
+            crm_agents_qs = crm_agents_qs.filter(
+                Q(username__icontains=commission_agent_q) |
+                Q(email__icontains=commission_agent_q)
+            )
         commission_rows, commission_period_options, selected_commission_period_id = build_weekly_commission_dashboard_rows(
             crm_agents_qs,
             selected_commission_period_id,
@@ -8737,9 +8934,11 @@ def crm_dashboard(request):
         'can_view_audit': crm_can_view_audit(request.user),
         'can_message': crm_can_message(request.user),
         'retail_hierarchy': retail_hierarchy,
+        'hierarchy_agent_q': hierarchy_agent_q,
         'commission_rows': commission_rows,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
+        'commission_agent_q': commission_agent_q,
         'top_period_options': top_period_options,
         'selected_top_period_id': selected_top_period_id,
     }
@@ -8876,6 +9075,7 @@ def retail_dashboard(request):
     player_q = (request.GET.get('player_q') or '').strip()
     player_status = (request.GET.get('player_status') or '').strip()
     player_kyc = (request.GET.get('player_kyc') or '').strip()
+    commission_agent_q = (request.GET.get('commission_agent') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -9129,13 +9329,20 @@ def retail_dashboard(request):
                 selected_period = period_qs.first()
                 selected_commission_period_id = str(selected_period.id) if selected_period else ''
 
-            comm_qs = WeeklyAgentCommission.objects.filter(agent__in=agents).select_related('agent', 'period')
+            filtered_agents = agents
+            if commission_agent_q:
+                filtered_agents = filtered_agents.filter(
+                    Q(username__icontains=commission_agent_q) |
+                    Q(email__icontains=commission_agent_q)
+                )
+
+            comm_qs = WeeklyAgentCommission.objects.filter(agent__in=filtered_agents).select_related('agent', 'period')
             if selected_period:
                 comm_qs = comm_qs.filter(period=selected_period)
 
             comm_map = {c.agent_id: c for c in comm_qs}
             commission_rows = []
-            for ag in agents.only('id', 'username', 'email', 'phone_number').order_by('email'):
+            for ag in filtered_agents.only('id', 'username', 'email', 'phone_number').order_by('email'):
                 rec = comm_map.get(ag.id)
                 calc = calculate_weekly_agent_commission_data(ag, selected_period) if selected_period else None
                 calc_total = None
@@ -9147,9 +9354,11 @@ def retail_dashboard(request):
                     calc_total = Decimal('0.00')
                 commission_rows.append(
                     {
+                        'agent_id': ag.id,
                         'agent_username': (ag.username or '').strip() or (ag.email or '').strip() or '-',
                         'agent_phone_number': (ag.phone_number or '').strip() or '-',
                         'total': calc_total,
+                        'partially_paid': getattr(rec, 'amount_paid', Decimal('0.00')) if rec else Decimal('0.00'),
                         'status': getattr(rec, 'status', 'pending') if rec else 'pending',
                     }
                 )
@@ -9284,6 +9493,7 @@ def retail_dashboard(request):
         'commission_rows': commission_rows,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
+        'commission_agent_q': commission_agent_q,
         'risk_kind': risk_kind,
         'risk_logs_page': risk_logs_page,
         'shop_q': shop_q,
@@ -10064,6 +10274,7 @@ def finance_dashboard(request):
     recon_filter = (request.GET.get('recon') or '').strip()
     fraud_filter = (request.GET.get('fraud') or '').strip()
     selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
+    commission_agent_q = (request.GET.get('commission_agent') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -10947,6 +11158,11 @@ def finance_dashboard(request):
 
     if active_tab == 'commissions':
         finance_agents_qs = User.objects.filter(user_type='agent', is_superuser=False)
+        if commission_agent_q:
+            finance_agents_qs = finance_agents_qs.filter(
+                Q(username__icontains=commission_agent_q) |
+                Q(email__icontains=commission_agent_q)
+            )
         commission_rows, commission_period_options, selected_commission_period_id = build_weekly_commission_dashboard_rows(
             finance_agents_qs,
             selected_commission_period_id,
@@ -11205,6 +11421,7 @@ def finance_dashboard(request):
         'commission_rows': commission_rows,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
+        'commission_agent_q': commission_agent_q,
         'bonuses_page': bonuses_page,
         'audit_page': audit_page,
         'settlements_page': settlements_page,
@@ -11502,13 +11719,53 @@ def crm_user_detail(request, user_id):
             ).distinct()
         return User.objects.filter(id=root_user.id)
 
+    scoped_users_qs = _crm_allowed_targets_for_root(target)
+    scoped_user_ids = list(scoped_users_qs.values_list('id', flat=True))
+    downline_user_ids = [uid for uid in scoped_user_ids if uid != target.id]
+    hierarchy_types = ['agent', 'super_agent', 'master_agent']
+    ticket_scope_ids = downline_user_ids if target.user_type in hierarchy_types else [target.id]
+    withdrawal_scope_ids = scoped_user_ids if target.user_type in hierarchy_types else [target.id]
+
     wallet = Wallet.objects.filter(user=target).first()
-    txs = Transaction.objects.filter(user=target).select_related('initiating_user').order_by('-timestamp')[:30]
+    txs = attach_wallet_balance_snapshots(
+        Transaction.objects.filter(user=target).select_related('initiating_user').order_by('-timestamp')[:30]
+    )
     deposits = Transaction.objects.filter(user=target, transaction_type='deposit').order_by('-timestamp')[:20]
     bonuses = Transaction.objects.filter(user=target, transaction_type='bonus').order_by('-timestamp')[:20]
-    tickets = BetTicket.objects.filter(user=target).order_by('-placed_at')[:20]
-    withdrawals = UserWithdrawal.objects.filter(user=target).order_by('-request_time')[:20]
-    withdrawal_reports = WithdrawalReport.objects.filter(withdrawal__user=target).select_related('withdrawal', 'user').order_by('-created_at')[:50]
+    tickets = BetTicket.objects.filter(user_id__in=ticket_scope_ids).select_related('user').order_by('-placed_at')[:20]
+    withdrawals = list(
+        UserWithdrawal.objects.filter(user_id__in=withdrawal_scope_ids).select_related('user', 'approved_rejected_by').order_by('-request_time')[:20]
+    )
+    for withdrawal in withdrawals:
+        withdrawal.entry_kind = 'withdrawal'
+        actor = getattr(withdrawal, 'approved_rejected_by', None)
+        withdrawal.actor_display = (
+            getattr(actor, 'email', '') or getattr(actor, 'username', '') or '-'
+        ) if actor else '-'
+
+    if target.user_type == 'cashier':
+        cashier_debit_logs = list(
+            Transaction.objects.filter(
+                user=target,
+                transaction_type__in=['wallet_transfer_out', 'account_user_debit', 'manual_debit', 'commission_recall_debit'],
+            )
+            .select_related('initiating_user')
+            .order_by('-timestamp')[:20]
+        )
+        for tx in cashier_debit_logs:
+            tx.entry_kind = 'wallet_debit'
+            tx.request_time = tx.timestamp
+            tx.actor_display = (
+                getattr(getattr(tx, 'initiating_user', None), 'email', '')
+                or getattr(getattr(tx, 'initiating_user', None), 'username', '')
+                or '-'
+            )
+            tx.action_label = tx.get_transaction_type_display() if hasattr(tx, 'get_transaction_type_display') else tx.transaction_type
+        withdrawals.extend(cashier_debit_logs)
+        withdrawals.sort(key=lambda item: getattr(item, 'request_time', None) or timezone.now(), reverse=True)
+        withdrawals = withdrawals[:20]
+
+    withdrawal_reports = WithdrawalReport.objects.filter(withdrawal__user_id__in=withdrawal_scope_ids).select_related('withdrawal', 'user').order_by('-created_at')[:50]
 
     profile_form = CRMUserProfileForm(instance=target)
 
@@ -11628,46 +11885,44 @@ def crm_user_detail(request, user_id):
             description = (form.cleaned_data.get('description') or '').strip()
             reason = (request.POST.get('reason') or '').strip()
 
-            with db_transaction.atomic():
-                locked_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=wallet_target, defaults={'balance': Decimal('0.00')})
-                if action == 'debit' and locked_wallet.balance < amount:
-                    messages.error(request, 'Insufficient wallet balance for debit.')
-                    return redirect('betting:crm_user_detail', user_id=target.id)
-                if action == 'credit':
-                    txn_type = 'wallet_transfer_in'
-                    crm_action = 'WALLET_CREDITED'
-                else:
-                    txn_type = 'wallet_transfer_out'
-                    crm_action = 'WALLET_DEBITED'
+            approver = get_default_wallet_request_approver()
+            if not approver:
+                messages.error(request, 'No active Account User or Admin is available to approve this wallet action.')
+                return redirect('betting:crm_user_detail', user_id=target.id)
 
-                tx = Transaction.objects.create(
-                    user=wallet_target,
-                    initiating_user=request.user,
-                    target_user=wallet_target,
-                    transaction_type=txn_type,
-                    amount=amount,
-                    is_successful=True,
-                    status='completed',
-                    description=description or f"CRM wallet {action}. {reason}".strip(),
-                    timestamp=timezone.now(),
-                )
-                locked_wallet.apply_delta(
-                    amount=(amount if action == "credit" else -amount),
-                    actor=request.user,
-                    transaction_obj=tx,
-                    reference=str(tx.id),
-                    reason=tx.description,
-                    metadata={"source": "crm_wallet_adjust", "action": action},
-                )
+            request_type = 'crm_credit' if action == 'credit' else 'crm_debit'
+            approval_reason = description or reason or f"CRM wallet {action} request"
+            credit_request = CreditRequest.objects.create(
+                requester=wallet_target,
+                recipient=approver,
+                amount=amount,
+                reason=approval_reason,
+                request_type=request_type,
+                status='pending',
+            )
 
+            CreditLog.objects.create(
+                actor=request.user,
+                target_user=wallet_target,
+                action_type=f'{request_type}_requested',
+                amount=amount,
+                status='pending',
+                reference_id=str(credit_request.id)
+            )
             CRMActionLog.objects.create(
                 actor=request.user,
                 target_user=wallet_target,
-                action_type=crm_action,
+                action_type='WALLET_CREDIT_REQUESTED' if action == 'credit' else 'WALLET_DEBIT_REQUESTED',
                 reason=reason,
-                data={'amount': str(amount), 'description': description},
+                data={
+                    'amount': str(amount),
+                    'description': description,
+                    'request_id': credit_request.id,
+                    'approver_id': approver.id,
+                    'approver_email': approver.email,
+                },
             )
-            messages.success(request, f"Wallet {action} completed.")
+            messages.success(request, f"Wallet {action} request sent for Account User/Admin approval.")
             return redirect('betting:crm_user_detail', user_id=target.id)
 
         elif 'send_message' in request.POST:

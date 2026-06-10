@@ -1350,6 +1350,10 @@ class CreditRequestForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
+        self.fields['request_type'].choices = [
+            ('credit', 'Normal Credit'),
+            ('loan', 'Loan'),
+        ]
         
         if user:
             # Hierarchy Logic: Restrict recipients to direct Upline only

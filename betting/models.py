@@ -1668,6 +1668,8 @@ class CRMActionLog(models.Model):
         ('WITHDRAWAL_UNFROZEN', 'Withdrawals Unfrozen'),
         ('WALLET_CREDITED', 'Wallet Credited'),
         ('WALLET_DEBITED', 'Wallet Debited'),
+        ('WALLET_CREDIT_REQUESTED', 'Wallet Credit Requested'),
+        ('WALLET_DEBIT_REQUESTED', 'Wallet Debit Requested'),
         ('PASSWORD_RESET', 'Password Reset'),
         ('MESSAGE_SENT', 'Message Sent'),
         ('VIP_UPDATED', 'VIP/KYC Updated'),
@@ -2132,6 +2134,8 @@ class CreditRequest(models.Model):
     REQUEST_TYPE_CHOICES = (
         ('credit', 'Normal Credit'),
         ('loan', 'Loan'),
+        ('crm_credit', 'CRM Credit Approval'),
+        ('crm_debit', 'CRM Debit Approval'),
     )
     
     requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_credit_requests')

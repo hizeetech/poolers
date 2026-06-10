@@ -5,6 +5,7 @@ import re
 import traceback
 import secrets
 import smtplib
+from types import SimpleNamespace
 from django.core.mail import send_mail
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -8827,6 +8828,7 @@ def crm_dashboard(request):
         audit_logs = list(audit_qs[:100])
 
     retail_hierarchy = []
+    hierarchy_search_results = []
     if active_tab == 'retail_hierarchy':
         last_bet_at_subq = Subquery(
             BetTicket.objects.filter(user__agent_id=OuterRef('id'))
@@ -8848,6 +8850,7 @@ def crm_dashboard(request):
         )
         if hierarchy_agent_q:
             agents_qs = agents_qs.filter(username__icontains=hierarchy_agent_q)
+            hierarchy_search_results = list(agents_qs[:50])
             matched_sa_ids = set(
                 agents_qs.exclude(super_agent_id__isnull=True).values_list('super_agent_id', flat=True)
             )
@@ -8934,6 +8937,7 @@ def crm_dashboard(request):
         'can_view_audit': crm_can_view_audit(request.user),
         'can_message': crm_can_message(request.user),
         'retail_hierarchy': retail_hierarchy,
+        'hierarchy_search_results': hierarchy_search_results,
         'hierarchy_agent_q': hierarchy_agent_q,
         'commission_rows': commission_rows,
         'commission_period_options': commission_period_options,
@@ -11743,29 +11747,74 @@ def crm_user_detail(request, user_id):
             getattr(actor, 'email', '') or getattr(actor, 'username', '') or '-'
         ) if actor else '-'
 
-    if target.user_type == 'cashier':
-        cashier_debit_logs = list(
-            Transaction.objects.filter(
-                user=target,
-                transaction_type__in=['wallet_transfer_out', 'account_user_debit', 'manual_debit', 'commission_recall_debit'],
-            )
-            .select_related('initiating_user')
-            .order_by('-timestamp')[:20]
+    debit_activity_logs = list(
+        Transaction.objects.filter(
+            user_id__in=withdrawal_scope_ids,
+        ).filter(
+            Q(transaction_type__in=['account_user_debit', 'manual_debit', 'commission_recall_debit']) |
+            Q(transaction_type='wallet_transfer_out', description__icontains='CRM debit') |
+            Q(transaction_type='wallet_transfer_out', description__icontains='withdrawal')
         )
-        for tx in cashier_debit_logs:
-            tx.entry_kind = 'wallet_debit'
-            tx.request_time = tx.timestamp
-            tx.actor_display = (
-                getattr(getattr(tx, 'initiating_user', None), 'email', '')
-                or getattr(getattr(tx, 'initiating_user', None), 'username', '')
-                or '-'
-            )
-            tx.action_label = tx.get_transaction_type_display() if hasattr(tx, 'get_transaction_type_display') else tx.transaction_type
-        withdrawals.extend(cashier_debit_logs)
+        .select_related('user', 'initiating_user')
+        .order_by('-timestamp')[:20]
+    )
+    for tx in debit_activity_logs:
+        tx.entry_kind = 'wallet_debit'
+        tx.request_time = tx.timestamp
+        tx.actor_display = (
+            getattr(getattr(tx, 'initiating_user', None), 'email', '')
+            or getattr(getattr(tx, 'initiating_user', None), 'username', '')
+            or '-'
+        )
+        tx.action_label = tx.get_transaction_type_display() if hasattr(tx, 'get_transaction_type_display') else tx.transaction_type
+    if debit_activity_logs:
+        withdrawals.extend(debit_activity_logs)
         withdrawals.sort(key=lambda item: getattr(item, 'request_time', None) or timezone.now(), reverse=True)
         withdrawals = withdrawals[:20]
 
-    withdrawal_reports = WithdrawalReport.objects.filter(withdrawal__user_id__in=withdrawal_scope_ids).select_related('withdrawal', 'user').order_by('-created_at')[:50]
+    real_withdrawal_reports = list(
+        WithdrawalReport.objects.filter(withdrawal__user_id__in=withdrawal_scope_ids).select_related('withdrawal', 'user').order_by('-created_at')[:50]
+    )
+    reported_withdrawal_ids = {r.withdrawal_id for r in real_withdrawal_reports}
+    synthetic_withdrawal_reports = []
+    for withdrawal in withdrawals:
+        if getattr(withdrawal, 'entry_kind', 'withdrawal') == 'withdrawal':
+            if withdrawal.id in reported_withdrawal_ids:
+                continue
+            synthetic_withdrawal_reports.append(
+                SimpleNamespace(
+                    requested_at=getattr(withdrawal, 'request_time', None),
+                    updated_at=getattr(withdrawal, 'approved_rejected_time', None) or getattr(withdrawal, 'request_time', None),
+                    user=getattr(withdrawal, 'user', None),
+                    username=(getattr(getattr(withdrawal, 'user', None), 'email', '') or getattr(getattr(withdrawal, 'user', None), 'username', '') or '-'),
+                    transaction_reference=f"WD-{withdrawal.id}",
+                    withdrawal_status=getattr(withdrawal, 'status', ''),
+                    event=getattr(withdrawal, 'status', 'requested'),
+                    is_admin_copy=False,
+                    email_sent_at=None,
+                    email_error='',
+                )
+            )
+        elif getattr(withdrawal, 'entry_kind', '') == 'wallet_debit':
+            synthetic_withdrawal_reports.append(
+                SimpleNamespace(
+                    requested_at=getattr(withdrawal, 'timestamp', None),
+                    updated_at=getattr(withdrawal, 'timestamp', None),
+                    user=getattr(withdrawal, 'user', None),
+                    username=(getattr(getattr(withdrawal, 'user', None), 'email', '') or getattr(getattr(withdrawal, 'user', None), 'username', '') or '-'),
+                    transaction_reference=str(getattr(withdrawal, 'id', '')),
+                    withdrawal_status='completed',
+                    event='completed',
+                    is_admin_copy=False,
+                    email_sent_at=None,
+                    email_error='',
+                )
+            )
+    withdrawal_reports = sorted(
+        real_withdrawal_reports + synthetic_withdrawal_reports,
+        key=lambda item: getattr(item, 'updated_at', None) or getattr(item, 'requested_at', None) or timezone.now(),
+        reverse=True,
+    )[:50]
 
     profile_form = CRMUserProfileForm(instance=target)
 

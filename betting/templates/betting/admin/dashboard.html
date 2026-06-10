@@ -156,6 +156,17 @@
                 </div>
             </div>
         </div>
+
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-secondary-subtle text-secondary-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">CRM Wallet Approvals</h3>
+                    <p class="card-text fs-1 fw-bold text-secondary">{{ pending_crm_wallet_approval_count }}</p>
+                    <p class="card-text fs-6 text-muted mb-1">Pending CRM credit/debit approvals</p>
+                    <a href="{% url 'betting:manage_credit_requests' %}" class="btn btn-sm btn-outline-secondary mt-2">Manage All</a>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="row g-4 mb-4">
@@ -193,6 +204,56 @@
         </div>
 
         <div class="col-lg-6">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 class="h5 mb-0 fw-semibold">CRM Wallet Approval Requests</h3>
+                        <a href="{% url 'betting:manage_credit_requests' %}" class="btn btn-sm btn-outline-secondary">Open Full Queue</a>
+                    </div>
+                    {% if pending_crm_wallet_approvals %}
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Requester</th>
+                                        <th>Approver</th>
+                                        <th>Type</th>
+                                        <th class="text-end">Amount</th>
+                                        <th>Reason</th>
+                                        <th class="text-end">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for req in pending_crm_wallet_approvals %}
+                                        <tr>
+                                            <td class="text-nowrap">{{ req.created_at|date:"Y-m-d H:i" }}</td>
+                                            <td>
+                                                {{ req.requester.email }}
+                                                <div class="small text-muted">{{ req.requester.get_user_type_display }}</div>
+                                            </td>
+                                            <td class="small text-muted">{{ req.recipient.email }}</td>
+                                            <td>{{ req.get_request_type_display }}</td>
+                                            <td class="text-end">₦{{ req.amount|floatformat:2 }}</td>
+                                            <td class="small text-muted">{{ req.reason|truncatechars:70 }}</td>
+                                            <td class="text-end">
+                                                <form action="{% url 'betting:approve_credit_request' req.id %}" method="post" class="d-inline">
+                                                    {% csrf_token %}
+                                                    <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
+                                                    <button type="submit" name="action" value="decline" class="btn btn-danger btn-sm">Decline</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-muted">No pending CRM wallet approval requests.</div>
+                    {% endif %}
+                </div>
+            </div>
+
             <div class="card border-0 shadow-sm">
                 <div class="card-body">
                     <h3 class="h5 mb-3 fw-semibold">Agents With Custom Limits</h3>

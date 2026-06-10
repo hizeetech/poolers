@@ -208,7 +208,7 @@
               <textarea name="description" class="form-control form-control-sm" rows="2" placeholder="Description (optional)"></textarea>
             </div>
             <div class="col-12 d-flex gap-2">
-              <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+              <button class="btn btn-sm btn-primary" type="submit">Send for Approval</button>
             </div>
           </form>
           {% if can_reset_password %}
@@ -284,8 +284,12 @@
               <thead class="table-light">
                 <tr>
                   <th>Time</th>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <th>User</th>
+                  {% endif %}
                   <th class="text-end">Amount</th>
                   <th>Status</th>
+                  <th>Actor</th>
                   <th class="text-end">Action</th>
                 </tr>
               </thead>
@@ -293,10 +297,20 @@
                 {% for w in withdrawals %}
                 <tr class="{% if forloop.counter > 6 %}crm-hide crm-withdrawals-row{% endif %}">
                   <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <td class="small">{{ w.user.email|default:w.user.username }}</td>
+                  {% endif %}
                   <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
-                  <td class="text-uppercase small">{{ w.status }}</td>
+                  <td class="text-uppercase small">
+                    {% if w.entry_kind == 'wallet_debit' %}
+                      {{ w.action_label|default:w.status }}
+                    {% else %}
+                      {{ w.status }}
+                    {% endif %}
+                  </td>
+                  <td class="small text-muted">{{ w.actor_display|default:"-" }}</td>
                   <td class="text-end">
-                    {% if can_approve_withdrawals and w.status == 'pending' %}
+                    {% if w.entry_kind == 'withdrawal' and can_approve_withdrawals and w.status == 'pending' %}
                       <form method="post" action="{% url 'betting:crm_withdrawal_action' w.id %}" class="d-inline">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="approve">
@@ -312,7 +326,7 @@
                   </td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="4" class="text-center text-muted py-4">No withdrawals.</td></tr>
+                <tr><td colspan="{% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}6{% else %}5{% endif %}" class="text-center text-muted py-4">No withdrawals.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -334,6 +348,9 @@
                 <tr>
                   <th>Requested</th>
                   <th>Updated</th>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <th>User</th>
+                  {% endif %}
                   <th>Ref</th>
                   <th>Status</th>
                   <th>Event</th>
@@ -347,6 +364,9 @@
                 <tr class="{% if forloop.counter > 6 %}crm-hide crm-withdrawal-reports-row{% endif %}">
                   <td class="text-nowrap">{{ r.requested_at|date:"Y-m-d H:i:s" }}</td>
                   <td class="text-nowrap">{{ r.updated_at|date:"Y-m-d H:i:s" }}</td>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <td class="small">{{ r.user.email|default:r.username|default:"-" }}</td>
+                  {% endif %}
                   <td class="text-nowrap">{{ r.transaction_reference }}</td>
                   <td class="text-uppercase small">{{ r.withdrawal_status }}</td>
                   <td class="text-uppercase small">{{ r.event }}</td>
@@ -355,7 +375,7 @@
                   <td class="small text-danger">{% if r.email_error %}{{ r.email_error|truncatechars:40 }}{% else %}-{% endif %}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="8" class="text-center text-muted py-4">No withdrawal reports.</td></tr>
+                <tr><td colspan="{% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}9{% else %}8{% endif %}" class="text-center text-muted py-4">No withdrawal reports.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -373,6 +393,9 @@
               <thead class="table-light">
                 <tr>
                   <th>Time</th>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <th>User</th>
+                  {% endif %}
                   <th>Ticket</th>
                   <th class="text-end">Stake</th>
                   <th>Status</th>
@@ -382,12 +405,15 @@
                 {% for t in tickets %}
                 <tr>
                   <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
+                  {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
+                  <td class="small">{{ t.user.email|default:t.user.username }}</td>
+                  {% endif %}
                   <td class="fw-semibold">{{ t.ticket_id }}</td>
                   <td class="text-end">₦{{ t.stake_amount|floatformat:2 }}</td>
                   <td class="text-uppercase small">{{ t.status }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="4" class="text-center text-muted py-4">No tickets.</td></tr>
+                <tr><td colspan="{% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}5{% else %}4{% endif %}" class="text-center text-muted py-4">No tickets.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -413,6 +439,8 @@
                   <th>Type</th>
                   <th>Description</th>
                   <th class="text-end">Amount</th>
+                  <th>Wallet Balance Before</th>
+                  <th>Wallet Balance After</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -423,10 +451,12 @@
                   <td class="text-uppercase small">{{ tx.transaction_type }}</td>
                   <td class="text-muted small">{{ tx.description|default:"-" }}</td>
                   <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+                  <td class="small text-muted">{% if tx.wallet_balance_before != None %}₦{{ tx.wallet_balance_before|floatformat:2 }}{% else %}-{% endif %}</td>
+                  <td class="small text-muted">{% if tx.wallet_balance_after != None %}₦{{ tx.wallet_balance_after|floatformat:2 }}{% else %}-{% endif %}</td>
                   <td class="text-uppercase small">{{ tx.status }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="5" class="text-center text-muted py-4">No transactions.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-4">No transactions.</td></tr>
                 {% endfor %}
               </tbody>
             </table>

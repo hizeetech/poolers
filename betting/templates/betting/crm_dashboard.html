@@ -96,7 +96,7 @@
   </div>
   {% endif %}
 
-  <ul class="nav nav-tabs crm-tabs mb-3" role="tablist">
+  <ul class="nav nav-tabs crm-tabs mb-3" role="tablist" id="crm-dashboard-tabs">
     <li class="nav-item" role="presentation">
       <button class="nav-link {% if active_tab == 'overview' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab">Overview</button>
     </li>
@@ -1042,6 +1042,17 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   (function () {
+    if (window.location.search && window.location.search.length > 1) {
+      window.addEventListener('load', function () {
+        const activePane = document.querySelector('.tab-pane.show.active');
+        const tabs = document.getElementById('crm-dashboard-tabs');
+        const target = activePane || tabs;
+        if (target) {
+          target.scrollIntoView({ block: 'start', behavior: 'auto' });
+        }
+      });
+    }
+
     const tabButtons = document.querySelectorAll('.crm-tabs [data-bs-toggle="tab"]');
     tabButtons.forEach(btn => {
       btn.addEventListener('shown.bs.tab', (e) => {

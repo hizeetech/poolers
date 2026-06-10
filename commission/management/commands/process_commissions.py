@@ -1,8 +1,9 @@
 from django.core.management.base import BaseCommand
-from django.utils import timezone
-from commission.models import CommissionPeriod
 from commission.services import CommissionCalculationService, CommissionPayoutService
-from datetime import timedelta
+from commission.tasks import (
+    ensure_monthly_commission_period_for_date,
+    ensure_weekly_commission_period_for_date,
+)
 
 class Command(BaseCommand):
     help = 'Process agent commissions (calculation and optional payout)'
@@ -18,20 +19,7 @@ class Command(BaseCommand):
         self.stdout.write("Starting commission processing...")
 
         # 1. Identify and create/get relevant periods
-        today = timezone.now().date()
-        
-        days_since_monday = today.weekday()
-        if days_since_monday == 0:
-            days_since_monday = 7
-        last_monday = today - timedelta(days=days_since_monday)
-        last_tuesday = last_monday - timedelta(days=6)
-        
-        # Check if weekly period exists for last week, if not create it
-        weekly_period, created = CommissionPeriod.objects.get_or_create(
-            period_type='weekly',
-            start_date=last_tuesday,
-            end_date=last_monday
-        )
+        weekly_period, created = ensure_weekly_commission_period_for_date()
         
         if not weekly_period.is_processed:
             self.stdout.write(f"Processing weekly period: {weekly_period}")
@@ -43,17 +31,7 @@ class Command(BaseCommand):
         else:
             self.stdout.write(f"Weekly period {weekly_period} already processed.")
 
-        # Determine last completed month
-        first_day_this_month = today.replace(day=1)
-        last_day_last_month = first_day_this_month - timedelta(days=1)
-        first_day_last_month = last_day_last_month.replace(day=1)
-        
-        # Check if monthly period exists for last month
-        monthly_period, created = CommissionPeriod.objects.get_or_create(
-            period_type='monthly',
-            start_date=first_day_last_month,
-            end_date=last_day_last_month
-        )
+        monthly_period, created = ensure_monthly_commission_period_for_date()
         
         if not monthly_period.is_processed:
             self.stdout.write(f"Processing monthly period: {monthly_period}")

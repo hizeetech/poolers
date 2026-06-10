@@ -263,6 +263,7 @@ $(document).ready(function() {
                     <div class="text-muted small">{{ metrics_label }} ({{ metrics_start }} → {{ metrics_end }})</div>
                 </div>
                 <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+                    <input type="hidden" name="section" value="overview">
                     <div>
                         <label class="form-label small text-muted mb-1">From</label>
                         <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
@@ -272,7 +273,7 @@ $(document).ready(function() {
                         <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
                     </div>
                     <button class="btn btn-sm btn-dark" type="submit">Apply</button>
-                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:account_user_dashboard' %}">Reset</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="{% url 'betting:account_user_dashboard' %}?section=overview#acct-overview-section">Reset</a>
                 </form>
             </div>
         </div>
@@ -813,6 +814,7 @@ $(document).ready(function() {
                 </div>
                 <div class="card-body collapse show" id="pendingCommissionsBody">
                     <form method="get" class="mb-3">
+                        <input type="hidden" name="section" value="commissions">
                         <div class="row g-2 align-items-end">
                             <div class="col-12 col-md-5">
                                 <label class="form-label small text-muted mb-1">Commission Period</label>
@@ -828,12 +830,13 @@ $(document).ready(function() {
                             </div>
                             <div class="col-12 col-md-2 d-flex gap-2">
                                 <button type="submit" class="btn btn-dark w-100">Filter</button>
-                                <a class="btn btn-outline-secondary w-100" href="{% url 'betting:account_user_dashboard' %}">Reset</a>
+                                <a class="btn btn-outline-secondary w-100" href="{% url 'betting:account_user_dashboard' %}?section=commissions#acct-commissions-section">Reset</a>
                             </div>
                         </div>
                     </form>
                     <form method="post">
                         {% csrf_token %}
+                        <input type="hidden" name="section" value="commissions">
                         <input type="hidden" name="commission_period" value="{{ selected_commission_period_id|default:'' }}">
                         <input type="hidden" name="commission_search" value="{{ commission_search|default:'' }}">
                         <div class="mb-3">
@@ -1022,6 +1025,7 @@ $(document).ready(function() {
                 </div>
                 <div class="card-body collapse show" id="allBetTicketsBody">
                     <form method="get" class="mb-4 d-flex flex-wrap gap-2 align-items-end">
+                        <input type="hidden" name="section" value="bets">
                         <input type="hidden" name="start_date" value="{{ start_date }}">
                         <input type="hidden" name="end_date" value="{{ end_date }}">
                         <div>
@@ -1091,10 +1095,10 @@ $(document).ready(function() {
                             <div class="text-muted small">Page {{ bet_tickets_page.number }} of {{ bet_tickets_page.paginator.num_pages }}</div>
                             <div class="d-flex gap-2">
                                 {% if bet_tickets_page.has_previous %}
-                                <a class="btn btn-sm btn-outline-secondary" href="?start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
+                                <a class="btn btn-sm btn-outline-secondary" href="?section=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.previous_page_number }}">Prev</a>
                                 {% endif %}
                                 {% if bet_tickets_page.has_next %}
-                                <a class="btn btn-sm btn-outline-secondary" href="?start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
+                                <a class="btn btn-sm btn-outline-secondary" href="?section=bets&start_date={{ start_date }}&end_date={{ end_date }}&bet_q={{ bet_q }}&bet_status={{ bet_status }}&bet_agent={{ bet_agent }}&bets_page={{ bet_tickets_page.next_page_number }}">Next</a>
                                 {% endif %}
                             </div>
                         </div>
@@ -1370,6 +1374,22 @@ $(document).ready(function() {
             selectAllWithdrawals.addEventListener('change', function() {
                 const checkboxes = document.querySelectorAll('.withdrawal-checkbox');
                 checkboxes.forEach(cb => cb.checked = this.checked);
+            });
+        }
+
+        const section = (new URLSearchParams(window.location.search).get('section') || '').trim().toLowerCase();
+        const sectionMap = {
+            overview: 'acct-overview-section',
+            commissions: 'acct-commissions-section',
+            bets: 'acct-bets-section'
+        };
+        const targetId = sectionMap[section];
+        if (targetId) {
+            window.addEventListener('load', function() {
+                const target = document.getElementById(targetId);
+                if (target) {
+                    target.scrollIntoView({ block: 'start', behavior: 'auto' });
+                }
             });
         }
     </script>

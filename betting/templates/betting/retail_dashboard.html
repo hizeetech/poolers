@@ -70,7 +70,7 @@
     </div>
   </div>
 
-  <ul class="nav nav-tabs rm-tabs mb-3">
+  <ul class="nav nav-tabs rm-tabs mb-3" id="retail-dashboard-tabs">
     <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'hierarchy' %}active{% endif %}" href="?tab=hierarchy&start_date={{ start_date }}&end_date={{ end_date }}">Hierarchy</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'shops' %}active{% endif %}" href="?tab=shops&start_date={{ start_date }}&end_date={{ end_date }}">Shops</a></li>
@@ -851,6 +851,17 @@
   </div>
   {% endif %}
 </div>
+<script>
+  (function () {
+    if (!window.location.search || window.location.search.length <= 1) return;
+    window.addEventListener('load', function () {
+      const target = document.getElementById('retail-dashboard-tabs');
+      if (target) {
+        target.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+    });
+  })();
+</script>
 
 {% if active_tab == 'overview' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

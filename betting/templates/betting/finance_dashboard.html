@@ -63,7 +63,7 @@
     </form>
   </div>
 
-  <ul class="nav nav-tabs fin-tabs mb-3">
+  <ul class="nav nav-tabs fin-tabs mb-3" id="finance-dashboard-tabs">
     <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'bets' %}active{% endif %}" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}">Bets</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'transactions' %}active{% endif %}" href="?tab=transactions&start_date={{ start_date }}&end_date={{ end_date }}">Transactions</a></li>
@@ -1414,6 +1414,17 @@
   </div>
   {% endif %}
 </div>
+<script>
+  (function () {
+    if (!window.location.search || window.location.search.length <= 1) return;
+    window.addEventListener('load', function () {
+      const target = document.getElementById('finance-dashboard-tabs');
+      if (target) {
+        target.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+    });
+  })();
+</script>
 
 {% if active_tab == 'overview' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

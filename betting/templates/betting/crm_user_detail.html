@@ -388,7 +388,7 @@
       <div class="card shadow-sm">
         <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
           <span>Recent Tickets</span>
-          {% if tickets|length > 6 %}
+          {% if tickets|length > 7 %}
           <button type="button" class="crm-see-toggle" data-crm-toggle="tickets">Show All</button>
           {% endif %}
         </div>
@@ -408,7 +408,7 @@
               </thead>
               <tbody>
                 {% for t in tickets %}
-                <tr class="{% if forloop.counter > 6 %}crm-hide crm-tickets-row{% endif %}">
+                <tr class="{% if forloop.counter > 7 %}crm-hide crm-tickets-row{% endif %}">
                   <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
                   {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
                   <td class="small">{{ t.user.email|default:t.user.username }}</td>

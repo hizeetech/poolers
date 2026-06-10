@@ -612,7 +612,7 @@
             const rows = Array.from(document.querySelectorAll('#ticket-list-body .recent-ticket-history-row'));
             if (!toggleBtn) return;
 
-            if (rows.length <= 6) {
+            if (rows.length <= 7) {
                 recentTicketHistoryExpanded = false;
                 toggleBtn.classList.add('d-none');
                 toggleBtn.textContent = 'Show All';
@@ -621,7 +621,7 @@
 
             toggleBtn.classList.remove('d-none');
             rows.forEach((row, index) => {
-                row.classList.toggle(hideClass, !recentTicketHistoryExpanded && index >= 6);
+                row.classList.toggle(hideClass, !recentTicketHistoryExpanded && index >= 7);
             });
             toggleBtn.textContent = recentTicketHistoryExpanded ? 'Hide' : 'Show All';
         }

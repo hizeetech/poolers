@@ -180,7 +180,7 @@
             <div class="col-12">
               <label class="form-label small text-muted mb-1">Apply To (Agent / Downlines)</label>
               <select name="target_user_id" id="crmTargetUserSelect" class="form-select form-select-sm" style="width: 100%;">
-                <option value="{{ target_user.id }}" selected>
+                <option value="{{ target_user.id }}" selected data-balance="{{ wallet.balance|default_if_none:0 }}">
                   {{ target_user.get_full_name|default:target_user.email }} ({{ target_user.email }}){% if target_user.username %} @{{ target_user.username }}{% endif %} [{{ target_user.get_user_type_display }}]
                 </option>
               </select>
@@ -197,7 +197,7 @@
             </div>
             <div class="col-md-6">
               <label class="form-label small text-muted mb-1">Amount</label>
-              <input type="number" step="0.01" min="0.01" name="amount" class="form-control form-control-sm" required>
+              <input type="number" step="0.01" min="0.01" name="amount" id="crmWalletAmountInput" class="form-control form-control-sm" placeholder="Current balance: ₦{{ wallet.balance|default_if_none:0|floatformat:2 }}" required>
             </div>
             <div class="col-md-6">
               <label class="form-label small text-muted mb-1">Reason</label>
@@ -551,6 +551,24 @@
 <script>
   (function() {
     const hideClass = 'crm-hide';
+    const formatBalance = (raw) => {
+      const n = Number(raw || 0);
+      return `Current balance: ₦${Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}`;
+    };
+    const updateWalletAmountPlaceholder = () => {
+      const input = document.getElementById('crmWalletAmountInput');
+      const sel = document.getElementById('crmTargetUserSelect');
+      if (!input || !sel) return;
+
+      let balance = 0;
+      const selectedData = typeof window.jQuery === 'function' ? window.jQuery(sel).select2('data') : [];
+      if (selectedData && selectedData.length && selectedData[0] && selectedData[0].balance != null) {
+        balance = selectedData[0].balance;
+      } else if (sel.selectedOptions && sel.selectedOptions.length) {
+        balance = sel.selectedOptions[0].dataset.balance || 0;
+      }
+      input.placeholder = formatBalance(balance);
+    };
     const updateHiddenTargets = () => {
       const sel = document.getElementById('crmTargetUserSelect');
       const v = sel ? (sel.value || '') : '';
@@ -558,6 +576,7 @@
       const m = document.getElementById('crmMessageTargetUserId');
       if (r) r.value = v;
       if (m) m.value = v;
+      updateWalletAmountPlaceholder();
     };
 
     document.addEventListener('DOMContentLoaded', function() {
@@ -587,6 +606,7 @@
           minimumInputLength: 0
         });
         $sel.on('change', updateHiddenTargets);
+        $sel.on('select2:select', updateWalletAmountPlaceholder);
       }
       updateHiddenTargets();
 

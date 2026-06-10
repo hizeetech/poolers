@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from commission.services import CommissionCalculationService, CommissionPayoutService
 from commission.tasks import (
     ensure_monthly_commission_period_for_date,
-    ensure_weekly_commission_period_for_date,
+    ensure_last_completed_weekly_commission_period_for_date,
 )
 
 class Command(BaseCommand):
@@ -19,7 +19,7 @@ class Command(BaseCommand):
         self.stdout.write("Starting commission processing...")
 
         # 1. Identify and create/get relevant periods
-        weekly_period, created = ensure_weekly_commission_period_for_date()
+        weekly_period, created = ensure_last_completed_weekly_commission_period_for_date()
         
         if not weekly_period.is_processed:
             self.stdout.write(f"Processing weekly period: {weekly_period}")

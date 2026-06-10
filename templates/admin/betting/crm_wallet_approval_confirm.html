@@ -41,6 +41,42 @@
 
         <form method="post" style="margin-top: 16px;">
             {% csrf_token %}
+            {% if action == "approve" %}
+            {% if request.user.user_type == "admin" or request.user.is_superuser %}
+                <div style="margin-bottom: 16px;">
+                    <label for="id_account_user_wallet_user_id" style="display:block; font-weight:600; margin-bottom:6px;">
+                        {% if request_obj.request_type == "crm_credit" %}
+                            Account User wallet source
+                        {% else %}
+                            Account User wallet reimbursement target
+                        {% endif %}
+                    </label>
+                    <select name="account_user_wallet_user_id" id="id_account_user_wallet_user_id" style="min-width: 340px; max-width: 100%; padding: 6px 8px;">
+                        {% if request.user.is_superuser and request_obj.request_type == "crm_credit" %}
+                            <option value="">Approve without debiting any wallet</option>
+                        {% else %}
+                            <option value="">Select Account User</option>
+                        {% endif %}
+                        {% for acc_user in account_user_choices %}
+                            <option value="{{ acc_user.id }}"{% if selected_account_user_id == acc_user.id|stringformat:"s" %} selected{% endif %}>
+                                {{ acc_user.email }} - N{{ acc_user.wallet_balance|floatformat:2 }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <div style="margin-top: 6px; color: #666; font-size: 12px;">
+                        {% if request_obj.request_type == "crm_credit" %}
+                            {% if request.user.is_superuser %}
+                                Superadmin can leave this blank to approve and credit without taking from any wallet, or choose an Account User wallet to debit.
+                            {% else %}
+                                Choose the Account User wallet that should be debited for this CRM credit approval.
+                            {% endif %}
+                        {% else %}
+                            Choose the Account User wallet that should be reimbursed after the target user is debited.
+                        {% endif %}
+                    </div>
+                </div>
+            {% endif %}
+            {% endif %}
             <input type="submit" value="{{ action_label }}" class="default">
             <a href="{{ changelist_url }}" class="button cancel-link">Cancel</a>
         </form>

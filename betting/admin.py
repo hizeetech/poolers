@@ -2307,10 +2307,32 @@ class CreditRequestAdmin(admin.ModelAdmin):
 
 
 class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
-    list_display = ('created_at', 'requester', 'recipient', 'request_type', 'amount', 'status', 'approval_actions')
+    list_display = (
+        'created_at',
+        'requester',
+        'recipient',
+        'request_type',
+        'amount',
+        'status',
+        'approved_by_display',
+        'wallet_flow_display',
+        'approval_actions',
+    )
     list_filter = ('status', 'request_type', 'created_at')
     search_fields = ('requester__email', 'recipient__email', 'reason')
-    readonly_fields = ('requester', 'recipient', 'amount', 'reason', 'request_type', 'status', 'created_at', 'updated_at')
+    readonly_fields = (
+        'requester',
+        'recipient',
+        'amount',
+        'reason',
+        'request_type',
+        'status',
+        'approved_by_display',
+        'wallet_flow_display',
+        'created_at',
+        'updated_at',
+    )
+    fields = readonly_fields
 
     def get_queryset(self, request):
         return (
@@ -2325,6 +2347,69 @@ class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
+
+    def _account_user_wallet_choices(self):
+        account_users = list(
+            User.objects.filter(is_active=True, user_type='account_user')
+            .order_by('email')
+        )
+        balances = {
+            wallet.user_id: wallet.balance
+            for wallet in Wallet.objects.filter(user_id__in=[u.id for u in account_users])
+        }
+        for account_user in account_users:
+            account_user.wallet_balance = balances.get(account_user.id, Decimal('0.00'))
+        return account_users
+
+    def _get_crm_approval_log(self, obj):
+        cached = getattr(obj, '_crm_approval_log_cache', None)
+        if cached is not None:
+            return cached
+        log = CRMActionLog.objects.filter(
+            target_user=obj.requester,
+            action_type__in=['WALLET_CREDITED', 'WALLET_DEBITED'],
+            data__request_id=obj.id,
+        ).order_by('-created_at').first()
+        obj._crm_approval_log_cache = log
+        return log
+
+    def approved_by_display(self, obj):
+        if obj.status != 'approved':
+            return '-'
+        log = self._get_crm_approval_log(obj)
+        if not log:
+            return '-'
+        approved_by = log.data.get('approved_by') or getattr(log.actor, 'email', '') or '-'
+        approved_by_role = log.data.get('approved_by_role') or '-'
+        return format_html(
+            '{}<div class="small" style="color:#6c757d;">{}</div>',
+            approved_by,
+            approved_by_role.replace('_', ' ').title(),
+        )
+    approved_by_display.short_description = 'Approved By'
+
+    def wallet_flow_display(self, obj):
+        if obj.status != 'approved':
+            return '-'
+        log = self._get_crm_approval_log(obj)
+        if not log:
+            return '-'
+
+        if obj.request_type == 'crm_credit':
+            funding_mode = log.data.get('funding_mode')
+            funding_email = log.data.get('funding_account_user_email')
+            if funding_mode == 'superadmin_override':
+                return 'No wallet debit'
+            if funding_mode == 'account_user_wallet' and funding_email:
+                return format_html('Debited<div class="small" style="color:#6c757d;">{}</div>', funding_email)
+            return 'Debited approver wallet'
+
+        reimbursement_mode = log.data.get('reimbursement_mode')
+        reimbursement_email = log.data.get('reimbursement_account_user_email')
+        if reimbursement_mode == 'account_user_wallet' and reimbursement_email:
+            return format_html('Reimbursed<div class="small" style="color:#6c757d;">{}</div>', reimbursement_email)
+        return 'Reimbursed approver wallet'
+    wallet_flow_display.short_description = 'Wallet Flow'
 
     def get_urls(self):
         opts = self.model._meta
@@ -2366,16 +2451,25 @@ class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
             return redirect(changelist_url)
 
         if request.method == 'POST':
+            selected_account_user = None
+            selected_account_user_id = (request.POST.get('account_user_wallet_user_id') or '').strip()
+            if selected_account_user_id:
+                selected_account_user = User.objects.filter(
+                    id=selected_account_user_id,
+                    is_active=True,
+                    user_type='account_user',
+                ).first()
             try:
                 message_text, message_level = views.process_credit_request_decision(
                     actor=request.user,
                     credit_req=credit_req,
                     action=action,
+                    account_user_wallet_user=selected_account_user,
                 )
                 self.message_user(request, message_text, level=message_level)
+                return redirect(changelist_url)
             except views.CreditRequestProcessError as exc:
                 self.message_user(request, str(exc), level=messages.ERROR)
-            return redirect(changelist_url)
 
         context = {
             **self.admin_site.each_context(request),
@@ -2385,6 +2479,8 @@ class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
             'action': action,
             'action_label': 'Approve' if action == 'approve' else 'Decline',
             'changelist_url': changelist_url,
+            'account_user_choices': self._account_user_wallet_choices(),
+            'selected_account_user_id': (request.POST.get('account_user_wallet_user_id') or '').strip(),
         }
         return render(request, 'admin/betting/crm_wallet_approval_confirm.html', context)
 

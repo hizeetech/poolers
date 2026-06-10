@@ -275,7 +275,7 @@
         <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
           <span>Recent Withdrawals</span>
           {% if withdrawals|length > 6 %}
-          <button type="button" class="crm-see-toggle" data-crm-toggle="withdrawals">See All</button>
+          <button type="button" class="crm-see-toggle" data-crm-toggle="withdrawals">Show All</button>        
           {% endif %}
         </div>
         <div class="card-body p-0">
@@ -338,7 +338,7 @@
         <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
           <span>Withdrawal Reports</span>
           {% if withdrawal_reports|length > 6 %}
-          <button type="button" class="crm-see-toggle" data-crm-toggle="withdrawal_reports">See All</button>
+          <button type="button" class="crm-see-toggle" data-crm-toggle="withdrawal_reports">Show All</button> 
           {% endif %}
         </div>
         <div class="card-body p-0">
@@ -386,7 +386,12 @@
 
     <div class="col-lg-6">
       <div class="card shadow-sm">
-        <div class="card-header bg-light fw-semibold">Recent Tickets</div>
+        <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+          <span>Recent Tickets</span>
+          {% if tickets|length > 6 %}
+          <button type="button" class="crm-see-toggle" data-crm-toggle="tickets">Show All</button>
+          {% endif %}
+        </div>
         <div class="card-body p-0">
           <div class="table-responsive">
             <table class="table table-sm mb-0">
@@ -403,7 +408,7 @@
               </thead>
               <tbody>
                 {% for t in tickets %}
-                <tr>
+                <tr class="{% if forloop.counter > 6 %}crm-hide crm-tickets-row{% endif %}">
                   <td class="text-nowrap">{{ t.placed_at|date:"Y-m-d H:i" }}</td>
                   {% if target_user.user_type == 'agent' or target_user.user_type == 'super_agent' or target_user.user_type == 'master_agent' %}
                   <td class="small">{{ t.user.email|default:t.user.username }}</td>
@@ -427,7 +432,7 @@
         <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
           <span>Recent Transactions</span>
           {% if transactions|length > 6 %}
-          <button type="button" class="crm-see-toggle" data-crm-toggle="transactions">See All</button>
+          <button type="button" class="crm-see-toggle" data-crm-toggle="transactions">Show All</button>
           {% endif %}
         </div>
         <div class="card-body p-0">
@@ -470,7 +475,7 @@
         <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
           <span>Login / IP History</span>
           {% if login_attempts|length > 6 %}
-          <button type="button" class="crm-see-toggle" data-crm-toggle="logins">See All</button>
+          <button type="button" class="crm-see-toggle" data-crm-toggle="logins">Show All</button>
           {% endif %}
         </div>
         <div class="card-body p-0">
@@ -643,6 +648,7 @@
       const toggleMap = {
         withdrawals: { rows: 'crm-withdrawals-row' },
         withdrawal_reports: { rows: 'crm-withdrawal-reports-row' },
+        tickets: { rows: 'crm-tickets-row' },
         transactions: { rows: 'crm-transactions-row' },
         logins: { rows: 'crm-logins-row' },
       };
@@ -653,7 +659,7 @@
         const rows = document.querySelectorAll('.' + cfg.rows);
         const anyHidden = Array.from(rows).some(r => r.classList.contains(hideClass));
         rows.forEach(r => r.classList.toggle(hideClass, !anyHidden ? true : false));
-        if (btn) btn.textContent = anyHidden ? 'Hide' : 'See All';
+        if (btn) btn.textContent = anyHidden ? 'Hide' : 'Show All';
       };
 
       document.querySelectorAll('[data-crm-toggle]').forEach((btn) => {

@@ -16,6 +16,14 @@ def get_last_completed_weekly_period_bounds(reference_date=None):
     start_date = end_date - timedelta(days=6)
     return start_date, end_date
 
+
+def get_current_weekly_period_bounds(reference_date=None):
+    today = reference_date or timezone.localdate()
+    days_since_tuesday = (today.weekday() - 1) % 7
+    start_date = today - timedelta(days=days_since_tuesday)
+    end_date = start_date + timedelta(days=6)
+    return start_date, end_date
+
 def get_last_completed_monthly_period_bounds(reference_date=None):
     today = reference_date or timezone.localdate()
     first_day_this_month = today.replace(day=1)
@@ -24,6 +32,15 @@ def get_last_completed_monthly_period_bounds(reference_date=None):
     return start_date, end_date
 
 def ensure_weekly_commission_period_for_date(reference_date=None):
+    start_date, end_date = get_current_weekly_period_bounds(reference_date=reference_date)
+    return CommissionPeriod.objects.get_or_create(
+        period_type='weekly',
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def ensure_last_completed_weekly_commission_period_for_date(reference_date=None):
     start_date, end_date = get_last_completed_weekly_period_bounds(reference_date=reference_date)
     return CommissionPeriod.objects.get_or_create(
         period_type='weekly',
@@ -79,7 +96,7 @@ def process_commissions(self, payout=False):
     # 1. Identify and create/get relevant periods
     today = timezone.localdate()
 
-    weekly_period, created = ensure_weekly_commission_period_for_date(reference_date=today)
+    weekly_period, created = ensure_last_completed_weekly_commission_period_for_date(reference_date=today)
     
     if not weekly_period.is_processed:
         logger.info(f"Processing weekly period: {weekly_period}")

@@ -24,7 +24,7 @@ def ensure_weekly_commission_periodic_task():
             "crontab": schedule,
             "enabled": True,
             "queue": "commission_queue",
-            "description": "Automatically creates the last completed Tuesday-to-Monday weekly commission period every Wednesday at 00:00.",
+            "description": "Automatically creates the current Tuesday-to-Monday weekly commission period every Wednesday at 00:00.",
         },
     )
     return schedule, schedule_created, task, task_created

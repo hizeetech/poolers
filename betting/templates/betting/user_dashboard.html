@@ -91,7 +91,7 @@
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
                     <h5 class="mb-0 fw-bold">Recent Tickets</h5>
                     <div class="d-flex gap-2">
-                        {% if recent_tickets|length > 6 %}
+                        {% if recent_tickets|length > 7 %}
                         <button type="button" class="btn btn-sm btn-outline-secondary" id="recentTicketsToggleBtn">Show All</button>
                         {% endif %}
                         <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-sm btn-outline-primary">View All</a>
@@ -112,7 +112,7 @@
                             </thead>
                             <tbody>
                                 {% for ticket in recent_tickets %}
-                                <tr class="{% if forloop.counter > 6 %}recent-tickets-row recent-tickets-hide{% endif %}">
+                                <tr class="{% if forloop.counter > 7 %}recent-tickets-row recent-tickets-hide{% endif %}">
                                     <td class="ps-3 fw-bold">#{{ ticket.ticket_id|slice:":8" }}...</td>
                                     <td>{{ ticket.placed_at|date:"M d, H:i" }}</td>
                                     <td>₦{{ ticket.stake_amount|floatformat:2|intcomma }}</td>

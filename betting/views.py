@@ -7421,6 +7421,7 @@ def account_user_dashboard(request):
 
             qd = QueryDict(mutable=True)
             qd['commission_period'] = str(selected_period_id)
+            qd['section'] = 'commissions'
             commission_search_post = (request.POST.get('commission_search') or '').strip()
             if commission_search_post:
                 qd['commission_search'] = commission_search_post
@@ -7477,6 +7478,7 @@ def account_user_dashboard(request):
                 messages.success(request, f"Successfully paid {success_count} commissions.")
             qd = QueryDict(mutable=True)
             qd['commission_period'] = str(selected_period_id)
+            qd['section'] = 'commissions'
             commission_search_post = (request.POST.get('commission_search') or '').strip()
             if commission_search_post:
                 qd['commission_search'] = commission_search_post

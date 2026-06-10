@@ -585,6 +585,39 @@
             </div>
             <button class="btn btn-sm btn-primary" type="submit">Search</button>
           </form>
+          {% if hierarchy_agent_q %}
+          <div class="mb-3">
+            <div class="fw-semibold mb-2">Matched Agents</div>
+            <div class="table-responsive">
+              <table class="table table-sm mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Agent</th>
+                    <th>Username</th>
+                    <th>Phone</th>
+                    <th>Master Agent</th>
+                    <th>Super Agent</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for ag in hierarchy_search_results %}
+                  <tr>
+                    <td class="text-muted small">{{ ag.email|default:ag.username }}</td>
+                    <td class="text-muted small">{{ ag.username|default:"-" }}</td>
+                    <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
+                    <td class="text-muted small">{{ ag.master_agent.email|default:"-" }}</td>
+                    <td class="text-muted small">{{ ag.super_agent.email|default:"-" }}</td>
+                    <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_user_detail' ag.id %}">Open</a></td>
+                  </tr>
+                  {% empty %}
+                  <tr><td colspan="6" class="text-center text-muted py-3">No agents matched that username.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% endif %}
           {% if retail_hierarchy %}
             <div class="accordion" id="crmRetailHierarchy">
               {% for n in retail_hierarchy %}

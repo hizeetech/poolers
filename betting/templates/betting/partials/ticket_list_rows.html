@@ -1,6 +1,6 @@
 {% load betting_extras %}
 {% for t in tickets %}
-<tr>
+<tr class="{% if forloop.counter > 6 %}recent-ticket-history-row recent-ticket-history-hide{% endif %}">
     <td data-label="Ticket ID">{{ t.ticket_id }}</td>
     <td data-label="Type">{{ t.get_bet_type_display|title }}</td>
     <td data-label="Sel." class="text-center">{{ t.selections.count }}</td>

@@ -4,6 +4,14 @@
 
 {% block title %}User Dashboard - Pool Betting{% endblock %}
 
+{% block extra_css %}
+<style>
+    .recent-tickets-hide {
+        display: none !important;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container py-4">
     <div class="row mb-4">
@@ -82,7 +90,12 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
                     <h5 class="mb-0 fw-bold">Recent Tickets</h5>
-                    <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-sm btn-outline-primary">View All</a>
+                    <div class="d-flex gap-2">
+                        {% if recent_tickets|length > 6 %}
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="recentTicketsToggleBtn">Show All</button>
+                        {% endif %}
+                        <a href="{% url 'betting:check_ticket_status' %}" class="btn btn-sm btn-outline-primary">View All</a>
+                    </div>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
@@ -99,7 +112,7 @@
                             </thead>
                             <tbody>
                                 {% for ticket in recent_tickets %}
-                                <tr>
+                                <tr class="{% if forloop.counter > 6 %}recent-tickets-row recent-tickets-hide{% endif %}">
                                     <td class="ps-3 fw-bold">#{{ ticket.ticket_id|slice:":8" }}...</td>
                                     <td>{{ ticket.placed_at|date:"M d, H:i" }}</td>
                                     <td>₦{{ ticket.stake_amount|floatformat:2|intcomma }}</td>
@@ -170,4 +183,21 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const toggleBtn = document.getElementById('recentTicketsToggleBtn');
+        if (!toggleBtn) return;
+
+        const hideClass = 'recent-tickets-hide';
+        const rows = Array.from(document.querySelectorAll('.recent-tickets-row'));
+        toggleBtn.addEventListener('click', function() {
+            const anyHidden = rows.some((row) => row.classList.contains(hideClass));
+            rows.forEach((row) => row.classList.toggle(hideClass, !anyHidden ? true : false));
+            toggleBtn.textContent = anyHidden ? 'Hide' : 'Show All';
+        });
+    });
+</script>
 {% endblock %}

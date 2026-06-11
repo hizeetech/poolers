@@ -8667,9 +8667,10 @@ def crm_dashboard(request):
             )
             try:
                 from notifications.tasks import send_campaign
-                send_campaign.delay(obj.id)
-            except Exception:
-                pass
+                send_campaign(obj.id)
+            except Exception as e:
+                messages.error(request, f'Broadcast could not be sent immediately: {e}')
+                return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
             CRMActionLog.objects.create(
                 actor=request.user,
                 action_type='MESSAGE_SENT',
@@ -8681,7 +8682,7 @@ def crm_dashboard(request):
                     'notification_type': 'SYSTEM_ANNOUNCEMENT',
                 },
             )
-            messages.success(request, 'Broadcast queued.')
+            messages.success(request, 'Broadcast sent.')
             return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
 
     users = User.objects.none()
@@ -12188,7 +12189,17 @@ def crm_user_detail(request, user_id):
             errors = {}
             if via_inapp:
                 try:
-                    create_notification(recipient=msg_target, notification_type='SYSTEM_ANNOUNCEMENT', title=title, message=body)
+                    create_notification(
+                        recipient=msg_target,
+                        notification_type='SYSTEM_ANNOUNCEMENT',
+                        title=title,
+                        message=body,
+                        data={
+                            'popup_category': 'message',
+                            'delivery_channel': 'in_app',
+                            'url': '/notifications/',
+                        },
+                    )
                     sent.append('in_app')
                 except Exception as e:
                     errors['in_app'] = str(e)
@@ -12214,6 +12225,17 @@ def crm_user_detail(request, user_id):
                     )
                     m.attach_alternative(html, "text/html")
                     m.send(fail_silently=False)
+                    create_notification(
+                        recipient=msg_target,
+                        notification_type='SYSTEM_ANNOUNCEMENT',
+                        title=title,
+                        message=body,
+                        data={
+                            'popup_category': 'message',
+                            'delivery_channel': 'email',
+                            'url': '/notifications/',
+                        },
+                    )
                     sent.append('email')
                 except Exception as e:
                     errors['email'] = str(e)

@@ -15,6 +15,7 @@ class NotificationPayload:
     notification_type: str
     title: str
     message: str
+    data: dict
     created_at: str
     is_read: bool
 
@@ -68,7 +69,15 @@ def create_broadcast_notification(*, queryset, notification_type, title, message
     if channel_layer:
         async_to_sync(channel_layer.group_send)(
             "notifications_broadcast",
-            {"type": "notifications.broadcast", "payload": {"title": title, "message": message, "notification_type": notification_type}},
+            {
+                "type": "notifications.broadcast",
+                "payload": {
+                    "title": title,
+                    "message": message,
+                    "notification_type": notification_type,
+                    "data": data or {},
+                },
+            },
         )
 
     return created
@@ -84,6 +93,7 @@ def _broadcast_to_user(*, recipient_id, notification):
         "notification_type": notification.notification_type,
         "title": notification.title,
         "message": notification.message,
+        "data": notification.data or {},
         "created_at": notification.created_at.isoformat(),
         "is_read": bool(notification.is_read),
     }

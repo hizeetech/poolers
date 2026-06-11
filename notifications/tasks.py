@@ -47,7 +47,12 @@ def broadcast_announcement(announcement_id):
         notification_type="SYSTEM_ANNOUNCEMENT",
         title=ann.title,
         message=ann.message,
-        data={"announcement_id": ann.id},
+        data={
+            "announcement_id": ann.id,
+            "popup_category": "message",
+            "delivery_channel": "broadcast",
+            "url": "/notifications/",
+        },
     )
 
 
@@ -163,7 +168,12 @@ def send_campaign(campaign_id):
         notification_type=campaign.notification_type or "SYSTEM_ANNOUNCEMENT",
         title=campaign.title,
         message=campaign.message,
-        data={"campaign_id": campaign.id},
+        data={
+            "campaign_id": campaign.id,
+            "popup_category": "message",
+            "delivery_channel": "broadcast",
+            "url": "/notifications/",
+        },
     )
 
     campaign.sent_at = timezone.now()

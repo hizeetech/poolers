@@ -1,5 +1,7 @@
 from django.contrib import admin
+from django.http import JsonResponse
 from django.shortcuts import render
+from django.template.loader import render_to_string
 from django.utils import timezone
 from django.contrib import messages
 from decimal import Decimal
@@ -376,62 +378,68 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).filter(status__in=['pending', 'approved', 'partially_paid'])
 
+    def _build_agent_data(self, *, period, search_q=''):
+        from .models import AgentCommissionProfile
+        from .services import calculate_weekly_agent_commission_data
+
+        today = timezone.localdate()
+        is_live_period = period.start_date <= today <= period.end_date
+        profiles = AgentCommissionProfile.objects.filter(is_active=True).select_related('user', 'plan')
+        if search_q:
+            profiles = profiles.filter(
+                Q(user__username__icontains=search_q) |
+                Q(user__first_name__icontains=search_q) |
+                Q(user__last_name__icontains=search_q) |
+                Q(user__other_name__icontains=search_q)
+            )
+
+        agent_data = []
+        for profile in profiles:
+            agent = profile.user
+            existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
+            calc = calculate_weekly_agent_commission_data(agent, period, include_breakdown=True) or {}
+            calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
+
+            if existing:
+                existing_total = getattr(existing, 'commission_total_amount', None) or Decimal('0.00')
+                agent_data.append({
+                    'agent': agent,
+                    'plan': profile.plan.name,
+                    'calc': calc,
+                    'status': existing.get_status_display(),
+                    'is_paid': existing.status == 'paid',
+                    'can_pay': (not is_live_period) and (existing.status != 'paid') and ((calc_total > 0) or (existing_total > 0)),
+                })
+            else:
+                agent_data.append({
+                    'agent': agent,
+                    'plan': profile.plan.name,
+                    'calc': calc,
+                    'status': 'Pending (Calculated)',
+                    'is_paid': False,
+                    'can_pay': (not is_live_period) and (calc_total > 0),
+                })
+
+        return agent_data, is_live_period
+
     def add_view(self, request, form_url='', extra_context=None):
         from django.template.response import TemplateResponse
         from django.shortcuts import redirect
         from urllib.parse import quote
-        from .models import CommissionPeriod, AgentCommissionProfile
-        from .services import calculate_weekly_agent_commission_data
+        from .models import CommissionPeriod
 
         periods = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
         selected_period_id = request.GET.get('period_id') or request.POST.get('period_id')
         search_q = (request.GET.get('q') or request.POST.get('q') or '').strip()
         
         agent_data = []
+        selected_period = None
+        is_live_period = False
         if selected_period_id:
             try:
                 period = CommissionPeriod.objects.get(id=selected_period_id)
-                # Find all agents with active profiles
-                profiles = AgentCommissionProfile.objects.filter(is_active=True).select_related('user', 'plan')
-                if search_q:
-                    profiles = profiles.filter(
-                        Q(user__username__icontains=search_q) |
-                        Q(user__first_name__icontains=search_q) |
-                        Q(user__last_name__icontains=search_q) |
-                        Q(user__other_name__icontains=search_q)
-                    )
-                
-                for profile in profiles:
-                    agent = profile.user
-                    
-                    # Check existing
-                    existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
-                    calc = calculate_weekly_agent_commission_data(agent, period, include_breakdown=True) or {}
-                    
-                    if existing:
-                        calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
-                        existing_total = getattr(existing, 'commission_total_amount', None) or Decimal('0.00')
-                        row = {
-                            'agent': agent,
-                            'plan': profile.plan.name,
-                            'calc': calc,
-                            'status': existing.get_status_display(),
-                            'is_paid': existing.status == 'paid',
-                            'can_pay': (existing.status != 'paid') and ((calc_total > 0) or (existing_total > 0)),
-                        }
-                        agent_data.append(row)
-                    else:
-                        calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
-                        row = {
-                            'agent': agent,
-                            'plan': profile.plan.name,
-                            'calc': calc,
-                            'status': 'Pending (Calculated)',
-                            'is_paid': False,
-                            'can_pay': calc_total > 0,
-                        }
-                        agent_data.append(row)
-                            
+                selected_period = period
+                agent_data, is_live_period = self._build_agent_data(period=period, search_q=search_q)
             except CommissionPeriod.DoesNotExist:
                 pass
 
@@ -462,11 +470,23 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
             **self.admin_site.each_context(request),
             'opts': self.model._meta,
             'periods': periods,
+            'selected_period': selected_period,
             'selected_period_id': selected_period_id,
             'search_query': search_q,
             'agent_data': agent_data,
+            'is_live_period': is_live_period,
             'title': 'Bulk Weekly Commission Payment',
         }
+        if request.method == 'GET' and request.GET.get('live_fragment') == '1' and selected_period:
+            return JsonResponse({
+                'is_live_period': is_live_period,
+                'updated_at': timezone.localtime().strftime('%Y-%m-%d %H:%M:%S'),
+                'results_html': render_to_string(
+                    "admin/commission/weeklyagentcommission/_results.html",
+                    context,
+                    request=request,
+                ),
+            })
         return TemplateResponse(request, "admin/commission/weeklyagentcommission/bulk_add.html", context)
 
     def pay_commissions(self, request, queryset):

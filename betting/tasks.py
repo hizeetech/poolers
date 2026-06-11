@@ -420,6 +420,7 @@ def recalculate_tickets_for_fixture(fixture_id):
 
         tickets = BetTicket.objects.filter(status="pending", selections__fixture=fixture).distinct()
         count = tickets.count()
+        affected_ticket_ids = [str(ticket.id) for ticket in tickets]
         logger.info(f"Starting recalculation for {count} tickets for fixture {fixture}")
 
         for ticket in tickets:
@@ -432,6 +433,9 @@ def recalculate_tickets_for_fixture(fixture_id):
                 logger.error(f"Error updating ticket {ticket.id}: {e}")
         
         logger.info(f"Completed recalculation for {count} tickets for fixture {fixture}")
+        if affected_ticket_ids:
+            from commission.tasks import refresh_weekly_commissions_for_ticket_ids
+            refresh_weekly_commissions_for_ticket_ids(affected_ticket_ids)
         
     except Exception as e:
         logger.error(f"Critical error in recalculate_tickets_for_fixture: {e}")

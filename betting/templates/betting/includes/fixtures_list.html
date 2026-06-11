@@ -1,4 +1,14 @@
 {% if current_betting_period %}
+<style>
+    @keyframes fixture-update-blink {
+        0%, 45% { opacity: 1; }
+        55%, 100% { opacity: 0.2; }
+    }
+
+    .fixture-update-indicator {
+        animation: fixture-update-blink 2.6s ease-in-out infinite;
+    }
+</style>
 <h3 class="mb-3">
     <span class="badge bg-primary px-3 py-2 rounded-3">{{ current_betting_period.name }} Fixtures</span>
 </h3>
@@ -13,9 +23,15 @@
             <p class="card-text text-muted mb-0">
                 {{ fixture.match_date|date:"D, M d" }} {{ fixture.match_time|time:"H:i" }}
             </p>
+            {% if fixture.datetime_updated_at %}
+            <div class="fixture-update-indicator text-warning fw-bold" style="font-size: 11px; line-height: 1.1; margin-top: 2px;">Date or/and Time Updated</div>
+            {% endif %}
         </div>
         
         <div class="d-flex flex-wrap gap-2 justify-content-md-end" id="fixture-{{ fixture.id }}-buttons" style="max-width: 100%;">
+            {% if fixture.odds_updated_at %}
+            <span class="fixture-update-indicator text-danger fw-bold me-2" style="font-size: 11px; line-height: 1; align-self: center;">Odd Updated</span>
+            {% endif %}
             {% if fixture.home_win_odd %}
             <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="home_win" data-odd="{{ fixture.home_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} Win ({{ fixture.home_win_odd|floatformat:2 }})"
                 data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">

@@ -1,8 +1,13 @@
 from celery import shared_task
+from django.apps import apps
 from django.utils import timezone
 from datetime import timedelta
 from commission.models import CommissionPeriod
-from commission.services import CommissionCalculationService, CommissionPayoutService
+from commission.services import (
+    CommissionCalculationService,
+    CommissionPayoutService,
+    calculate_weekly_agent_commission,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -74,6 +79,99 @@ def ensure_weekly_commission_period(self):
     return {
         'period_id': weekly_period.id,
         'created': created,
+        'start_date': weekly_period.start_date.isoformat(),
+        'end_date': weekly_period.end_date.isoformat(),
+    }
+
+
+def refresh_weekly_commissions_for_ticket_ids(ticket_ids):
+    if not ticket_ids:
+        return {"period_ids": [], "agent_ids": [], "updated": 0}
+
+    BetTicket = apps.get_model('betting', 'BetTicket')
+    tickets = list(
+        BetTicket.objects.filter(id__in=ticket_ids)
+        .select_related('user__agent')
+        .only('id', 'placed_at', 'user_id', 'user__agent_id')
+    )
+    if not tickets:
+        return {"period_ids": [], "agent_ids": [], "updated": 0}
+
+    period_cache = {}
+    affected_pairs = set()
+
+    for ticket in tickets:
+        agent_id = getattr(getattr(ticket, 'user', None), 'agent_id', None)
+        placed_at = getattr(ticket, 'placed_at', None)
+        placed_date = placed_at.date() if placed_at else None
+        if not agent_id or not placed_date:
+            continue
+
+        if placed_date not in period_cache:
+            weekly_period, _ = ensure_weekly_commission_period_for_date(reference_date=placed_date)
+            period_cache[placed_date] = weekly_period.id
+        affected_pairs.add((period_cache[placed_date], agent_id))
+
+    if not affected_pairs:
+        return {"period_ids": [], "agent_ids": [], "updated": 0}
+
+    User = apps.get_model('betting', 'User')
+    period_ids = sorted({period_id for period_id, _ in affected_pairs})
+    agent_ids = sorted({agent_id for _, agent_id in affected_pairs})
+    period_map = CommissionPeriod.objects.in_bulk(period_ids)
+    agent_map = User.objects.in_bulk(agent_ids)
+
+    updated = 0
+    for period_id, agent_id in sorted(affected_pairs):
+        period = period_map.get(period_id)
+        agent = agent_map.get(agent_id)
+        if not period or not agent:
+            continue
+        calculate_weekly_agent_commission(agent, period)
+        updated += 1
+
+    return {"period_ids": period_ids, "agent_ids": agent_ids, "updated": updated}
+
+
+@shared_task(
+    name='commission.tasks.refresh_weekly_commissions_for_ticket_ids',
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=5,
+    max_retries=5,
+    retry_kwargs={'max_retries': 5}
+)
+def refresh_weekly_commissions_for_ticket_ids_task(self, ticket_ids):
+    result = refresh_weekly_commissions_for_ticket_ids(ticket_ids or [])
+    logger.info(
+        "Refreshed weekly commissions for %s agent-period pairs from %s tickets.",
+        result.get('updated', 0),
+        len(ticket_ids or []),
+    )
+    return result
+
+
+@shared_task(
+    name='commission.tasks.finalize_last_completed_weekly_commissions',
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=5,
+    max_retries=5,
+    retry_kwargs={'max_retries': 5}
+)
+def finalize_last_completed_weekly_commissions(self):
+    weekly_period, created = ensure_last_completed_weekly_commission_period_for_date()
+    count = CommissionCalculationService.calculate_weekly_commissions(weekly_period)
+    logger.info(
+        "Finalized weekly commission period: %s (created=%s, updated_agents=%s)",
+        weekly_period,
+        created,
+        count,
+    )
+    return {
+        'period_id': weekly_period.id,
+        'created': created,
+        'updated_agents': count,
         'start_date': weekly_period.start_date.isoformat(),
         'end_date': weekly_period.end_date.isoformat(),
     }

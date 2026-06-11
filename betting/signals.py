@@ -544,7 +544,7 @@ def notify_fixture_status_and_odds_change(sender, instance, **kwargs):
             return
         cache.set(dedupe_key, 1, timeout=600)
         title = "Odds Changed"
-        message = f"Odds updated for {instance.home_team} vs {instance.away_team}."
+        message = f"Odd updated for {instance.home_team} vs {instance.away_team}."
         for u in users_qs.iterator():
             try:
                 create_notification(

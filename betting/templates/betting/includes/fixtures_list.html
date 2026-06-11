@@ -30,7 +30,14 @@
         
         <div class="d-flex flex-wrap gap-2 justify-content-md-end" id="fixture-{{ fixture.id }}-buttons" style="max-width: 100%;">
             {% if fixture.odds_updated_at %}
-            <span class="fixture-update-indicator text-danger fw-bold me-2" style="font-size: 11px; line-height: 1; align-self: center;">Odd Updated</span>
+            <span class="fixture-update-indicator fw-bold me-2 {% if fixture.odds_update_direction == 'up' %}text-success{% elif fixture.odds_update_direction == 'down' %}text-danger{% else %}text-warning{% endif %}" style="font-size: 11px; line-height: 1; align-self: center;">
+                {% if fixture.odds_update_direction == 'up' %}
+                <i class="fas fa-caret-up"></i>
+                {% elif fixture.odds_update_direction == 'down' %}
+                <i class="fas fa-caret-down"></i>
+                {% endif %}
+                Odd Updated
+            </span>
             {% endif %}
             {% if fixture.home_win_odd %}
             <button class="btn btn-outline-primary btn-sm px-3 rounded-pill bet-selection-btn" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="home_win" data-odd="{{ fixture.home_win_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} Win ({{ fixture.home_win_odd|floatformat:2 }})"

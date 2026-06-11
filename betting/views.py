@@ -5589,8 +5589,8 @@ def admin_dashboard(request):
         )
         period_ggr = (period_turnover or Decimal('0.00')) - (period_winnings or Decimal('0.00'))
         period_commission_paid = (
-            WeeklyAgentCommission.objects.filter(period=selected_commission_period, status='paid')
-            .aggregate(total=Coalesce(Sum('commission_total_amount'), Value(0), output_field=DecimalField()))['total']
+            WeeklyAgentCommission.objects.filter(period=selected_commission_period)
+            .aggregate(total=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()))['total']
         )
         period_ngr = (period_ggr or Decimal('0.00')) - (period_commission_paid or Decimal('0.00'))
 
@@ -7576,7 +7576,7 @@ def account_user_dashboard(request):
     top_fixtures, top_period_options, selected_top_period_id = build_top_fixtures_by_betting_period(selected_top_period_id_raw)
 
     platform_users_qs = User.objects.filter(is_superuser=False)
-    kpi_cache_key = f"account_user:kpis:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
+    kpi_cache_key = f"account_user:kpis:v2:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
     chart_cache_key = f"account_user:charts:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
     kpis = cache.get(kpi_cache_key)
     charts_data = cache.get(chart_cache_key)
@@ -7593,14 +7593,16 @@ def account_user_dashboard(request):
         total_payouts = tickets_qs.filter(status='won').aggregate(v=Sum('max_winning'))['v'] or Decimal('0.00')
         ggr = total_stake_amount - total_payouts
 
-        bonus_cost = Transaction.objects.filter(
-            transaction_type='bonus',
-            status='completed',
-            is_successful=True,
-            timestamp__gte=metrics_start_dt,
-            timestamp__lte=metrics_end_dt,
-        ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
-        ngr = ggr - bonus_cost
+        weekly_periods_in_range = CommissionPeriod.objects.filter(
+            period_type='weekly',
+            start_date__gte=metrics_start_date,
+            end_date__lte=metrics_end_date,
+        )
+        total_paid_commission = (
+            WeeklyAgentCommission.objects.filter(period__in=weekly_periods_in_range)
+            .aggregate(v=Sum('amount_paid'))['v'] or Decimal('0.00')
+        )
+        ngr = ggr - total_paid_commission
 
         total_deposits = Transaction.objects.filter(
             transaction_type='deposit',
@@ -7630,6 +7632,7 @@ def account_user_dashboard(request):
             'total_stake_amount': str(total_stake_amount),
             'total_payouts': str(total_payouts),
             'ggr': str(ggr),
+            'total_paid_commission': str(total_paid_commission),
             'ngr': str(ngr),
             'total_deposits': str(total_deposits),
             'total_withdrawals': str(total_withdrawals),

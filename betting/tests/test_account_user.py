@@ -1,12 +1,20 @@
+from datetime import datetime
+from django.core.cache import cache
+from django.http import HttpResponse
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.utils import timezone
+from unittest.mock import patch
 from betting.models import User, Wallet
+from betting.models import BetTicket
+from commission.models import CommissionPeriod, WeeklyAgentCommission
 from decimal import Decimal
 
 class AccountUserTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.password = 'password123'
+        cache.clear()
         
         # Create Account User
         self.account_user = User.objects.create_user(
@@ -95,3 +103,160 @@ class AccountUserTests(TestCase):
         resp3 = self.client.post(url, {'search_user': '1', 'search_term': '08012345678'})
         self.assertEqual(resp3.status_code, 200)
         self.assertContains(resp3, 'john.doe@test.com')
+
+    def test_account_user_dashboard_ngr_uses_paid_weekly_commission_for_period(self):
+        self.client.force_login(self.account_user)
+        captured_context = {}
+
+        player = User.objects.create_user(
+            email='overview-player@test.com',
+            password=self.password,
+            user_type='player',
+        )
+        agent = User.objects.create_user(
+            email='overview-agent@test.com',
+            password=self.password,
+            user_type='agent',
+        )
+        Wallet.objects.get_or_create(user=player, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=timezone.datetime(2026, 6, 9).date(),
+            end_date=timezone.datetime(2026, 6, 15).date(),
+        )
+        other_period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=timezone.datetime(2026, 6, 2).date(),
+            end_date=timezone.datetime(2026, 6, 8).date(),
+        )
+
+        placed_at = timezone.make_aware(datetime(2026, 6, 10, 12, 0, 0))
+        BetTicket.objects.create(
+            user=player,
+            stake_amount=Decimal('300.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('600.00'),
+            max_winning=Decimal('100.00'),
+            status='won',
+            bet_type='single',
+            original_selections_count=1,
+            placed_at=placed_at,
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period,
+            total_stake=Decimal('300.00'),
+            total_winnings=Decimal('100.00'),
+            ggr=Decimal('200.00'),
+            commission_total_amount=Decimal('50.00'),
+            amount_paid=Decimal('50.00'),
+            status='paid',
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=other_period,
+            total_stake=Decimal('500.00'),
+            total_winnings=Decimal('250.00'),
+            ggr=Decimal('250.00'),
+            commission_total_amount=Decimal('999.00'),
+            amount_paid=Decimal('999.00'),
+            status='paid',
+        )
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:account_user_dashboard'),
+                {
+                    'section': 'overview',
+                    'start_date': '2026-06-09',
+                    'end_date': '2026-06-15',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['kpis']['ggr'], '200.00')
+        self.assertEqual(captured_context['kpis']['total_paid_commission'], '50.00')
+        self.assertEqual(captured_context['kpis']['ngr'], '150.00')
+
+    def test_admin_dashboard_period_ngr_uses_amount_paid_including_partial_payments(self):
+        self.client.force_login(self.super_admin)
+        captured_context = {}
+
+        player = User.objects.create_user(
+            email='admin-overview-player@test.com',
+            password=self.password,
+            user_type='player',
+        )
+        agent_one = User.objects.create_user(
+            email='admin-overview-agent-one@test.com',
+            password=self.password,
+            user_type='agent',
+        )
+        agent_two = User.objects.create_user(
+            email='admin-overview-agent-two@test.com',
+            password=self.password,
+            user_type='agent',
+        )
+        Wallet.objects.get_or_create(user=player, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=agent_one, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=agent_two, defaults={'balance': Decimal('0.00')})
+
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=timezone.datetime(2026, 6, 9).date(),
+            end_date=timezone.datetime(2026, 6, 15).date(),
+        )
+
+        placed_at = timezone.make_aware(datetime(2026, 6, 10, 12, 0, 0))
+        BetTicket.objects.create(
+            user=player,
+            stake_amount=Decimal('300.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('600.00'),
+            max_winning=Decimal('100.00'),
+            status='won',
+            bet_type='single',
+            original_selections_count=1,
+            placed_at=placed_at,
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent_one,
+            period=period,
+            total_stake=Decimal('300.00'),
+            total_winnings=Decimal('100.00'),
+            ggr=Decimal('200.00'),
+            commission_total_amount=Decimal('80.00'),
+            amount_paid=Decimal('50.00'),
+            status='partially_paid',
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent_two,
+            period=period,
+            total_stake=Decimal('300.00'),
+            total_winnings=Decimal('100.00'),
+            ggr=Decimal('200.00'),
+            commission_total_amount=Decimal('40.00'),
+            amount_paid=Decimal('40.00'),
+            status='paid',
+        )
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:admin_dashboard'),
+                {'commission_period_id': str(period.id)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['period_ggr'], Decimal('200.00'))
+        self.assertEqual(captured_context['period_commission_paid'], Decimal('90.00'))
+        self.assertEqual(captured_context['period_ngr'], Decimal('110.00'))

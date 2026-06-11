@@ -790,6 +790,9 @@ class Fixture(models.Model):
     away_score = models.IntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
+    odds_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    datetime_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
     # Odds Fields
     home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -2046,6 +2049,78 @@ def refund_stake_on_void(sender, instance, **kwargs):
                     )
         except BetTicket.DoesNotExist:
             pass
+
+
+@receiver(pre_save, sender=Fixture)
+@receiver(pre_save, sender=Result)
+def track_fixture_update_flags(sender, instance, **kwargs):
+    if not getattr(instance, "pk", None):
+        return
+
+    old = (
+        Fixture.objects.filter(pk=instance.pk)
+        .only(
+            "match_date",
+            "match_time",
+            "home_win_odd",
+            "draw_odd",
+            "away_win_odd",
+            "over_1_5_odd",
+            "under_1_5_odd",
+            "over_2_5_odd",
+            "under_2_5_odd",
+            "over_3_5_odd",
+            "under_3_5_odd",
+            "btts_yes_odd",
+            "btts_no_odd",
+            "home_dnb_odd",
+            "away_dnb_odd",
+        )
+        .first()
+    )
+    if old is None:
+        return
+
+    datetime_changed = old.match_date != instance.match_date or old.match_time != instance.match_time
+
+    def _norm_decimal(v):
+        if v is None:
+            return None
+        if v == "":
+            return None
+        try:
+            return Decimal(str(v)).quantize(Decimal("0.01"))
+        except Exception:
+            return str(v)
+
+    odds_changed = False
+    for field in (
+        "home_win_odd",
+        "draw_odd",
+        "away_win_odd",
+        "over_1_5_odd",
+        "under_1_5_odd",
+        "over_2_5_odd",
+        "under_2_5_odd",
+        "over_3_5_odd",
+        "under_3_5_odd",
+        "btts_yes_odd",
+        "btts_no_odd",
+        "home_dnb_odd",
+        "away_dnb_odd",
+    ):
+        if _norm_decimal(getattr(old, field, None)) != _norm_decimal(getattr(instance, field, None)):
+            odds_changed = True
+            break
+
+    if not datetime_changed and not odds_changed:
+        return
+
+    now = timezone.now()
+    if datetime_changed:
+        instance.datetime_updated_at = now
+    if odds_changed:
+        instance.odds_updated_at = now
 
 @receiver(post_save, sender=Fixture)
 @receiver(post_save, sender=Result)

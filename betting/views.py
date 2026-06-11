@@ -6012,6 +6012,7 @@ def declare_result(request, fixture_id):
             bets_on_this_fixture = BetTicket.objects.filter(
                 selections__fixture=fixture 
             ).distinct().select_for_update() 
+            affected_ticket_ids = [str(pk) for pk in bets_on_this_fixture.values_list('id', flat=True)]
 
             for ticket in bets_on_this_fixture:
                 # Find the specific selection for *this* fixture within *this* ticket
@@ -6127,6 +6128,9 @@ def declare_result(request, fixture_id):
 
             messages.success(request, f"Result declared for {fixture.home_team} vs {fixture.away_team} as '{fixture.get_result_display()}'. All associated tickets processed.")
             log_admin_activity(request, f"Declared result for fixture {fixture.id} ({fixture.home_team} vs {fixture.away_team}) as {fixture.result}.")
+            if affected_ticket_ids:
+                from commission.tasks import refresh_weekly_commissions_for_ticket_ids_task
+                transaction.on_commit(lambda: refresh_weekly_commissions_for_ticket_ids_task.delay(affected_ticket_ids))
             return redirect('betting_admin:manage_fixtures')
         else:
             for field, errors in form.errors.items():

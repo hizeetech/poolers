@@ -713,12 +713,18 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
         logger.warning(f"Agent {agent.email} has no commission profile.")
         return None
 
+    today = timezone.localdate()
+    is_live_period = period.start_date <= today <= period.end_date
+
+    # For the active weekly period, include newly placed/open tickets so the admin view updates live.
+    excluded_statuses = ['cancelled', 'deleted'] if is_live_period else ['pending', 'cancelled', 'deleted']
+
     # Find tickets: Cashiers under this agent
     tickets = BetTicket.objects.filter(
         user__agent=agent,
         placed_at__date__gte=period.start_date,
         placed_at__date__lte=period.end_date
-    ).exclude(status__in=['pending', 'cancelled', 'deleted'])
+    ).exclude(status__in=excluded_statuses)
     
     total_stake = (tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)).quantize(Decimal('0.01'))
     total_winnings = (tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)).quantize(Decimal('0.01'))
@@ -840,7 +846,8 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
         'commission_hybrid_amount': commission_multiple_amount,
         'commission_single_amount': commission_single_amount,
         'commission_multiple_amount': commission_multiple_amount,
-        'commission_total_amount': commission_total_amount
+        'commission_total_amount': commission_total_amount,
+        'is_live_period': is_live_period,
     }
     return data
 
@@ -848,7 +855,10 @@ def calculate_weekly_agent_commission(agent, period):
     data = calculate_weekly_agent_commission_data(agent, period)
     if not data:
         return None
-        
+
+    # This flag is only used by the admin live view and is not stored on the model.
+    data.pop('is_live_period', None)
+
     record, created = WeeklyAgentCommission.objects.update_or_create(
         agent=agent,
         period=period,

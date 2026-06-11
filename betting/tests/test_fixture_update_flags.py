@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.test import TestCase
 from django.utils import timezone
 
+from betting.forms import FixtureForm
 from betting.models import BettingPeriod, Fixture
 
 
@@ -31,6 +32,7 @@ class FixtureUpdateFlagTests(TestCase):
         self.fixture.refresh_from_db()
         self.assertIsNone(self.fixture.datetime_updated_at)
         self.assertIsNone(self.fixture.odds_updated_at)
+        self.assertEqual(self.fixture.odds_update_direction, "")
 
     def test_datetime_updated_at_set_when_match_time_changes(self):
         self.fixture.match_time = (timezone.localtime(timezone.now()) + timedelta(hours=1)).time().replace(second=0, microsecond=0)
@@ -45,4 +47,29 @@ class FixtureUpdateFlagTests(TestCase):
         self.fixture.refresh_from_db()
         self.assertIsNone(self.fixture.datetime_updated_at)
         self.assertIsNotNone(self.fixture.odds_updated_at)
+        self.assertEqual(self.fixture.odds_update_direction, "up")
 
+    def test_odds_update_direction_set_to_down_when_odds_decrease(self):
+        self.fixture.draw_odd = "3.20"
+        self.fixture.save()
+        self.fixture.refresh_from_db()
+        self.assertIsNotNone(self.fixture.odds_updated_at)
+        self.assertEqual(self.fixture.odds_update_direction, "down")
+
+    def test_fixture_form_shows_up_indicator_under_draw_odd(self):
+        self.fixture.draw_odd = "3.60"
+        self.fixture.save()
+        form = FixtureForm(instance=self.fixture)
+        rendered = str(form["draw_odd"])
+        self.assertIn("fas fa-caret-up", rendered)
+        self.assertIn("text-success", rendered)
+        self.assertIn("Odd Updated", rendered)
+
+    def test_fixture_form_shows_down_indicator_under_draw_odd(self):
+        self.fixture.draw_odd = "3.20"
+        self.fixture.save()
+        form = FixtureForm(instance=self.fixture)
+        rendered = str(form["draw_odd"])
+        self.assertIn("fas fa-caret-down", rendered)
+        self.assertIn("text-danger", rendered)
+        self.assertIn("Odd Updated", rendered)

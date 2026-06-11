@@ -769,6 +769,11 @@ class BettingPeriod(models.Model):
         return self.name
 
 class Fixture(models.Model):
+    ODDS_UPDATE_DIRECTION_CHOICES = (
+        ('up', 'Up'),
+        ('down', 'Down'),
+        ('mixed', 'Mixed'),
+    )
     STATUS_CHOICES = (
         ('scheduled', 'Scheduled'),
         ('live', 'Live'),
@@ -792,6 +797,7 @@ class Fixture(models.Model):
 
     odds_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
     datetime_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    odds_update_direction = models.CharField(max_length=10, choices=ODDS_UPDATE_DIRECTION_CHOICES, blank=True, default='')
 
     # Odds Fields
     home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -2094,6 +2100,8 @@ def track_fixture_update_flags(sender, instance, **kwargs):
             return str(v)
 
     odds_changed = False
+    increased = False
+    decreased = False
     for field in (
         "home_win_odd",
         "draw_odd",
@@ -2109,9 +2117,17 @@ def track_fixture_update_flags(sender, instance, **kwargs):
         "home_dnb_odd",
         "away_dnb_odd",
     ):
-        if _norm_decimal(getattr(old, field, None)) != _norm_decimal(getattr(instance, field, None)):
+        old_value = _norm_decimal(getattr(old, field, None))
+        new_value = _norm_decimal(getattr(instance, field, None))
+        if old_value != new_value:
             odds_changed = True
-            break
+            if old_value is None or new_value is None:
+                continue
+            if isinstance(old_value, Decimal) and isinstance(new_value, Decimal):
+                if new_value > old_value:
+                    increased = True
+                elif new_value < old_value:
+                    decreased = True
 
     if not datetime_changed and not odds_changed:
         return
@@ -2121,6 +2137,14 @@ def track_fixture_update_flags(sender, instance, **kwargs):
         instance.datetime_updated_at = now
     if odds_changed:
         instance.odds_updated_at = now
+        if increased and decreased:
+            instance.odds_update_direction = 'mixed'
+        elif increased:
+            instance.odds_update_direction = 'up'
+        elif decreased:
+            instance.odds_update_direction = 'down'
+        else:
+            instance.odds_update_direction = ''
 
 @receiver(post_save, sender=Fixture)
 @receiver(post_save, sender=Result)

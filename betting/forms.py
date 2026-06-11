@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.contrib import messages 
 from django.db.models import Q 
+from django.utils.html import format_html
 
 import logging
 from django.conf import settings
@@ -23,6 +24,22 @@ from pending_registration.models import PendingAgentRegistration
 # Get the custom User model dynamically
 CustomUser = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+class OddUpdateIndicatorNumberInput(forms.NumberInput):
+    def __init__(self, *args, indicator_html="", **kwargs):
+        self.indicator_html = indicator_html
+        super().__init__(*args, **kwargs)
+
+    def render(self, name, value, attrs=None, renderer=None):
+        input_html = super().render(name, value, attrs=attrs, renderer=renderer)
+        if not self.indicator_html:
+            return input_html
+        return format_html(
+            '{}<div style="font-size: 11px; line-height: 1.1; margin-top: 2px; white-space: nowrap;">{}</div>',
+            input_html,
+            self.indicator_html,
+        )
 
 # --- User Registration Form (for Frontend Self-Registration) ---
 class UserRegistrationForm(forms.ModelForm):
@@ -505,6 +522,7 @@ class FixtureForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        draw_indicator_html = ""
         if self.instance.pk:
             odds_fields = [
                 'home_win_odd', 'draw_odd', 'away_win_odd',
@@ -520,6 +538,25 @@ class FixtureForm(forms.ModelForm):
                     self.fields[active_field].initial = False
                 else:
                     self.fields[active_field].initial = True
+
+            if self.instance.odds_updated_at:
+                if self.instance.odds_update_direction == 'up':
+                    draw_indicator_html = format_html(
+                        '<span class="text-success fw-bold"><i class="fas fa-caret-up"></i> Odd Updated</span>'
+                    )
+                elif self.instance.odds_update_direction == 'down':
+                    draw_indicator_html = format_html(
+                        '<span class="text-danger fw-bold"><i class="fas fa-caret-down"></i> Odd Updated</span>'
+                    )
+                else:
+                    draw_indicator_html = format_html(
+                        '<span class="text-warning fw-bold">Odd Updated</span>'
+                    )
+
+        self.fields['draw_odd'].widget = OddUpdateIndicatorNumberInput(
+            attrs={'class': 'form-control', 'step': '0.01'},
+            indicator_html=draw_indicator_html,
+        )
 
         self.order_fields([
             'betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'serial_number', 'status', 'is_active',

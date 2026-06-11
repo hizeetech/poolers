@@ -1,7 +1,10 @@
 from django.test import TestCase, Client
 from django.urls import reverse
 from decimal import Decimal
+from unittest.mock import patch
 from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket
+from notifications.models import Notification, NotificationCampaign
+from notifications.tasks import send_campaign
 
 class RBACTests(TestCase):
     def setUp(self):
@@ -129,6 +132,66 @@ class RBACTests(TestCase):
         self.player.refresh_from_db()
         self.assertFalse(self.player.is_active)
         self.assertTrue(CRMActionLog.objects.filter(target_user=self.player, action_type='USER_SUSPENDED').exists())
+
+    def test_crm_in_app_message_creates_popup_notification(self):
+        self.client.force_login(self.crm_viewer)
+        resp = self.client.post(reverse('betting:crm_user_detail', args=[self.player.id]), {
+            'send_message': '1',
+            'target_user_id': str(self.player.id),
+            'msg_title': 'Support Update',
+            'msg_body': 'Please check your account notice.',
+            'via_inapp': '1',
+        })
+        self.assertNotEqual(resp.status_code, 500)
+        notif = Notification.objects.filter(recipient=self.player, title='Support Update').latest('created_at')
+        self.assertEqual(notif.data.get('popup_category'), 'message')
+        self.assertEqual(notif.data.get('delivery_channel'), 'in_app')
+
+    @patch('django.core.mail.EmailMultiAlternatives.send', return_value=1)
+    def test_crm_email_message_creates_popup_notification(self, _mock_send):
+        self.client.force_login(self.crm_viewer)
+        resp = self.client.post(reverse('betting:crm_user_detail', args=[self.player.id]), {
+            'send_message': '1',
+            'target_user_id': str(self.player.id),
+            'msg_title': 'Email Notice',
+            'msg_body': 'Check your email inbox.',
+            'via_email': '1',
+        })
+        self.assertNotEqual(resp.status_code, 500)
+        notif = Notification.objects.filter(recipient=self.player, title='Email Notice').latest('created_at')
+        self.assertEqual(notif.data.get('popup_category'), 'message')
+        self.assertEqual(notif.data.get('delivery_channel'), 'email')
+
+    def test_broadcast_campaign_creates_message_popup_metadata(self):
+        campaign = NotificationCampaign.objects.create(
+            title='Broadcast Notice',
+            message='A new platform-wide broadcast is available.',
+            notification_type='SYSTEM_ANNOUNCEMENT',
+            send_to_all=False,
+            target_user_ids=[self.player.id],
+            created_by=self.crm_viewer,
+        )
+
+        created = send_campaign(campaign.id)
+
+        self.assertEqual(created, 1)
+        notif = Notification.objects.filter(recipient=self.player, title='Broadcast Notice').latest('created_at')
+        self.assertEqual(notif.data.get('popup_category'), 'message')
+        self.assertEqual(notif.data.get('delivery_channel'), 'broadcast')
+
+    def test_crm_dashboard_broadcast_sends_immediately(self):
+        self.client.force_login(self.crm_viewer)
+        resp = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'communications',
+            'create_campaign': '1',
+            'campaign_title': 'Immediate Broadcast',
+            'campaign_message': 'This should arrive immediately.',
+        })
+        self.assertNotEqual(resp.status_code, 500)
+        self.assertTrue(NotificationCampaign.objects.filter(title='Immediate Broadcast', sent_at__isnull=False).exists())
+        notif = Notification.objects.filter(recipient=self.player, title='Immediate Broadcast').latest('created_at')
+        self.assertEqual(notif.data.get('popup_category'), 'message')
+        self.assertEqual(notif.data.get('delivery_channel'), 'broadcast')
 
     def test_crm_wallet_adjust_creates_pending_approval_request_and_account_user_can_approve(self):
         Wallet.objects.filter(user=self.account_user).update(balance=Decimal('500.00'))

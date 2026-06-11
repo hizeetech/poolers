@@ -154,6 +154,8 @@ def approve_and_void_request(*, void_request_id, approved_by=None, is_auto=False
     ticket.deleted_by = approved_by
     ticket.deleted_at = now
     ticket.save()
+    from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+    enqueue_refresh_weekly_commissions_for_ticket_ids([str(ticket.id)])
 
     vr.status = TicketVoidRequest.STATUS_AUTO_VOIDED if is_auto else TicketVoidRequest.STATUS_APPROVED
     vr.is_processed = True

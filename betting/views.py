@@ -2707,6 +2707,8 @@ def agent_void_ticket(request, ticket_id):
     ticket.deleted_by = request.user
     ticket.deleted_at = timezone.now()
     ticket.save() # This triggers the pre_save signal to refund stake
+    from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+    enqueue_refresh_weekly_commissions_for_ticket_ids([str(ticket.id)])
 
     if request.user.is_superuser or request.user.user_type == 'admin':
         log_admin_activity(request, f"Voided ticket {ticket.ticket_id} for user {ticket.user.email}")
@@ -6782,6 +6784,8 @@ def admin_void_ticket_single(request, ticket_id):
             ticket.deleted_by = request.user
             ticket.deleted_at = timezone.now()
             ticket.save()
+            from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+            enqueue_refresh_weekly_commissions_for_ticket_ids([str(ticket.id)])
 
             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
             refund_tx = Transaction.objects.create(

@@ -133,6 +133,27 @@ def refresh_weekly_commissions_for_ticket_ids(ticket_ids):
     return {"period_ids": period_ids, "agent_ids": agent_ids, "updated": updated}
 
 
+def enqueue_refresh_weekly_commissions_for_ticket_ids(ticket_ids):
+    normalized_ticket_ids = []
+    seen = set()
+    for ticket_id in ticket_ids or []:
+        value = str(ticket_id or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized_ticket_ids.append(value)
+
+    if not normalized_ticket_ids:
+        return []
+
+    from django.db import transaction
+
+    transaction.on_commit(
+        lambda: refresh_weekly_commissions_for_ticket_ids_task.delay(normalized_ticket_ids)
+    )
+    return normalized_ticket_ids
+
+
 @shared_task(
     name='commission.tasks.refresh_weekly_commissions_for_ticket_ids',
     bind=True,

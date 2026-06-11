@@ -684,6 +684,7 @@ class BetTicketAdmin(admin.ModelAdmin):
     def void_selected_tickets(self, request, queryset):
         tickets_voided = 0
         tickets_failed = 0
+        changed_ticket_ids = []
         
         with db_transaction.atomic():
             for ticket in queryset:
@@ -697,12 +698,17 @@ class BetTicketAdmin(admin.ModelAdmin):
                     ticket.deleted_by = request.user
                     ticket.deleted_at = timezone.now()
                     ticket.save() # Signal handles refund
+                    changed_ticket_ids.append(str(ticket.id))
 
                     tickets_voided += 1
                     views.log_admin_activity(request, f"Voided/Deleted bet ticket {ticket.ticket_id} and refunded stake.") 
                 except Exception as e:
                     messages.error(request, f"Failed to void ticket {ticket.ticket_id}: {e}")
                     tickets_failed += 1
+
+            if changed_ticket_ids:
+                from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+                enqueue_refresh_weekly_commissions_for_ticket_ids(changed_ticket_ids)
 
         if tickets_voided > 0:
             messages.success(request, f"Successfully voided/deleted {tickets_voided} bet tickets.")

@@ -8148,6 +8148,8 @@ def account_user_dashboard(request):
             data = calculate_weekly_agent_commission_data(wc.agent, wc.period)
             if not data:
                 continue
+            data = dict(data)
+            data.pop('is_live_period', None)
             changed = False
             for field, value in data.items():
                 if getattr(wc, field) != value:

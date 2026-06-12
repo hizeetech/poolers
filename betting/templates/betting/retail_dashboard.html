@@ -175,7 +175,7 @@
               <tbody>
                 {% for a in top_agents %}
                 <tr>
-                  <td class="text-muted small">{{ a.user__agent__email|default:"-" }}</td>
+                  <td class="text-muted small">{{ a.user__agent__username|default:a.user__agent__email|default:"-" }}</td>
                   <td class="text-end">{{ a.bets }}</td>
                   <td class="text-end fw-semibold">₦{{ a.stake|floatformat:2 }}</td>
                 </tr>

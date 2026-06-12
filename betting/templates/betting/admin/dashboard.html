@@ -187,8 +187,7 @@
                                     {% for row in top_exposure_agents %}
                                         <tr>
                                             <td>
-                                                {{ row.user__agent__email }}
-                                                {% if row.user__agent__username %}<span class="text-muted">@{{ row.user__agent__username }}</span>{% endif %}
+                                                {{ row.user__agent__username|default:row.user__agent__email|default:"-" }}
                                             </td>
                                             <td class="text-end">₦{{ row.exposure|floatformat:2 }}</td>
                                         </tr>

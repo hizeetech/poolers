@@ -1,5 +1,6 @@
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.contrib.sessions.models import Session
 from betting.models import (
     User,
     Wallet,
@@ -154,7 +155,13 @@ class FullCoverageTests(TestCase):
         from betting.views import get_retail_manager_super_agents, get_retail_manager_agents, get_retail_network_users_qs
 
         password = "pass12345"
-        retail_manager = User.objects.create_user(email="rm@test.com", password=password, user_type="retail_manager")
+        retail_manager = User.objects.create_user(
+            email="rm@test.com",
+            password=password,
+            user_type="retail_manager",
+            first_name="Retail",
+            last_name="Manager",
+        )
 
         master = User.objects.create_user(email="ma@test.com", password=password, user_type="master_agent")
         sa_mapped = User.objects.create_user(
@@ -165,7 +172,13 @@ class FullCoverageTests(TestCase):
         )
 
         agent_under_mapped = User.objects.create_user(
-            email="a1@test.com", password=password, user_type="agent", master_agent=master, super_agent=sa_mapped
+            email="a1@test.com",
+            password=password,
+            user_type="agent",
+            first_name="Agent",
+            last_name="Mapped",
+            master_agent=master,
+            super_agent=sa_mapped,
         )
         User.objects.create_user(
             email="a2@test.com", password=password, user_type="agent", master_agent=master, super_agent=sa_unmapped
@@ -182,6 +195,31 @@ class FullCoverageTests(TestCase):
         network = get_retail_network_users_qs(retail_manager)
         self.assertIn(sa_mapped.id, set(network.values_list("id", flat=True)))
         self.assertNotIn(sa_unmapped.id, set(network.values_list("id", flat=True)))
+
+        self.client.force_login(retail_manager)
+        response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "hierarchy"})
+        self.assertContains(response, "<td>Agent Mapped</td>", html=True)
+
+    def test_password_change_logs_user_out_from_all_active_sessions(self):
+        client_one = Client()
+        client_two = Client()
+        self.assertTrue(client_one.login(email='user@test.com', password=self.password))
+        self.assertTrue(client_two.login(email='user@test.com', password=self.password))
+
+        response = client_one.post(reverse('betting:change_password'), {
+            'old_password': self.password,
+            'new_password1': 'NewSecurePass123!',
+            'new_password2': 'NewSecurePass123!',
+        }, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(any(
+            session.get_decoded().get('_auth_user_id') == str(self.user.id)
+            for session in Session.objects.all()
+        ))
+        protected = client_two.get(reverse('betting:user_dashboard'))
+        self.assertEqual(protected.status_code, 302)
+        self.assertIn(reverse('betting:login'), protected.url)
 
     def test_cashier_void_request_auto_voids_and_refunds(self):
         from void_requests.services import create_void_request, process_due_void_requests

@@ -12,6 +12,8 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
+from django.contrib.auth import SESSION_KEY
+from django.contrib.sessions.models import Session
 from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
@@ -131,6 +133,16 @@ def _quantize_amount(amount):
         return Decimal(str(amount)).quantize(Decimal("0.01"))
     except Exception:
         return None
+
+
+def _logout_user_from_all_active_sessions(user):
+    user_id = str(user.pk)
+    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+        try:
+            if session.get_decoded().get(SESSION_KEY) == user_id:
+                session.delete()
+        except Exception:
+            continue
 
 
 def _complete_deposit_transaction(*, tx, amount, gateway, reference, source, payload=None, http_status=None, message=""):
@@ -1107,6 +1119,7 @@ def reset_password(request, token):
             user = reset_request.user
             user.set_password(form.cleaned_data['password'])
             user.save()
+            _logout_user_from_all_active_sessions(user)
             
             # Mark request as used
             reset_request.is_used = True
@@ -4339,6 +4352,8 @@ def profile_view(request):
         elif 'password_submit' in request.POST:
             if password_form.is_valid():
                 password_form.save()
+                _logout_user_from_all_active_sessions(request.user)
+                logout(request)
                 messages.success(request, 'Your password has been changed successfully. Please log in again.')
                 return redirect('betting:login') # Redirect to login after password change
             else:
@@ -4487,6 +4502,8 @@ def change_password(request):
         form = PasswordChangeForm(request.user, request.POST)
         if form.is_valid():
             form.save()
+            _logout_user_from_all_active_sessions(request.user)
+            logout(request)
             messages.success(request, 'Your password was successfully updated!')
             return redirect('betting:login') # Log out user after password change for security
         else:
@@ -12302,6 +12319,7 @@ def crm_user_detail(request, user_id):
             raw_password = get_random_string(12)
             reset_target.set_password(raw_password)
             reset_target.save(update_fields=['password'])
+            _logout_user_from_all_active_sessions(reset_target)
 
             login_url = request.build_absolute_uri(reverse('betting:login'))
             email_error = None

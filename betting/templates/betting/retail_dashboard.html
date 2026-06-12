@@ -253,7 +253,7 @@
                       <tbody>
                         {% for ag in n.direct_agents %}
                         <tr>
-                          <td>{{ ag.email|default:ag.username }}</td>
+                          <td>{{ ag.get_full_name }}</td>
                           <td class="text-muted small">{{ ag.username|default:"-" }}</td>
                           <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
                           <td class="text-muted small">{% if ag.last_bet_at %}{{ ag.last_bet_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
@@ -284,7 +284,7 @@
                       <tbody>
                         {% for ag in sa.agents %}
                         <tr>
-                          <td>{{ ag.email|default:ag.username }}</td>
+                          <td>{{ ag.get_full_name }}</td>
                           <td class="text-muted small">{{ ag.username|default:"-" }}</td>
                           <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
                           <td class="text-muted small">{% if ag.last_bet_at %}{{ ag.last_bet_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>

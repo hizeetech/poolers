@@ -2,9 +2,11 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from decimal import Decimal
 from unittest.mock import patch
+from django.utils import timezone
 from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket
 from notifications.models import Notification, NotificationCampaign
 from notifications.tasks import send_campaign
+from betting.tasks import _maybe_alert_stuck_deposit
 
 class RBACTests(TestCase):
     def setUp(self):
@@ -172,12 +174,34 @@ class RBACTests(TestCase):
             created_by=self.crm_viewer,
         )
 
-        created = send_campaign(campaign.id)
+        with patch('notifications.tasks.create_broadcast_notification') as mock_broadcast:
+            created = send_campaign(campaign.id)
+            mock_broadcast.assert_not_called()
 
         self.assertEqual(created, 1)
         notif = Notification.objects.filter(recipient=self.player, title='Broadcast Notice').latest('created_at')
         self.assertEqual(notif.data.get('popup_category'), 'message')
         self.assertEqual(notif.data.get('delivery_channel'), 'broadcast')
+        self.assertFalse(Notification.objects.filter(recipient=self.agent, title='Broadcast Notice').exists())
+
+    def test_stuck_deposit_alert_is_not_broadcast_to_all_users(self):
+        tx = Transaction.objects.create(
+            user=self.player,
+            transaction_type='deposit',
+            status='pending',
+            is_successful=False,
+            amount=Decimal('7200.00'),
+            payment_gateway='paystack',
+            external_reference='ref-123',
+        )
+
+        _maybe_alert_stuck_deposit(tx=tx, now=timezone.now(), ttl_seconds=60)
+
+        self.assertTrue(Notification.objects.filter(recipient=self.player, title='Deposit pending verification').exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.admin, title='Pending deposit requires attention').exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.plain_admin, title='Pending deposit requires attention').exists())
+        self.assertFalse(Notification.objects.filter(recipient=self.agent, title='Pending deposit requires attention').exists())
+        self.assertFalse(Notification.objects.filter(recipient=self.account_user, title='Pending deposit requires attention').exists())
 
     def test_crm_dashboard_broadcast_sends_immediately(self):
         self.client.force_login(self.crm_viewer)

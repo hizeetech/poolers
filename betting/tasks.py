@@ -39,7 +39,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from notifications.services import create_notification, create_broadcast_notification
+from notifications.services import create_notification, create_targeted_notifications
 
 
 def _fmt_money(value):
@@ -936,7 +936,7 @@ def _verify_deposit_gateway(*, gateway, reference):
 
 
 def _deposit_admin_queryset():
-    return User.objects.filter(is_active=True).filter(Q(is_superuser=True) | Q(user_type__in=["admin", "finance", "account_user"]))
+    return User.objects.filter(is_active=True).filter(Q(is_superuser=True) | Q(user_type__in=["admin", "finance"]))
 
 
 def _maybe_alert_stuck_deposit(*, tx, now, ttl_seconds):
@@ -963,7 +963,7 @@ def _maybe_alert_stuck_deposit(*, tx, now, ttl_seconds):
     title_admin = "Pending deposit requires attention"
     msg_admin = f"A deposit has been pending beyond the configured threshold. User: {getattr(tx.user, 'email', '')}. Reference: {ref}. Gateway: {gateway}. Amount: {_fmt_money(tx.amount)}."
     try:
-        create_broadcast_notification(
+        create_targeted_notifications(
             queryset=admins,
             notification_type="SYSTEM_ANNOUNCEMENT",
             title=title_admin,

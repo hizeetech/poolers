@@ -83,6 +83,42 @@ def create_broadcast_notification(*, queryset, notification_type, title, message
     return created
 
 
+def create_targeted_notifications(*, queryset, notification_type, title, message="", data=None, batch_size=500):
+    Notification = apps.get_model("notifications", "Notification")
+    channel_layer = get_channel_layer()
+
+    buffer = []
+    created = 0
+    now = timezone.now()
+    for user in queryset.iterator():
+        buffer.append(
+            Notification(
+                recipient_id=user.id,
+                notification_type=notification_type,
+                title=title,
+                message=message or "",
+                data=data or {},
+                created_at=now,
+            )
+        )
+        if len(buffer) >= batch_size:
+            created_objs = Notification.objects.bulk_create(buffer, batch_size=batch_size)
+            created += len(created_objs)
+            if channel_layer:
+                for n in created_objs:
+                    _broadcast_to_user(recipient_id=n.recipient_id, notification=n)
+            buffer = []
+
+    if buffer:
+        created_objs = Notification.objects.bulk_create(buffer, batch_size=batch_size)
+        created += len(created_objs)
+        if channel_layer:
+            for n in created_objs:
+                _broadcast_to_user(recipient_id=n.recipient_id, notification=n)
+
+    return created
+
+
 def _broadcast_to_user(*, recipient_id, notification):
     channel_layer = get_channel_layer()
     if not channel_layer:

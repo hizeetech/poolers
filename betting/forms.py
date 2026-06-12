@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm as AuthPasswordChangeForm, UserCreationForm as DjangoUserCreationForm, UserChangeForm as DjangoUserChangeForm
 from django.core.exceptions import ValidationError
+from django_ckeditor_5.widgets import CKEditor5Widget
 from decimal import Decimal
 import random
 import string
@@ -17,7 +18,7 @@ from django.conf import settings
 from django.core.mail import send_mail, get_connection
 from django.contrib.auth.hashers import make_password
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote
 from .services.usernames import create_agent_and_cashiers
 from pending_registration.models import PendingAgentRegistration
 
@@ -1553,6 +1554,18 @@ class CRMWithdrawalDecisionForm(forms.Form):
         if action == 'reject' and not reason:
             self.add_error('reason', 'Reason is required when rejecting a withdrawal.')
         return cleaned_data
+
+
+class RetailManagerDashboardNoteForm(forms.ModelForm):
+    class Meta:
+        model = RetailManagerDashboardNote
+        fields = ('content',)
+        widgets = {
+            'content': CKEditor5Widget(
+                attrs={'class': 'django_ckeditor_5'},
+                config_name='default',
+            ),
+        }
 
 class AdminManualWalletForm(forms.Form):
     ACTION_CHOICES = (

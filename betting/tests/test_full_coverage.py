@@ -12,6 +12,7 @@ from betting.models import (
     ActivityLog,
     RetailManagerSuperAgentMapping,
     RetailManagerAgentMapping,
+    RetailManagerDashboardNote,
 )
 from django.utils import timezone
 import datetime
@@ -258,6 +259,47 @@ class FullCoverageTests(TestCase):
         finance_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "finance"})
         self.assertEqual(finance_response.status_code, 200)
         self.assertContains(finance_response, "<td class=\"text-muted small\">player_two</td>", html=True)
+
+    def test_retail_dashboard_note_tab_saves_and_reloads_note(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-note@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="retail_note_manager",
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+        self.client.force_login(retail_manager)
+
+        get_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "note"})
+        self.assertEqual(get_response.status_code, 200)
+        self.assertContains(get_response, ">Note</a>", html=False)
+        self.assertContains(get_response, "Reporting Note")
+
+        note_html = "<p>Weekly retail note</p>"
+        post_response = self.client.post(
+            reverse("betting:retail_dashboard"),
+            {
+                "tab": "note",
+                "save_note": "1",
+                "content": note_html,
+            },
+            follow=True,
+        )
+        self.assertEqual(post_response.status_code, 200)
+        self.assertContains(post_response, "Note saved successfully.")
+
+        note = RetailManagerDashboardNote.objects.get(retail_manager=retail_manager)
+        self.assertEqual(note.content, note_html)
+
+        reload_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "note"})
+        self.assertEqual(reload_response.status_code, 200)
+        self.assertContains(reload_response, "Weekly retail note")
+
+        overview_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "overview"})
+        self.assertEqual(overview_response.status_code, 200)
+        self.assertContains(overview_response, "Latest Saved Note")
+        self.assertContains(overview_response, "Weekly retail note")
 
     def test_crm_and_finance_dashboards_use_usernames_in_replica_tabs(self):
         password = "pass12345"

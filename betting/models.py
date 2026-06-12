@@ -1775,6 +1775,27 @@ class RetailManagerAgentMapping(models.Model):
         return f"{self.retail_manager.email} → {self.agent.email}"
 
 
+class RetailManagerDashboardNote(models.Model):
+    retail_manager = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='retail_dashboard_note',
+        limit_choices_to={'user_type': 'retail_manager'},
+    )
+    content = CKEditor5Field(blank=True, default='', config_name='default')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'Retail Manager Dashboard Note'
+        verbose_name_plural = 'Retail Manager Dashboard Notes'
+
+    def __str__(self):
+        identifier = self.retail_manager.username or self.retail_manager.email or f"user#{self.retail_manager_id}"
+        return f"Retail Note - {identifier}"
+
+
 class FinanceAuditLog(models.Model):
     ACTION_TYPES = (
         ('WITHDRAWAL_APPROVED', 'Withdrawal Approved'),

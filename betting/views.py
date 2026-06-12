@@ -61,6 +61,7 @@ from .models import (
     BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
     CashierRegistrationRequest, CRMActionLog, LoginAttempt,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping, RetailManagerDashboardNote,
+    AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
     ScheduledFinanceReport
@@ -77,7 +78,7 @@ from .forms import (
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
-    RetailManagerDashboardNoteForm
+    RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm
 )
 
 # Setup logger for this app
@@ -392,6 +393,470 @@ def crm_can_view_audit(user):
     if user.is_superuser or user.user_type == 'admin':
         return True
     return user.crm_role in ['supervisor']
+
+
+def crm_can_remap_agents(user):
+    return bool(user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'crm']))
+
+
+def _crm_agent_transfer_history_queryset(*, q='', start_dt=None, end_dt=None, old_super_agent_id='', new_super_agent_id=''):
+    qs = AgentTransferLog.objects.select_related(
+        'agent', 'old_super_agent', 'new_super_agent', 'transferred_by'
+    ).order_by('-created_at')
+    if start_dt:
+        qs = qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        qs = qs.filter(created_at__lte=end_dt)
+    if old_super_agent_id.isdigit():
+        qs = qs.filter(old_super_agent_id=int(old_super_agent_id))
+    if new_super_agent_id.isdigit():
+        qs = qs.filter(new_super_agent_id=int(new_super_agent_id))
+    if q:
+        qs = qs.filter(
+            Q(agent__username__icontains=q) |
+            Q(agent__email__icontains=q) |
+            Q(agent__phone_number__icontains=q) |
+            Q(agent__first_name__icontains=q) |
+            Q(agent__last_name__icontains=q) |
+            Q(agent__other_name__icontains=q) |
+            Q(old_super_agent__username__icontains=q) |
+            Q(old_super_agent__email__icontains=q) |
+            Q(old_super_agent__first_name__icontains=q) |
+            Q(old_super_agent__last_name__icontains=q) |
+            Q(new_super_agent__username__icontains=q) |
+            Q(new_super_agent__email__icontains=q) |
+            Q(new_super_agent__first_name__icontains=q) |
+            Q(new_super_agent__last_name__icontains=q) |
+            Q(transferred_by__username__icontains=q) |
+            Q(transferred_by__email__icontains=q)
+        )
+    return qs
+
+
+def _export_simple_rows(*, rows, title, fmt):
+    if fmt == 'csv':
+        import io
+        import csv
+        output = io.StringIO()
+        fieldnames = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+        response = HttpResponse(output.getvalue(), content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{title}.csv"'
+        return response
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+        output = io.BytesIO()
+        df = pd.DataFrame(rows)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=(title[:31] or 'Sheet1'))
+        output.seek(0)
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{title}.xlsx"'
+        return response
+
+    if fmt == 'pdf':
+        try:
+            from weasyprint import HTML
+        except Exception as e:
+            return HttpResponseBadRequest(f"PDF export unavailable: {e}")
+        from html import escape as _html_escape
+
+        columns = list(rows[0].keys()) if rows else []
+
+        def esc(value):
+            return _html_escape(str(value or ''), quote=True)
+
+        head = ''.join([f"<th>{esc(col)}</th>" for col in columns])
+        body = ''.join(
+            "<tr>" + ''.join([f"<td>{esc(row.get(col))}</td>" for col in columns]) + "</tr>"
+            for row in rows[:3000]
+        )
+        html = f"""
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+              h2 {{ margin: 0 0 8px 0; }}
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
+              th {{ background: #f3f5f7; text-align: left; }}
+              tr:nth-child(even) td {{ background: #fafafa; }}
+            </style>
+          </head>
+          <body>
+            <h2>{esc(title.replace('_', ' ').title())}</h2>
+            <table>
+              <thead><tr>{head}</tr></thead>
+              <tbody>{body}</tbody>
+            </table>
+          </body>
+        </html>
+        """
+        pdf_bytes = HTML(string=html).write_pdf()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{title}.pdf"'
+        return response
+
+    return HttpResponseBadRequest("Unknown format")
+def can_manage_account_unlock_appeals(user):
+    return bool(user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'crm']))
+
+
+def _scoped_lock_subject_users_queryset(user):
+    scoped_types = ['agent', 'super_agent', 'retail_manager', 'cashier']
+    if not getattr(user, 'is_authenticated', False):
+        return User.objects.none()
+    if user.is_superuser or user.user_type in ['admin', 'crm']:
+        return User.objects.filter(user_type__in=scoped_types).distinct()
+    if user.user_type == 'super_agent':
+        return User.objects.filter(
+            Q(user_type='agent', super_agent=user) |
+            Q(user_type='cashier', agent__super_agent=user)
+        ).distinct()
+    if user.user_type == 'retail_manager':
+        super_agents = get_retail_manager_super_agents(user)
+        agents = get_retail_manager_agents(user, super_agents_qs=super_agents)
+        super_agent_ids = list(super_agents.values_list('id', flat=True))
+        agent_ids = list(agents.values_list('id', flat=True))
+        q = Q()
+        if super_agent_ids:
+            q |= Q(user_type='super_agent', id__in=super_agent_ids)
+        if agent_ids:
+            q |= Q(user_type='agent', id__in=agent_ids)
+            q |= Q(user_type='cashier', agent_id__in=agent_ids)
+        return User.objects.filter(q).distinct() if q else User.objects.none()
+    return User.objects.none()
+
+
+def _scoped_locked_accounts_queryset(user):
+    latest_appeal_qs = AccountUnlockAppeal.objects.filter(locked_user_id=OuterRef('pk')).order_by('-created_at')
+    return (
+        _scoped_lock_subject_users_queryset(user)
+        .filter(is_locked=True)
+        .annotate(
+            latest_appeal_status=Subquery(latest_appeal_qs.values('status')[:1]),
+            latest_appeal_created_at=Subquery(latest_appeal_qs.values('created_at')[:1]),
+        )
+        .select_related('super_agent', 'agent', 'master_agent')
+        .order_by('-locked_at', 'username', 'email')
+    )
+
+
+def _scoped_account_unlock_appeals_queryset(user):
+    scoped_targets = _scoped_lock_subject_users_queryset(user)
+    return (
+        AccountUnlockAppeal.objects.select_related('locked_user', 'appealed_by', 'reviewed_by')
+        .filter(locked_user__in=scoped_targets)
+        .order_by('-created_at')
+    )
+
+
+def _apply_locked_accounts_filters(
+    qs,
+    *,
+    query='',
+    user_type='',
+    status='',
+    locked_by='',
+    locked_start_dt=None,
+    locked_end_dt=None,
+    appeal_start_dt=None,
+    appeal_end_dt=None,
+):
+    query = (query or '').strip()
+    user_type = (user_type or '').strip()
+    status = (status or '').strip().lower()
+    locked_by = (locked_by or '').strip()
+
+    if query:
+        qs = qs.filter(
+            Q(username__icontains=query) |
+            Q(email__icontains=query) |
+            Q(phone_number__icontains=query) |
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(other_name__icontains=query)
+        )
+    if user_type:
+        qs = qs.filter(user_type=user_type)
+    if locked_start_dt:
+        qs = qs.filter(locked_at__gte=locked_start_dt)
+    if locked_end_dt:
+        qs = qs.filter(locked_at__lte=locked_end_dt)
+    if appeal_start_dt:
+        qs = qs.filter(latest_appeal_created_at__gte=appeal_start_dt)
+    if appeal_end_dt:
+        qs = qs.filter(latest_appeal_created_at__lte=appeal_end_dt)
+    if status == 'appealed':
+        qs = qs.filter(latest_appeal_status='pending')
+    elif status == 'rejected':
+        qs = qs.filter(latest_appeal_status='rejected')
+    elif status == 'locked':
+        qs = qs.exclude(latest_appeal_status__in=['pending', 'rejected'])
+    if locked_by:
+        lock_filters = (
+            Q(locked_by__username__icontains=locked_by) |
+            Q(locked_by__email__icontains=locked_by) |
+            Q(lock_reason__icontains=locked_by) |
+            Q(remarks__icontains=locked_by)
+        )
+        if locked_by.lower() in {'system', 'invalid credentials', 'invalid credential'}:
+            lock_filters |= Q(locked_by__isnull=True)
+        lock_ids = list(
+            AccountLockAuditLog.objects.filter(action='locked')
+            .filter(lock_filters)
+            .values_list('locked_user_id', flat=True)
+        )
+        qs = qs.filter(id__in=lock_ids)
+    return qs
+
+
+def _apply_account_unlock_appeal_filters(
+    qs,
+    *,
+    query='',
+    user_type='',
+    status='',
+    locked_by='',
+    locked_start_dt=None,
+    locked_end_dt=None,
+    appeal_start_dt=None,
+    appeal_end_dt=None,
+):
+    query = (query or '').strip()
+    user_type = (user_type or '').strip()
+    status = (status or '').strip().lower()
+    locked_by = (locked_by or '').strip()
+
+    if query:
+        qs = qs.filter(
+            Q(locked_user__username__icontains=query) |
+            Q(locked_user__email__icontains=query) |
+            Q(locked_user__phone_number__icontains=query) |
+            Q(locked_user__first_name__icontains=query) |
+            Q(locked_user__last_name__icontains=query) |
+            Q(appealed_by__username__icontains=query) |
+            Q(appealed_by__email__icontains=query)
+        )
+    if user_type:
+        qs = qs.filter(locked_user__user_type=user_type)
+    if status:
+        qs = qs.filter(status=status)
+    if locked_start_dt:
+        qs = qs.filter(locked_user__locked_at__gte=locked_start_dt)
+    if locked_end_dt:
+        qs = qs.filter(locked_user__locked_at__lte=locked_end_dt)
+    if appeal_start_dt:
+        qs = qs.filter(created_at__gte=appeal_start_dt)
+    if appeal_end_dt:
+        qs = qs.filter(created_at__lte=appeal_end_dt)
+    if locked_by:
+        lock_filters = (
+            Q(locked_by__username__icontains=locked_by) |
+            Q(locked_by__email__icontains=locked_by) |
+            Q(lock_reason__icontains=locked_by) |
+            Q(remarks__icontains=locked_by)
+        )
+        if locked_by.lower() in {'system', 'invalid credentials', 'invalid credential'}:
+            lock_filters |= Q(locked_by__isnull=True)
+        lock_ids = list(
+            AccountLockAuditLog.objects.filter(action='locked')
+            .filter(lock_filters)
+            .values_list('locked_user_id', flat=True)
+        )
+        qs = qs.filter(locked_user_id__in=lock_ids)
+    return qs
+
+
+def _attach_locked_account_metadata(users):
+    user_ids = [u.id for u in users if getattr(u, 'id', None)]
+    if not user_ids:
+        return users
+
+    latest_appeals = (
+        AccountUnlockAppeal.objects.filter(locked_user_id__in=user_ids)
+        .select_related('appealed_by', 'reviewed_by')
+        .order_by('locked_user_id', '-created_at')
+    )
+    latest_appeal_map = {}
+    for appeal in latest_appeals:
+        latest_appeal_map.setdefault(appeal.locked_user_id, appeal)
+
+    latest_lock_logs = (
+        AccountLockAuditLog.objects.filter(locked_user_id__in=user_ids, action='locked')
+        .select_related('locked_by')
+        .order_by('locked_user_id', '-timestamp')
+    )
+    latest_lock_map = {}
+    for log in latest_lock_logs:
+        latest_lock_map.setdefault(log.locked_user_id, log)
+
+    for user in users:
+        latest_appeal = latest_appeal_map.get(user.id)
+        latest_lock = latest_lock_map.get(user.id)
+        user.latest_unlock_appeal = latest_appeal
+        user.locked_account_status_label = 'Locked'
+        if latest_appeal:
+            if latest_appeal.status == 'pending':
+                user.locked_account_status_label = 'Appealed'
+            elif latest_appeal.status == 'rejected':
+                user.locked_account_status_label = 'Rejected'
+        actor = getattr(latest_lock, 'locked_by', None)
+        user.locked_by_display = (
+            (getattr(actor, 'username', None) or getattr(actor, 'email', None))
+            if actor else 'System'
+        )
+        user.lock_reason_display = (
+            (getattr(latest_lock, 'lock_reason', None) or '').strip()
+            or (getattr(user, 'lock_reason', None) or '').strip()
+            or '-'
+        )
+        user.can_submit_unlock_appeal = not (latest_appeal and latest_appeal.status == 'pending')
+    return users
+
+
+def _safe_send_simple_email(subject, message, recipients):
+    recipient_list = [email for email in recipients if email]
+    if not recipient_list:
+        return
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+            recipient_list=recipient_list,
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+
+def _get_related_super_agent_for_locked_user(locked_user):
+    if not locked_user:
+        return None
+    if locked_user.user_type == 'agent':
+        return locked_user.super_agent
+    if locked_user.user_type == 'cashier' and locked_user.agent_id:
+        try:
+            return locked_user.agent.super_agent
+        except Exception:
+            return None
+    return None
+
+
+def _get_related_retail_managers_for_locked_user(locked_user):
+    if not locked_user:
+        return User.objects.none()
+    retail_manager_ids = set()
+    if locked_user.user_type == 'super_agent':
+        retail_manager_ids |= set(
+            RetailManagerSuperAgentMapping.objects.filter(super_agent=locked_user).values_list('retail_manager_id', flat=True)
+        )
+    elif locked_user.user_type == 'agent':
+        retail_manager_ids |= set(
+            RetailManagerAgentMapping.objects.filter(agent=locked_user).values_list('retail_manager_id', flat=True)
+        )
+        if locked_user.super_agent_id:
+            retail_manager_ids |= set(
+                RetailManagerSuperAgentMapping.objects.filter(super_agent_id=locked_user.super_agent_id).values_list('retail_manager_id', flat=True)
+            )
+    elif locked_user.user_type == 'cashier' and locked_user.agent_id:
+        retail_manager_ids |= set(
+            RetailManagerAgentMapping.objects.filter(agent_id=locked_user.agent_id).values_list('retail_manager_id', flat=True)
+        )
+        try:
+            if locked_user.agent and locked_user.agent.super_agent_id:
+                retail_manager_ids |= set(
+                    RetailManagerSuperAgentMapping.objects.filter(super_agent_id=locked_user.agent.super_agent_id).values_list('retail_manager_id', flat=True)
+                )
+        except Exception:
+            pass
+    if not retail_manager_ids:
+        return User.objects.none()
+    return User.objects.filter(id__in=list(retail_manager_ids), is_active=True)
+
+
+def _notify_admins_of_unlock_appeal(appeal):
+    review_url = reverse('betting:account_appeals_review')
+    message = 'A new account unlock appeal has been submitted.'
+    admin_qs = User.objects.filter(Q(is_superuser=True) | Q(user_type='admin'), is_active=True).distinct()
+    for admin_user in admin_qs.iterator():
+        create_notification(
+            recipient=admin_user,
+            notification_type='SYSTEM_ANNOUNCEMENT',
+            title='New Account Unlock Appeal',
+            message=message,
+            data={
+                'popup_category': 'message',
+                'delivery_channel': 'in_app',
+                'url': review_url,
+            },
+        )
+
+
+def _notify_unlock_appeal_resolution(appeal, *, approved):
+    locked_user = appeal.locked_user
+    if not locked_user:
+        return
+
+    related_super_agent = _get_related_super_agent_for_locked_user(locked_user)
+    related_retail_managers = list(_get_related_retail_managers_for_locked_user(locked_user))
+
+    if approved:
+        locked_title = 'Unlock Appeal Approved'
+        locked_message = 'Your unlock appeal has been approved. Your account is now active.'
+        applicant_title = 'Unlock Appeal Approved'
+        applicant_message = 'Your unlock appeal has been approved. The account is now active.'
+        manager_message = f"{locked_user.username or locked_user.email or locked_user.get_full_name()} unlock appeal has been approved."
+        email_subject = 'Unlock Appeal Approved'
+        email_message = locked_message
+    else:
+        locked_title = 'Unlock Appeal Rejected'
+        locked_message = 'Your unlock appeal has been reviewed and declined. Please contact support for further clarification.'
+        applicant_title = 'Unlock Appeal Rejected'
+        applicant_message = 'Your unlock appeal has been reviewed and declined. Please contact support for further clarification.'
+        manager_message = f"{locked_user.username or locked_user.email or locked_user.get_full_name()} unlock appeal has been rejected."
+        email_subject = 'Unlock Appeal Rejected'
+        email_message = locked_message
+
+    recipient_pool = []
+    if appeal.appealed_by_id:
+        recipient_pool.append((appeal.appealed_by, applicant_title, applicant_message))
+    recipient_pool.append((locked_user, locked_title, locked_message))
+    if related_super_agent:
+        recipient_pool.append((related_super_agent, locked_title, manager_message))
+    for retail_manager in related_retail_managers:
+        recipient_pool.append((retail_manager, locked_title, manager_message))
+
+    seen_ids = set()
+    email_targets = []
+    for recipient, title, message in recipient_pool:
+        if not recipient or recipient.id in seen_ids:
+            continue
+        seen_ids.add(recipient.id)
+        create_notification(
+            recipient=recipient,
+            notification_type='SYSTEM_ANNOUNCEMENT',
+            title=title,
+            message=message,
+            data={
+                'popup_category': 'message',
+                'delivery_channel': 'in_app',
+                'url': reverse('betting:account_appeals_review') if can_manage_account_unlock_appeals(recipient) else reverse('betting:crm_dashboard') if recipient.user_type == 'crm' else reverse('betting:retail_dashboard') if recipient.user_type == 'retail_manager' else reverse('betting:super_agent_dashboard') if recipient.user_type == 'super_agent' else reverse('betting:user_dashboard'),
+            },
+        )
+        email_targets.append(recipient.email)
+
+    _safe_send_simple_email(email_subject, email_message, email_targets)
 
 
 CRM_WALLET_APPROVAL_REQUEST_TYPES = ('crm_credit', 'crm_debit')
@@ -4578,6 +5043,14 @@ def agent_dashboard(request):
     start_of_month = last_day_last_month.replace(day=1)
     start_date_str = request.GET.get('start_date') or ''
     end_date_str = request.GET.get('end_date') or ''
+    locked_q = (request.GET.get('locked_q') or '').strip()
+    locked_user_type = (request.GET.get('locked_user_type') or '').strip()
+    locked_status = (request.GET.get('locked_status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_date = (request.GET.get('locked_start_date') or '').strip()
+    locked_end_date = (request.GET.get('locked_end_date') or '').strip()
+    locked_appeal_start_date = (request.GET.get('locked_appeal_start_date') or '').strip()
+    locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
     start_date = None
     end_date = None
     try:
@@ -4592,6 +5065,21 @@ def agent_dashboard(request):
         end_date = None
     if start_date and end_date and start_date > end_date:
         start_date, end_date = end_date, start_date
+
+    def _parse_dashboard_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = date.fromisoformat(value)
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    locked_start_dt = _parse_dashboard_bound(locked_start_date, end=False)
+    locked_end_dt = _parse_dashboard_bound(locked_end_date, end=True)
+    locked_appeal_start_dt = _parse_dashboard_bound(locked_appeal_start_date, end=False)
+    locked_appeal_end_dt = _parse_dashboard_bound(locked_appeal_end_date, end=True)
 
     direct_downline_rows = []
     master_downline_tree = []
@@ -4933,6 +5421,28 @@ def agent_dashboard(request):
     sort_field = sort_map.get(sort_by, 'placed_at')
     order_expr = f"-{sort_field}" if sort_dir == 'desc' else sort_field
 
+    locked_accounts_summary = {'locked_downlines': 0, 'pending_appeals': 0}
+    locked_accounts_page = None
+    locked_accounts_rows = []
+    if user.user_type == 'super_agent':
+        locked_accounts_summary = {
+            'locked_downlines': _scoped_locked_accounts_queryset(user).count(),
+            'pending_appeals': _scoped_account_unlock_appeals_queryset(user).filter(status='pending').count(),
+        }
+        locked_accounts_qs = _apply_locked_accounts_filters(
+            _scoped_locked_accounts_queryset(user),
+            query=locked_q,
+            user_type=locked_user_type,
+            status=locked_status,
+            locked_by=locked_by,
+            locked_start_dt=locked_start_dt,
+            locked_end_dt=locked_end_dt,
+            appeal_start_dt=locked_appeal_start_dt,
+            appeal_end_dt=locked_appeal_end_dt,
+        )
+        locked_accounts_page = Paginator(locked_accounts_qs, 25).get_page(request.GET.get('locked_page') or 1)
+        locked_accounts_rows = _attach_locked_account_metadata(list(locked_accounts_page.object_list))
+
     context = {
         'user': user,
         'downline_users': downline_users_qs, # Pass the QuerySet
@@ -4960,6 +5470,17 @@ def agent_dashboard(request):
         'top_performers': top_performers,
         'recent_downline_transactions': recent_downline_transactions,
         'show_reports': True,
+        'locked_accounts_summary': locked_accounts_summary,
+        'locked_accounts_page': locked_accounts_page,
+        'locked_accounts_rows': locked_accounts_rows,
+        'locked_q': locked_q,
+        'locked_user_type': locked_user_type,
+        'locked_status': locked_status,
+        'locked_by': locked_by,
+        'locked_start_date': locked_start_date,
+        'locked_end_date': locked_end_date,
+        'locked_appeal_start_date': locked_appeal_start_date,
+        'locked_appeal_end_date': locked_appeal_end_date,
     }
     return render(request, 'betting/agent_dashboard.html', context)
 
@@ -8604,6 +9125,542 @@ def build_top_fixtures_by_betting_period(selected_period_id_raw=''):
     return top_fixtures, top_period_options, selected_top_period_id
 
 @login_required
+def agent_remapping(request):
+    if not crm_can_remap_agents(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    subtab = ((request.POST.get('subtab') if request.method == 'POST' else request.GET.get('subtab')) or 'remap').strip() or 'remap'
+    q = (request.GET.get('q') or '').strip()
+    history_q = (request.GET.get('history_q') or '').strip()
+    current_super_agent_id = ((request.POST.get('current_super_agent') if request.method == 'POST' else request.GET.get('current_super_agent')) or '').strip()
+    destination_super_agent_id = ((request.POST.get('destination_super_agent') if request.method == 'POST' else request.GET.get('destination_super_agent')) or '').strip()
+    history_old_super_agent_id = (request.GET.get('history_old_super_agent') or '').strip()
+    history_new_super_agent_id = (request.GET.get('history_new_super_agent') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    if start_date_str:
+        try:
+            start_dt = timezone.make_aware(datetime.combine(datetime.strptime(start_date_str, '%Y-%m-%d').date(), datetime.min.time()))
+        except Exception:
+            start_dt = None
+    if end_date_str:
+        try:
+            end_dt = timezone.make_aware(datetime.combine(datetime.strptime(end_date_str, '%Y-%m-%d').date(), datetime.max.time()))
+        except Exception:
+            end_dt = None
+
+    current_super_agents_qs = User.objects.filter(user_type='super_agent').select_related('master_agent').order_by('username', 'email')
+    destination_super_agents_qs = current_super_agents_qs.filter(is_active=True)
+
+    agent_rows_qs = User.objects.filter(user_type='agent').select_related('super_agent', 'master_agent', 'wallet').order_by('username', 'email')
+    if current_super_agent_id.isdigit():
+        agent_rows_qs = agent_rows_qs.filter(super_agent_id=int(current_super_agent_id))
+    else:
+        agent_rows_qs = agent_rows_qs.none()
+    if q:
+        agent_rows_qs = agent_rows_qs.filter(
+            Q(username__icontains=q) |
+            Q(email__icontains=q) |
+            Q(phone_number__icontains=q) |
+            Q(first_name__icontains=q) |
+            Q(last_name__icontains=q) |
+            Q(other_name__icontains=q)
+        )
+    remap_agent_rows = list(agent_rows_qs[:500])
+
+    remap_form = AgentRemapForm(
+        current_super_agent_qs=current_super_agents_qs,
+        destination_super_agent_qs=destination_super_agents_qs,
+        agent_queryset=agent_rows_qs,
+        initial={
+            'current_super_agent': current_super_agent_id or None,
+            'destination_super_agent': destination_super_agent_id or None,
+        },
+    )
+
+    if request.method == 'POST' and request.POST.get('action') == 'transfer_agents':
+        remap_form = AgentRemapForm(
+            request.POST,
+            current_super_agent_qs=current_super_agents_qs,
+            destination_super_agent_qs=destination_super_agents_qs,
+            agent_queryset=agent_rows_qs,
+        )
+        subtab = 'remap'
+        if remap_form.is_valid():
+            current_super_agent = remap_form.cleaned_data['current_super_agent']
+            destination_super_agent = remap_form.cleaned_data['destination_super_agent']
+            remarks = remap_form.cleaned_data.get('remarks') or ''
+            selected_agents = list(
+                remap_form.cleaned_data['agents'].select_related('super_agent', 'master_agent').order_by('username', 'email')
+            )
+            try:
+                with db_transaction.atomic():
+                    for agent in selected_agents:
+                        if agent.super_agent_id != current_super_agent.id:
+                            raise ValueError('One or more selected agents no longer belong to the chosen Current Super Agent.')
+                        if agent.super_agent_id == destination_super_agent.id:
+                            raise ValueError('Agent already belongs to this Super Agent.')
+
+                        old_super_agent = agent.super_agent
+                        agent.super_agent = destination_super_agent
+                        agent.master_agent = destination_super_agent.master_agent
+                        agent.save()
+
+                        AgentTransferLog.objects.create(
+                            agent=agent,
+                            old_super_agent=old_super_agent,
+                            new_super_agent=destination_super_agent,
+                            transferred_by=request.user,
+                            remarks=remarks,
+                        )
+
+                        if old_super_agent:
+                            create_notification(
+                                recipient=old_super_agent,
+                                notification_type='SYSTEM_ANNOUNCEMENT',
+                                title='Agent Removed From Downline',
+                                message=f"{agent.get_full_name() or agent.username or agent.email} has been removed from your downline and reassigned by Management.",
+                                data={
+                                    'popup_category': 'message',
+                                    'delivery_channel': 'in_app',
+                                    'url': reverse('betting:agent_remapping'),
+                                },
+                            )
+                        create_notification(
+                            recipient=destination_super_agent,
+                            notification_type='SYSTEM_ANNOUNCEMENT',
+                            title='New Agent Assigned',
+                            message=f"{agent.get_full_name() or agent.username or agent.email} has been assigned to your downline by Management.",
+                            data={
+                                'popup_category': 'message',
+                                'delivery_channel': 'in_app',
+                                'url': reverse('betting:agent_remapping'),
+                            },
+                        )
+                        create_notification(
+                            recipient=agent,
+                            notification_type='SYSTEM_ANNOUNCEMENT',
+                            title='Super Agent Reassigned',
+                            message='Your account has been reassigned to a new Super Agent. Your operations, wallet, tickets and commissions remain unaffected.',
+                            data={
+                                'popup_category': 'message',
+                                'delivery_channel': 'in_app',
+                                'url': reverse('betting:user_dashboard'),
+                            },
+                        )
+                messages.success(request, f"{len(selected_agents)} agent(s) transferred successfully.")
+                query = QueryDict(mutable=True)
+                query['subtab'] = 'history'
+                if history_q:
+                    query['history_q'] = history_q
+                if start_date_str:
+                    query['start_date'] = start_date_str
+                if end_date_str:
+                    query['end_date'] = end_date_str
+                return redirect(f"{reverse('betting:agent_remapping')}?{query.urlencode()}")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            except Exception:
+                messages.error(request, 'Agent transfer failed. Please try again.')
+
+    history_qs = _crm_agent_transfer_history_queryset(
+        q=history_q,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        old_super_agent_id=history_old_super_agent_id,
+        new_super_agent_id=history_new_super_agent_id,
+    )
+    history_paginator = Paginator(history_qs, 50)
+    history_page_number = request.GET.get('history_page') or 1
+    try:
+        history_page = history_paginator.page(history_page_number)
+    except Exception:
+        history_page = history_paginator.page(1)
+
+    context = {
+        'subtab': subtab,
+        'q': q,
+        'history_q': history_q,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
+        'current_super_agent': current_super_agent_id,
+        'destination_super_agent': destination_super_agent_id,
+        'history_old_super_agent': history_old_super_agent_id,
+        'history_new_super_agent': history_new_super_agent_id,
+        'current_super_agents': list(current_super_agents_qs[:300]),
+        'destination_super_agents': list(destination_super_agents_qs[:300]),
+        'remap_agent_rows': remap_agent_rows,
+        'remap_form': remap_form,
+        'selected_agent_ids': [str(v) for v in ((request.POST.getlist('agents') if request.method == 'POST' else []))],
+        'history_page': history_page,
+        'history_total_count': history_qs.count(),
+    }
+    return render(request, 'betting/agent_remapping.html', context)
+
+
+@login_required
+def agent_remapping_export(request):
+    if not crm_can_remap_agents(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    fmt = (request.GET.get('format') or 'xlsx').strip().lower()
+    if fmt not in {'csv', 'xlsx', 'pdf'}:
+        return HttpResponseBadRequest('Unknown format')
+
+    history_q = (request.GET.get('history_q') or '').strip()
+    history_old_super_agent_id = (request.GET.get('history_old_super_agent') or '').strip()
+    history_new_super_agent_id = (request.GET.get('history_new_super_agent') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    if start_date_str:
+        try:
+            start_dt = timezone.make_aware(datetime.combine(datetime.strptime(start_date_str, '%Y-%m-%d').date(), datetime.min.time()))
+        except Exception:
+            start_dt = None
+    if end_date_str:
+        try:
+            end_dt = timezone.make_aware(datetime.combine(datetime.strptime(end_date_str, '%Y-%m-%d').date(), datetime.max.time()))
+        except Exception:
+            end_dt = None
+
+    qs = _crm_agent_transfer_history_queryset(
+        q=history_q,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        old_super_agent_id=history_old_super_agent_id,
+        new_super_agent_id=history_new_super_agent_id,
+    )
+    rows = []
+    for item in qs[:100000]:
+        rows.append({
+            'date': item.created_at.isoformat(sep=' ', timespec='seconds') if item.created_at else '',
+            'agent_username': getattr(item.agent, 'username', '') or '',
+            'agent_name': getattr(item.agent, 'get_full_name', lambda: '')() or '',
+            'agent_phone': getattr(item.agent, 'phone_number', '') or '',
+            'old_super_agent': getattr(item.old_super_agent, 'username', '') or getattr(item.old_super_agent, 'email', '') or '',
+            'new_super_agent': getattr(item.new_super_agent, 'username', '') or getattr(item.new_super_agent, 'email', '') or '',
+            'transferred_by': getattr(item.transferred_by, 'username', '') or getattr(item.transferred_by, 'email', '') or '',
+            'remarks': item.remarks or '',
+        })
+    return _export_simple_rows(rows=rows, title='agent_transfer_history', fmt=fmt)
+
+
+@login_required
+@require_POST
+def submit_account_unlock_appeal(request, locked_user_id):
+    if not can_manage_account_unlock_appeals(request.user) and request.user.user_type not in ['super_agent', 'retail_manager']:
+        return JsonResponse({'ok': False, 'message': 'Permission Denied'}, status=403)
+
+    locked_user = _scoped_locked_accounts_queryset(request.user).filter(id=locked_user_id).first()
+    if not locked_user:
+        return JsonResponse({'ok': False, 'message': 'Locked account not found.'}, status=404)
+
+    if AccountUnlockAppeal.objects.filter(locked_user=locked_user, status='pending').exists():
+        return JsonResponse({'ok': False, 'message': 'A pending appeal already exists for this account.'}, status=400)
+
+    form = AccountUnlockAppealForm(request.POST)
+    if not form.is_valid():
+        error_message = next(iter(form.errors.get('appeal_reason', ['Unable to submit appeal.'])), 'Unable to submit appeal.')
+        return JsonResponse({'ok': False, 'message': error_message}, status=400)
+
+    appeal = AccountUnlockAppeal.objects.create(
+        user=locked_user,
+        locked_user=locked_user,
+        appealed_by=request.user,
+        appeal_reason=form.cleaned_data['appeal_reason'],
+        status='pending',
+    )
+    AccountLockAuditLog.objects.create(
+        locked_user=locked_user,
+        appealed_by=request.user,
+        lock_reason=(locked_user.lock_reason or '').strip(),
+        action='appeal_submitted',
+        remarks=form.cleaned_data['appeal_reason'],
+    )
+    _notify_admins_of_unlock_appeal(appeal)
+    return JsonResponse({
+        'ok': True,
+        'message': 'Appeal submitted successfully. Your request has been forwarded to Admin for review.',
+    })
+
+
+@login_required
+def account_appeals_review(request):
+    if not can_manage_account_unlock_appeals(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    def _parse_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    query = (request.GET.get('q') or '').strip()
+    user_type = (request.GET.get('user_type') or '').strip()
+    status = (request.GET.get('status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_date = (request.GET.get('locked_start_date') or '').strip()
+    locked_end_date = (request.GET.get('locked_end_date') or '').strip()
+    appeal_start_date = (request.GET.get('appeal_start_date') or '').strip()
+    appeal_end_date = (request.GET.get('appeal_end_date') or '').strip()
+
+    locked_start_dt = _parse_bound(locked_start_date, end=False)
+    locked_end_dt = _parse_bound(locked_end_date, end=True)
+    appeal_start_dt = _parse_bound(appeal_start_date, end=False)
+    appeal_end_dt = _parse_bound(appeal_end_date, end=True)
+
+    if request.method == 'POST' and request.POST.get('review_appeal') == '1':
+        return_to = (request.POST.get('return_to') or reverse('betting:account_appeals_review')).strip()
+        appeal = get_object_or_404(
+            AccountUnlockAppeal.objects.select_related('locked_user', 'appealed_by'),
+            id=request.POST.get('appeal_id'),
+        )
+        review_form = AccountUnlockAppealReviewForm(request.POST)
+        if review_form.is_valid():
+            if appeal.status != 'pending':
+                messages.error(request, 'This appeal has already been reviewed.')
+                return redirect(return_to)
+            action = review_form.cleaned_data['action']
+            admin_comment = review_form.cleaned_data['admin_comment']
+            locked_user = appeal.locked_user
+            review_time = timezone.now()
+            prior_reason = ''
+            if locked_user:
+                prior_reason = (locked_user.lock_reason or '').strip()
+            with db_transaction.atomic():
+                if action == 'approve' and locked_user:
+                    locked_user.is_locked = False
+                    locked_user.failed_login_attempts = 0
+                    locked_user.last_failed_login = None
+                    locked_user.locked_at = None
+                    locked_user.lock_reason = ''
+                    locked_user.save(update_fields=['is_locked', 'failed_login_attempts', 'last_failed_login', 'locked_at', 'lock_reason'])
+                    LoginAttempt.objects.create(
+                        user=locked_user,
+                        username_attempted=locked_user.email,
+                        ip_address=request.META.get('REMOTE_ADDR'),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        status='unlocked',
+                    )
+                    AccountLockAuditLog.objects.create(
+                        locked_user=locked_user,
+                        appealed_by=appeal.appealed_by,
+                        reviewed_by=request.user,
+                        lock_reason=prior_reason,
+                        action='appeal_approved',
+                        remarks=appeal.appeal_reason,
+                    )
+                    AccountLockAuditLog.objects.create(
+                        locked_user=locked_user,
+                        reviewed_by=request.user,
+                        lock_reason=prior_reason,
+                        action='unlocked',
+                        remarks='Account unlocked after appeal approval.',
+                    )
+                    appeal.status = 'approved'
+                    messages.success(request, 'Appeal approved and account unlocked successfully.')
+                else:
+                    AccountLockAuditLog.objects.create(
+                        locked_user=locked_user,
+                        appealed_by=appeal.appealed_by,
+                        reviewed_by=request.user,
+                        lock_reason=prior_reason,
+                        action='appeal_rejected',
+                        remarks=admin_comment or appeal.appeal_reason,
+                    )
+                    appeal.status = 'rejected'
+                    messages.success(request, 'Appeal rejected successfully.')
+                appeal.admin_comment = admin_comment
+                appeal.reviewed_at = review_time
+                appeal.reviewed_by = request.user
+                appeal.save(update_fields=['status', 'admin_comment', 'reviewed_at', 'reviewed_by'])
+            _notify_unlock_appeal_resolution(appeal, approved=(action == 'approve'))
+        else:
+            messages.error(request, next(iter(review_form.errors.get('admin_comment', ['Unable to review appeal.'])), 'Unable to review appeal.'))
+        return redirect(return_to)
+
+    locked_accounts_qs = _apply_locked_accounts_filters(
+        _scoped_locked_accounts_queryset(request.user),
+        query=query,
+        user_type=user_type,
+        status=status,
+        locked_by=locked_by,
+        locked_start_dt=locked_start_dt,
+        locked_end_dt=locked_end_dt,
+        appeal_start_dt=appeal_start_dt,
+        appeal_end_dt=appeal_end_dt,
+    )
+    locked_accounts_paginator = Paginator(locked_accounts_qs, 50)
+    locked_accounts_page = locked_accounts_paginator.get_page(request.GET.get('locked_page') or 1)
+    locked_accounts_rows = _attach_locked_account_metadata(list(locked_accounts_page.object_list))
+
+    appeals_qs = _apply_account_unlock_appeal_filters(
+        _scoped_account_unlock_appeals_queryset(request.user),
+        query=query,
+        user_type=user_type,
+        status=status if status in ['pending', 'approved', 'rejected'] else '',
+        locked_by=locked_by,
+        locked_start_dt=locked_start_dt,
+        locked_end_dt=locked_end_dt,
+        appeal_start_dt=appeal_start_dt,
+        appeal_end_dt=appeal_end_dt,
+    )
+    appeals_paginator = Paginator(appeals_qs, 50)
+    appeals_page = appeals_paginator.get_page(request.GET.get('appeals_page') or 1)
+
+    summary = {
+        'total_locked_accounts': _scoped_locked_accounts_queryset(request.user).count(),
+        'pending_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='pending').count(),
+        'approved_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='approved').count(),
+        'rejected_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='rejected').count(),
+    }
+
+    context = {
+        'summary': summary,
+        'locked_accounts_page': locked_accounts_page,
+        'locked_accounts_rows': locked_accounts_rows,
+        'appeals_page': appeals_page,
+        'query': query,
+        'user_type': user_type,
+        'status': status,
+        'locked_by': locked_by,
+        'locked_start_date': locked_start_date,
+        'locked_end_date': locked_end_date,
+        'appeal_start_date': appeal_start_date,
+        'appeal_end_date': appeal_end_date,
+        'current_full_path': request.get_full_path(),
+        'user_type_choices': [
+            ('super_agent', 'Super Agent'),
+            ('agent', 'Agent'),
+            ('cashier', 'Cashier'),
+            ('retail_manager', 'Retail Manager'),
+        ],
+    }
+    return render(request, 'betting/account_appeals_review.html', context)
+
+
+@login_required
+def locked_accounts_export(request):
+    if not can_manage_account_unlock_appeals(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    fmt = (request.GET.get('format') or 'xlsx').strip().lower()
+    if fmt not in {'csv', 'xlsx', 'pdf'}:
+        return HttpResponseBadRequest('Unknown format')
+
+    def _parse_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    query = (request.GET.get('q') or '').strip()
+    user_type = (request.GET.get('user_type') or '').strip()
+    status = (request.GET.get('status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_dt = _parse_bound(request.GET.get('locked_start_date'), end=False)
+    locked_end_dt = _parse_bound(request.GET.get('locked_end_date'), end=True)
+    appeal_start_dt = _parse_bound(request.GET.get('appeal_start_date'), end=False)
+    appeal_end_dt = _parse_bound(request.GET.get('appeal_end_date'), end=True)
+
+    rows = []
+    users = list(_apply_locked_accounts_filters(
+        _scoped_locked_accounts_queryset(request.user),
+        query=query,
+        user_type=user_type,
+        status=status,
+        locked_by=locked_by,
+        locked_start_dt=locked_start_dt,
+        locked_end_dt=locked_end_dt,
+        appeal_start_dt=appeal_start_dt,
+        appeal_end_dt=appeal_end_dt,
+    )[:100000])
+    _attach_locked_account_metadata(users)
+    for user in users:
+        rows.append({
+            'username': user.username or user.email or '',
+            'full_name': user.get_full_name() or '',
+            'user_type': user.get_user_type_display(),
+            'locked_date': timezone.localtime(user.locked_at).strftime('%Y-%m-%d') if user.locked_at else '',
+            'locked_time': timezone.localtime(user.locked_at).strftime('%I:%M %p') if user.locked_at else '',
+            'locked_by': getattr(user, 'locked_by_display', '') or '',
+            'reason': getattr(user, 'lock_reason_display', '') or '',
+            'status': getattr(user, 'locked_account_status_label', 'Locked'),
+        })
+    return _export_simple_rows(rows=rows, title='locked_accounts', fmt=fmt)
+
+
+@login_required
+def account_unlock_appeals_export(request):
+    if not can_manage_account_unlock_appeals(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    fmt = (request.GET.get('format') or 'xlsx').strip().lower()
+    if fmt not in {'csv', 'xlsx', 'pdf'}:
+        return HttpResponseBadRequest('Unknown format')
+
+    def _parse_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    query = (request.GET.get('q') or '').strip()
+    user_type = (request.GET.get('user_type') or '').strip()
+    status = (request.GET.get('status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_dt = _parse_bound(request.GET.get('locked_start_date'), end=False)
+    locked_end_dt = _parse_bound(request.GET.get('locked_end_date'), end=True)
+    appeal_start_dt = _parse_bound(request.GET.get('appeal_start_date'), end=False)
+    appeal_end_dt = _parse_bound(request.GET.get('appeal_end_date'), end=True)
+
+    rows = []
+    appeals = _apply_account_unlock_appeal_filters(
+        _scoped_account_unlock_appeals_queryset(request.user),
+        query=query,
+        user_type=user_type,
+        status=status if status in ['pending', 'approved', 'rejected'] else '',
+        locked_by=locked_by,
+        locked_start_dt=locked_start_dt,
+        locked_end_dt=locked_end_dt,
+        appeal_start_dt=appeal_start_dt,
+        appeal_end_dt=appeal_end_dt,
+    )[:100000]
+    for appeal in appeals:
+        locked_user = appeal.locked_user
+        rows.append({
+            'date': appeal.created_at.isoformat(sep=' ', timespec='seconds') if appeal.created_at else '',
+            'locked_user': getattr(locked_user, 'username', '') or getattr(locked_user, 'email', '') or '',
+            'user_type': getattr(locked_user, 'get_user_type_display', lambda: '')() if locked_user else '',
+            'appealed_by': getattr(appeal.appealed_by, 'username', '') or getattr(appeal.appealed_by, 'email', '') or '',
+            'reason': appeal.appeal_reason or '',
+            'status': appeal.get_status_display(),
+            'admin_comment': appeal.admin_comment or '',
+            'reviewed_by': getattr(appeal.reviewed_by, 'username', '') or getattr(appeal.reviewed_by, 'email', '') or '',
+            'reviewed_at': appeal.reviewed_at.isoformat(sep=' ', timespec='seconds') if appeal.reviewed_at else '',
+        })
+    return _export_simple_rows(rows=rows, title='account_unlock_appeals', fmt=fmt)
+
+
+@login_required
 @user_passes_test(is_crm_user)
 def crm_dashboard(request):
     tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
@@ -8620,6 +9677,14 @@ def crm_dashboard(request):
     hierarchy_agent_q = (request.GET.get('hierarchy_agent') or '').strip()
     selected_top_period_id_raw = (request.GET.get('top_period') or '').strip()
     segment_key = (request.GET.get('segment') or '').strip()
+    locked_q = (request.GET.get('locked_q') or '').strip()
+    locked_user_type = (request.GET.get('locked_user_type') or '').strip()
+    locked_status = (request.GET.get('locked_status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_date = (request.GET.get('locked_start_date') or '').strip()
+    locked_end_date = (request.GET.get('locked_end_date') or '').strip()
+    locked_appeal_start_date = (request.GET.get('locked_appeal_start_date') or '').strip()
+    locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
     comm_msg_title = (request.POST.get('campaign_title') or '').strip()
     comm_msg_body = (request.POST.get('campaign_message') or '').strip()
 
@@ -8637,6 +9702,21 @@ def crm_dashboard(request):
             end_dt = timezone.make_aware(datetime.combine(ed, datetime.max.time()))
         except Exception:
             end_dt = None
+
+    def _parse_dashboard_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    locked_start_dt = _parse_dashboard_bound(locked_start_date, end=False)
+    locked_end_dt = _parse_dashboard_bound(locked_end_date, end=True)
+    locked_appeal_start_dt = _parse_dashboard_bound(locked_appeal_start_date, end=False)
+    locked_appeal_end_dt = _parse_dashboard_bound(locked_appeal_end_date, end=True)
 
     today = timezone.now().date()
     metrics_start_date = None
@@ -8883,6 +9963,29 @@ def crm_dashboard(request):
     cached_charts = dict(cached_charts or {})
     cached_charts['top_fixtures'] = top_fixtures
 
+    locked_accounts_summary = {
+        'total_locked_accounts': _scoped_locked_accounts_queryset(request.user).count(),
+        'pending_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='pending').count(),
+        'approved_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='approved').count(),
+        'rejected_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='rejected').count(),
+    }
+    locked_accounts_page = None
+    locked_accounts_rows = []
+    if active_tab == 'locked_accounts':
+        locked_accounts_qs = _apply_locked_accounts_filters(
+            _scoped_locked_accounts_queryset(request.user),
+            query=locked_q,
+            user_type=locked_user_type,
+            status=locked_status,
+            locked_by=locked_by,
+            locked_start_dt=locked_start_dt,
+            locked_end_dt=locked_end_dt,
+            appeal_start_dt=locked_appeal_start_dt,
+            appeal_end_dt=locked_appeal_end_dt,
+        )
+        locked_accounts_page = Paginator(locked_accounts_qs, 50).get_page(request.GET.get('locked_page') or 1)
+        locked_accounts_rows = _attach_locked_account_metadata(list(locked_accounts_page.object_list))
+
     bet_tickets_page = None
     agent_filter_options = []
     if active_tab == 'bets':
@@ -9102,6 +10205,12 @@ def crm_dashboard(request):
             selected_commission_period_id,
         )
 
+    recent_agent_transfers = []
+    if active_tab == 'agent_management':
+        recent_agent_transfers = list(
+            AgentTransferLog.objects.select_related('agent', 'old_super_agent', 'new_super_agent', 'transferred_by').order_by('-created_at')[:5]
+        )
+
     context = {
         'active_tab': active_tab,
         'q': q,
@@ -9137,6 +10246,7 @@ def crm_dashboard(request):
         'can_approve_registrations': crm_can_approve_registrations(request.user),
         'can_edit_profiles': crm_can_edit_profiles(request.user),
         'can_view_audit': crm_can_view_audit(request.user),
+        'can_remap_agents': crm_can_remap_agents(request.user),
         'can_message': crm_can_message(request.user),
         'retail_hierarchy': retail_hierarchy,
         'hierarchy_search_results': hierarchy_search_results,
@@ -9147,6 +10257,18 @@ def crm_dashboard(request):
         'commission_agent_q': commission_agent_q,
         'top_period_options': top_period_options,
         'selected_top_period_id': selected_top_period_id,
+        'recent_agent_transfers': recent_agent_transfers,
+        'locked_accounts_summary': locked_accounts_summary,
+        'locked_accounts_page': locked_accounts_page,
+        'locked_accounts_rows': locked_accounts_rows,
+        'locked_q': locked_q,
+        'locked_user_type': locked_user_type,
+        'locked_status': locked_status,
+        'locked_by': locked_by,
+        'locked_start_date': locked_start_date,
+        'locked_end_date': locked_end_date,
+        'locked_appeal_start_date': locked_appeal_start_date,
+        'locked_appeal_end_date': locked_appeal_end_date,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 
@@ -9282,6 +10404,14 @@ def retail_dashboard(request):
     player_status = (request.GET.get('player_status') or '').strip()
     player_kyc = (request.GET.get('player_kyc') or '').strip()
     commission_agent_q = (request.GET.get('commission_agent') or '').strip()
+    locked_q = (request.GET.get('locked_q') or '').strip()
+    locked_user_type = (request.GET.get('locked_user_type') or '').strip()
+    locked_status = (request.GET.get('locked_status') or '').strip()
+    locked_by = (request.GET.get('locked_by') or '').strip()
+    locked_start_date = (request.GET.get('locked_start_date') or '').strip()
+    locked_end_date = (request.GET.get('locked_end_date') or '').strip()
+    locked_appeal_start_date = (request.GET.get('locked_appeal_start_date') or '').strip()
+    locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -9296,6 +10426,21 @@ def retail_dashboard(request):
             end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
     except Exception:
         end_dt = None
+
+    def _parse_dashboard_bound(value, *, end=False):
+        value = (value or '').strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%d").date()
+            return timezone.make_aware(datetime.combine(parsed, datetime.max.time() if end else datetime.min.time()))
+        except Exception:
+            return None
+
+    locked_start_dt = _parse_dashboard_bound(locked_start_date, end=False)
+    locked_end_dt = _parse_dashboard_bound(locked_end_date, end=True)
+    locked_appeal_start_dt = _parse_dashboard_bound(locked_appeal_start_date, end=False)
+    locked_appeal_end_dt = _parse_dashboard_bound(locked_appeal_end_date, end=True)
 
     today = timezone.localdate()
     metrics_start_date = (start_dt.date() if start_dt else (today - timedelta(days=30)))
@@ -9487,6 +10632,27 @@ def retail_dashboard(request):
                     'total_balance': sum((row['total_balance'] for row in agent_rows), Decimal('0.00')),
                 }
             )
+
+    locked_accounts_summary = {
+        'locked_downlines': _scoped_locked_accounts_queryset(request.user).count(),
+        'pending_appeals': _scoped_account_unlock_appeals_queryset(request.user).filter(status='pending').count(),
+    }
+    locked_accounts_page = None
+    locked_accounts_rows = []
+    if active_tab == 'locked_accounts':
+        locked_accounts_qs = _apply_locked_accounts_filters(
+            _scoped_locked_accounts_queryset(request.user),
+            query=locked_q,
+            user_type=locked_user_type,
+            status=locked_status,
+            locked_by=locked_by,
+            locked_start_dt=locked_start_dt,
+            locked_end_dt=locked_end_dt,
+            appeal_start_dt=locked_appeal_start_dt,
+            appeal_end_dt=locked_appeal_end_dt,
+        )
+        locked_accounts_page = Paginator(locked_accounts_qs, 50).get_page(request.GET.get('locked_page') or 1)
+        locked_accounts_rows = _attach_locked_account_metadata(list(locked_accounts_page.object_list))
 
     hierarchy = []
     if active_tab == 'hierarchy':
@@ -9780,6 +10946,17 @@ def retail_dashboard(request):
         'mapped_super_agents': list(super_agents.only('id', 'email', 'username').order_by('email')[:200]),
         'note_form': note_form,
         'note_entry': note_entry,
+        'locked_accounts_summary': locked_accounts_summary,
+        'locked_accounts_page': locked_accounts_page,
+        'locked_accounts_rows': locked_accounts_rows,
+        'locked_q': locked_q,
+        'locked_user_type': locked_user_type,
+        'locked_status': locked_status,
+        'locked_by': locked_by,
+        'locked_start_date': locked_start_date,
+        'locked_end_date': locked_end_date,
+        'locked_appeal_start_date': locked_appeal_start_date,
+        'locked_appeal_end_date': locked_appeal_end_date,
     }
     return render(request, 'betting/retail_dashboard.html', context)
 

@@ -1,0 +1,80 @@
+<script>
+  (function () {
+    function getCookie(name) {
+      const value = `; ${document.cookie}`;
+      const parts = value.split(`; ${name}=`);
+      if (parts.length === 2) {
+        return parts.pop().split(';').shift();
+      }
+      return '';
+    }
+
+    async function submitAppeal(button) {
+      const appealUrl = button.getAttribute('data-appeal-url');
+      const username = button.getAttribute('data-locked-username') || 'this account';
+      if (!appealUrl || typeof Swal === 'undefined') {
+        return;
+      }
+
+      const result = await Swal.fire({
+        title: 'Submit Unlock Appeal',
+        input: 'textarea',
+        inputLabel: `Appeal for ${username}`,
+        inputPlaceholder: 'Please explain why this account should be unlocked.',
+        inputAttributes: { 'aria-label': 'Appeal reason' },
+        showCancelButton: true,
+        confirmButtonText: 'Submit Appeal',
+        cancelButtonText: 'Cancel',
+        inputValidator: (value) => {
+          if (!value || !value.trim()) {
+            return 'Appeal reason is required.';
+          }
+          return null;
+        },
+      });
+
+      if (!result.isConfirmed) {
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('appeal_reason', result.value.trim());
+
+      try {
+        const response = await fetch(appealUrl, {
+          method: 'POST',
+          headers: {
+            'X-CSRFToken': getCookie('csrftoken'),
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error((data && data.message) || 'Unable to submit appeal.');
+        }
+        await Swal.fire({
+          icon: 'success',
+          title: 'Appeal submitted successfully.',
+          text: 'Your request has been forwarded to Admin for review.',
+        });
+        window.location.reload();
+      } catch (error) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Unable to submit appeal',
+          text: error.message || 'Please try again.',
+        });
+      }
+    }
+
+    document.addEventListener('click', function (event) {
+      const button = event.target.closest('.js-account-appeal-btn');
+      if (!button) {
+        return;
+      }
+      event.preventDefault();
+      submitAppeal(button);
+    });
+  })();
+</script>

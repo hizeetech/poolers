@@ -1796,6 +1796,154 @@ class RetailManagerDashboardNote(models.Model):
         return f"Retail Note - {identifier}"
 
 
+class AgentTransferLog(models.Model):
+    agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_transfer_logs',
+        limit_choices_to={'user_type': 'agent'},
+    )
+    old_super_agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_transfer_logs_as_old_super_agent',
+        limit_choices_to={'user_type': 'super_agent'},
+    )
+    new_super_agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_transfer_logs_as_new_super_agent',
+        limit_choices_to={'user_type': 'super_agent'},
+    )
+    transferred_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_transfer_logs_created',
+    )
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Agent Transfer Log'
+        verbose_name_plural = 'Agent Transfer Logs'
+
+    def __str__(self):
+        agent_label = getattr(self.agent, 'username', None) or getattr(self.agent, 'email', None) or f"agent#{self.agent_id}"
+        return f"Agent Transfer - {agent_label}"
+
+
+class AccountUnlockAppeal(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_unlock_appeals',
+    )
+    locked_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_unlock_appeals_received',
+    )
+    appealed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_unlock_appeals_submitted',
+    )
+    appeal_reason = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    admin_comment = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_unlock_appeals_reviewed',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Account Unlock Appeal'
+        verbose_name_plural = 'Account Unlock Appeals'
+
+    def __str__(self):
+        target = getattr(self.locked_user, 'username', None) or getattr(self.locked_user, 'email', None) or f"user#{self.locked_user_id}"
+        return f"Unlock Appeal - {target}"
+
+
+class AccountLockAuditLog(models.Model):
+    ACTION_CHOICES = (
+        ('locked', 'Locked'),
+        ('appeal_submitted', 'Appeal Submitted'),
+        ('appeal_approved', 'Appeal Approved'),
+        ('appeal_rejected', 'Appeal Rejected'),
+        ('unlocked', 'Unlocked'),
+    )
+
+    locked_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_lock_audit_logs',
+    )
+    locked_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_lock_events_created',
+    )
+    lock_reason = models.CharField(max_length=255, blank=True, default='')
+    appealed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_lock_appeals_logged',
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='account_lock_reviews_logged',
+    )
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES, db_index=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    remarks = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'Account Lock Audit Log'
+        verbose_name_plural = 'Account Lock Audit Logs'
+
+    def __str__(self):
+        target = getattr(self.locked_user, 'username', None) or getattr(self.locked_user, 'email', None) or f"user#{self.locked_user_id}"
+        return f"{self.get_action_display()} - {target}"
+
+
 class FinanceAuditLog(models.Model):
     ACTION_TYPES = (
         ('WITHDRAWAL_APPROVED', 'Withdrawal Approved'),

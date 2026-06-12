@@ -1,0 +1,287 @@
+{% extends 'betting/base.html' %}
+{% block title %}Account Appeals{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold mb-0">Account Appeals</h2>
+      <div class="text-muted small">Review locked accounts, submitted appeals, and unlock decisions.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-outline-primary btn-sm" href="{% url 'betting:locked_accounts_export' %}?format=csv&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Locked CSV</a>
+      <a class="btn btn-outline-primary btn-sm" href="{% url 'betting:locked_accounts_export' %}?format=xlsx&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Locked Excel</a>
+      <a class="btn btn-outline-primary btn-sm" href="{% url 'betting:locked_accounts_export' %}?format=pdf&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Locked PDF</a>
+      <a class="btn btn-outline-success btn-sm" href="{% url 'betting:account_unlock_appeals_export' %}?format=csv&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Appeals CSV</a>
+      <a class="btn btn-outline-success btn-sm" href="{% url 'betting:account_unlock_appeals_export' %}?format=xlsx&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Appeals Excel</a>
+      <a class="btn btn-outline-success btn-sm" href="{% url 'betting:account_unlock_appeals_export' %}?format=pdf&q={{ query }}&user_type={{ user_type }}&status={{ status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&appeal_start_date={{ appeal_start_date }}&appeal_end_date={{ appeal_end_date }}">Appeals PDF</a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+      <div class="card shadow-sm h-100 border-start border-4 border-danger">
+        <div class="card-body">
+          <div class="text-muted small">Total Locked Accounts</div>
+          <div class="fs-4 fw-bold">{{ summary.total_locked_accounts }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card shadow-sm h-100 border-start border-4 border-warning">
+        <div class="card-body">
+          <div class="text-muted small">Pending Appeals</div>
+          <div class="fs-4 fw-bold">{{ summary.pending_appeals }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card shadow-sm h-100 border-start border-4 border-success">
+        <div class="card-body">
+          <div class="text-muted small">Approved Appeals</div>
+          <div class="fs-4 fw-bold">{{ summary.approved_appeals }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card shadow-sm h-100 border-start border-4 border-secondary">
+        <div class="card-body">
+          <div class="text-muted small">Rejected Appeals</div>
+          <div class="fs-4 fw-bold">{{ summary.rejected_appeals }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold">Search & Filters</div>
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label small text-muted mb-1">Search</label>
+          <input type="text" name="q" value="{{ query }}" class="form-control form-control-sm" placeholder="Username, name, phone">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small text-muted mb-1">User Type</label>
+          <select name="user_type" class="form-select form-select-sm">
+            <option value="">All</option>
+            {% for value,label in user_type_choices %}
+            <option value="{{ value }}" {% if user_type == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small text-muted mb-1">Status</label>
+          <select name="status" class="form-select form-select-sm">
+            <option value="">All</option>
+            <option value="locked" {% if status == 'locked' %}selected{% endif %}>Locked</option>
+            <option value="appealed" {% if status == 'appealed' %}selected{% endif %}>Appealed</option>
+            <option value="rejected" {% if status == 'rejected' %}selected{% endif %}>Rejected</option>
+            <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending Appeal</option>
+            <option value="approved" {% if status == 'approved' %}selected{% endif %}>Approved Appeal</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small text-muted mb-1">Locked By</label>
+          <input type="text" name="locked_by" value="{{ locked_by }}" class="form-control form-control-sm" placeholder="Admin or System">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small text-muted mb-1">Locked From</label>
+          <input type="date" name="locked_start_date" value="{{ locked_start_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small text-muted mb-1">Locked To</label>
+          <input type="date" name="locked_end_date" value="{{ locked_end_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small text-muted mb-1">Appeal From</label>
+          <input type="date" name="appeal_start_date" value="{{ appeal_start_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small text-muted mb-1">Appeal To</label>
+          <input type="date" name="appeal_end_date" value="{{ appeal_end_date }}" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-12 d-flex gap-2">
+          <button class="btn btn-primary btn-sm" type="submit">Apply Filters</button>
+          <a class="btn btn-outline-secondary btn-sm" href="{% url 'betting:account_appeals_review' %}">Reset</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-light fw-semibold">Locked Accounts</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Username</th>
+              <th>Full Name</th>
+              <th>User Type</th>
+              <th>Locked Date</th>
+              <th>Locked Time</th>
+              <th>Locked By</th>
+              <th>Reason</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in locked_accounts_rows %}
+            <tr>
+              <td class="text-muted small">{{ u.username|default:u.email|default:"-" }}</td>
+              <td>{{ u.get_full_name|default:"-" }}</td>
+              <td class="text-uppercase small">{{ u.get_user_type_display }}</td>
+              <td class="text-nowrap">{{ u.locked_at|date:"Y-m-d"|default:"-" }}</td>
+              <td class="text-nowrap">{{ u.locked_at|date:"h:i A"|default:"-" }}</td>
+              <td class="text-muted small">{{ u.locked_by_display }}</td>
+              <td class="text-muted small">{{ u.lock_reason_display }}</td>
+              <td>
+                {% if u.locked_account_status_label == 'Appealed' %}
+                <span class="badge bg-warning text-dark">Appealed</span>
+                {% elif u.locked_account_status_label == 'Rejected' %}
+                <span class="badge bg-secondary">Rejected</span>
+                {% else %}
+                <span class="badge bg-danger">Locked</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" class="text-center text-muted py-4">No locked accounts found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header bg-light fw-semibold">Appeal History</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Date</th>
+              <th>Locked User</th>
+              <th>User Type</th>
+              <th>Appealed By</th>
+              <th>Reason</th>
+              <th>Status</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for appeal in appeals_page %}
+            <tr>
+              <td class="text-nowrap">{{ appeal.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-muted small">{% if appeal.locked_user %}{{ appeal.locked_user.username|default:appeal.locked_user.email|default:"-" }}{% else %}-{% endif %}</td>
+              <td class="text-uppercase small">{% if appeal.locked_user %}{{ appeal.locked_user.get_user_type_display|default:"-" }}{% else %}-{% endif %}</td>
+              <td class="text-muted small">{% if appeal.appealed_by %}{{ appeal.appealed_by.username|default:appeal.appealed_by.email|default:"-" }}{% else %}-{% endif %}</td>
+              <td class="text-muted small">{{ appeal.appeal_reason|truncatechars:80 }}</td>
+              <td>
+                {% if appeal.status == 'pending' %}
+                <span class="badge bg-warning text-dark">Pending</span>
+                {% elif appeal.status == 'approved' %}
+                <span class="badge bg-success">Approved</span>
+                {% else %}
+                <span class="badge bg-secondary">Rejected</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="d-flex flex-wrap gap-2 justify-content-end">
+                  <button type="button" class="btn btn-sm btn-outline-info js-appeal-detail-btn"
+                          data-locked-user="{% if appeal.locked_user %}{{ appeal.locked_user.username|default:appeal.locked_user.email|default:'-' }}{% else %}-{% endif %}"
+                          data-user-type="{% if appeal.locked_user %}{{ appeal.locked_user.get_user_type_display|default:'-' }}{% else %}-{% endif %}"
+                          data-appealed-by="{% if appeal.appealed_by %}{{ appeal.appealed_by.username|default:appeal.appealed_by.email|default:'-' }}{% else %}-{% endif %}"
+                          data-reason="{{ appeal.appeal_reason }}"
+                          data-status="{{ appeal.get_status_display }}"
+                          data-comment="{{ appeal.admin_comment|default:'' }}"
+                          data-reviewed-by="{% if appeal.reviewed_by %}{{ appeal.reviewed_by.username|default:appeal.reviewed_by.email|default:'-' }}{% else %}-{% endif %}"
+                          data-reviewed-at="{{ appeal.reviewed_at|date:'Y-m-d H:i'|default:'-' }}">
+                    View Details
+                  </button>
+                  {% if appeal.status == 'pending' %}
+                  <button type="button" class="btn btn-sm btn-success js-appeal-review-btn" data-action="approve" data-appeal-id="{{ appeal.id }}" data-locked-user="{% if appeal.locked_user %}{{ appeal.locked_user.username|default:appeal.locked_user.email|default:'account' }}{% else %}account{% endif %}">Approve Unlock</button>
+                  <button type="button" class="btn btn-sm btn-danger js-appeal-review-btn" data-action="reject" data-appeal-id="{{ appeal.id }}" data-locked-user="{% if appeal.locked_user %}{{ appeal.locked_user.username|default:appeal.locked_user.email|default:'account' }}{% else %}account{% endif %}">Reject Appeal</button>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-center text-muted py-4">No appeals found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<form id="appealReviewForm" method="post" class="d-none">
+  {% csrf_token %}
+  <input type="hidden" name="review_appeal" value="1">
+  <input type="hidden" name="appeal_id" id="appealReviewId">
+  <input type="hidden" name="action" id="appealReviewAction">
+  <input type="hidden" name="admin_comment" id="appealReviewComment">
+  <input type="hidden" name="return_to" value="{{ current_full_path }}">
+</form>
+
+<script>
+  (function () {
+    document.addEventListener('click', async function (event) {
+      const detailButton = event.target.closest('.js-appeal-detail-btn');
+      if (detailButton && typeof Swal !== 'undefined') {
+        event.preventDefault();
+        Swal.fire({
+          title: 'Appeal Details',
+          html: `
+            <div class="text-start small">
+              <p><strong>Locked User:</strong> ${detailButton.getAttribute('data-locked-user') || '-'}</p>
+              <p><strong>User Type:</strong> ${detailButton.getAttribute('data-user-type') || '-'}</p>
+              <p><strong>Appealed By:</strong> ${detailButton.getAttribute('data-appealed-by') || '-'}</p>
+              <p><strong>Status:</strong> ${detailButton.getAttribute('data-status') || '-'}</p>
+              <p><strong>Reason:</strong><br>${detailButton.getAttribute('data-reason') || '-'}</p>
+              <p><strong>Admin Comment:</strong><br>${detailButton.getAttribute('data-comment') || '-'}</p>
+              <p><strong>Reviewed By:</strong> ${detailButton.getAttribute('data-reviewed-by') || '-'}</p>
+              <p><strong>Reviewed At:</strong> ${detailButton.getAttribute('data-reviewed-at') || '-'}</p>
+            </div>
+          `,
+          confirmButtonText: 'Close',
+        });
+        return;
+      }
+
+      const reviewButton = event.target.closest('.js-appeal-review-btn');
+      if (!reviewButton || typeof Swal === 'undefined') {
+        return;
+      }
+      event.preventDefault();
+      const action = reviewButton.getAttribute('data-action');
+      const appealId = reviewButton.getAttribute('data-appeal-id');
+      const lockedUser = reviewButton.getAttribute('data-locked-user') || 'account';
+      const isReject = action === 'reject';
+      const result = await Swal.fire({
+        title: isReject ? 'Reject Appeal' : 'Approve Unlock',
+        input: 'textarea',
+        inputLabel: isReject ? `Admin comment for ${lockedUser}` : `Review note for ${lockedUser} (optional)`,
+        inputPlaceholder: isReject ? 'Admin comment is required.' : 'Optional review note',
+        inputValidator: (value) => {
+          if (isReject && (!value || !value.trim())) {
+            return 'Admin comment is required when rejecting an appeal.';
+          }
+          return null;
+        },
+        showCancelButton: true,
+        confirmButtonText: isReject ? 'Reject Appeal' : 'Approve Unlock',
+      });
+      if (!result.isConfirmed) {
+        return;
+      }
+      document.getElementById('appealReviewId').value = appealId;
+      document.getElementById('appealReviewAction').value = action;
+      document.getElementById('appealReviewComment').value = (result.value || '').trim();
+      document.getElementById('appealReviewForm').submit();
+    });
+  })();
+</script>
+{% endblock %}

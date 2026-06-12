@@ -190,6 +190,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting:agent_remapping' %}active{% endif %}" href="{% url 'betting:agent_remapping' %}">
+                        <i class="fas fa-exchange-alt me-2"></i> Agent Re-Mapping
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if 'withdrawal' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:withdraw_request_list' %}">
                         <i class="fas fa-money-check-alt me-2"></i> Withdrawal Requests
                     </a>
@@ -222,10 +227,10 @@
 
                 <!-- Reporting Section - Collapsible -->
                 <li class="nav-item">
-                    <div class="collapsible-header {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#reportsCollapse" aria-expanded="{% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}true{% else %}false{% endif %}" aria-controls="reportsCollapse">
+                    <div class="collapsible-header {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log,betting_admin:betting_agenttransferlog_changelist' %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#reportsCollapse" aria-expanded="{% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log,betting_admin:betting_agenttransferlog_changelist' %}true{% else %}false{% endif %}" aria-controls="reportsCollapse">
                         <i class="fas fa-chart-line"></i> Reports <i class="fas fa-caret-down float-end mt-1"></i>
                     </div>
-                    <div class="collapse collapsible-content {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log' %}show{% endif %}" id="reportsCollapse">
+                    <div class="collapse collapsible-content {% if request.resolver_match.view_name in 'betting_admin:admin_ticket_report,betting_admin:admin_tickets_by_event_report,betting_admin:admin_wallet_report,betting_admin:admin_sales_winnings_report,betting_admin:admin_commission_report,betting_admin:admin_activity_log,betting_admin:betting_agenttransferlog_changelist' %}show{% endif %}" id="reportsCollapse">
                         <ul class="nav flex-column ps-3">
                             <li class="nav-item">
                                 <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_ticket_report' %}active{% endif %}" href="{% url 'betting_admin:admin_ticket_report' %}">Ticket Report</a>
@@ -244,6 +249,9 @@
                             </li>
                             <li class="nav-item">
                                 <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_activity_log' %}active{% endif %}" href="{% url 'betting_admin:admin_activity_log' %}">Activity Logs</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:betting_agenttransferlog_changelist' %}active{% endif %}" href="{% url 'betting_admin:betting_agenttransferlog_changelist' %}">Agent Transfer Logs</a>
                             </li>
                         </ul>
                     </div>

@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.mail import send_mail, get_connection
 from django.contrib.auth.hashers import make_password
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog
 from .services.usernames import create_agent_and_cashiers
 from pending_registration.models import PendingAgentRegistration
 
@@ -255,6 +255,12 @@ class LoginForm(AuthenticationForm):
                     user.locked_at = timezone.now()
                     user.lock_reason = "Exceeded maximum failed login attempts"
                     user.save()
+                    AccountLockAuditLog.objects.create(
+                        locked_user=user,
+                        lock_reason=user.lock_reason or "",
+                        action='locked',
+                        remarks='Account locked after repeated failed login attempts.',
+                    )
                     
                     LoginAttempt.objects.create(
                         user=user,
@@ -1565,6 +1571,160 @@ class RetailManagerDashboardNoteForm(forms.ModelForm):
                 attrs={'class': 'django_ckeditor_5'},
                 config_name='default',
             ),
+        }
+
+
+class AccountUnlockAppealForm(forms.ModelForm):
+    class Meta:
+        model = AccountUnlockAppeal
+        fields = ('appeal_reason',)
+        widgets = {
+            'appeal_reason': forms.Textarea(
+                attrs={
+                    'class': 'form-control',
+                    'rows': 4,
+                    'placeholder': 'Please explain why this account should be unlocked.',
+                }
+            ),
+        }
+
+    def clean_appeal_reason(self):
+        value = (self.cleaned_data.get('appeal_reason') or '').strip()
+        if not value:
+            raise ValidationError('Appeal reason is required.')
+        return value
+
+
+class AccountUnlockAppealReviewForm(forms.Form):
+    ACTION_CHOICES = (
+        ('approve', 'Approve Unlock'),
+        ('reject', 'Reject Appeal'),
+    )
+
+    action = forms.ChoiceField(choices=ACTION_CHOICES)
+    admin_comment = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                'class': 'form-control',
+                'rows': 3,
+                'placeholder': 'Enter comment for rejection or review notes.',
+            }
+        ),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        action = cleaned_data.get('action')
+        admin_comment = (cleaned_data.get('admin_comment') or '').strip()
+        if action == 'reject' and not admin_comment:
+            self.add_error('admin_comment', 'Admin comment is required when rejecting an appeal.')
+        cleaned_data['admin_comment'] = admin_comment
+        return cleaned_data
+
+
+class AgentRemapForm(forms.Form):
+    current_super_agent = forms.ModelChoiceField(
+        queryset=User.objects.none(),
+        label="Current Super Agent",
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+    agents = forms.ModelMultipleChoiceField(
+        queryset=User.objects.none(),
+        label="Agents",
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+    destination_super_agent = forms.ModelChoiceField(
+        queryset=User.objects.none(),
+        label="Transfer To Super Agent",
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+    remarks = forms.CharField(
+        label="Reason for transfer",
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Optional remarks'}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        current_super_agent_qs = kwargs.pop('current_super_agent_qs', None)
+        destination_super_agent_qs = kwargs.pop('destination_super_agent_qs', None)
+        agent_queryset = kwargs.pop('agent_queryset', None)
+        super().__init__(*args, **kwargs)
+
+        current_super_agent_qs = current_super_agent_qs or User.objects.filter(user_type='super_agent').order_by('username', 'email')
+        destination_super_agent_qs = destination_super_agent_qs or User.objects.filter(user_type='super_agent', is_active=True).order_by('username', 'email')
+        self.fields['current_super_agent'].queryset = current_super_agent_qs
+        self.fields['destination_super_agent'].queryset = destination_super_agent_qs
+
+        current_super_agent_id = ''
+        if self.is_bound:
+            current_super_agent_id = (self.data.get('current_super_agent') or '').strip()
+        else:
+            current_super_agent_id = str(self.initial.get('current_super_agent') or '')
+
+        if agent_queryset is None:
+            agent_queryset = User.objects.filter(user_type='agent').select_related('super_agent').order_by('username', 'email')
+            if current_super_agent_id.isdigit():
+                agent_queryset = agent_queryset.filter(super_agent_id=int(current_super_agent_id))
+            else:
+                agent_queryset = agent_queryset.none()
+        self.fields['agents'].queryset = agent_queryset
+
+        self.fields['current_super_agent'].label_from_instance = self._label_super_agent
+        self.fields['destination_super_agent'].label_from_instance = self._label_super_agent
+        self.fields['agents'].label_from_instance = self._label_agent
+
+    @staticmethod
+    def _label_super_agent(user):
+        identifier = (user.username or '').strip() or (user.email or '').strip() or f"user#{user.pk}"
+        name = (user.get_full_name() or '').strip()
+        return f"{identifier} - {name}" if name and name != identifier else identifier
+
+    @staticmethod
+    def _label_agent(user):
+        identifier = (user.username or '').strip() or (user.email or '').strip() or f"user#{user.pk}"
+        name = (user.get_full_name() or '').strip()
+        phone = (user.phone_number or '').strip()
+        bits = [identifier]
+        if name and name != identifier:
+            bits.append(name)
+        if phone:
+            bits.append(phone)
+        return " | ".join(bits)
+
+    def clean_destination_super_agent(self):
+        destination = self.cleaned_data.get('destination_super_agent')
+        if destination and not destination.is_active:
+            raise ValidationError("Cannot transfer to an inactive Super Agent.")
+        return destination
+
+    def clean(self):
+        cleaned_data = super().clean()
+        current_super_agent = cleaned_data.get('current_super_agent')
+        destination_super_agent = cleaned_data.get('destination_super_agent')
+        agents = cleaned_data.get('agents')
+
+        if current_super_agent and destination_super_agent and current_super_agent.id == destination_super_agent.id:
+            self.add_error('destination_super_agent', 'Agent already belongs to this Super Agent.')
+
+        if current_super_agent and agents:
+            invalid_ids = [agent.id for agent in agents if agent.super_agent_id != current_super_agent.id]
+            if invalid_ids:
+                self.add_error('agents', 'One or more selected agents no longer belong to the chosen Current Super Agent.')
+
+        if not agents:
+            self.add_error('agents', 'Select at least one agent to transfer.')
+
+        return cleaned_data
+
+
+class AgentTransferLogForm(forms.ModelForm):
+    class Meta:
+        model = AgentTransferLog
+        fields = ('remarks',)
+        widgets = {
+            'remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Optional remarks'}),
         }
 
 class AdminManualWalletForm(forms.Form):

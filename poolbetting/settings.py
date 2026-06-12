@@ -47,6 +47,11 @@ JAZZMIN_SETTINGS = {
             "url": "betting_admin:admin_manual_wallet_manager", 
             "icon": "fas fa-wallet",
             "permissions": ["auth.view_user"]
+        }, {
+            "name": "Agent Re-Mapping",
+            "url": "betting:agent_remapping",
+            "icon": "fas fa-exchange-alt",
+            "permissions": ["auth.view_user"]
         }],
         "uip": [{
             "name": "Go to Dashboard", 

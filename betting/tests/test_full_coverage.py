@@ -13,10 +13,15 @@ from betting.models import (
     RetailManagerSuperAgentMapping,
     RetailManagerAgentMapping,
     RetailManagerDashboardNote,
+    AgentTransferLog,
+    AccountUnlockAppeal,
+    AccountLockAuditLog,
 )
 from django.utils import timezone
+from django.db.models import Q
 import datetime
 from decimal import Decimal
+from notifications.models import Notification
 
 class FullCoverageTests(TestCase):
     def setUp(self):
@@ -200,6 +205,129 @@ class FullCoverageTests(TestCase):
         self.client.force_login(retail_manager)
         response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "hierarchy"})
         self.assertContains(response, "<td>Agent Mapped</td>", html=True)
+
+    def test_agent_remapping_returns_403_for_unauthorized_roles(self):
+        password = "pass12345"
+        agent_user = User.objects.create_user(
+            email="unauth-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="unauth_agent",
+        )
+        Wallet.objects.create(user=agent_user, balance=Decimal("0.00"))
+
+        self.assertTrue(self.client.login(email="unauth-agent@test.com", password=password))
+        response = self.client.get(reverse("betting:agent_remapping"))
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Permission Denied", response.content.decode())
+
+    def test_crm_can_remap_agent_and_export_history(self):
+        password = "pass12345"
+        crm_user = User.objects.create_user(
+            email="crm-remap@test.com",
+            password=password,
+            user_type="crm",
+            username="crm_remap",
+            crm_role="viewer",
+        )
+        master_old = User.objects.create_user(
+            email="master-old@test.com",
+            password=password,
+            user_type="master_agent",
+            username="master_old",
+        )
+        master_new = User.objects.create_user(
+            email="master-new@test.com",
+            password=password,
+            user_type="master_agent",
+            username="master_new",
+        )
+        old_super_agent = User.objects.create_user(
+            email="old-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="old_super",
+            master_agent=master_old,
+        )
+        new_super_agent = User.objects.create_user(
+            email="new-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="new_super",
+            master_agent=master_new,
+        )
+        transferred_agent = User.objects.create_user(
+            email="transfer-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="transfer_agent",
+            first_name="Transfer",
+            last_name="Agent",
+            super_agent=old_super_agent,
+            master_agent=master_old,
+        )
+        cashier = User.objects.create_user(
+            email="transfer-cashier@test.com",
+            password=password,
+            user_type="cashier",
+            username="transfer_cashier",
+            agent=transferred_agent,
+        )
+        for user, balance in [
+            (crm_user, Decimal("0.00")),
+            (master_old, Decimal("0.00")),
+            (master_new, Decimal("0.00")),
+            (old_super_agent, Decimal("0.00")),
+            (new_super_agent, Decimal("0.00")),
+            (transferred_agent, Decimal("100.00")),
+            (cashier, Decimal("25.00")),
+        ]:
+            Wallet.objects.create(user=user, balance=balance)
+
+        self.assertTrue(self.client.login(email="crm-remap@test.com", password=password))
+        response = self.client.post(
+            reverse("betting:agent_remapping"),
+            {
+                "subtab": "remap",
+                "action": "transfer_agents",
+                "current_super_agent": str(old_super_agent.id),
+                "destination_super_agent": str(new_super_agent.id),
+                "agents": [str(transferred_agent.id)],
+                "remarks": "Operational realignment",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "1 agent(s) transferred successfully.")
+
+        transferred_agent.refresh_from_db()
+        cashier.refresh_from_db()
+        self.assertEqual(transferred_agent.super_agent_id, new_super_agent.id)
+        self.assertEqual(transferred_agent.master_agent_id, master_new.id)
+        self.assertEqual(cashier.agent_id, transferred_agent.id)
+
+        old_downline_ids = set(User.objects.filter(Q(super_agent=old_super_agent) | Q(agent__super_agent=old_super_agent)).values_list("id", flat=True))
+        new_downline_ids = set(User.objects.filter(Q(super_agent=new_super_agent) | Q(agent__super_agent=new_super_agent)).values_list("id", flat=True))
+        self.assertNotIn(transferred_agent.id, old_downline_ids)
+        self.assertIn(transferred_agent.id, new_downline_ids)
+        self.assertIn(cashier.id, new_downline_ids)
+
+        log = AgentTransferLog.objects.get(agent=transferred_agent)
+        self.assertEqual(log.old_super_agent_id, old_super_agent.id)
+        self.assertEqual(log.new_super_agent_id, new_super_agent.id)
+        self.assertEqual(log.transferred_by_id, crm_user.id)
+        self.assertEqual(log.remarks, "Operational realignment")
+
+        self.assertTrue(Notification.objects.filter(recipient=old_super_agent, title="Agent Removed From Downline").exists())
+        self.assertTrue(Notification.objects.filter(recipient=new_super_agent, title="New Agent Assigned").exists())
+        self.assertTrue(Notification.objects.filter(recipient=transferred_agent, title="Super Agent Reassigned").exists())
+
+        export_response = self.client.get(reverse("betting:agent_remapping_export"), {"format": "xlsx"})
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(
+            export_response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     def test_retail_dashboard_overview_downline_section_shows_only_mapped_super_agent_branches(self):
         password = "pass12345"
@@ -524,6 +652,7 @@ class FullCoverageTests(TestCase):
 
     def test_cashier_void_request_auto_voids_and_refunds(self):
         from void_requests.services import create_void_request, process_due_void_requests
+        from betting.models import SiteConfiguration
 
         cashier = User.objects.create_user(
             email="cashier@test.com",
@@ -532,6 +661,9 @@ class FullCoverageTests(TestCase):
             agent=self.agent,
         )
         Wallet.objects.create(user=cashier, balance=Decimal("0.00"))
+        config = SiteConfiguration.load()
+        config.enable_global_cashier_voiding = True
+        config.save(update_fields=["enable_global_cashier_voiding"])
         ticket = BetTicket.objects.create(user=cashier, stake_amount=Decimal("100.00"), bet_type="single")
 
         vr = create_void_request(ticket=ticket, cashier=cashier, reason="")
@@ -549,3 +681,277 @@ class FullCoverageTests(TestCase):
 
         wallet = Wallet.objects.get(user=cashier)
         self.assertEqual(wallet.balance, Decimal("100.00"))
+
+    def test_super_agent_locked_accounts_tab_is_scoped_to_his_downline(self):
+        password = "pass12345"
+        master = User.objects.create_user(
+            email="scope-master@test.com",
+            password=password,
+            user_type="master_agent",
+            username="scope_master",
+        )
+        super_agent = User.objects.create_user(
+            email="scope-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="scope_super",
+            master_agent=master,
+        )
+        other_super_agent = User.objects.create_user(
+            email="scope-super-other@test.com",
+            password=password,
+            user_type="super_agent",
+            username="scope_super_other",
+            master_agent=master,
+        )
+        owned_agent = User.objects.create_user(
+            email="scope-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="scope_agent",
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        owned_cashier = User.objects.create_user(
+            email="scope-cashier@test.com",
+            password=password,
+            user_type="cashier",
+            username="scope_cashier",
+            agent=owned_agent,
+        )
+        outsider_agent = User.objects.create_user(
+            email="scope-agent-other@test.com",
+            password=password,
+            user_type="agent",
+            username="scope_agent_other",
+            super_agent=other_super_agent,
+            master_agent=master,
+        )
+        for user in [master, super_agent, other_super_agent, owned_agent, owned_cashier, outsider_agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+
+        now = timezone.now()
+        User.objects.filter(id__in=[owned_agent.id, owned_cashier.id, outsider_agent.id]).update(
+            is_locked=True,
+            locked_at=now,
+            lock_reason="Compliance Review",
+        )
+        AccountLockAuditLog.objects.create(locked_user=owned_agent, action="locked", lock_reason="Compliance Review")
+        AccountLockAuditLog.objects.create(locked_user=owned_cashier, action="locked", lock_reason="Compliance Review")
+        AccountLockAuditLog.objects.create(locked_user=outsider_agent, action="locked", lock_reason="Compliance Review")
+
+        self.client.force_login(super_agent)
+        response = self.client.get(reverse("betting:super_agent_dashboard"), {"locked_q": "scope_", "locked_user_type": ""})
+        self.assertEqual(response.status_code, 200)
+        locked_rows = list(response.context["locked_accounts_rows"])
+        self.assertEqual({row.username for row in locked_rows}, {"scope_agent", "scope_cashier"})
+
+    def test_retail_manager_can_submit_unlock_appeal_for_mapped_locked_account(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="appeal-rm@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="appeal_rm",
+        )
+        master = User.objects.create_user(
+            email="appeal-master@test.com",
+            password=password,
+            user_type="master_agent",
+            username="appeal_master",
+        )
+        super_agent = User.objects.create_user(
+            email="appeal-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="appeal_super",
+            master_agent=master,
+        )
+        mapped_agent = User.objects.create_user(
+            email="appeal-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="appeal_agent",
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        outsider_super = User.objects.create_user(
+            email="appeal-super-outsider@test.com",
+            password=password,
+            user_type="super_agent",
+            username="appeal_super_outsider",
+            master_agent=master,
+        )
+        outsider_agent = User.objects.create_user(
+            email="appeal-agent-outsider@test.com",
+            password=password,
+            user_type="agent",
+            username="appeal_agent_outsider",
+            super_agent=outsider_super,
+            master_agent=master,
+        )
+        for user in [retail_manager, master, super_agent, mapped_agent, outsider_super, outsider_agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=super_agent)
+        now = timezone.now()
+        User.objects.filter(id__in=[mapped_agent.id, outsider_agent.id]).update(is_locked=True, locked_at=now, lock_reason="KYC Issue")
+        AccountLockAuditLog.objects.create(locked_user=mapped_agent, action="locked", lock_reason="KYC Issue")
+        AccountLockAuditLog.objects.create(locked_user=outsider_agent, action="locked", lock_reason="KYC Issue")
+
+        self.client.force_login(retail_manager)
+        page = self.client.get(reverse("betting:retail_dashboard"), {"tab": "locked_accounts"})
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "appeal_agent")
+        self.assertNotContains(page, "appeal_agent_outsider")
+
+        submit_response = self.client.post(
+            reverse("betting:submit_account_unlock_appeal", args=[mapped_agent.id]),
+            {"appeal_reason": "KYC has now been completed."},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(submit_response.status_code, 200)
+        self.assertTrue(submit_response.json()["ok"])
+        appeal = AccountUnlockAppeal.objects.get(locked_user=mapped_agent)
+        self.assertEqual(appeal.status, "pending")
+        self.assertEqual(appeal.appealed_by_id, retail_manager.id)
+        self.assertTrue(AccountLockAuditLog.objects.filter(locked_user=mapped_agent, action="appeal_submitted").exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.admin, title="New Account Unlock Appeal").exists())
+
+    def test_crm_can_approve_appeal_and_unlock_account(self):
+        password = "pass12345"
+        crm_user = User.objects.create_user(
+            email="appeal-crm@test.com",
+            password=password,
+            user_type="crm",
+            username="appeal_crm",
+            crm_role="viewer",
+        )
+        retail_manager = User.objects.create_user(
+            email="appeal-review-rm@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="appeal_review_rm",
+        )
+        master = User.objects.create_user(
+            email="appeal-review-master@test.com",
+            password=password,
+            user_type="master_agent",
+            username="appeal_review_master",
+        )
+        super_agent = User.objects.create_user(
+            email="appeal-review-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="appeal_review_super",
+            master_agent=master,
+        )
+        locked_agent = User.objects.create_user(
+            email="appeal-review-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="appeal_review_agent",
+            super_agent=super_agent,
+            master_agent=master,
+            is_locked=True,
+            locked_at=timezone.now(),
+            lock_reason="Suspicious Activity",
+        )
+        for user in [crm_user, retail_manager, master, super_agent, locked_agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=super_agent)
+        AccountLockAuditLog.objects.create(locked_user=locked_agent, action="locked", lock_reason="Suspicious Activity")
+        appeal = AccountUnlockAppeal.objects.create(
+            user=locked_agent,
+            locked_user=locked_agent,
+            appealed_by=retail_manager,
+            appeal_reason="Please unlock this account.",
+            status="pending",
+        )
+
+        self.client.force_login(crm_user)
+        response = self.client.post(
+            reverse("betting:account_appeals_review"),
+            {
+                "review_appeal": "1",
+                "appeal_id": str(appeal.id),
+                "action": "approve",
+                "admin_comment": "Verified and approved.",
+                "return_to": reverse("betting:account_appeals_review"),
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        locked_agent.refresh_from_db()
+        appeal.refresh_from_db()
+        self.assertFalse(locked_agent.is_locked)
+        self.assertEqual(locked_agent.failed_login_attempts, 0)
+        self.assertEqual(appeal.status, "approved")
+        self.assertEqual(appeal.reviewed_by_id, crm_user.id)
+        self.assertTrue(AccountLockAuditLog.objects.filter(locked_user=locked_agent, action="appeal_approved").exists())
+        self.assertTrue(AccountLockAuditLog.objects.filter(locked_user=locked_agent, action="unlocked").exists())
+        self.assertTrue(Notification.objects.filter(recipient=locked_agent, title="Unlock Appeal Approved").exists())
+        self.assertTrue(Notification.objects.filter(recipient=super_agent, title="Unlock Appeal Approved").exists())
+        self.assertTrue(Notification.objects.filter(recipient=retail_manager, title="Unlock Appeal Approved").exists())
+
+    def test_reject_requires_comment_and_exports_enforce_permissions(self):
+        password = "pass12345"
+        crm_user = User.objects.create_user(
+            email="appeal-export-crm@test.com",
+            password=password,
+            user_type="crm",
+            username="appeal_export_crm",
+            crm_role="viewer",
+        )
+        super_agent = User.objects.create_user(
+            email="appeal-export-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="appeal_export_super",
+        )
+        locked_agent = User.objects.create_user(
+            email="appeal-export-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="appeal_export_agent",
+            super_agent=super_agent,
+            is_locked=True,
+            locked_at=timezone.now(),
+            lock_reason="Manual Administrative Lock",
+        )
+        for user in [crm_user, super_agent, locked_agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+        AccountLockAuditLog.objects.create(locked_user=locked_agent, action="locked", lock_reason="Manual Administrative Lock")
+        appeal = AccountUnlockAppeal.objects.create(
+            user=locked_agent,
+            locked_user=locked_agent,
+            appealed_by=super_agent,
+            appeal_reason="Please review.",
+            status="pending",
+        )
+
+        self.client.force_login(crm_user)
+        reject_response = self.client.post(
+            reverse("betting:account_appeals_review"),
+            {
+                "review_appeal": "1",
+                "appeal_id": str(appeal.id),
+                "action": "reject",
+                "admin_comment": "",
+                "return_to": reverse("betting:account_appeals_review"),
+            },
+            follow=True,
+        )
+        self.assertEqual(reject_response.status_code, 200)
+        appeal.refresh_from_db()
+        self.assertEqual(appeal.status, "pending")
+        self.assertContains(reject_response, "Admin comment is required when rejecting an appeal.")
+
+        export_response = self.client.get(reverse("betting:locked_accounts_export"), {"format": "csv"})
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(export_response["Content-Type"], "text/csv")
+
+        self.client.force_login(super_agent)
+        forbidden_export = self.client.get(reverse("betting:locked_accounts_export"), {"format": "csv"})
+        self.assertEqual(forbidden_export.status_code, 403)

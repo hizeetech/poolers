@@ -9415,7 +9415,7 @@ def retail_dashboard(request):
     try:
         top_agents = list(
             tickets_range_qs.filter(user__agent__isnull=False)
-            .values('user__agent_id', 'user__agent__email')
+            .values('user__agent_id', 'user__agent__email', 'user__agent__username')
             .annotate(stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()), bets=Count('id'))
             .order_by('-stake')[:10]
         )

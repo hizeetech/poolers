@@ -332,6 +332,52 @@ class FullCoverageTests(TestCase):
         self.assertEqual(finance_withdrawals_response.status_code, 200)
         self.assertContains(finance_withdrawals_response, "<td class=\"text-muted small\">player_three</td>", html=True)
 
+    def test_retail_and_admin_overview_top_agent_cards_use_usernames(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-top@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_top",
+        )
+        agent = User.objects.create_user(
+            email="topagent@test.com",
+            password=password,
+            user_type="agent",
+            username="top_agent_user",
+        )
+        player = User.objects.create_user(
+            email="topplayer@test.com",
+            password=password,
+            user_type="player",
+            username="top_player_user",
+            agent=agent,
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+        Wallet.objects.create(user=agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=player, balance=Decimal("0.00"))
+        RetailManagerAgentMapping.objects.create(retail_manager=retail_manager, agent=agent)
+
+        BetTicket.objects.create(
+            user=player,
+            stake_amount=Decimal("150.00"),
+            bet_type="single",
+            status="pending",
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("300.00"),
+            max_winning=Decimal("300.00"),
+        )
+
+        self.client.force_login(retail_manager)
+        retail_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "overview"})
+        self.assertEqual(retail_response.status_code, 200)
+        self.assertContains(retail_response, "<td class=\"text-muted small\">top_agent_user</td>", html=True)
+
+        self.client.force_login(self.admin)
+        admin_response = self.client.get(reverse("betting:admin_dashboard"))
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, "<td>top_agent_user</td>", html=True)
+
     def test_password_change_logs_user_out_from_all_active_sessions(self):
         client_one = Client()
         client_two = Client()

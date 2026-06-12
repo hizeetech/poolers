@@ -14,7 +14,7 @@ from django.conf import settings
 from django.apps import apps
 from django.contrib.auth import SESSION_KEY
 from django.contrib.sessions.models import Session
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -9442,6 +9442,52 @@ def retail_dashboard(request):
     except Exception:
         top_agents = []
 
+    overview_downline_rows = []
+    if active_tab == 'overview':
+        mapped_super_agents = list(
+            super_agents.select_related('master_agent', 'wallet').order_by('email')
+        )
+        overview_agents = list(
+            agents.filter(super_agent__in=super_agents)
+            .select_related('super_agent', 'wallet')
+            .prefetch_related(
+                Prefetch(
+                    'agents_under',
+                    queryset=User.objects.filter(user_type='cashier').select_related('wallet').order_by('email'),
+                    to_attr='overview_cashiers',
+                )
+            )
+            .order_by('super_agent__email', 'email')
+        )
+        agents_by_super_agent = {}
+        for ag in overview_agents:
+            cashiers = list(getattr(ag, 'overview_cashiers', []))
+            agent_balance = getattr(getattr(ag, 'wallet', None), 'balance', None) or Decimal('0.00')
+            cashier_total = sum(
+                (getattr(getattr(cashier, 'wallet', None), 'balance', None) or Decimal('0.00'))
+                for cashier in cashiers
+            )
+            total_balance = agent_balance + cashier_total
+            agents_by_super_agent.setdefault(ag.super_agent_id, []).append(
+                {
+                    'agent': ag,
+                    'cashier_count': len(cashiers),
+                    'agent_balance': agent_balance,
+                    'cashier_total_balance': cashier_total,
+                    'total_balance': total_balance,
+                }
+            )
+        for sa in mapped_super_agents:
+            agent_rows = agents_by_super_agent.get(sa.id, [])
+            overview_downline_rows.append(
+                {
+                    'super_agent': sa,
+                    'agents': agent_rows,
+                    'agent_count': len(agent_rows),
+                    'total_balance': sum((row['total_balance'] for row in agent_rows), Decimal('0.00')),
+                }
+            )
+
     hierarchy = []
     if active_tab == 'hierarchy':
         last_bet_at_subq = Subquery(
@@ -9705,6 +9751,7 @@ def retail_dashboard(request):
         },
         'charts_data': charts_data,
         'top_agents': top_agents,
+        'overview_downline_rows': overview_downline_rows,
         'hierarchy': hierarchy,
         'bet_q': bet_q,
         'bet_status': bet_status,

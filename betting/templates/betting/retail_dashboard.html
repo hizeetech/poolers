@@ -207,6 +207,73 @@
       </div>
     </div>
 
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <div>
+            <div class="fw-semibold">Downline Users (Directly under you)</div>
+            <div class="text-muted small">Mapped super agents and their agents with combined agent + cashier balances.</div>
+          </div>
+        </div>
+        <div class="card-body">
+          {% if overview_downline_rows %}
+          <div class="accordion" id="rmOverviewDownlineAccordion">
+            {% for sa_row in overview_downline_rows %}
+            <div class="accordion-item">
+              <h2 class="accordion-header" id="rm-overview-sa-{{ sa_row.super_agent.id }}">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#rm-overview-sa-body-{{ sa_row.super_agent.id }}" aria-expanded="false" aria-controls="rm-overview-sa-body-{{ sa_row.super_agent.id }}">
+                  <div class="d-flex justify-content-between align-items-center w-100 me-3 gap-3">
+                    <div>
+                      <div class="fw-semibold">{{ sa_row.super_agent.get_full_name|default:sa_row.super_agent.username|default:sa_row.super_agent.email }}</div>
+                      <div class="text-muted small">{{ sa_row.super_agent.username|default:sa_row.super_agent.email|default:"-" }}</div>
+                    </div>
+                    <div class="text-end">
+                      <div class="small text-muted">{{ sa_row.agent_count }} agent{{ sa_row.agent_count|pluralize }}</div>
+                      <div class="fw-bold text-success">₦{{ sa_row.total_balance|floatformat:2 }}</div>
+                    </div>
+                  </div>
+                </button>
+              </h2>
+              <div id="rm-overview-sa-body-{{ sa_row.super_agent.id }}" class="accordion-collapse collapse" aria-labelledby="rm-overview-sa-{{ sa_row.super_agent.id }}" data-bs-parent="#rmOverviewDownlineAccordion">
+                <div class="accordion-body">
+                  {% if sa_row.agents %}
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead class="table-light">
+                        <tr>
+                          <th>Agent</th>
+                          <th>Username</th>
+                          <th class="text-end">Cashiers</th>
+                          <th class="text-end">Agent + Cashier Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for ag_row in sa_row.agents %}
+                        <tr>
+                          <td>{{ ag_row.agent.get_full_name|default:ag_row.agent.username|default:ag_row.agent.email }}</td>
+                          <td class="text-muted small">{{ ag_row.agent.username|default:ag_row.agent.email|default:"-" }}</td>
+                          <td class="text-end">{{ ag_row.cashier_count }}</td>
+                          <td class="text-end fw-semibold">₦{{ ag_row.total_balance|floatformat:2 }}</td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <div class="text-muted">No mapped agents under this super agent.</div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="text-muted">No mapped super-agent downline users found.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
     <div class="col-12 col-lg-7">
       <div class="card shadow-sm mb-3">
         <div class="card-header bg-light fw-semibold">Revenue & Betting Trends</div>

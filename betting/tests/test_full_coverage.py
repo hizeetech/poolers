@@ -201,6 +201,87 @@ class FullCoverageTests(TestCase):
         response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "hierarchy"})
         self.assertContains(response, "<td>Agent Mapped</td>", html=True)
 
+    def test_retail_dashboard_overview_downline_section_shows_only_mapped_super_agent_branches(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-downline@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_downline",
+        )
+        master = User.objects.create_user(
+            email="ma-downline@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_downline",
+        )
+        sa_mapped = User.objects.create_user(
+            email="sa-mapped@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_mapped_user",
+            master_agent=master,
+        )
+        sa_unmapped = User.objects.create_user(
+            email="sa-unmapped@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_unmapped_user",
+            master_agent=master,
+        )
+        mapped_agent = User.objects.create_user(
+            email="agent-mapped@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_user",
+            first_name="Mapped",
+            last_name="Agent",
+            master_agent=master,
+            super_agent=sa_mapped,
+        )
+        unmapped_agent = User.objects.create_user(
+            email="agent-unmapped@test.com",
+            password=password,
+            user_type="agent",
+            username="unmapped_agent_user",
+            master_agent=master,
+            super_agent=sa_unmapped,
+        )
+        User.objects.create_user(
+            email="cashier-mapped@test.com",
+            password=password,
+            user_type="cashier",
+            username="mapped_cashier_user",
+            agent=mapped_agent,
+        )
+        User.objects.create_user(
+            email="cashier-unmapped@test.com",
+            password=password,
+            user_type="cashier",
+            username="unmapped_cashier_user",
+            agent=unmapped_agent,
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+        Wallet.objects.create(user=master, balance=Decimal("0.00"))
+        Wallet.objects.create(user=sa_mapped, balance=Decimal("0.00"))
+        Wallet.objects.create(user=sa_unmapped, balance=Decimal("0.00"))
+        Wallet.objects.create(user=mapped_agent, balance=Decimal("100.00"))
+        Wallet.objects.create(user=unmapped_agent, balance=Decimal("500.00"))
+        Wallet.objects.create(user=User.objects.get(username="mapped_cashier_user"), balance=Decimal("45.00"))
+        Wallet.objects.create(user=User.objects.get(username="unmapped_cashier_user"), balance=Decimal("55.00"))
+
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=sa_mapped)
+
+        self.client.force_login(retail_manager)
+        response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "overview"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Downline Users (Directly under you)")
+        self.assertContains(response, "sa_mapped_user")
+        self.assertContains(response, "mapped_agent_user")
+        self.assertContains(response, "₦145.00")
+        self.assertNotContains(response, "sa_unmapped_user")
+        self.assertNotContains(response, "unmapped_agent_user")
+
     def test_retail_dashboard_uses_usernames_in_bets_and_finance_tabs(self):
         password = "pass12345"
         retail_manager = User.objects.create_user(

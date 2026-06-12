@@ -776,7 +776,7 @@ $(document).ready(function() {
                                             {% if tx.user == request.user %}
                                                 <span class="text-muted">Self</span>
                                             {% else %}
-                                                {{ tx.user.email }}
+                                                {{ tx.user.username|default:tx.user.email }}
                                             {% endif %}
                                         </td>
                                         <td>{{ tx.description|default:"-" }}</td>
@@ -1018,7 +1018,7 @@ $(document).ready(function() {
                                         </td>
                                         <td>
                                             <div class="fw-bold">{{ withdrawal.user.get_full_name|default:withdrawal.user.email }}</div>
-                                            <div class="small text-muted">{{ withdrawal.user.email }}</div>
+                                            <div class="small text-muted">{{ withdrawal.user.username|default:withdrawal.user.email }}</div>
                                         </td>
                                         <td>
                                             <div class="small"><strong>{{ withdrawal.bank_name }}</strong></div>
@@ -1095,7 +1095,7 @@ $(document).ready(function() {
                             <select name="bet_agent" class="form-select form-select-sm">
                                 <option value="">All</option>
                                 {% for ag in agent_filter_options %}
-                                <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+                                <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.username|default:ag.email }}</option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -1278,7 +1278,7 @@ $(document).ready(function() {
                                 <tr>
                                     <td class="small">{{ txn.timestamp|date:"M d, H:i" }}</td>
                                     <td>{{ txn.get_transaction_type_display }}</td>
-                                    <td>{{ txn.user.email }}</td>
+               <td>{{ txn.user.username|default:txn.user.email }}</td>
                                     <td>{{ txn.initiating_user.email|default:"System" }}</td>
                                     <td class="fw-bold">₦{{ txn.amount|floatformat:2 }}</td>
                                     <td>
@@ -1366,7 +1366,7 @@ $(document).ready(function() {
                                 {% for pw in processed_withdrawals_page %}
                                 <tr>
                                     <td class="small">{{ pw.approved_rejected_time|date:"M d, H:i" }}</td>
-                                    <td>{{ pw.user.email }}</td>
+               <td>{{ pw.user.username|default:pw.user.email }}</td>
                                     <td class="fw-bold">₦{{ pw.amount|floatformat:2 }}</td>
                                     <td>₦{{ pw.balance_before|floatformat:2 }}</td>
                                     <td>₦{{ pw.balance_after|floatformat:2 }}</td>

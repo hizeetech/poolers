@@ -200,6 +200,138 @@ class FullCoverageTests(TestCase):
         response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "hierarchy"})
         self.assertContains(response, "<td>Agent Mapped</td>", html=True)
 
+    def test_retail_dashboard_uses_usernames_in_bets_and_finance_tabs(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm2@test.com",
+            password=password,
+            user_type="retail_manager",
+            first_name="Retail",
+            last_name="Manager",
+            username="retailmanager2",
+        )
+        agent = User.objects.create_user(
+            email="agent2@test.com",
+            password=password,
+            user_type="agent",
+            first_name="Agent",
+            last_name="Two",
+            other_name="Mapped",
+            username="agent_two",
+        )
+        player = User.objects.create_user(
+            email="player2@test.com",
+            password=password,
+            user_type="player",
+            username="player_two",
+            agent=agent,
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+        Wallet.objects.create(user=agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=player, balance=Decimal("0.00"))
+        RetailManagerAgentMapping.objects.create(retail_manager=retail_manager, agent=agent)
+
+        BetTicket.objects.create(user=player, stake_amount=Decimal("100.00"), bet_type="single")
+        Transaction.objects.create(
+            user=player,
+            transaction_type="deposit",
+            amount=Decimal("250.00"),
+            is_successful=True,
+            status="completed",
+            description="Test deposit",
+        )
+        UserWithdrawal.objects.create(
+            user=player,
+            amount=Decimal("50.00"),
+            bank_name="Test Bank",
+            account_number="1234567890",
+            account_name="Player Two",
+            status="completed",
+        )
+
+        self.client.force_login(retail_manager)
+
+        bets_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "bets"})
+        self.assertEqual(bets_response.status_code, 200)
+        self.assertContains(bets_response, f'<option value="{agent.id}">agent_two</option>', html=True)
+
+        finance_response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "finance"})
+        self.assertEqual(finance_response.status_code, 200)
+        self.assertContains(finance_response, "<td class=\"text-muted small\">player_two</td>", html=True)
+
+    def test_crm_and_finance_dashboards_use_usernames_in_replica_tabs(self):
+        password = "pass12345"
+        crm_user = User.objects.create_user(
+            email="crm2@test.com",
+            password=password,
+            user_type="crm",
+            crm_role="viewer",
+            username="crmviewer2",
+        )
+        finance_user = User.objects.create_user(
+            email="finance2@test.com",
+            password=password,
+            user_type="finance",
+            finance_role="manager",
+            username="financemgr2",
+        )
+        agent = User.objects.create_user(
+            email="agent3@test.com",
+            password=password,
+            user_type="agent",
+            first_name="Agent",
+            last_name="Three",
+            other_name="Mapped",
+            username="agent_three",
+        )
+        player = User.objects.create_user(
+            email="player3@test.com",
+            password=password,
+            user_type="player",
+            username="player_three",
+            agent=agent,
+        )
+        Wallet.objects.create(user=crm_user, balance=Decimal("0.00"))
+        Wallet.objects.create(user=finance_user, balance=Decimal("0.00"))
+        Wallet.objects.create(user=agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=player, balance=Decimal("0.00"))
+
+        BetTicket.objects.create(user=player, stake_amount=Decimal("100.00"), bet_type="single")
+        Transaction.objects.create(
+            user=player,
+            transaction_type="deposit",
+            amount=Decimal("250.00"),
+            is_successful=True,
+            status="completed",
+            description="Test deposit",
+        )
+        UserWithdrawal.objects.create(
+            user=player,
+            amount=Decimal("50.00"),
+            bank_name="Test Bank",
+            account_number="1234567890",
+            account_name="Player Three",
+            status="pending",
+        )
+
+        self.client.force_login(crm_user)
+        crm_response = self.client.get(reverse("betting:crm_dashboard"), {"tab": "bets"})
+        self.assertEqual(crm_response.status_code, 200)
+        self.assertContains(crm_response, f'<option value="{agent.id}">agent_three</option>', html=True)
+
+        self.client.force_login(finance_user)
+        finance_bets_response = self.client.get(reverse("betting:finance_dashboard"), {"tab": "bets"})
+        self.assertEqual(finance_bets_response.status_code, 200)
+        self.assertContains(finance_bets_response, f'<option value="{agent.id}">agent_three</option>', html=True)
+
+        finance_transactions_response = self.client.get(reverse("betting:finance_dashboard"), {"tab": "transactions"})
+        self.assertEqual(finance_transactions_response.status_code, 200)
+        self.assertContains(finance_transactions_response, "<td class=\"text-muted small\">player_three</td>", html=True)
+
+        finance_withdrawals_response = self.client.get(reverse("betting:finance_dashboard"), {"tab": "withdrawals"})
+        self.assertEqual(finance_withdrawals_response.status_code, 200)
+        self.assertContains(finance_withdrawals_response, "<td class=\"text-muted small\">player_three</td>", html=True)
+
     def test_password_change_logs_user_out_from_all_active_sessions(self):
         client_one = Client()
         client_two = Client()

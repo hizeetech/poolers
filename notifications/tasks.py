@@ -23,7 +23,7 @@ from django.core.cache import cache
 from django.db.models import Q
 from django.utils import timezone
 
-from .services import create_broadcast_notification, create_notification
+from .services import create_broadcast_notification, create_notification, create_targeted_notifications
 
 
 @shared_task
@@ -163,18 +163,29 @@ def send_campaign(campaign_id):
         else:
             return 0
 
-    created = create_broadcast_notification(
-        queryset=qs,
-        notification_type=campaign.notification_type or "SYSTEM_ANNOUNCEMENT",
-        title=campaign.title,
-        message=campaign.message,
-        data={
-            "campaign_id": campaign.id,
-            "popup_category": "message",
-            "delivery_channel": "broadcast",
-            "url": "/notifications/",
-        },
-    )
+    data = {
+        "campaign_id": campaign.id,
+        "popup_category": "message",
+        "delivery_channel": "broadcast",
+        "url": "/notifications/",
+    }
+
+    if campaign.send_to_all:
+        created = create_broadcast_notification(
+            queryset=qs,
+            notification_type=campaign.notification_type or "SYSTEM_ANNOUNCEMENT",
+            title=campaign.title,
+            message=campaign.message,
+            data=data,
+        )
+    else:
+        created = create_targeted_notifications(
+            queryset=qs,
+            notification_type=campaign.notification_type or "SYSTEM_ANNOUNCEMENT",
+            title=campaign.title,
+            message=campaign.message,
+            data=data,
+        )
 
     campaign.sent_at = timezone.now()
     campaign.send_now = False

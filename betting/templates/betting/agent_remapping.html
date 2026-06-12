@@ -1,0 +1,256 @@
+{% extends 'betting/base.html' %}
+{% block title %}Agent Re-Mapping{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Agent Re-Mapping</h2>
+      <div class="text-muted small">Transfer agents between Super Agents without affecting wallets, bets, transactions, or commission records.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_dashboard' %}?tab=agent_management">Back to CRM Dashboard</a>
+    </div>
+  </div>
+
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+      <a class="nav-link {% if subtab == 'remap' %}active{% endif %}" href="{% url 'betting:agent_remapping' %}?subtab=remap&current_super_agent={{ current_super_agent }}&q={{ q }}">Re-Map Agents</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if subtab == 'history' %}active{% endif %}" href="{% url 'betting:agent_remapping' %}?subtab=history&history_q={{ history_q }}&history_old_super_agent={{ history_old_super_agent }}&history_new_super_agent={{ history_new_super_agent }}&start_date={{ start_date }}&end_date={{ end_date }}">Transfer History</a>
+    </li>
+  </ul>
+
+  {% if subtab == 'remap' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light fw-semibold">Select Source Super Agent</div>
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end">
+        <input type="hidden" name="subtab" value="remap">
+        <div class="col-12 col-lg-4">
+          <label class="form-label">Current Super Agent</label>
+          <select name="current_super_agent" class="form-select">
+            <option value="">Select Current Super Agent</option>
+            {% for sa in current_super_agents %}
+            <option value="{{ sa.id }}" {% if current_super_agent == sa.id|stringformat:"s" %}selected{% endif %}>
+              {{ sa.username|default:sa.email }}{% if sa.get_full_name %} - {{ sa.get_full_name }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-lg-4">
+          <label class="form-label">Search Agent</label>
+          <input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Username, name or phone">
+        </div>
+        <div class="col-12 col-lg-4 d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Load Agents</button>
+          <a class="btn btn-outline-secondary" href="{% url 'betting:agent_remapping' %}?subtab=remap">Reset</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+      <div class="fw-semibold">Transfer Agent(s)</div>
+      <div class="text-muted small">Cashiers remain attached to their Agent automatically.</div>
+    </div>
+    <div class="card-body">
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="transfer_agents">
+        <input type="hidden" name="subtab" value="remap">
+        <input type="hidden" name="current_super_agent" value="{{ current_super_agent }}">
+
+        {% if remap_form.non_field_errors %}
+        <div class="alert alert-danger">
+          {% for err in remap_form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="row g-3 mb-3">
+          <div class="col-12 col-lg-6">
+            <label class="form-label">Transfer To Super Agent</label>
+            {{ remap_form.destination_super_agent }}
+            {% if remap_form.destination_super_agent.errors %}
+            <div class="text-danger small mt-1">{{ remap_form.destination_super_agent.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label">Reason for transfer</label>
+            {{ remap_form.remarks }}
+            {% if remap_form.remarks.errors %}
+            <div class="text-danger small mt-1">{{ remap_form.remarks.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if remap_form.current_super_agent.errors %}
+        <div class="text-danger small mb-2">{{ remap_form.current_super_agent.errors|join:", " }}</div>
+        {% endif %}
+
+        {% if current_super_agent %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead class="table-light">
+              <tr>
+                <th style="width:40px;">
+                  <input type="checkbox" class="form-check-input" id="select-all-agents">
+                </th>
+                <th>Agent Username</th>
+                <th>Agent Name</th>
+                <th>Phone</th>
+                <th>Current Super Agent</th>
+                <th class="text-end">Wallet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ag in remap_agent_rows %}
+              <tr>
+                <td>
+                  <input type="checkbox" class="form-check-input agent-checkbox" name="agents" value="{{ ag.id }}" {% if ag.id|stringformat:"s" in selected_agent_ids %}checked{% endif %}>
+                </td>
+                <td class="fw-semibold">{{ ag.username|default:ag.email|default:"-" }}</td>
+                <td>{{ ag.get_full_name|default:"-" }}</td>
+                <td>{{ ag.phone_number|default:"-" }}</td>
+                <td class="text-muted small">{{ ag.super_agent.username|default:ag.super_agent.email|default:"-" }}</td>
+                <td class="text-end">₦{{ ag.wallet.balance|default_if_none:0|floatformat:2 }}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="6" class="text-center text-muted py-4">No agents found for the selected Current Super Agent.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if remap_form.agents.errors %}
+        <div class="text-danger small mb-3">{{ remap_form.agents.errors|join:", " }}</div>
+        {% endif %}
+        <button class="btn btn-success" type="submit">
+          <i class="fas fa-exchange-alt me-1"></i>Transfer Agent(s)
+        </button>
+        {% else %}
+        <div class="text-muted">Choose a Current Super Agent first to load the agents available for transfer.</div>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if subtab == 'history' %}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3">
+        <div>
+          <div class="fw-semibold">Transfer History</div>
+          <div class="text-muted small">{{ history_total_count }} record(s)</div>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-success btn-sm" href="{% url 'betting:agent_remapping_export' %}?format=xlsx&history_q={{ history_q }}&history_old_super_agent={{ history_old_super_agent }}&history_new_super_agent={{ history_new_super_agent }}&start_date={{ start_date }}&end_date={{ end_date }}">Export Excel</a>
+          <a class="btn btn-outline-danger btn-sm" href="{% url 'betting:agent_remapping_export' %}?format=pdf&history_q={{ history_q }}&history_old_super_agent={{ history_old_super_agent }}&history_new_super_agent={{ history_new_super_agent }}&start_date={{ start_date }}&end_date={{ end_date }}">Export PDF</a>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end mb-3">
+        <input type="hidden" name="subtab" value="history">
+        <div class="col-12 col-lg-3">
+          <label class="form-label">Search</label>
+          <input type="text" name="history_q" value="{{ history_q }}" class="form-control" placeholder="Agent, phone, super agent">
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label">Old Super Agent</label>
+          <select name="history_old_super_agent" class="form-select">
+            <option value="">All</option>
+            {% for sa in current_super_agents %}
+            <option value="{{ sa.id }}" {% if history_old_super_agent == sa.id|stringformat:"s" %}selected{% endif %}>{{ sa.username|default:sa.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label">New Super Agent</label>
+          <select name="history_new_super_agent" class="form-select">
+            <option value="">All</option>
+            {% for sa in current_super_agents %}
+            <option value="{{ sa.id }}" {% if history_new_super_agent == sa.id|stringformat:"s" %}selected{% endif %}>{{ sa.username|default:sa.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label">From</label>
+          <input type="date" name="start_date" value="{{ start_date }}" class="form-control">
+        </div>
+        <div class="col-12 col-lg-2">
+          <label class="form-label">To</label>
+          <input type="date" name="end_date" value="{{ end_date }}" class="form-control">
+        </div>
+        <div class="col-12 col-lg-1 d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Filter</button>
+        </div>
+      </form>
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Date</th>
+              <th>Agent</th>
+              <th>Old Super Agent</th>
+              <th>New Super Agent</th>
+              <th>Transferred By</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in history_page %}
+            <tr>
+              <td class="text-nowrap">{{ item.created_at|date:"Y-m-d H:i" }}</td>
+              <td>
+                <div class="fw-semibold">{{ item.agent.username|default:item.agent.email|default:"-" }}</div>
+                <div class="text-muted small">{{ item.agent.get_full_name|default:"-" }}{% if item.agent.phone_number %} • {{ item.agent.phone_number }}{% endif %}</div>
+              </td>
+              <td class="text-muted small">{{ item.old_super_agent.username|default:item.old_super_agent.email|default:"-" }}</td>
+              <td class="text-muted small">{{ item.new_super_agent.username|default:item.new_super_agent.email|default:"-" }}</td>
+              <td class="text-muted small">{{ item.transferred_by.username|default:item.transferred_by.email|default:"-" }}</td>
+              <td class="text-muted small">{{ item.remarks|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">No transfer history found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if history_page.paginator.num_pages > 1 %}
+      <nav aria-label="Transfer history pagination">
+        <ul class="pagination pagination-sm mb-0">
+          {% if history_page.has_previous %}
+          <li class="page-item"><a class="page-link" href="?subtab=history&history_q={{ history_q }}&history_old_super_agent={{ history_old_super_agent }}&history_new_super_agent={{ history_new_super_agent }}&start_date={{ start_date }}&end_date={{ end_date }}&history_page={{ history_page.previous_page_number }}">Previous</a></li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">Previous</span></li>
+          {% endif %}
+          <li class="page-item disabled"><span class="page-link">Page {{ history_page.number }} of {{ history_page.paginator.num_pages }}</span></li>
+          {% if history_page.has_next %}
+          <li class="page-item"><a class="page-link" href="?subtab=history&history_q={{ history_q }}&history_old_super_agent={{ history_old_super_agent }}&history_new_super_agent={{ history_new_super_agent }}&start_date={{ start_date }}&end_date={{ end_date }}&history_page={{ history_page.next_page_number }}">Next</a></li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">Next</span></li>
+          {% endif %}
+        </ul>
+      </nav>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  (function () {
+    const selectAll = document.getElementById('select-all-agents');
+    if (!selectAll) return;
+    selectAll.addEventListener('change', function () {
+      document.querySelectorAll('.agent-checkbox').forEach((box) => {
+        box.checked = selectAll.checked;
+      });
+    });
+  })();
+</script>
+{% endblock %}

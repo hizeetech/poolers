@@ -39,6 +39,7 @@
   .kpi-value { font-weight: 800; font-size: 1.35rem; color: #132C46; }
   .feed-item { border-bottom: 1px solid rgba(0,0,0,0.06); padding: 10px 0; }
   .feed-item:last-child { border-bottom: none; }
+  {% include 'betting/includes/locked_counter_styles.html' %}
 </style>
 
 <div class="container py-4">
@@ -79,6 +80,7 @@
     <li class="nav-item"><a class="nav-link {% if active_tab == 'finance' %}active{% endif %}" href="?tab=finance&start_date={{ start_date }}&end_date={{ end_date }}">Finance</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'commissions' %}active{% endif %}" href="?tab=commissions&start_date={{ start_date }}&end_date={{ end_date }}">Commissions</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'risk' %}active{% endif %}" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}">Risk</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'locked_accounts' %}active{% endif %}" href="?tab=locked_accounts&start_date={{ start_date }}&end_date={{ end_date }}" title="Open locked accounts tab">Locked Accounts <span class="badge rounded-pill locked-counter-clickable {% if locked_accounts_summary.locked_downlines %}bg-danger text-white locked-counter-attention{% else %}bg-light text-dark{% endif %} ms-1" title="Open locked accounts tab">{{ locked_accounts_summary.locked_downlines }}</span></a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'note' %}active{% endif %}" href="?tab=note&start_date={{ start_date }}&end_date={{ end_date }}">Note</a></li>
   </ul>
@@ -157,6 +159,18 @@
       <div class="kpi-card p-3 h-100">
         <div class="kpi-label">Online Users</div>
         <div class="kpi-value" id="kpiOnlineUsers">{{ kpis.online_users }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Locked Downlines</div>
+        <div class="kpi-value">{{ locked_accounts_summary.locked_downlines }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Pending Appeals</div>
+        <div class="kpi-value">{{ locked_accounts_summary.pending_appeals }}</div>
       </div>
     </div>
 
@@ -304,6 +318,130 @@
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {% if active_tab == 'locked_accounts' %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header bg-light">
+      <div class="d-flex flex-column gap-3">
+        <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+          <div>
+            <div class="fw-semibold">Locked Accounts</div>
+            <div class="text-muted small">View locked Super Agents, Agents, and Cashiers within your mapped network and submit unlock appeals.</div>
+          </div>
+        </div>
+        <form method="get" class="d-flex flex-wrap gap-2 align-items-end">
+          <input type="hidden" name="tab" value="locked_accounts">
+          <input type="hidden" name="start_date" value="{{ start_date }}">
+          <input type="hidden" name="end_date" value="{{ end_date }}">
+          <div>
+            <label class="form-label small text-muted mb-1">Search</label>
+            <input type="text" name="locked_q" value="{{ locked_q }}" class="form-control form-control-sm" placeholder="Username, name, phone">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">User Type</label>
+            <select name="locked_user_type" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="super_agent" {% if locked_user_type == 'super_agent' %}selected{% endif %}>Super Agent</option>
+              <option value="agent" {% if locked_user_type == 'agent' %}selected{% endif %}>Agent</option>
+              <option value="cashier" {% if locked_user_type == 'cashier' %}selected{% endif %}>Cashier</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="locked_status" class="form-select form-select-sm">
+              <option value="">All</option>
+              <option value="locked" {% if locked_status == 'locked' %}selected{% endif %}>Locked</option>
+              <option value="appealed" {% if locked_status == 'appealed' %}selected{% endif %}>Appealed</option>
+              <option value="rejected" {% if locked_status == 'rejected' %}selected{% endif %}>Rejected</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Locked By</label>
+            <input type="text" name="locked_by" value="{{ locked_by }}" class="form-control form-control-sm" placeholder="Admin or System">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Locked From</label>
+            <input type="date" name="locked_start_date" value="{{ locked_start_date }}" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Locked To</label>
+            <input type="date" name="locked_end_date" value="{{ locked_end_date }}" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Appeal From</label>
+            <input type="date" name="locked_appeal_start_date" value="{{ locked_appeal_start_date }}" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1">Appeal To</label>
+            <input type="date" name="locked_appeal_end_date" value="{{ locked_appeal_end_date }}" class="form-control form-control-sm">
+          </div>
+          <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Username</th>
+              <th>Full Name</th>
+              <th>User Type</th>
+              <th>Locked Date</th>
+              <th>Locked Time</th>
+              <th>Locked By</th>
+              <th>Reason</th>
+              <th>Status</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in locked_accounts_rows %}
+            <tr>
+              <td class="text-muted small">{{ u.username|default:u.email|default:"-" }}</td>
+              <td>{{ u.get_full_name|default:"-" }}</td>
+              <td class="text-uppercase small">{{ u.get_user_type_display }}</td>
+              <td class="text-nowrap">{{ u.locked_at|date:"Y-m-d"|default:"-" }}</td>
+              <td class="text-nowrap">{{ u.locked_at|date:"h:i A"|default:"-" }}</td>
+              <td class="text-muted small">{{ u.locked_by_display }}</td>
+              <td class="text-muted small">{{ u.lock_reason_display }}</td>
+              <td>
+                {% if u.locked_account_status_label == 'Appealed' %}
+                <span class="badge bg-warning text-dark">Appealed</span>
+                {% elif u.locked_account_status_label == 'Rejected' %}
+                <span class="badge bg-secondary">Rejected</span>
+                {% else %}
+                <span class="badge bg-danger">Locked</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm {% if u.can_submit_unlock_appeal %}btn-outline-primary js-account-appeal-btn{% else %}btn-outline-secondary{% endif %}" {% if u.can_submit_unlock_appeal %}data-appeal-url="{% url 'betting:submit_account_unlock_appeal' u.id %}" data-locked-username="{{ u.username|default:u.email|default:'account' }}"{% else %}disabled{% endif %}>
+                  {% if u.can_submit_unlock_appeal %}Appeal{% else %}Appealed{% endif %}
+                </button>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="9" class="text-center text-muted py-4">No locked accounts found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% if locked_accounts_page %}
+  <div class="d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ locked_accounts_page.number }} of {{ locked_accounts_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if locked_accounts_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=locked_accounts&start_date={{ start_date }}&end_date={{ end_date }}&locked_q={{ locked_q }}&locked_user_type={{ locked_user_type }}&locked_status={{ locked_status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&locked_appeal_start_date={{ locked_appeal_start_date }}&locked_appeal_end_date={{ locked_appeal_end_date }}&locked_page={{ locked_accounts_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if locked_accounts_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?tab=locked_accounts&start_date={{ start_date }}&end_date={{ end_date }}&locked_q={{ locked_q }}&locked_user_type={{ locked_user_type }}&locked_status={{ locked_status }}&locked_by={{ locked_by }}&locked_start_date={{ locked_start_date }}&locked_end_date={{ locked_end_date }}&locked_appeal_start_date={{ locked_appeal_start_date }}&locked_appeal_end_date={{ locked_appeal_end_date }}&locked_page={{ locked_accounts_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if active_tab == 'hierarchy' %}
@@ -1163,6 +1301,8 @@
   })();
 </script>
 {% endif %}
+
+{% include 'betting/includes/account_unlock_appeal_script.html' %}
 
 <div class="modal fade" id="rmRegisterAgentModal" tabindex="-1" aria-labelledby="rmRegisterAgentModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">

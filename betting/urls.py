@@ -99,6 +99,12 @@ urlpatterns = [
 
     # CRM URLs
     path('crm/dashboard/', views.crm_dashboard, name='crm_dashboard'),
+    path('agent-remapping/', views.agent_remapping, name='agent_remapping'),
+    path('agent-remapping/export/', views.agent_remapping_export, name='agent_remapping_export'),
+    path('locked-accounts/appeal/<int:locked_user_id>/', views.submit_account_unlock_appeal, name='submit_account_unlock_appeal'),
+    path('account-appeals/', views.account_appeals_review, name='account_appeals_review'),
+    path('locked-accounts/export/', views.locked_accounts_export, name='locked_accounts_export'),
+    path('account-appeals/export/', views.account_unlock_appeals_export, name='account_unlock_appeals_export'),
     path('crm/activity-feed/', views.crm_activity_feed, name='crm_activity_feed'),
     path('crm/user/<int:user_id>/', views.crm_user_detail, name='crm_user_detail'),
     path('crm/user/<int:user_id>/downline-search/', views.crm_user_downline_search, name='crm_user_downline_search'),

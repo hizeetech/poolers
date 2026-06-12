@@ -59,6 +59,8 @@ from .models import (
     PaymentGatewayDeposit,
     CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
+    AgentTransferLog,
+    AccountUnlockAppeal, AccountLockAuditLog,
     FinanceAuditLog, CRMActionLog, WithdrawalReport
 )
 from . import signals
@@ -238,6 +240,7 @@ class CustomUserAdmin(UserAdmin):
     get_last_impersonated.short_description = "Last Impersonated"
 
     def unlock_accounts(self, request, queryset):
+        targets = list(queryset)
         updated_count = queryset.update(
             is_locked=False,
             failed_login_attempts=0,
@@ -247,13 +250,20 @@ class CustomUserAdmin(UserAdmin):
         )
         
         # Log the unlock action for each user
-        for user in queryset:
+        for user in targets:
             LoginAttempt.objects.create(
                 user=user,
                 username_attempted=user.email,
                 ip_address=request.META.get('REMOTE_ADDR'),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 status='unlocked'
+            )
+            AccountLockAuditLog.objects.create(
+                locked_user=user,
+                reviewed_by=request.user,
+                lock_reason=user.lock_reason or '',
+                action='unlocked',
+                remarks='Account unlocked from Django admin bulk action.',
             )
             
         self.message_user(request, f"{updated_count} account(s) successfully unlocked.")
@@ -356,6 +366,9 @@ class CustomUserAdmin(UserAdmin):
         return RequestForm
 
     def save_model(self, request, obj, form, change):
+        previous = None
+        if change and obj.pk:
+            previous = User.objects.filter(pk=obj.pk).only('is_locked', 'lock_reason').first()
         action_description = f"User '{obj.email}' {'updated' if change else 'created'}."
         views.log_admin_activity(request, action_description)
 
@@ -364,6 +377,32 @@ class CustomUserAdmin(UserAdmin):
         # Call the form's save method explicitly if you need its custom logic to run.
         # Otherwise, super().save_model will call obj.save() and form.save() as needed.
         super().save_model(request, obj, form, change)
+
+        if previous and previous.is_locked != obj.is_locked:
+            if obj.is_locked:
+                AccountLockAuditLog.objects.create(
+                    locked_user=obj,
+                    locked_by=request.user,
+                    lock_reason=obj.lock_reason or '',
+                    action='locked',
+                    remarks='Account locked from Django admin user form.',
+                )
+            else:
+                AccountLockAuditLog.objects.create(
+                    locked_user=obj,
+                    reviewed_by=request.user,
+                    lock_reason=previous.lock_reason or '',
+                    action='unlocked',
+                    remarks='Account unlocked from Django admin user form.',
+                )
+        elif not change and obj.is_locked:
+            AccountLockAuditLog.objects.create(
+                locked_user=obj,
+                locked_by=request.user,
+                lock_reason=obj.lock_reason or '',
+                action='locked',
+                remarks='Locked account created from Django admin user form.',
+            )
 
         if not change and getattr(obj, 'email', None) and getattr(obj, 'user_type', None) in ['retail_manager', 'finance', 'account_user', 'crm']:
             raw_password = None
@@ -1840,6 +1879,76 @@ class CRMActionLogAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
+
+
+class AgentTransferLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'agent', 'old_super_agent', 'new_super_agent', 'transferred_by')
+    list_filter = ('created_at', 'old_super_agent', 'new_super_agent', 'transferred_by')
+    search_fields = (
+        'agent__username', 'agent__email', 'agent__phone_number',
+        'old_super_agent__username', 'old_super_agent__email',
+        'new_super_agent__username', 'new_super_agent__email',
+        'transferred_by__username', 'transferred_by__email',
+        'remarks',
+    )
+    readonly_fields = [f.name for f in AgentTransferLog._meta.fields]
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+class AccountUnlockAppealAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'locked_user', 'appealed_by', 'status', 'reviewed_at', 'reviewed_by')
+    list_filter = ('status', 'created_at', 'reviewed_at')
+    search_fields = (
+        'locked_user__username', 'locked_user__email',
+        'appealed_by__username', 'appealed_by__email',
+        'reviewed_by__username', 'reviewed_by__email',
+        'appeal_reason', 'admin_comment',
+    )
+    readonly_fields = [f.name for f in AccountUnlockAppeal._meta.fields]
+    date_hierarchy = 'created_at'
+    list_select_related = ('locked_user', 'appealed_by', 'reviewed_by')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+class AccountLockAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('timestamp', 'locked_user', 'action', 'locked_by', 'appealed_by', 'reviewed_by')
+    list_filter = ('action', 'timestamp')
+    search_fields = (
+        'locked_user__username', 'locked_user__email',
+        'locked_by__username', 'locked_by__email',
+        'appealed_by__username', 'appealed_by__email',
+        'reviewed_by__username', 'reviewed_by__email',
+        'lock_reason', 'remarks',
+    )
+    readonly_fields = [f.name for f in AccountLockAuditLog._meta.fields]
+    date_hierarchy = 'timestamp'
+    list_select_related = ('locked_user', 'locked_by', 'appealed_by', 'reviewed_by')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
 # Register your models with the CUSTOM admin site
 betting_admin_site.register(User, CustomUserAdmin)
 betting_admin_site.register(Wallet, WalletAdmin)
@@ -1866,6 +1975,9 @@ betting_admin_site.register(RetailManagerSuperAgentMapping, RetailManagerSuperAg
 betting_admin_site.register(RetailManagerAgentMapping, RetailManagerAgentMappingAdmin)
 betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
 betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
+betting_admin_site.register(AgentTransferLog, AgentTransferLogAdmin)
+betting_admin_site.register(AccountUnlockAppeal, AccountUnlockAppealAdmin)
+betting_admin_site.register(AccountLockAuditLog, AccountLockAuditLogAdmin)
 
 from void_requests.models import CashierVoidPermission, TicketVoidAuditLog, TicketVoidRequest
 from void_requests.admin import CashierVoidPermissionAdmin, TicketVoidAuditLogAdmin, TicketVoidRequestAdmin

@@ -1,0 +1,10 @@
+.locked-counter-attention {
+  animation: lockedCounterPulse 1.6s ease-in-out infinite;
+}
+.locked-counter-clickable {
+  cursor: pointer;
+}
+@keyframes lockedCounterPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.18); }
+  50% { transform: scale(1.05); box-shadow: 0 0 0 0.35rem rgba(220, 53, 69, 0.10); }
+}

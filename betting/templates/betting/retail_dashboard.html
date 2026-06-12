@@ -80,6 +80,7 @@
     <li class="nav-item"><a class="nav-link {% if active_tab == 'commissions' %}active{% endif %}" href="?tab=commissions&start_date={{ start_date }}&end_date={{ end_date }}">Commissions</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'risk' %}active{% endif %}" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}">Risk</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'note' %}active{% endif %}" href="?tab=note&start_date={{ start_date }}&end_date={{ end_date }}">Note</a></li>
   </ul>
 
   {% if active_tab == 'overview' %}
@@ -190,6 +191,23 @@
     </div>
 
     <div class="col-12 col-lg-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <div class="fw-semibold">Latest Saved Note</div>
+          <a class="btn btn-sm btn-outline-primary" href="?tab=note&start_date={{ start_date }}&end_date={{ end_date }}">Open Note</a>
+        </div>
+        <div class="card-body">
+          {% if note_entry.content %}
+          <div class="text-muted small mb-2">Last saved: {{ note_entry.updated_at|date:"Y-m-d H:i" }}</div>
+          <div class="border rounded p-3 bg-light-subtle" style="max-height: 260px; overflow: auto;">{{ note_entry.content|safe }}</div>
+          {% else %}
+          <div class="text-muted">No saved note yet. Use the Note tab to create one.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
       <div class="card shadow-sm mb-3">
         <div class="card-header bg-light fw-semibold">Revenue & Betting Trends</div>
         <div class="card-body">
@@ -204,7 +222,7 @@
       </div>
     </div>
 
-    <div class="col-12">
+    <div class="col-12 col-lg-5">
       <div class="card shadow-sm">
         <div class="card-header bg-light d-flex justify-content-between align-items-center">
           <div class="fw-semibold">Real-time Activity Feed</div>
@@ -558,6 +576,42 @@
         </div>
       </div>
       <div class="text-muted small mt-3">PDF exports are capped to the first 2,000 rows.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if active_tab == 'note' %}
+  {{ note_form.media }}
+  <div class="card shadow-sm">
+    <div class="card-header bg-light d-flex flex-column flex-md-row gap-2 justify-content-between align-items-start align-items-md-center">
+      <div>
+        <div class="fw-semibold">Reporting Note</div>
+        <div class="text-muted small">Write and save notes for your own reference.</div>
+      </div>
+      <div class="text-muted small">
+        {% if note_entry.updated_at %}
+        Last saved: {{ note_entry.updated_at|date:"Y-m-d H:i" }}
+        {% else %}
+        Not saved yet
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="tab" value="note">
+        <input type="hidden" name="save_note" value="1">
+        <input type="hidden" name="start_date" value="{{ start_date }}">
+        <input type="hidden" name="end_date" value="{{ end_date }}">
+        {% if note_form.content.errors %}
+        <div class="alert alert-danger py-2">{{ note_form.content.errors }}</div>
+        {% endif %}
+        <label class="form-label fw-semibold" for="{{ note_form.content.id_for_label }}">Note</label>
+        {{ note_form.content }}
+        <div class="d-flex justify-content-end mt-3">
+          <button class="btn btn-primary" type="submit">Save Note</button>
+        </div>
+      </form>
     </div>
   </div>
   {% endif %}

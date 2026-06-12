@@ -60,7 +60,7 @@ from .models import (
     SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage, State,
     BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
     CashierRegistrationRequest, CRMActionLog, LoginAttempt,
-    RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
+    RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping, RetailManagerDashboardNote,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
     ScheduledFinanceReport
@@ -76,7 +76,8 @@ from .forms import (
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
-    CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm
+    CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
+    RetailManagerDashboardNoteForm
 )
 
 # Setup logger for this app
@@ -9303,6 +9304,25 @@ def retail_dashboard(request):
     metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
     metrics_label = f"{metrics_start_date.isoformat()} → {metrics_end_date.isoformat()}"
 
+    note_entry, _ = RetailManagerDashboardNote.objects.get_or_create(retail_manager=request.user)
+    note_form = RetailManagerDashboardNoteForm(instance=note_entry)
+
+    if request.method == 'POST' and active_tab == 'note' and request.POST.get('save_note') == '1':
+        note_form = RetailManagerDashboardNoteForm(request.POST, instance=note_entry)
+        if note_form.is_valid():
+            saved_note = note_form.save(commit=False)
+            saved_note.retail_manager = request.user
+            saved_note.save()
+            messages.success(request, 'Note saved successfully.')
+            qd = QueryDict(mutable=True)
+            qd['tab'] = 'note'
+            if start_date_str:
+                qd['start_date'] = start_date_str
+            if end_date_str:
+                qd['end_date'] = end_date_str
+            return redirect(f"{reverse('betting:retail_dashboard')}?{qd.urlencode()}")
+        messages.error(request, 'Unable to save note. Please review the editor content and try again.')
+
     master_agents = get_retail_manager_master_agents(request.user)
     super_agents = get_retail_manager_super_agents(request.user, master_agents_qs=master_agents)
     agents = get_retail_manager_agents(request.user, master_agents_qs=master_agents, super_agents_qs=super_agents)
@@ -9711,6 +9731,8 @@ def retail_dashboard(request):
         'players_page': players_page,
         'states': list(State.objects.all().order_by('state_name')),
         'mapped_super_agents': list(super_agents.only('id', 'email', 'username').order_by('email')[:200]),
+        'note_form': note_form,
+        'note_entry': note_entry,
     }
     return render(request, 'betting/retail_dashboard.html', context)
 

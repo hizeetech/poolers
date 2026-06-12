@@ -163,7 +163,7 @@
             <select name="bet_agent" class="form-select form-select-sm">
               <option value="">All</option>
               {% for ag in agent_filter_options %}
-              <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+              <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.username|default:ag.email }}</option>
               {% endfor %}
             </select>
           </div>
@@ -278,7 +278,7 @@
             <tr>
               <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
               <td class="text-muted small">{{ tx.id }}</td>
-              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.user.username|default:tx.user.email }}</td>
               <td class="text-uppercase small">{{ tx.transaction_type }}</td>
               <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
               <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
@@ -345,7 +345,7 @@
             {% for tx in deposits_page %}
             <tr>
               <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.user.username|default:tx.user.email }}</td>
               <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
               <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
               <td class="text-uppercase small">{{ tx.status }}</td>
@@ -400,7 +400,7 @@
                   {% endif %}
                 </td>
                 <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
-                <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+                <td class="text-muted small">{{ w.user.username|default:w.user.email }}</td>
                 <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
                 <td class="text-uppercase small">{{ w.status }}</td>
                 <td class="text-muted small">{{ w.bank_name }} • {{ w.account_number }}</td>
@@ -503,7 +503,7 @@
           <tbody>
             {% for w in wallets_page %}
             <tr>
-              <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+              <td class="text-muted small">{{ w.user.username|default:w.user.email }}</td>
               <td class="text-uppercase small">{{ w.user.user_type }}</td>
               <td class="text-end fw-semibold">₦{{ w.balance|floatformat:2 }}</td>
               <td class="text-muted small text-nowrap">{{ w.last_updated|date:"Y-m-d H:i" }}</td>
@@ -602,7 +602,7 @@
             {% for tx in bonuses_page %}
             <tr>
               <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.user.username|default:tx.user.email }}</td>
               <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
               <td class="text-uppercase small">{{ tx.status }}</td>
             </tr>
@@ -660,7 +660,7 @@
             {% for tx in recon_deposits_page %}
             <tr>
               <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ tx.user.email|default:tx.user.username }}</td>
+              <td class="text-muted small">{{ tx.user.username|default:tx.user.email }}</td>
               <td class="text-muted small">{{ tx.payment_gateway|default:"-" }}</td>
               <td class="text-muted small">{{ tx.external_reference|default:tx.paystack_reference }}</td>
               <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
@@ -708,7 +708,7 @@
               <td class="text-nowrap">{{ ev.created_at|date:"Y-m-d H:i" }}</td>
               <td class="text-muted small">{{ ev.gateway }}</td>
               <td class="text-muted small">{{ ev.reference }}</td>
-              <td class="text-muted small">{{ ev.user.email|default:ev.user.username }}</td>
+              <td class="text-muted small">{{ ev.user.username|default:ev.user.email }}</td>
               <td class="text-end fw-semibold">{{ ev.amount|default_if_none:"" }}</td>
               <td class="text-uppercase small">{{ ev.transaction.status }}</td>
             </tr>
@@ -805,7 +805,7 @@
                 {% for w in fraud_large_withdrawals %}
                 <tr>
                   <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
-                  <td class="text-muted small">{{ w.user.email|default:w.user.username }}</td>
+                  <td class="text-muted small">{{ w.user.username|default:w.user.email }}</td>
                   <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
                   <td class="text-uppercase small">{{ w.status }}</td>
                   <td class="text-muted small">{{ w.bank_name }} • {{ w.account_number }}</td>
@@ -912,7 +912,7 @@
           <tbody>
             {% for it in settlement_items %}
             <tr>
-              <td class="text-muted small">{{ it.beneficiary.email|default:it.beneficiary.username }}</td>
+              <td class="text-muted small">{{ it.beneficiary.username|default:it.beneficiary.email }}</td> 
               <td class="text-end fw-semibold">₦{{ it.amount|floatformat:2 }}</td>
               <td class="text-uppercase small">{{ it.status }}</td>
               <td class="text-muted small">
@@ -1156,7 +1156,7 @@
             {% for p in pin_logs_page %}
             <tr>
               <td class="text-nowrap">{{ p.created_at|date:"Y-m-d H:i" }}</td>
-              <td class="text-muted small">{{ p.user.email|default:p.user.username }}</td>
+              <td class="text-muted small">{{ p.user.username|default:p.user.email }}</td>
               <td class="text-uppercase small">{% if p.success %}success{% else %}failed{% endif %}</td>
               <td class="text-muted small">{{ p.ip_address|default:"-" }}</td>
               <td class="text-muted small">{{ p.user_agent|default:"-"|truncatechars:60 }}</td>
@@ -1406,8 +1406,8 @@
             <tr>
               <td class="text-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
               <td class="text-uppercase small">{{ a.action_type }}</td>
-              <td class="text-muted small">{{ a.actor.email|default:"-" }}</td>
-              <td class="text-muted small">{{ a.target_user.email|default:"-" }}</td>
+              <td class="text-muted small">{{ a.actor.username|default:a.actor.email|default:"-" }}</td>
+              <td class="text-muted small">{{ a.target_user.username|default:a.target_user.email|default:"-" }}</td>
               <td class="text-muted small">{{ a.reason|default:"-" }}</td>
             </tr>
             {% empty %}

@@ -5,8 +5,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 from unittest.mock import patch
-from betting.models import User, Wallet
-from betting.models import BetTicket
+from betting.models import User, Wallet, BetTicket, Transaction, UserWithdrawal
 from commission.models import CommissionPeriod, WeeklyAgentCommission
 from decimal import Decimal
 
@@ -48,6 +47,65 @@ class AccountUserTests(TestCase):
         
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'betting/account_user_dashboard.html')
+
+    def test_account_user_dashboard_uses_usernames_in_replica_sections(self):
+        self.client.force_login(self.account_user)
+
+        agent = User.objects.create_user(
+            email='account-agent@test.com',
+            password=self.password,
+            user_type='agent',
+            username='account_agent',
+        )
+        player = User.objects.create_user(
+            email='account-player@test.com',
+            password=self.password,
+            user_type='player',
+            username='account_player',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=player, defaults={'balance': Decimal('0.00')})
+
+        BetTicket.objects.create(
+            user=player,
+            stake_amount=Decimal('100.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('200.00'),
+            max_winning=Decimal('200.00'),
+            status='pending',
+            bet_type='single',
+        )
+        Transaction.objects.create(
+            user=player,
+            transaction_type='deposit',
+            amount=Decimal('250.00'),
+            is_successful=True,
+            status='completed',
+            description='Account user dashboard test deposit',
+        )
+        UserWithdrawal.objects.create(
+            user=player,
+            amount=Decimal('50.00'),
+            bank_name='Test Bank',
+            account_number='1234567890',
+            account_name='Account Player',
+            status='completed',
+        )
+        UserWithdrawal.objects.create(
+            user=player,
+            amount=Decimal('30.00'),
+            bank_name='Test Bank',
+            account_number='1234567890',
+            account_name='Account Player',
+            status='pending',
+        )
+
+        response = self.client.get(reverse('betting:account_user_dashboard'), {'section': 'bets'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'<option value="{agent.id}">account_agent</option>', html=True)
+        self.assertContains(response, '<td>account_player</td>', html=True)
+        self.assertContains(response, '<div class="small text-muted">account_player</div>', html=True)
 
     def test_player_cannot_access_account_user_dashboard(self):
         self.client.force_login(self.player)

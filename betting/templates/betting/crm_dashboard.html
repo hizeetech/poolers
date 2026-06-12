@@ -377,7 +377,7 @@
                 <select name="bet_agent" class="form-select form-select-sm">
                   <option value="">All</option>
                   {% for ag in agent_filter_options %}
-                  <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.email|default:ag.username }}</option>
+                  <option value="{{ ag.id }}" {% if bet_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.username|default:ag.email }}</option>
                   {% endfor %}
                 </select>
               </div>
@@ -891,7 +891,7 @@
                   <td class="text-nowrap">{{ w.request_time|date:"Y-m-d H:i" }}</td>
                   <td>
                     <div class="fw-semibold">{{ w.user.get_full_name|default:w.user.email }}</div>
-                    <div class="text-muted small">{{ w.user.email }}</div>
+                    <div class="text-muted small">{{ w.user.username|default:w.user.email }}</div>
                   </td>
                   <td class="text-end fw-semibold">₦{{ w.amount|floatformat:2 }}</td>
                   <td>

@@ -1421,6 +1421,14 @@ def _retail_manager_scoped_user_ids(retail_manager_id):
     return list(get_retail_network_users_qs(retail_user).values_list('id', flat=True))
 
 
+def _retail_manager_scoped_agent_ids(retail_manager_id):
+    try:
+        retail_user = User.objects.get(id=int(retail_manager_id), user_type='retail_manager')
+    except Exception:
+        return []
+    return list(get_retail_manager_agents(retail_user).values_list('id', flat=True))
+
+
 def _annotate_user_engagement(qs):
     wallet_balance_subq = Wallet.objects.filter(user_id=OuterRef('pk')).values('balance')[:1]
     latest_bet_qs = (
@@ -1514,21 +1522,63 @@ def _apply_ops_user_filters(
     return qs
 
 
-def _bucket_match_for_dormancy(user_obj, bucket, *, login_cutoff_7=None, login_cutoff_14=None, login_cutoff_30=None):
-    last_login = getattr(user_obj, 'last_login', None)
-    last_bet_at = getattr(user_obj, 'last_bet_at', None)
-    last_deposit_at = getattr(user_obj, 'last_deposit_at', None)
+def _apply_dormant_agent_filters(
+    qs,
+    *,
+    query='',
+    user_type='',
+    agent_id='',
+    super_agent_id='',
+    retail_manager_id='',
+    status='',
+):
+    if user_type and user_type != 'agent':
+        return qs.none()
+    if query:
+        qs = qs.filter(
+            Q(username__icontains=query) |
+            Q(email__icontains=query) |
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(other_name__icontains=query) |
+            Q(phone_number__icontains=query)
+        )
+    if agent_id:
+        try:
+            qs = qs.filter(id=int(agent_id))
+        except Exception:
+            pass
+    if super_agent_id:
+        try:
+            qs = qs.filter(super_agent_id=int(super_agent_id))
+        except Exception:
+            pass
+    if retail_manager_id:
+        scoped_agent_ids = _retail_manager_scoped_agent_ids(retail_manager_id)
+        qs = qs.filter(id__in=scoped_agent_ids) if scoped_agent_ids else qs.none()
+    if status == 'active':
+        qs = qs.filter(is_active=True)
+    elif status == 'inactive':
+        qs = qs.filter(is_active=False)
+    elif status == 'locked':
+        qs = qs.filter(is_locked=True)
+    return qs
+
+
+def _resolve_dormant_reference_at(agent_obj):
+    last_activity_at = getattr(agent_obj, 'last_activity_at', None)
+    return last_activity_at or getattr(agent_obj, 'date_joined', None)
+
+
+def _bucket_match_for_dormancy(agent_obj, bucket, *, login_cutoff_7=None, login_cutoff_14=None, login_cutoff_30=None):
+    reference_at = _resolve_dormant_reference_at(agent_obj)
     if bucket == 'login_7':
-        return (last_login is None) or (last_login < login_cutoff_7)
+        return bool(reference_at and reference_at < login_cutoff_7)
     if bucket == 'login_14':
-        return (last_login is None) or (last_login < login_cutoff_14)
+        return bool(reference_at and reference_at < login_cutoff_14)
     if bucket == 'login_30':
-        return (last_login is None) or (last_login < login_cutoff_30)
-    if bucket == 'no_bets':
-        return not bool(last_bet_at)
-    if bucket == 'no_deposits':
-        return not bool(last_deposit_at)
-    return True
+        return bool(reference_at and reference_at < login_cutoff_30)
+    return False
 
 
 def _build_dormant_center_data(
@@ -1541,10 +1591,12 @@ def _build_dormant_center_data(
     retail_manager_id='',
     status='',
     bucket='login_7',
+    start_dt=None,
+    end_dt=None,
 ):
     now = timezone.now()
-    base_qs = _annotate_user_engagement(_ops_targetable_users_queryset(scope_user))
-    base_qs = _apply_ops_user_filters(
+    base_qs = _ops_targetable_users_queryset(scope_user).filter(user_type='agent')
+    base_qs = _apply_dormant_agent_filters(
         base_qs,
         query=query,
         user_type=user_type,
@@ -1553,7 +1605,41 @@ def _build_dormant_center_data(
         retail_manager_id=retail_manager_id,
         status=status,
     )
-    users = list(base_qs.order_by('username', 'email'))
+    wallet_balance_subq = Wallet.objects.filter(user_id=OuterRef('pk')).values('balance')[:1]
+    cashier_last_login_qs = (
+        User.objects.filter(agent_id=OuterRef('pk'), user_type='cashier')
+        .exclude(last_login__isnull=True)
+        .order_by('-last_login')
+    )
+    latest_activity_bet_qs = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(Q(user_id=OuterRef('pk')) | Q(user__agent_id=OuterRef('pk'), user__user_type='cashier'))
+        .order_by('-placed_at')
+    )
+    latest_activity_transaction_qs = (
+        Transaction.objects.filter(
+            Q(user_id=OuterRef('pk')) |
+            Q(user__agent_id=OuterRef('pk'), user__user_type='cashier')
+        )
+        .order_by('-timestamp')
+    )
+    latest_wallet_activity_qs = (
+        apps.get_model('betting', 'WalletLedgerEntry').objects.filter(
+            Q(user_id=OuterRef('pk')) |
+            Q(user__agent_id=OuterRef('pk'), user__user_type='cashier')
+        )
+        .order_by('-created_at')
+    )
+    agents = list(
+        base_qs.select_related('super_agent', 'master_agent').annotate(
+            wallet_balance_annotated=Coalesce(Subquery(wallet_balance_subq), Value(0), output_field=DecimalField()),
+            cashiers_count=Count('agents_under', filter=Q(agents_under__user_type='cashier'), distinct=True),
+            cashier_last_login=Subquery(cashier_last_login_qs.values('last_login')[:1]),
+            last_bet_at=Subquery(latest_activity_bet_qs.values('placed_at')[:1]),
+            last_transaction_at=Subquery(latest_activity_transaction_qs.values('timestamp')[:1]),
+            last_wallet_activity_at=Subquery(latest_wallet_activity_qs.values('created_at')[:1]),
+        ).order_by('username', 'email')
+    )
     login_cutoff_7 = now - timedelta(days=7)
     login_cutoff_14 = now - timedelta(days=14)
     login_cutoff_30 = now - timedelta(days=30)
@@ -1561,24 +1647,32 @@ def _build_dormant_center_data(
         'login_7': 0,
         'login_14': 0,
         'login_30': 0,
-        'no_bets': 0,
-        'no_deposits': 0,
     }
+    bucket = bucket if bucket in cards else 'login_30'
     rows = []
-    for user_obj in users:
-        if _bucket_match_for_dormancy(user_obj, 'login_7', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+    for agent_obj in agents:
+        activity_points = [
+            getattr(agent_obj, 'last_login', None),
+            getattr(agent_obj, 'cashier_last_login', None),
+            getattr(agent_obj, 'last_bet_at', None),
+            getattr(agent_obj, 'last_transaction_at', None),
+            getattr(agent_obj, 'last_wallet_activity_at', None),
+        ]
+        agent_obj.last_activity_at = max([value for value in activity_points if value is not None], default=None)
+        agent_obj.reference_activity_at = _resolve_dormant_reference_at(agent_obj)
+        if start_dt and ((agent_obj.reference_activity_at is None) or (agent_obj.reference_activity_at < start_dt)):
+            continue
+        if end_dt and ((agent_obj.reference_activity_at is None) or (agent_obj.reference_activity_at > end_dt)):
+            continue
+        agent_obj.dormant_days = (now - agent_obj.reference_activity_at).days if agent_obj.reference_activity_at else None
+        if _bucket_match_for_dormancy(agent_obj, 'login_7', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
             cards['login_7'] += 1
-        if _bucket_match_for_dormancy(user_obj, 'login_14', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+        if _bucket_match_for_dormancy(agent_obj, 'login_14', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
             cards['login_14'] += 1
-        if _bucket_match_for_dormancy(user_obj, 'login_30', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+        if _bucket_match_for_dormancy(agent_obj, 'login_30', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
             cards['login_30'] += 1
-        if _bucket_match_for_dormancy(user_obj, 'no_bets', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
-            cards['no_bets'] += 1
-        if _bucket_match_for_dormancy(user_obj, 'no_deposits', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
-            cards['no_deposits'] += 1
-
-        if _bucket_match_for_dormancy(user_obj, bucket, login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
-            rows.append(user_obj)
+        if _bucket_match_for_dormancy(agent_obj, bucket, login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            rows.append(agent_obj)
     return cards, rows
 
 
@@ -5936,7 +6030,6 @@ def agent_dashboard(request):
     locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
     dormant_q = (request.GET.get('dormant_q') or '').strip()
     dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
-    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
     dormant_agent = (request.GET.get('dormant_agent') or '').strip()
     dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
     dormant_status = (request.GET.get('dormant_status') or '').strip()
@@ -10583,7 +10676,6 @@ def crm_dashboard(request):
     comm_msg_title = (request.POST.get('campaign_title') or '').strip()
     comm_msg_body = (request.POST.get('campaign_message') or '').strip()
     dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
-    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
     dormant_agent = (request.GET.get('dormant_agent') or '').strip()
     dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
     dormant_retail_manager = (request.GET.get('dormant_retail_manager') or '').strip()
@@ -11312,12 +11404,13 @@ def crm_dashboard(request):
     dormant_cards, dormant_rows = _build_dormant_center_data(
         request.user,
         query=q,
-        user_type=dormant_user_type,
         agent_id=dormant_agent,
         super_agent_id=dormant_super_agent,
         retail_manager_id=dormant_retail_manager,
         status=dormant_status,
         bucket=dormant_bucket,
+        start_dt=start_dt,
+        end_dt=end_dt,
     )
     dormant_page = Paginator(dormant_rows, 50).get_page(request.GET.get('dormant_page') or 1) if active_tab == 'dormant_accounts' else None
 
@@ -11460,7 +11553,6 @@ def crm_dashboard(request):
         'crm_filter_super_agents': crm_filter_super_agents,
         'crm_filter_retail_managers': crm_filter_retail_managers,
         'dormant_bucket': dormant_bucket,
-        'dormant_user_type': dormant_user_type,
         'dormant_agent': dormant_agent,
         'dormant_super_agent': dormant_super_agent,
         'dormant_retail_manager': dormant_retail_manager,
@@ -11582,7 +11674,6 @@ def crm_export(request):
     start_date_str = (request.GET.get('start_date') or '').strip()
     end_date_str = (request.GET.get('end_date') or '').strip()
     dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
-    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
     dormant_agent = (request.GET.get('dormant_agent') or '').strip()
     dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
     dormant_retail_manager = (request.GET.get('dormant_retail_manager') or '').strip()
@@ -11627,25 +11718,30 @@ def crm_export(request):
         _, dormant_rows = _build_dormant_center_data(
             request.user,
             query=q,
-            user_type=dormant_user_type,
             agent_id=dormant_agent,
             super_agent_id=dormant_super_agent,
             retail_manager_id=dormant_retail_manager,
             status=dormant_status,
             bucket=dormant_bucket,
+            start_dt=start_dt,
+            end_dt=end_dt,
         )
         for user_obj in dormant_rows:
             rows.append({
                 'username': user_obj.username or user_obj.email or '',
                 'full_name': user_obj.get_full_name() or '',
-                'user_type': user_obj.get_user_type_display(),
                 'last_login': user_obj.last_login.isoformat(sep=' ', timespec='seconds') if user_obj.last_login else '',
                 'last_bet': user_obj.last_bet_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_bet_at', None) else '',
-                'last_deposit': user_obj.last_deposit_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_deposit_at', None) else '',
+                'last_transaction': user_obj.last_transaction_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_transaction_at', None) else '',
+                'last_wallet_activity': user_obj.last_wallet_activity_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_wallet_activity_at', None) else '',
+                'last_activity': user_obj.last_activity_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_activity_at', None) else '',
+                'super_agent': getattr(getattr(user_obj, 'super_agent', None), 'username', '') or getattr(getattr(user_obj, 'super_agent', None), 'email', '') or '',
+                'cashiers': getattr(user_obj, 'cashiers_count', 0) or 0,
+                'dormant_days': getattr(user_obj, 'dormant_days', '') if getattr(user_obj, 'dormant_days', None) is not None else '',
                 'wallet_balance': str(getattr(user_obj, 'wallet_balance_annotated', Decimal('0.00')) or Decimal('0.00')),
                 'status': 'Locked' if user_obj.is_locked else ('Active' if user_obj.is_active else 'Inactive'),
             })
-        title = 'crm_dormant_accounts'
+        title = 'crm_dormant_agents'
 
     elif dataset == 'complaints':
         complaints_qs = _apply_complaint_filters(
@@ -11862,7 +11958,6 @@ def retail_dashboard(request):
     locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
     dormant_q = (request.GET.get('dormant_q') or '').strip()
     dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
-    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
     dormant_agent = (request.GET.get('dormant_agent') or '').strip()
     dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
     dormant_status = (request.GET.get('dormant_status') or '').strip()
@@ -12417,12 +12512,13 @@ def retail_dashboard(request):
     dormant_cards, dormant_rows = _build_dormant_center_data(
         request.user,
         query=dormant_q,
-        user_type=dormant_user_type,
         agent_id=dormant_agent,
         super_agent_id=dormant_super_agent,
         retail_manager_id='',
         status=dormant_status,
         bucket=dormant_bucket,
+        start_dt=start_dt,
+        end_dt=end_dt,
     )
     dormant_page = Paginator(dormant_rows, 50).get_page(request.GET.get('dormant_page') or 1) if active_tab == 'dormant_accounts' else None
 
@@ -12530,7 +12626,6 @@ def retail_dashboard(request):
         'locked_appeal_end_date': locked_appeal_end_date,
         'dormant_q': dormant_q,
         'dormant_bucket': dormant_bucket,
-        'dormant_user_type': dormant_user_type,
         'dormant_agent': dormant_agent,
         'dormant_super_agent': dormant_super_agent,
         'dormant_status': dormant_status,
@@ -12625,7 +12720,6 @@ def retail_export(request):
     end_date_str = (request.GET.get('end_date') or '').strip()
     dormant_q = (request.GET.get('dormant_q') or '').strip()
     dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
-    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
     dormant_agent = (request.GET.get('dormant_agent') or '').strip()
     dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
     dormant_status = (request.GET.get('dormant_status') or '').strip()
@@ -12769,25 +12863,30 @@ def retail_export(request):
         _, dormant_rows = _build_dormant_center_data(
             request.user,
             query=dormant_q,
-            user_type=dormant_user_type,
             agent_id=dormant_agent,
             super_agent_id=dormant_super_agent,
             retail_manager_id='',
             status=dormant_status,
             bucket=dormant_bucket,
+            start_dt=start_dt,
+            end_dt=end_dt,
         )
         for user_obj in dormant_rows:
             rows.append({
                 'username': user_obj.username or user_obj.email or '',
                 'full_name': user_obj.get_full_name() or '',
-                'user_type': user_obj.get_user_type_display(),
                 'last_login': user_obj.last_login.isoformat(sep=' ', timespec='seconds') if user_obj.last_login else '',
                 'last_bet': user_obj.last_bet_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_bet_at', None) else '',
-                'last_deposit': user_obj.last_deposit_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_deposit_at', None) else '',
+                'last_transaction': user_obj.last_transaction_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_transaction_at', None) else '',
+                'last_wallet_activity': user_obj.last_wallet_activity_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_wallet_activity_at', None) else '',
+                'last_activity': user_obj.last_activity_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_activity_at', None) else '',
+                'super_agent': getattr(getattr(user_obj, 'super_agent', None), 'username', '') or getattr(getattr(user_obj, 'super_agent', None), 'email', '') or '',
+                'cashiers': getattr(user_obj, 'cashiers_count', 0) or 0,
+                'dormant_days': getattr(user_obj, 'dormant_days', '') if getattr(user_obj, 'dormant_days', None) is not None else '',
                 'wallet_balance': str(getattr(user_obj, 'wallet_balance_annotated', Decimal('0.00')) or Decimal('0.00')),
                 'status': 'Locked' if user_obj.is_locked else ('Active' if user_obj.is_active else 'Inactive'),
             })
-        title = "dormant_accounts"
+        title = "retail_dormant_agents"
 
     elif dataset == 'complaints':
         qs = _apply_complaint_filters(

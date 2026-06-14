@@ -120,8 +120,13 @@ class RBACTests(TestCase):
         })
         self.assertEqual(forbidden_response.status_code, 403)
 
-        self.player.last_login = timezone.now() - timedelta(days=10)
-        self.player.save(update_fields=['last_login'])
+        stale_login = timezone.now() - timedelta(days=10)
+        self.agent.first_name = 'Dormant Agent'
+        self.agent.last_login = stale_login
+        self.agent.save(update_fields=['first_name', 'last_login'])
+        self.cashier.agent = self.agent
+        self.cashier.last_login = stale_login
+        self.cashier.save(update_fields=['agent', 'last_login'])
 
         self.client.force_login(self.crm_viewer)
         allowed_response = self.client.get(reverse('betting:crm_export'), {
@@ -130,7 +135,7 @@ class RBACTests(TestCase):
             'dormant_bucket': 'login_7',
         })
         self.assertEqual(allowed_response.status_code, 200)
-        exported_identifier = self.player.username or self.player.email
+        exported_identifier = self.agent.username or self.agent.email
         self.assertIn(exported_identifier, allowed_response.content.decode())
 
     def test_crm_bulk_campaign_supports_custom_users_with_template_defaults(self):
@@ -264,21 +269,21 @@ class RBACTests(TestCase):
         self.assertNotIn('Agent SMS Campaign', body)
 
     def test_crm_dormant_export_respects_search_query(self):
-        other_player = User.objects.create_user(
-            email='other-export-player@test.com',
+        other_agent = User.objects.create_user(
+            email='other-export-agent@test.com',
             password='pass12345',
-            user_type='player',
-            username='other_export_player',
+            user_type='agent',
+            username='other_export_agent',
         )
-        Wallet.objects.create(user=other_player, balance=Decimal('15.00'))
+        Wallet.objects.create(user=other_agent, balance=Decimal('15.00'))
 
         stale_login = timezone.now() - timedelta(days=10)
-        self.player.first_name = 'DormantFilterTarget'
-        self.player.last_login = stale_login
-        self.player.save(update_fields=['first_name', 'last_login'])
-        other_player.first_name = 'DormantFilterOther'
-        other_player.last_login = stale_login
-        other_player.save(update_fields=['first_name', 'last_login'])
+        self.agent.first_name = 'DormantFilterTarget'
+        self.agent.last_login = stale_login
+        self.agent.save(update_fields=['first_name', 'last_login'])
+        other_agent.first_name = 'DormantFilterOther'
+        other_agent.last_login = stale_login
+        other_agent.save(update_fields=['first_name', 'last_login'])
 
         self.client.force_login(self.crm_viewer)
         response = self.client.get(
@@ -293,8 +298,72 @@ class RBACTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
-        self.assertIn(self.player.username or self.player.email, body)
-        self.assertNotIn(other_player.username, body)
+        self.assertIn(self.agent.username or self.agent.email, body)
+        self.assertNotIn(other_agent.username, body)
+
+    def test_crm_dormant_export_requires_inactive_agent_and_cashier_hierarchy(self):
+        dormant_agent = User.objects.create_user(
+            email='dormant-agent-hierarchy@test.com',
+            password='pass12345',
+            user_type='agent',
+            username='dormant_agent_hierarchy',
+        )
+        active_cashier_agent = User.objects.create_user(
+            email='active-cashier-agent@test.com',
+            password='pass12345',
+            user_type='agent',
+            username='active_cashier_agent',
+        )
+        active_agent = User.objects.create_user(
+            email='active-agent-hierarchy@test.com',
+            password='pass12345',
+            user_type='agent',
+            username='active_agent_hierarchy',
+        )
+        dormant_cashier = User.objects.create_user(
+            email='dormant-cashier-hierarchy@test.com',
+            password='pass12345',
+            user_type='cashier',
+            username='dormant_cashier_hierarchy',
+            agent=dormant_agent,
+        )
+        active_cashier = User.objects.create_user(
+            email='active-cashier-hierarchy@test.com',
+            password='pass12345',
+            user_type='cashier',
+            username='active_cashier_hierarchy',
+            agent=active_cashier_agent,
+        )
+        inactive_cashier = User.objects.create_user(
+            email='inactive-cashier-hierarchy@test.com',
+            password='pass12345',
+            user_type='cashier',
+            username='inactive_cashier_hierarchy',
+            agent=active_agent,
+        )
+        for user in [dormant_agent, active_cashier_agent, active_agent, dormant_cashier, active_cashier, inactive_cashier]:
+            Wallet.objects.create(user=user, balance=Decimal('0.00'))
+
+        stale_login = timezone.now() - timedelta(days=10)
+        recent_login = timezone.now() - timedelta(days=1)
+        User.objects.filter(id__in=[dormant_agent.id, active_cashier_agent.id, dormant_cashier.id, inactive_cashier.id]).update(last_login=stale_login)
+        User.objects.filter(id__in=[active_agent.id, active_cashier.id]).update(last_login=recent_login)
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'dormant_accounts',
+                'format': 'csv',
+                'dormant_bucket': 'login_7',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn('dormant_agent_hierarchy', body)
+        self.assertNotIn('active_cashier_agent', body)
+        self.assertNotIn('active_agent_hierarchy', body)
 
     def test_crm_deposit_monitoring_export_respects_status_gateway_and_flag_filters(self):
         site_config = SiteConfiguration.load()
@@ -635,12 +704,14 @@ class RBACTests(TestCase):
         )
 
     def test_crm_dashboard_message_creates_notification_action_log_and_ops_audit(self):
+        self.agent.last_login = timezone.now() - timedelta(days=10)
+        self.agent.save(update_fields=['last_login'])
         self.client.force_login(self.crm_viewer)
         response = self.client.post(reverse('betting:crm_dashboard'), {
             'tab': 'dormant_accounts',
             'module': 'dormant_accounts',
             'send_dashboard_message': '1',
-            'target_user_ids': str(self.player.id),
+            'target_user_ids': str(self.agent.id),
             'msg_title': 'We miss you',
             'msg_body': 'Come back and place your next bet.',
             'message_channels': ['in_app'],
@@ -649,7 +720,7 @@ class RBACTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(
             Notification.objects.filter(
-                recipient=self.player,
+                recipient=self.agent,
                 title='We miss you',
                 message='Come back and place your next bet.',
             ).exists()
@@ -657,7 +728,7 @@ class RBACTests(TestCase):
         self.assertTrue(
             CRMActionLog.objects.filter(
                 actor=self.crm_viewer,
-                target_user=self.player,
+                target_user=self.agent,
                 action_type='MESSAGE_SENT',
                 data__source='dashboard_ops',
                 data__module='dormant_accounts',
@@ -668,7 +739,7 @@ class RBACTests(TestCase):
                 actor=self.crm_viewer,
                 module='dormant_accounts',
                 action='message_sent',
-                target_user=self.player,
+                target_user=self.agent,
             ).exists()
         )
 

@@ -2,20 +2,20 @@
   <div class="card-header bg-light">
     <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3">
       <div>
-        <div class="fw-semibold">Dormant Accounts Center</div>
-        <div class="text-muted small">Identify inactive users and re-engage them across the platform hierarchy.</div>
+        <div class="fw-semibold">Dormant Agents Center</div>
+        <div class="text-muted small">Identify agents whose own account and mapped cashiers have no recent activity.</div>
       </div>
       <div class="d-flex flex-wrap gap-2">
-        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=csv&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">CSV</a>
-        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=xlsx&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">Excel</a>
-        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=pdf&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">PDF</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=csv&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=xlsx&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=pdf&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">PDF</a>
       </div>
     </div>
   </div>
   <div class="card-body">
     <div class="row g-3 mb-3">
       <div class="col-6 col-lg">
-        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_7&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_7&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
           <div class="card h-100 {% if dormant_bucket == 'login_7' %}border-primary{% endif %}">
             <div class="card-body">
               <div class="text-muted small">Dormant 7 Days</div>
@@ -25,7 +25,7 @@
         </a>
       </div>
       <div class="col-6 col-lg">
-        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_14&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_14&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
           <div class="card h-100 {% if dormant_bucket == 'login_14' %}border-primary{% endif %}">
             <div class="card-body">
               <div class="text-muted small">Dormant 14 Days</div>
@@ -35,31 +35,11 @@
         </a>
       </div>
       <div class="col-6 col-lg">
-        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_30&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_30&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
           <div class="card h-100 {% if dormant_bucket == 'login_30' %}border-primary{% endif %}">
             <div class="card-body">
               <div class="text-muted small">Dormant 30 Days</div>
               <div class="fs-4 fw-bold">{{ dormant_cards.login_30 }}</div>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-6 col-lg">
-        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=no_bets&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
-          <div class="card h-100 {% if dormant_bucket == 'no_bets' %}border-primary{% endif %}">
-            <div class="card-body">
-              <div class="text-muted small">No Bets</div>
-              <div class="fs-4 fw-bold">{{ dormant_cards.no_bets }}</div>
-            </div>
-          </div>
-        </a>
-      </div>
-      <div class="col-6 col-lg">
-        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=no_deposits&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
-          <div class="card h-100 {% if dormant_bucket == 'no_deposits' %}border-primary{% endif %}">
-            <div class="card-body">
-              <div class="text-muted small">No Deposits</div>
-              <div class="fs-4 fw-bold">{{ dormant_cards.no_deposits }}</div>
             </div>
           </div>
         </a>
@@ -70,18 +50,15 @@
       <input type="hidden" name="tab" value="dormant_accounts">
       <div class="col-12 col-md-3">
         <label class="form-label small text-muted mb-1">Search</label>
-        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Username, name, email or phone">
+        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Agent username, name, email or phone">
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label small text-muted mb-1">User Type</label>
-        <select name="dormant_user_type" class="form-select form-select-sm">
-          <option value="">All</option>
-          <option value="player" {% if dormant_user_type == 'player' %}selected{% endif %}>Player</option>
-          <option value="agent" {% if dormant_user_type == 'agent' %}selected{% endif %}>Agent</option>
-          <option value="super_agent" {% if dormant_user_type == 'super_agent' %}selected{% endif %}>Super Agent</option>
-          <option value="retail_manager" {% if dormant_user_type == 'retail_manager' %}selected{% endif %}>Retail Manager</option>
-          <option value="cashier" {% if dormant_user_type == 'cashier' %}selected{% endif %}>Cashier</option>
-        </select>
+        <label class="form-label small text-muted mb-1">Start Date</label>
+        <input type="date" name="start_date" value="{{ start_date }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small text-muted mb-1">End Date</label>
+        <input type="date" name="end_date" value="{{ end_date }}" class="form-control form-control-sm">
       </div>
       <div class="col-6 col-md-2">
         <label class="form-label small text-muted mb-1">Agent</label>
@@ -120,8 +97,6 @@
         </select>
       </div>
       <input type="hidden" name="dormant_bucket" value="{{ dormant_bucket }}">
-      <input type="hidden" name="start_date" value="{{ start_date }}">
-      <input type="hidden" name="end_date" value="{{ end_date }}">
       <div class="col-12">
         <button class="btn btn-sm btn-primary" type="submit">Filter</button>
       </div>
@@ -139,12 +114,11 @@
             <tr>
               <th><input type="checkbox" class="form-check-input js-dashboard-select-all" data-checkboxes=".js-dormant-user-checkbox"></th>
               <th>Username</th>
-              <th>Full Name</th>
-              <th>User Type</th>
-              <th>Last Login</th>
-              <th>Last Bet</th>
-              <th>Last Deposit</th>
-              <th class="text-end">Wallet Balance</th>
+              <th>Agent Name</th>
+              <th>Super Agent</th>
+              <th class="text-center">Cashiers</th>
+              <th>Last Activity</th>
+              <th class="text-center">Dormant Days</th>
               <th>Status</th>
               <th class="text-end">Actions</th>
             </tr>
@@ -155,11 +129,16 @@
               <td><input type="checkbox" class="form-check-input js-dormant-user-checkbox js-dashboard-user-checkbox" value="{{ u.id }}"></td>
               <td class="fw-semibold">{{ u.username|default:u.email|default:"-" }}</td>
               <td>{{ u.get_full_name|default:"-" }}</td>
-              <td class="text-uppercase small">{{ u.get_user_type_display }}</td>
-              <td class="text-nowrap text-muted small">{{ u.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
-              <td class="text-nowrap text-muted small">{{ u.last_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
-              <td class="text-nowrap text-muted small">{{ u.last_deposit_at|date:"Y-m-d H:i"|default:"-" }}</td>
-              <td class="text-end fw-semibold">₦{{ u.wallet_balance_annotated|floatformat:2 }}</td>
+              <td class="text-muted small">{% if u.super_agent %}{{ u.super_agent.username|default:u.super_agent.email|default:"-" }}{% else %}-{% endif %}</td>
+              <td class="text-center">{{ u.cashiers_count }}</td>
+              <td class="text-nowrap text-muted small">
+                {% if u.last_activity_at %}
+                {{ u.last_activity_at|date:"Y-m-d H:i" }}
+                {% else %}
+                Never
+                {% endif %}
+              </td>
+              <td class="text-center">{{ u.dormant_days|default_if_none:"-" }}</td>
               <td>
                 {% if u.is_locked %}
                 <span class="badge bg-danger">Locked</span>
@@ -179,7 +158,7 @@
               </td>
             </tr>
             {% empty %}
-            <tr><td colspan="10" class="text-center text-muted py-4">No dormant users found.</td></tr>
+            <tr><td colspan="9" class="text-center text-muted py-4">No dormant agents found.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -224,10 +203,10 @@
   <div class="text-muted small">Page {{ dormant_page.number }} of {{ dormant_page.paginator.num_pages }}</div>
   <div class="d-flex gap-2">
     {% if dormant_page.has_previous %}
-    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.previous_page_number }}">Prev</a>
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.previous_page_number }}">Prev</a>
     {% endif %}
     {% if dormant_page.has_next %}
-    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.next_page_number }}">Next</a>
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.next_page_number }}">Next</a>
     {% endif %}
   </div>
 </div>

@@ -253,8 +253,8 @@ class FullCoverageTests(TestCase):
         RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=super_agent)
 
         old_login = timezone.now() - datetime.timedelta(days=10)
-        User.objects.filter(id=player.id).update(last_login=old_login)
-        player.refresh_from_db()
+        User.objects.filter(id=agent.id).update(last_login=old_login)
+        agent.refresh_from_db()
 
         CustomerComplaint.objects.create(
             complaint_type="wallet",
@@ -282,7 +282,7 @@ class FullCoverageTests(TestCase):
             {"dataset": "dormant_accounts", "format": "csv", "dormant_bucket": "login_7"},
         )
         self.assertEqual(dormant_response.status_code, 200)
-        self.assertIn("player_export", dormant_response.content.decode())
+        self.assertIn("agent_export", dormant_response.content.decode())
 
         complaints_response = self.client.get(
             reverse("betting:retail_export"),
@@ -458,7 +458,7 @@ class FullCoverageTests(TestCase):
         RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
 
         stale_login = timezone.now() - datetime.timedelta(days=10)
-        User.objects.filter(id__in=[mapped_player.id, unmapped_player.id]).update(last_login=stale_login)
+        User.objects.filter(id__in=[mapped_agent.id, unmapped_agent.id]).update(last_login=stale_login)
 
         BetTicket.objects.create(
             user=mapped_player,
@@ -489,8 +489,8 @@ class FullCoverageTests(TestCase):
         )
         self.assertEqual(dormant_response.status_code, 200)
         dormant_body = dormant_response.content.decode()
-        self.assertIn("mapped_player_network", dormant_body)
-        self.assertNotIn("unmapped_player_network", dormant_body)
+        self.assertIn("mapped_agent_network", dormant_body)
+        self.assertNotIn("unmapped_agent_network", dormant_body)
 
         performance_response = self.client.get(
             reverse("betting:retail_export"),
@@ -506,6 +506,61 @@ class FullCoverageTests(TestCase):
         self.assertIn("mapped_sa_network", performance_body)
         self.assertNotIn("unmapped_sa_network", performance_body)
 
+    def test_retail_agent_performance_dashboard_renders(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-performance-dashboard@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_performance_dashboard",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-performance-dashboard@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_performance_dashboard",
+            first_name="Performance Dashboard Target",
+        )
+        mapped_agent = User.objects.create_user(
+            email="mapped-agent-performance-dashboard@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_performance_dashboard",
+            super_agent=mapped_super_agent,
+        )
+        mapped_player = User.objects.create_user(
+            email="mapped-player-performance-dashboard@test.com",
+            password=password,
+            user_type="player",
+            username="mapped_player_performance_dashboard",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, mapped_agent, mapped_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+        BetTicket.objects.create(
+            user=mapped_player,
+            stake_amount=Decimal("50.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("100.00"),
+            max_winning=Decimal("100.00"),
+            status="won",
+        )
+
+        self.client.force_login(retail_manager)
+        response = self.client.get(
+            reverse("betting:retail_dashboard"),
+            {
+                "tab": "agent_performance",
+                "performance_entity": "super_agent",
+                "performance_q": "Performance Dashboard Target",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Performance Dashboard Target")
+
     def test_retail_dormant_dashboard_and_export_apply_search_filter(self):
         password = "pass12345"
         retail_manager = User.objects.create_user(
@@ -520,37 +575,38 @@ class FullCoverageTests(TestCase):
             user_type="super_agent",
             username="mapped_sa_dormant_search",
         )
-        mapped_agent = User.objects.create_user(
-            email="mapped-agent-dormant-search@test.com",
+        matching_agent = User.objects.create_user(
+            email="dormant-match-agent@test.com",
             password=password,
             user_type="agent",
-            username="mapped_agent_dormant_search",
-            super_agent=mapped_super_agent,
-        )
-        matching_player = User.objects.create_user(
-            email="dormant-match@test.com",
-            password=password,
-            user_type="player",
-            username="dormant_match_player",
+            username="dormant_match_agent",
             first_name="DormantSearchMatch",
-            agent=mapped_agent,
             super_agent=mapped_super_agent,
         )
-        other_player = User.objects.create_user(
-            email="dormant-other@test.com",
+        other_agent = User.objects.create_user(
+            email="dormant-other-agent@test.com",
             password=password,
-            user_type="player",
-            username="dormant_other_player",
+            user_type="agent",
+            username="dormant_other_agent",
             first_name="DormantSearchOther",
-            agent=mapped_agent,
             super_agent=mapped_super_agent,
         )
-        for user in [retail_manager, mapped_super_agent, mapped_agent, matching_player, other_player]:
+        other_cashier = User.objects.create_user(
+            email="dormant-other-cashier@test.com",
+            password=password,
+            user_type="cashier",
+            username="dormant_other_cashier",
+            agent=other_agent,
+            super_agent=mapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, matching_agent, other_agent, other_cashier]:
             Wallet.objects.create(user=user, balance=Decimal("0.00"))
         RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
 
         stale_login = timezone.now() - datetime.timedelta(days=10)
-        User.objects.filter(id__in=[matching_player.id, other_player.id]).update(last_login=stale_login)
+        recent_login = timezone.now() - datetime.timedelta(days=1)
+        User.objects.filter(id__in=[matching_agent.id, other_agent.id]).update(last_login=stale_login)
+        User.objects.filter(id=other_cashier.id).update(last_login=recent_login)
 
         self.client.force_login(retail_manager)
 
@@ -564,8 +620,8 @@ class FullCoverageTests(TestCase):
         )
         self.assertEqual(dashboard_response.status_code, 200)
         dashboard_body = dashboard_response.content.decode()
-        self.assertIn("dormant_match_player", dashboard_body)
-        self.assertNotIn("dormant_other_player", dashboard_body)
+        self.assertIn("dormant_match_agent", dashboard_body)
+        self.assertNotIn("dormant_other_agent", dashboard_body)
         self.assertIn('name="dormant_q" value="DormantSearchMatch"', dashboard_body)
 
         export_response = self.client.get(
@@ -579,8 +635,21 @@ class FullCoverageTests(TestCase):
         )
         self.assertEqual(export_response.status_code, 200)
         export_body = export_response.content.decode()
-        self.assertIn("dormant_match_player", export_body)
-        self.assertNotIn("dormant_other_player", export_body)
+        self.assertIn("dormant_match_agent", export_body)
+        self.assertNotIn("dormant_other_agent", export_body)
+
+        broad_export_response = self.client.get(
+            reverse("betting:retail_export"),
+            {
+                "dataset": "dormant_accounts",
+                "format": "csv",
+                "dormant_bucket": "login_7",
+            },
+        )
+        self.assertEqual(broad_export_response.status_code, 200)
+        broad_export_body = broad_export_response.content.decode()
+        self.assertIn("dormant_match_agent", broad_export_body)
+        self.assertNotIn("dormant_other_agent", broad_export_body)
 
     def test_retail_complaint_update_persists_note_for_mapped_user(self):
         password = "pass12345"

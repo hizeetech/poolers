@@ -1,0 +1,244 @@
+<div class="row g-3">
+  <div class="col-12 col-xl-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-light fw-semibold">Create Complaint</div>
+      <div class="card-body">
+        <form method="post" class="row g-2">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="complaints">
+          <input type="hidden" name="create_complaint" value="1">
+          {% if complaint_form.non_field_errors %}
+          <div class="col-12"><div class="alert alert-danger py-2 mb-1">{{ complaint_form.non_field_errors }}</div></div>
+          {% endif %}
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">User</label>{{ complaint_form.user }}
+            {% if complaint_form.user.errors %}<div class="text-danger small mt-1">{{ complaint_form.user.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Type</label>{{ complaint_form.complaint_type }}
+            {% if complaint_form.complaint_type.errors %}<div class="text-danger small mt-1">{{ complaint_form.complaint_type.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Subject</label>{{ complaint_form.subject }}
+            {% if complaint_form.subject.errors %}<div class="text-danger small mt-1">{{ complaint_form.subject.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Description</label>{{ complaint_form.description }}
+            {% if complaint_form.description.errors %}<div class="text-danger small mt-1">{{ complaint_form.description.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Priority</label>{{ complaint_form.priority }}
+            {% if complaint_form.priority.errors %}<div class="text-danger small mt-1">{{ complaint_form.priority.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="col-12"><button class="btn btn-sm btn-primary" type="submit">Create Complaint</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-8">
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-lg-3"><div class="card shadow-sm h-100"><div class="card-body"><div class="text-muted small">Open</div><div class="fs-4 fw-bold">{{ complaint_stats.open }}</div></div></div></div>
+      <div class="col-6 col-lg-3"><div class="card shadow-sm h-100"><div class="card-body"><div class="text-muted small">Pending</div><div class="fs-4 fw-bold">{{ complaint_stats.pending }}</div></div></div></div>
+      <div class="col-6 col-lg-3"><div class="card shadow-sm h-100"><div class="card-body"><div class="text-muted small">Resolved</div><div class="fs-4 fw-bold">{{ complaint_stats.resolved }}</div></div></div></div>
+      <div class="col-6 col-lg-3"><div class="card shadow-sm h-100"><div class="card-body"><div class="text-muted small">Escalated</div><div class="fs-4 fw-bold">{{ complaint_stats.escalated }}</div></div></div></div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header bg-light">
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3">
+          <form method="get" class="row g-2 align-items-end flex-grow-1">
+            <input type="hidden" name="tab" value="complaints">
+            <input type="hidden" name="start_date" value="{{ start_date }}">
+            <input type="hidden" name="end_date" value="{{ end_date }}">
+            <div class="col-12 col-md-4">
+              <label class="form-label small text-muted mb-1">Search</label>
+              <input type="text" name="complaint_q" value="{{ complaint_q }}" class="form-control form-control-sm" placeholder="Username, subject, description">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small text-muted mb-1">Type</label>
+              <select name="complaint_type" class="form-select form-select-sm">
+                <option value="">All</option>
+                {% for value, label in complaint_type_choices %}
+                <option value="{{ value }}" {% if complaint_type == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small text-muted mb-1">Status</label>
+              <select name="complaint_status" class="form-select form-select-sm">
+                <option value="">All</option>
+                {% for value, label in complaint_status_choices %}
+                <option value="{{ value }}" {% if complaint_status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label small text-muted mb-1">Priority</label>
+              <select name="complaint_priority" class="form-select form-select-sm">
+                <option value="">All</option>
+                {% for value, label in complaint_priority_choices %}
+                <option value="{{ value }}" {% if complaint_priority == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-6 col-md-2"><button class="btn btn-sm btn-primary" type="submit">Filter</button></div>
+          </form>
+          <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=complaints&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}&complaint_q={{ complaint_q }}&complaint_type={{ complaint_type }}&complaint_status={{ complaint_status }}&complaint_priority={{ complaint_priority }}">Export</a>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Complaint</th>
+                <th>User</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Notes</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for complaint in complaints_page %}
+              <tr>
+                <td>
+                  <div class="fw-semibold">{{ complaint.subject }}</div>
+                  <div class="text-muted small">{{ complaint.get_complaint_type_display }} • {{ complaint.created_at|date:"Y-m-d H:i" }}</div>
+                </td>
+                <td>{{ complaint.user.username|default:complaint.user.email }}</td>
+                <td>{{ complaint.get_status_display }}</td>
+                <td>{{ complaint.get_priority_display }}</td>
+                <td>{% with latest_note=complaint.notes.first %}{{ latest_note.note|truncatechars:60|default:"-" }}{% endwith %}</td>
+                <td class="text-end"><button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#retailComplaint{{ complaint.id }}">Manage</button></td>
+              </tr>
+              <tr class="collapse{% if complaint_action_target_id == complaint.id or complaint_note_target_id == complaint.id %} show{% endif %}" id="retailComplaint{{ complaint.id }}">
+                <td colspan="6" class="bg-light">
+                  <div class="row g-3">
+                    <div class="col-12 col-lg-7">
+                      <form method="post" class="row g-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="tab" value="complaints">
+                        <input type="hidden" name="update_complaint" value="1">
+                        <input type="hidden" name="complaint_id" value="{{ complaint.id }}">
+                        {% if complaint_action_target_id == complaint.id and complaint_action_form.non_field_errors %}
+                        <div class="col-12">
+                          <div class="alert alert-danger py-2 mb-1">{{ complaint_action_form.non_field_errors }}</div>
+                        </div>
+                        {% endif %}
+                        <div class="col-6">
+                          <label class="form-label small text-muted mb-1">Status</label>
+                          {% if complaint_action_target_id == complaint.id %}
+                          {{ complaint_action_form.status }}
+                          {% if complaint_action_form.status.errors %}
+                          <div class="text-danger small mt-1">{{ complaint_action_form.status.errors|join:", " }}</div>
+                          {% endif %}
+                          {% else %}
+                          <select name="status" class="form-select form-select-sm">
+                            {% for value, label in complaint_status_choices %}
+                            <option value="{{ value }}" {% if complaint.status == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                          </select>
+                          {% endif %}
+                        </div>
+                        <div class="col-6">
+                          <label class="form-label small text-muted mb-1">Priority</label>
+                          {% if complaint_action_target_id == complaint.id %}
+                          {{ complaint_action_form.priority }}
+                          {% if complaint_action_form.priority.errors %}
+                          <div class="text-danger small mt-1">{{ complaint_action_form.priority.errors|join:", " }}</div>
+                          {% endif %}
+                          {% else %}
+                          <select name="priority" class="form-select form-select-sm">
+                            {% for value, label in complaint_priority_choices %}
+                            <option value="{{ value }}" {% if complaint.priority == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                          </select>
+                          {% endif %}
+                        </div>
+                        <div class="col-12">
+                          <label class="form-label small text-muted mb-1">Update Note</label>
+                          {% if complaint_action_target_id == complaint.id %}
+                          {{ complaint_action_form.admin_note }}
+                          {% if complaint_action_form.admin_note.errors %}
+                          <div class="text-danger small mt-1">{{ complaint_action_form.admin_note.errors|join:", " }}</div>
+                          {% endif %}
+                          {% else %}
+                          <textarea name="admin_note" class="form-control form-control-sm" rows="2"></textarea>
+                          {% endif %}
+                        </div>
+                        <div class="col-12"><button class="btn btn-sm btn-primary" type="submit">Update Complaint</button></div>
+                      </form>
+                    </div>
+                    <div class="col-12 col-lg-5">
+                      <div class="border rounded p-2 bg-white mb-2" style="max-height: 150px; overflow:auto;">
+                        {% for note in complaint.notes.all %}
+                        <div class="border-bottom pb-2 mb-2">
+                          <div class="small fw-semibold">
+                            {% if note.author %}
+                            {{ note.author.username|default:note.author.email }}
+                            {% else %}
+                            System
+                            {% endif %}
+                          </div>
+                          <div class="small text-muted">{{ note.created_at|date:"Y-m-d H:i" }}</div>
+                          <div class="small">{{ note.note }}</div>
+                        </div>
+                        {% empty %}
+                        <div class="text-muted small">No notes yet.</div>
+                        {% endfor %}
+                      </div>
+                      <form method="post" class="row g-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="tab" value="complaints">
+                        <input type="hidden" name="add_complaint_note" value="1">
+                        <input type="hidden" name="complaint_id" value="{{ complaint.id }}">
+                        {% if complaint_note_target_id == complaint.id and complaint_note_form.non_field_errors %}
+                        <div class="col-12"><div class="alert alert-danger py-2 mb-1">{{ complaint_note_form.non_field_errors }}</div></div>
+                        {% endif %}
+                        <div class="col-12">
+                          {% if complaint_note_target_id == complaint.id %}
+                          {{ complaint_note_form.note }}
+                          {% if complaint_note_form.note.errors %}<div class="text-danger small mt-1">{{ complaint_note_form.note.errors|join:", " }}</div>{% endif %}
+                          {% else %}
+                          <textarea name="note" class="form-control form-control-sm" rows="2" placeholder="Add note"></textarea>
+                          {% endif %}
+                        </div>
+                        <div class="col-12 form-check ms-1">
+                          {% if complaint_note_target_id == complaint.id %}
+                          {{ complaint_note_form.is_internal }}
+                          <label class="form-check-label small" for="{{ complaint_note_form.is_internal.id_for_label }}">Internal Note</label>
+                          {% else %}
+                          <input class="form-check-input" type="checkbox" name="is_internal" id="retailComplaintInternal{{ complaint.id }}" checked>
+                          <label class="form-check-label small" for="retailComplaintInternal{{ complaint.id }}">Internal Note</label>
+                          {% endif %}
+                        </div>
+                        <div class="col-12"><button class="btn btn-sm btn-outline-primary" type="submit">Add Note</button></div>
+                      </form>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="6" class="text-center text-muted py-4">No complaints found.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% if complaints_page %}
+<div class="d-flex justify-content-between align-items-center">
+  <div class="text-muted small">Page {{ complaints_page.number }} of {{ complaints_page.paginator.num_pages }}</div>
+  <div class="d-flex gap-2">
+    {% if complaints_page.has_previous %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=complaints&start_date={{ start_date }}&end_date={{ end_date }}&complaint_q={{ complaint_q }}&complaint_type={{ complaint_type }}&complaint_status={{ complaint_status }}&complaint_priority={{ complaint_priority }}&complaint_page={{ complaints_page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% if complaints_page.has_next %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=complaints&start_date={{ start_date }}&end_date={{ end_date }}&complaint_q={{ complaint_q }}&complaint_type={{ complaint_type }}&complaint_status={{ complaint_status }}&complaint_priority={{ complaint_priority }}&complaint_page={{ complaints_page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

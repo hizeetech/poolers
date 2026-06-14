@@ -16,6 +16,8 @@ from betting.models import (
     AgentTransferLog,
     AccountUnlockAppeal,
     AccountLockAuditLog,
+    CustomerComplaint,
+    CustomerComplaintNote,
 )
 from django.utils import timezone
 from django.db.models import Q
@@ -205,6 +207,518 @@ class FullCoverageTests(TestCase):
         self.client.force_login(retail_manager)
         response = self.client.get(reverse("betting:retail_dashboard"), {"tab": "hierarchy"})
         self.assertContains(response, "<td>Agent Mapped</td>", html=True)
+
+    def test_retail_export_supports_new_dashboard_datasets(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-export@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_export",
+        )
+        master = User.objects.create_user(
+            email="ma-export@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_export",
+        )
+        super_agent = User.objects.create_user(
+            email="sa-export@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_export",
+            master_agent=master,
+        )
+        agent = User.objects.create_user(
+            email="agent-export@test.com",
+            password=password,
+            user_type="agent",
+            username="agent_export",
+            master_agent=master,
+            super_agent=super_agent,
+        )
+        player = User.objects.create_user(
+            email="player-export@test.com",
+            password=password,
+            user_type="player",
+            username="player_export",
+            agent=agent,
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+        Wallet.objects.create(user=super_agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=player, balance=Decimal("250.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=super_agent)
+
+        old_login = timezone.now() - datetime.timedelta(days=10)
+        User.objects.filter(id=player.id).update(last_login=old_login)
+        player.refresh_from_db()
+
+        CustomerComplaint.objects.create(
+            complaint_type="wallet",
+            user=player,
+            subject="Wallet help needed",
+            description="Player reported a wallet issue.",
+            status="open",
+            priority="high",
+            created_by=retail_manager,
+        )
+
+        BetTicket.objects.create(
+            user=player,
+            stake_amount=Decimal("150.00"),
+            total_odd=Decimal("2.50"),
+            potential_winning=Decimal("375.00"),
+            max_winning=Decimal("375.00"),
+            status="pending",
+        )
+
+        self.client.force_login(retail_manager)
+
+        dormant_response = self.client.get(
+            reverse("betting:retail_export"),
+            {"dataset": "dormant_accounts", "format": "csv", "dormant_bucket": "login_7"},
+        )
+        self.assertEqual(dormant_response.status_code, 200)
+        self.assertIn("player_export", dormant_response.content.decode())
+
+        complaints_response = self.client.get(
+            reverse("betting:retail_export"),
+            {"dataset": "complaints", "format": "csv"},
+        )
+        self.assertEqual(complaints_response.status_code, 200)
+        self.assertIn("Wallet help needed", complaints_response.content.decode())
+
+        performance_response = self.client.get(
+            reverse("betting:retail_export"),
+            {"dataset": "agent_performance", "format": "csv", "performance_entity": "agent"},
+        )
+        self.assertEqual(performance_response.status_code, 200)
+        self.assertIn("agent_export", performance_response.content.decode())
+
+    def test_retail_complaints_export_respects_scope_and_filters(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-complaint-filter@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_complaint_filter",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-complaint@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_complaint",
+        )
+        unmapped_super_agent = User.objects.create_user(
+            email="unmapped-sa-complaint@test.com",
+            password=password,
+            user_type="super_agent",
+            username="unmapped_sa_complaint",
+        )
+        mapped_agent = User.objects.create_user(
+            email="mapped-agent-complaint@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_complaint",
+            super_agent=mapped_super_agent,
+        )
+        unmapped_agent = User.objects.create_user(
+            email="unmapped-agent-complaint@test.com",
+            password=password,
+            user_type="agent",
+            username="unmapped_agent_complaint",
+            super_agent=unmapped_super_agent,
+        )
+        mapped_player = User.objects.create_user(
+            email="mapped-player-complaint@test.com",
+            password=password,
+            user_type="player",
+            username="mapped_player_complaint",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+            first_name="RetailComplaintTarget",
+        )
+        unmapped_player = User.objects.create_user(
+            email="unmapped-player-complaint@test.com",
+            password=password,
+            user_type="player",
+            username="unmapped_player_complaint",
+            agent=unmapped_agent,
+            super_agent=unmapped_super_agent,
+            first_name="RetailComplaintOther",
+        )
+        for user in [retail_manager, mapped_super_agent, unmapped_super_agent, mapped_agent, unmapped_agent, mapped_player, unmapped_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+
+        CustomerComplaint.objects.create(
+            complaint_type="deposit",
+            user=mapped_player,
+            subject="Retail Complaint Export Target",
+            description="RetailComplaintTarget description",
+            status="escalated",
+            priority="critical",
+            created_by=retail_manager,
+        )
+        CustomerComplaint.objects.create(
+            complaint_type="deposit",
+            user=unmapped_player,
+            subject="Retail Complaint Out Of Scope",
+            description="RetailComplaintTarget but unmapped",
+            status="escalated",
+            priority="critical",
+            created_by=retail_manager,
+        )
+        CustomerComplaint.objects.create(
+            complaint_type="wallet",
+            user=mapped_player,
+            subject="Retail Complaint Wrong Filter",
+            description="Different filter",
+            status="open",
+            priority="low",
+            created_by=retail_manager,
+        )
+
+        self.client.force_login(retail_manager)
+        response = self.client.get(
+            reverse("betting:retail_export"),
+            {
+                "dataset": "complaints",
+                "format": "csv",
+                "complaint_q": "RetailComplaintTarget",
+                "complaint_type": "deposit",
+                "complaint_status": "escalated",
+                "complaint_priority": "critical",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("Retail Complaint Export Target", body)
+        self.assertNotIn("Retail Complaint Out Of Scope", body)
+        self.assertNotIn("Retail Complaint Wrong Filter", body)
+
+    def test_retail_dormant_and_performance_exports_respect_network_scope(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-network-export@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_network_export",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-network@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_network",
+            first_name="RetailPerformanceTarget",
+        )
+        unmapped_super_agent = User.objects.create_user(
+            email="unmapped-sa-network@test.com",
+            password=password,
+            user_type="super_agent",
+            username="unmapped_sa_network",
+            first_name="RetailPerformanceOther",
+        )
+        mapped_agent = User.objects.create_user(
+            email="mapped-agent-network@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_network",
+            super_agent=mapped_super_agent,
+        )
+        unmapped_agent = User.objects.create_user(
+            email="unmapped-agent-network@test.com",
+            password=password,
+            user_type="agent",
+            username="unmapped_agent_network",
+            super_agent=unmapped_super_agent,
+        )
+        mapped_player = User.objects.create_user(
+            email="mapped-player-network@test.com",
+            password=password,
+            user_type="player",
+            username="mapped_player_network",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+        )
+        unmapped_player = User.objects.create_user(
+            email="unmapped-player-network@test.com",
+            password=password,
+            user_type="player",
+            username="unmapped_player_network",
+            agent=unmapped_agent,
+            super_agent=unmapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, unmapped_super_agent, mapped_agent, unmapped_agent, mapped_player, unmapped_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+
+        stale_login = timezone.now() - datetime.timedelta(days=10)
+        User.objects.filter(id__in=[mapped_player.id, unmapped_player.id]).update(last_login=stale_login)
+
+        BetTicket.objects.create(
+            user=mapped_player,
+            stake_amount=Decimal("125.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("250.00"),
+            max_winning=Decimal("250.00"),
+            status="won",
+        )
+        BetTicket.objects.create(
+            user=unmapped_player,
+            stake_amount=Decimal("80.00"),
+            total_odd=Decimal("1.50"),
+            potential_winning=Decimal("120.00"),
+            max_winning=Decimal("120.00"),
+            status="lost",
+        )
+
+        self.client.force_login(retail_manager)
+
+        dormant_response = self.client.get(
+            reverse("betting:retail_export"),
+            {
+                "dataset": "dormant_accounts",
+                "format": "csv",
+                "dormant_bucket": "login_7",
+            },
+        )
+        self.assertEqual(dormant_response.status_code, 200)
+        dormant_body = dormant_response.content.decode()
+        self.assertIn("mapped_player_network", dormant_body)
+        self.assertNotIn("unmapped_player_network", dormant_body)
+
+        performance_response = self.client.get(
+            reverse("betting:retail_export"),
+            {
+                "dataset": "agent_performance",
+                "format": "csv",
+                "performance_entity": "super_agent",
+                "performance_q": "RetailPerformanceTarget",
+            },
+        )
+        self.assertEqual(performance_response.status_code, 200)
+        performance_body = performance_response.content.decode()
+        self.assertIn("mapped_sa_network", performance_body)
+        self.assertNotIn("unmapped_sa_network", performance_body)
+
+    def test_retail_dormant_dashboard_and_export_apply_search_filter(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-dormant-search@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_dormant_search",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-dormant-search@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_dormant_search",
+        )
+        mapped_agent = User.objects.create_user(
+            email="mapped-agent-dormant-search@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_dormant_search",
+            super_agent=mapped_super_agent,
+        )
+        matching_player = User.objects.create_user(
+            email="dormant-match@test.com",
+            password=password,
+            user_type="player",
+            username="dormant_match_player",
+            first_name="DormantSearchMatch",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+        )
+        other_player = User.objects.create_user(
+            email="dormant-other@test.com",
+            password=password,
+            user_type="player",
+            username="dormant_other_player",
+            first_name="DormantSearchOther",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, mapped_agent, matching_player, other_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+
+        stale_login = timezone.now() - datetime.timedelta(days=10)
+        User.objects.filter(id__in=[matching_player.id, other_player.id]).update(last_login=stale_login)
+
+        self.client.force_login(retail_manager)
+
+        dashboard_response = self.client.get(
+            reverse("betting:retail_dashboard"),
+            {
+                "tab": "dormant_accounts",
+                "dormant_bucket": "login_7",
+                "dormant_q": "DormantSearchMatch",
+            },
+        )
+        self.assertEqual(dashboard_response.status_code, 200)
+        dashboard_body = dashboard_response.content.decode()
+        self.assertIn("dormant_match_player", dashboard_body)
+        self.assertNotIn("dormant_other_player", dashboard_body)
+        self.assertIn('name="dormant_q" value="DormantSearchMatch"', dashboard_body)
+
+        export_response = self.client.get(
+            reverse("betting:retail_export"),
+            {
+                "dataset": "dormant_accounts",
+                "format": "csv",
+                "dormant_bucket": "login_7",
+                "dormant_q": "DormantSearchMatch",
+            },
+        )
+        self.assertEqual(export_response.status_code, 200)
+        export_body = export_response.content.decode()
+        self.assertIn("dormant_match_player", export_body)
+        self.assertNotIn("dormant_other_player", export_body)
+
+    def test_retail_complaint_update_persists_note_for_mapped_user(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-complaint-update@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_complaint_update",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-update@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_update",
+        )
+        mapped_agent = User.objects.create_user(
+            email="mapped-agent-update@test.com",
+            password=password,
+            user_type="agent",
+            username="mapped_agent_update",
+            super_agent=mapped_super_agent,
+        )
+        mapped_player = User.objects.create_user(
+            email="mapped-player-update@test.com",
+            password=password,
+            user_type="player",
+            username="mapped_player_update",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, mapped_agent, mapped_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+
+        complaint = CustomerComplaint.objects.create(
+            complaint_type="wallet",
+            user=mapped_player,
+            subject="Mapped complaint",
+            description="Mapped user complaint",
+            status="open",
+            priority="low",
+            created_by=retail_manager,
+        )
+
+        self.client.force_login(retail_manager)
+        response = self.client.post(
+            reverse("betting:retail_dashboard"),
+            {
+                "tab": "complaints",
+                "update_complaint": "1",
+                "complaint_id": str(complaint.id),
+                "status": "resolved",
+                "priority": "high",
+                "admin_note": "Resolved with player at shop.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, "resolved")
+        self.assertEqual(complaint.priority, "high")
+        self.assertIsNotNone(complaint.resolved_at)
+        self.assertTrue(
+            CustomerComplaintNote.objects.filter(
+                complaint=complaint,
+                author=retail_manager,
+                note="Resolved with player at shop.",
+                is_internal=True,
+            ).exists()
+        )
+
+    def test_retail_complaint_update_rejects_unmapped_user_complaint(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-complaint-scope@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_complaint_scope",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="mapped-sa-scope@test.com",
+            password=password,
+            user_type="super_agent",
+            username="mapped_sa_scope",
+        )
+        unmapped_super_agent = User.objects.create_user(
+            email="unmapped-sa-scope@test.com",
+            password=password,
+            user_type="super_agent",
+            username="unmapped_sa_scope",
+        )
+        unmapped_agent = User.objects.create_user(
+            email="unmapped-agent-scope@test.com",
+            password=password,
+            user_type="agent",
+            username="unmapped_agent_scope",
+            super_agent=unmapped_super_agent,
+        )
+        unmapped_player = User.objects.create_user(
+            email="unmapped-player-scope@test.com",
+            password=password,
+            user_type="player",
+            username="unmapped_player_scope",
+            agent=unmapped_agent,
+            super_agent=unmapped_super_agent,
+        )
+        for user in [retail_manager, mapped_super_agent, unmapped_super_agent, unmapped_agent, unmapped_player]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+
+        complaint = CustomerComplaint.objects.create(
+            complaint_type="deposit",
+            user=unmapped_player,
+            subject="Unmapped complaint",
+            description="Unmapped user complaint",
+            status="open",
+            priority="medium",
+            created_by=retail_manager,
+        )
+
+        self.client.force_login(retail_manager)
+        response = self.client.post(
+            reverse("betting:retail_dashboard"),
+            {
+                "tab": "complaints",
+                "update_complaint": "1",
+                "complaint_id": str(complaint.id),
+                "status": "resolved",
+                "priority": "critical",
+                "admin_note": "Should not be allowed.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, "open")
+        self.assertEqual(complaint.priority, "medium")
+        self.assertFalse(CustomerComplaintNote.objects.filter(complaint=complaint, note="Should not be allowed.").exists())
 
     def test_agent_remapping_returns_403_for_unauthorized_roles(self):
         password = "pass12345"

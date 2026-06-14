@@ -1,0 +1,121 @@
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3">
+      <div>
+        <div class="fw-semibold">Agent Performance Dashboard</div>
+        <div class="text-muted small">Performance of Super Agents and Agents within your mapped network.</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=agent_performance&format=csv&start_date={{ start_date }}&end_date={{ end_date }}&performance_entity={{ performance_entity }}&performance_q={{ performance_q }}">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=agent_performance&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}&performance_entity={{ performance_entity }}&performance_q={{ performance_q }}">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_export' %}?dataset=agent_performance&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}&performance_entity={{ performance_entity }}&performance_q={{ performance_q }}">PDF</a>
+      </div>
+    </div>
+  </div>
+  <div class="card-body">
+    <form method="get" class="row g-2 align-items-end mb-3">
+      <input type="hidden" name="tab" value="agent_performance">
+      <input type="hidden" name="start_date" value="{{ start_date }}">
+      <input type="hidden" name="end_date" value="{{ end_date }}">
+      <div class="col-12 col-md-3">
+        <label class="form-label small text-muted mb-1">Entity</label>
+        <select name="performance_entity" class="form-select form-select-sm">
+          <option value="super_agent" {% if performance_entity == 'super_agent' %}selected{% endif %}>Super Agents</option>
+          <option value="agent" {% if performance_entity == 'agent' %}selected{% endif %}>Agents</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-5">
+        <label class="form-label small text-muted mb-1">Search</label>
+        <input type="text" name="performance_q" value="{{ performance_q }}" class="form-control form-control-sm" placeholder="Username, email, name">
+      </div>
+      <div class="col-12 col-md-2">
+        <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+      </div>
+    </form>
+
+    <div class="row g-3 mb-3">
+      <div class="col-12 col-lg-8">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-semibold">Performance Trends</div>
+          <div class="card-body">
+            <canvas id="retailPerformanceChart" height="120"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-4">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-semibold">Top Rankings</div>
+          <div class="card-body">
+            <div class="small text-muted mb-1">Super Agents</div>
+            {% for row in performance_top_super_agents|slice:":5" %}
+            <div class="d-flex justify-content-between small mb-1"><span>{{ row.entity.username|default:row.entity.email }}</span><span class="fw-semibold">₦{{ row.turnover|floatformat:2 }}</span></div>
+            {% empty %}<div class="text-muted small mb-2">No data.</div>{% endfor %}
+            <hr>
+            <div class="small text-muted mb-1">Agents</div>
+            {% for row in performance_top_agents|slice:":5" %}
+            <div class="d-flex justify-content-between small mb-1"><span>{{ row.entity.username|default:row.entity.email }}</span><span class="fw-semibold">₦{{ row.turnover|floatformat:2 }}</span></div>
+            {% empty %}<div class="text-muted small">No data.</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Entity</th>
+            <th class="text-end">Turnover</th>
+            <th class="text-end">GGR</th>
+            <th class="text-end">Net GGR</th>
+            <th class="text-end">Commission</th>
+            <th class="text-end">Active Users</th>
+            <th class="text-end">Dormant Users</th>
+            <th class="text-end">Deposit Volume</th>
+            <th class="text-end">Withdrawal Volume</th>
+            <th class="text-end">Cashiers</th>
+            <th class="text-end">Tickets Sold</th>
+            <th class="text-end">Average Stake</th>
+            <th class="text-end">Winning %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in performance_page %}
+          <tr>
+            <td>
+              <div class="fw-semibold">{{ row.entity.username|default:row.entity.email }}</div>
+              <div class="text-muted small">{{ row.entity.get_user_type_display }}</div>
+            </td>
+            <td class="text-end fw-semibold">₦{{ row.turnover|floatformat:2 }}</td>
+            <td class="text-end">₦{{ row.ggr|floatformat:2 }}</td>
+            <td class="text-end">₦{{ row.net_ggr|floatformat:2 }}</td>
+            <td class="text-end">₦{{ row.commission|floatformat:2 }}</td>
+            <td class="text-end">{{ row.active_users }}</td>
+            <td class="text-end">{{ row.dormant_users }}</td>
+            <td class="text-end">₦{{ row.deposit_volume|floatformat:2 }}</td>
+            <td class="text-end">₦{{ row.withdrawal_volume|floatformat:2 }}</td>
+            <td class="text-end">{{ row.cashiers_count }}</td>
+            <td class="text-end">{{ row.tickets_sold }}</td>
+            <td class="text-end">₦{{ row.average_stake|floatformat:2 }}</td>
+            <td class="text-end">{{ row.winning_percentage|floatformat:2 }}%</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="13" class="text-center text-muted py-4">No performance rows found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% if performance_page %}
+<div class="d-flex justify-content-between align-items-center">
+  <div class="text-muted small">Page {{ performance_page.number }} of {{ performance_page.paginator.num_pages }}</div>
+  <div class="d-flex gap-2">
+    {% if performance_page.has_previous %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=agent_performance&start_date={{ start_date }}&end_date={{ end_date }}&performance_entity={{ performance_entity }}&performance_q={{ performance_q }}&performance_page={{ performance_page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% if performance_page.has_next %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=agent_performance&start_date={{ start_date }}&end_date={{ end_date }}&performance_entity={{ performance_entity }}&performance_q={{ performance_q }}&performance_page={{ performance_page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+</div>

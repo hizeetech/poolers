@@ -106,6 +106,7 @@ urlpatterns = [
     path('locked-accounts/export/', views.locked_accounts_export, name='locked_accounts_export'),
     path('account-appeals/export/', views.account_unlock_appeals_export, name='account_unlock_appeals_export'),
     path('crm/activity-feed/', views.crm_activity_feed, name='crm_activity_feed'),
+    path('crm/export/', views.crm_export, name='crm_export'),
     path('crm/user/<int:user_id>/', views.crm_user_detail, name='crm_user_detail'),
     path('crm/user/<int:user_id>/downline-search/', views.crm_user_downline_search, name='crm_user_downline_search'),
     path('crm/withdrawals/<int:withdrawal_id>/action/', views.crm_withdrawal_action, name='crm_withdrawal_action'),

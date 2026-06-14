@@ -1,0 +1,47 @@
+<div class="modal fade" id="crmDashboardMessageModal" tabindex="-1" aria-labelledby="crmDashboardMessageModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <form method="post" id="crmDashboardMessageForm">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="crmDashboardMessageModalLabel">Send Message</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="tab" value="{{ active_tab }}">
+          <input type="hidden" name="module" value="{{ active_tab }}">
+          <input type="hidden" name="send_dashboard_message" value="1">
+          <input type="hidden" name="target_user_ids" id="crmDashboardMessageTargetIds">
+          <div class="alert alert-light border small mb-3" id="crmDashboardMessageTargetLabel">No user selected.</div>
+          <div class="mb-3">
+            <label class="form-label small text-muted mb-1">Subject</label>
+            <input type="text" name="msg_title" class="form-control" placeholder="Message subject">
+          </div>
+          <div class="mb-3">
+            <label class="form-label small text-muted mb-1">Message</label>
+            <textarea name="msg_body" class="form-control" rows="4" required></textarea>
+          </div>
+          <div>
+            <label class="form-label small text-muted mb-1 d-block">Channels</label>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="in_app" id="crmModalInApp" checked>
+              <label class="form-check-label" for="crmModalInApp">In-App Notification</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="email" id="crmModalEmail">
+              <label class="form-check-label" for="crmModalEmail">Email</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="sms" id="crmModalSms">
+              <label class="form-check-label" for="crmModalSms">SMS</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="submit" class="btn btn-primary">Send Message</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

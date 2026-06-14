@@ -5,6 +5,7 @@ import re
 import traceback
 import secrets
 import smtplib
+from functools import wraps
 from types import SimpleNamespace
 from django.core.mail import send_mail
 from django.shortcuts import render, redirect, get_object_or_404
@@ -62,6 +63,7 @@ from .models import (
     CashierRegistrationRequest, CRMActionLog, LoginAttempt,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping, RetailManagerDashboardNote,
     AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog,
+    CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery, CRMOpsAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
     ScheduledFinanceReport
@@ -78,7 +80,9 @@ from .forms import (
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
-    RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm
+    RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
+    CustomerComplaintForm, CustomerComplaintActionForm, CustomerComplaintNoteForm, BulkMessageTemplateForm,
+    BulkMessageCampaignForm, CRMThresholdSettingsForm
 )
 
 # Setup logger for this app
@@ -334,6 +338,19 @@ def is_account_user(user):
 
 def is_crm_user(user):
     return user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'crm'])
+
+
+def user_passes_test_403(test_func):
+    def decorator(view_func):
+        @wraps(view_func)
+        def _wrapped_view(request, *args, **kwargs):
+            if request.user.is_authenticated and not test_func(request.user):
+                return HttpResponse("Permission Denied", status=403)
+            return view_func(request, *args, **kwargs)
+
+        return _wrapped_view
+
+    return decorator
 
 def crm_can_approve_withdrawals(user):
     if not is_crm_user(user):
@@ -1381,6 +1398,872 @@ def get_retail_network_users_qs(user):
     q |= Q(id__in=list(agents.values_list('id', flat=True)))
     q |= Q(agent__in=agents) | Q(super_agent__in=sas)
     return User.objects.filter(q).distinct()
+
+
+CRM_OPS_EXCLUDED_USER_TYPES = ['admin', 'crm', 'finance', 'account_user']
+
+
+def _ops_scope_users_queryset(user):
+    if is_retail_manager(user):
+        return get_retail_network_users_qs(user)
+    return User.objects.exclude(is_superuser=True)
+
+
+def _ops_targetable_users_queryset(user):
+    return _ops_scope_users_queryset(user).exclude(user_type__in=CRM_OPS_EXCLUDED_USER_TYPES)
+
+
+def _retail_manager_scoped_user_ids(retail_manager_id):
+    try:
+        retail_user = User.objects.get(id=int(retail_manager_id), user_type='retail_manager')
+    except Exception:
+        return []
+    return list(get_retail_network_users_qs(retail_user).values_list('id', flat=True))
+
+
+def _annotate_user_engagement(qs):
+    wallet_balance_subq = Wallet.objects.filter(user_id=OuterRef('pk')).values('balance')[:1]
+    latest_bet_qs = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(user_id=OuterRef('pk'))
+        .order_by('-placed_at')
+    )
+    latest_deposit_qs = (
+        Transaction.objects.filter(
+            user_id=OuterRef('pk'),
+            transaction_type='deposit',
+            status='completed',
+            is_successful=True,
+        ).order_by('-timestamp')
+    )
+    bet_count_qs = (
+        BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
+        .filter(user_id=OuterRef('pk'))
+        .values('user_id')
+        .annotate(total=Count('id'))
+        .values('total')[:1]
+    )
+    deposit_count_qs = (
+        Transaction.objects.filter(
+            user_id=OuterRef('pk'),
+            transaction_type='deposit',
+            status='completed',
+            is_successful=True,
+        ).values('user_id').annotate(total=Count('id')).values('total')[:1]
+    )
+    deposit_sum_qs = (
+        Transaction.objects.filter(
+            user_id=OuterRef('pk'),
+            transaction_type='deposit',
+            status='completed',
+            is_successful=True,
+        ).values('user_id').annotate(total=Sum('amount')).values('total')[:1]
+    )
+    return qs.select_related('wallet', 'agent', 'super_agent', 'master_agent').annotate(
+        wallet_balance_annotated=Coalesce(Subquery(wallet_balance_subq), Value(0), output_field=DecimalField()),
+        last_bet_at=Subquery(latest_bet_qs.values('placed_at')[:1]),
+        last_deposit_at=Subquery(latest_deposit_qs.values('timestamp')[:1]),
+        bets_count=Coalesce(Subquery(bet_count_qs), Value(0), output_field=IntegerField()),
+        deposits_count=Coalesce(Subquery(deposit_count_qs), Value(0), output_field=IntegerField()),
+        deposits_amount=Coalesce(Subquery(deposit_sum_qs), Value(0), output_field=DecimalField()),
+    )
+
+
+def _apply_ops_user_filters(
+    qs,
+    *,
+    query='',
+    user_type='',
+    agent_id='',
+    super_agent_id='',
+    retail_manager_id='',
+    status='',
+):
+    if query:
+        qs = qs.filter(
+            Q(username__icontains=query) |
+            Q(email__icontains=query) |
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(other_name__icontains=query) |
+            Q(phone_number__icontains=query)
+        )
+    if user_type:
+        qs = qs.filter(user_type=user_type)
+    if agent_id:
+        try:
+            agent_id_int = int(agent_id)
+            qs = qs.filter(Q(id=agent_id_int) | Q(agent_id=agent_id_int))
+        except Exception:
+            pass
+    if super_agent_id:
+        try:
+            super_agent_id_int = int(super_agent_id)
+            qs = qs.filter(Q(id=super_agent_id_int) | Q(super_agent_id=super_agent_id_int))
+        except Exception:
+            pass
+    if retail_manager_id:
+        scoped_ids = _retail_manager_scoped_user_ids(retail_manager_id)
+        qs = qs.filter(id__in=scoped_ids) if scoped_ids else qs.none()
+    if status == 'active':
+        qs = qs.filter(is_active=True)
+    elif status == 'inactive':
+        qs = qs.filter(is_active=False)
+    elif status == 'locked':
+        qs = qs.filter(is_locked=True)
+    return qs
+
+
+def _bucket_match_for_dormancy(user_obj, bucket, *, login_cutoff_7=None, login_cutoff_14=None, login_cutoff_30=None):
+    last_login = getattr(user_obj, 'last_login', None)
+    last_bet_at = getattr(user_obj, 'last_bet_at', None)
+    last_deposit_at = getattr(user_obj, 'last_deposit_at', None)
+    if bucket == 'login_7':
+        return (last_login is None) or (last_login < login_cutoff_7)
+    if bucket == 'login_14':
+        return (last_login is None) or (last_login < login_cutoff_14)
+    if bucket == 'login_30':
+        return (last_login is None) or (last_login < login_cutoff_30)
+    if bucket == 'no_bets':
+        return not bool(last_bet_at)
+    if bucket == 'no_deposits':
+        return not bool(last_deposit_at)
+    return True
+
+
+def _build_dormant_center_data(
+    scope_user,
+    *,
+    query='',
+    user_type='',
+    agent_id='',
+    super_agent_id='',
+    retail_manager_id='',
+    status='',
+    bucket='login_7',
+):
+    now = timezone.now()
+    base_qs = _annotate_user_engagement(_ops_targetable_users_queryset(scope_user))
+    base_qs = _apply_ops_user_filters(
+        base_qs,
+        query=query,
+        user_type=user_type,
+        agent_id=agent_id,
+        super_agent_id=super_agent_id,
+        retail_manager_id=retail_manager_id,
+        status=status,
+    )
+    users = list(base_qs.order_by('username', 'email'))
+    login_cutoff_7 = now - timedelta(days=7)
+    login_cutoff_14 = now - timedelta(days=14)
+    login_cutoff_30 = now - timedelta(days=30)
+    cards = {
+        'login_7': 0,
+        'login_14': 0,
+        'login_30': 0,
+        'no_bets': 0,
+        'no_deposits': 0,
+    }
+    rows = []
+    for user_obj in users:
+        if _bucket_match_for_dormancy(user_obj, 'login_7', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            cards['login_7'] += 1
+        if _bucket_match_for_dormancy(user_obj, 'login_14', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            cards['login_14'] += 1
+        if _bucket_match_for_dormancy(user_obj, 'login_30', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            cards['login_30'] += 1
+        if _bucket_match_for_dormancy(user_obj, 'no_bets', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            cards['no_bets'] += 1
+        if _bucket_match_for_dormancy(user_obj, 'no_deposits', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            cards['no_deposits'] += 1
+
+        if _bucket_match_for_dormancy(user_obj, bucket, login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
+            rows.append(user_obj)
+    return cards, rows
+
+
+def _build_activation_center_data(
+    scope_user,
+    *,
+    query='',
+    user_type='',
+    agent_id='',
+    super_agent_id='',
+    retail_manager_id='',
+    status='',
+    category='registered_never_deposited',
+):
+    cutoff = timezone.now() - timedelta(days=30)
+    base_qs = _annotate_user_engagement(_ops_targetable_users_queryset(scope_user))
+    base_qs = _apply_ops_user_filters(
+        base_qs,
+        query=query,
+        user_type=user_type,
+        agent_id=agent_id,
+        super_agent_id=super_agent_id,
+        retail_manager_id=retail_manager_id,
+        status=status,
+    )
+    users = list(base_qs.order_by('-date_joined'))
+
+    def _category_match(user_obj, cat):
+        bets_count = int(getattr(user_obj, 'bets_count', 0) or 0)
+        deposits_count = int(getattr(user_obj, 'deposits_count', 0) or 0)
+        if cat == 'registered_never_deposited':
+            return deposits_count == 0
+        if cat == 'deposited_never_played':
+            return deposits_count > 0 and bets_count == 0
+        if cat == 'played_once_only':
+            return bets_count == 1
+        if cat == 'dormant_bettors':
+            last_bet_at = getattr(user_obj, 'last_bet_at', None)
+            return bets_count > 0 and ((last_bet_at is None) or (last_bet_at < cutoff))
+        return True
+
+    cards = {
+        'registered_never_deposited': 0,
+        'deposited_never_played': 0,
+        'played_once_only': 0,
+        'dormant_bettors': 0,
+    }
+    rows = []
+    for user_obj in users:
+        for cat in cards.keys():
+            if _category_match(user_obj, cat):
+                cards[cat] += 1
+        if _category_match(user_obj, category):
+            rows.append(user_obj)
+    return cards, rows
+
+
+def _complaint_scope_queryset(user):
+    qs = CustomerComplaint.objects.select_related('user', 'assigned_to', 'created_by').prefetch_related('notes__author')
+    if is_retail_manager(user):
+        return qs.filter(user__in=get_retail_network_users_qs(user))
+    return qs
+
+
+def _apply_complaint_filters(qs, *, query='', complaint_type='', status='', priority='', start_dt=None, end_dt=None):
+    if query:
+        qs = qs.filter(
+            Q(user__username__icontains=query) |
+            Q(user__email__icontains=query) |
+            Q(subject__icontains=query) |
+            Q(description__icontains=query)
+        )
+    if complaint_type:
+        qs = qs.filter(complaint_type=complaint_type)
+    if status:
+        qs = qs.filter(status=status)
+    if priority:
+        qs = qs.filter(priority=priority)
+    if start_dt:
+        qs = qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        qs = qs.filter(created_at__lte=end_dt)
+    return qs.order_by('-updated_at', '-created_at')
+
+
+def _deposit_scope_queryset(user):
+    qs = Transaction.objects.filter(transaction_type='deposit').select_related('user').order_by('-timestamp')
+    if is_retail_manager(user):
+        qs = qs.filter(user__in=get_retail_network_users_qs(user))
+    return qs
+
+
+def _build_deposit_monitoring_data(user, *, start_dt=None, end_dt=None, status='', gateway='', flag=''):
+    site_config = SiteConfiguration.load()
+    large_threshold = site_config.crm_large_deposit_threshold or Decimal('100000.00')
+    repeat_threshold = int(site_config.crm_failed_deposit_repeat_threshold or 3)
+    base_qs = _deposit_scope_queryset(user)
+    if start_dt:
+        base_qs = base_qs.filter(timestamp__gte=start_dt)
+    if end_dt:
+        base_qs = base_qs.filter(timestamp__lte=end_dt)
+    if status:
+        base_qs = base_qs.filter(status=status)
+    if gateway:
+        base_qs = base_qs.filter(payment_gateway=gateway)
+
+    failed_user_count_map = {
+        row['user_id']: int(row['attempts'] or 0)
+        for row in (
+            base_qs.filter(status='failed')
+            .order_by()
+            .values('user_id')
+            .annotate(attempts=Count('id'))
+        )
+    }
+    rows = []
+    for tx in base_qs:
+        attempts = failed_user_count_map.get(tx.user_id, 0)
+        is_large = (tx.amount or Decimal('0.00')) >= large_threshold
+        is_repeat_failed = attempts >= repeat_threshold and tx.status == 'failed'
+        if flag == 'large' and not is_large:
+            continue
+        if flag == 'repeat_failed' and not is_repeat_failed:
+            continue
+        rows.append({
+            'transaction': tx,
+            'attempts': attempts,
+            'is_large': is_large,
+            'is_repeat_failed': is_repeat_failed,
+        })
+
+    today = timezone.localdate()
+    today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+    today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+    today_qs = _deposit_scope_queryset(user).filter(timestamp__gte=today_start, timestamp__lte=today_end)
+    cards = {
+        'successful_today': today_qs.filter(status='completed', is_successful=True).count(),
+        'pending': _deposit_scope_queryset(user).filter(status='pending').count(),
+        'failed': _deposit_scope_queryset(user).filter(status='failed').count(),
+        'large': _deposit_scope_queryset(user).filter(amount__gte=large_threshold).count(),
+        'repeat_failed': sum(1 for count in failed_user_count_map.values() if count >= repeat_threshold),
+        'large_threshold': large_threshold,
+        'repeat_threshold': repeat_threshold,
+    }
+    return cards, rows
+
+
+def _entity_descendant_user_ids(entity):
+    entity_type = getattr(entity, 'user_type', '')
+    if entity_type == 'retail_manager':
+        return list(get_retail_network_users_qs(entity).values_list('id', flat=True))
+    if entity_type == 'super_agent':
+        agent_ids = list(User.objects.filter(super_agent=entity, user_type='agent').values_list('id', flat=True))
+        return list(
+            User.objects.filter(
+                Q(id=entity.id) |
+                Q(id__in=agent_ids) |
+                Q(agent_id__in=agent_ids)
+            ).values_list('id', flat=True)
+        )
+    if entity_type == 'agent':
+        return list(User.objects.filter(Q(id=entity.id) | Q(agent=entity)).values_list('id', flat=True))
+    return [entity.id]
+
+
+def _build_agent_performance_rows(scope_user, *, entity_type='super_agent', start_dt=None, end_dt=None, query=''):
+    if entity_type == 'retail_manager':
+        entities_qs = User.objects.filter(user_type='retail_manager')
+    elif entity_type == 'agent':
+        if is_retail_manager(scope_user):
+            entities_qs = get_retail_manager_agents(scope_user)
+        else:
+            entities_qs = User.objects.filter(user_type='agent')
+    else:
+        if is_retail_manager(scope_user):
+            entities_qs = get_retail_manager_super_agents(scope_user)
+        else:
+            entities_qs = User.objects.filter(user_type='super_agent')
+    if query:
+        entities_qs = entities_qs.filter(Q(username__icontains=query) | Q(email__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query))
+
+    rows = []
+    chart_user_ids = set()
+    for entity in entities_qs.select_related('master_agent').order_by('username', 'email'):
+        descendant_ids = _entity_descendant_user_ids(entity)
+        if not descendant_ids:
+            continue
+        chart_user_ids.update(descendant_ids)
+        tickets_qs = BetTicket.objects.exclude(status__in=['deleted', 'cancelled']).filter(user_id__in=descendant_ids)
+        if start_dt:
+            tickets_qs = tickets_qs.filter(placed_at__gte=start_dt)
+        if end_dt:
+            tickets_qs = tickets_qs.filter(placed_at__lte=end_dt)
+        deposits_qs = Transaction.objects.filter(user_id__in=descendant_ids, transaction_type='deposit', status='completed', is_successful=True)
+        withdrawals_qs = UserWithdrawal.objects.filter(user_id__in=descendant_ids)
+        bonuses_qs = Transaction.objects.filter(user_id__in=descendant_ids, transaction_type='bonus', status='completed', is_successful=True)
+        if start_dt:
+            deposits_qs = deposits_qs.filter(timestamp__gte=start_dt)
+            withdrawals_qs = withdrawals_qs.filter(request_time__gte=start_dt)
+            bonuses_qs = bonuses_qs.filter(timestamp__gte=start_dt)
+        if end_dt:
+            deposits_qs = deposits_qs.filter(timestamp__lte=end_dt)
+            withdrawals_qs = withdrawals_qs.filter(request_time__lte=end_dt)
+            bonuses_qs = bonuses_qs.filter(timestamp__lte=end_dt)
+
+        turnover = tickets_qs.aggregate(v=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        payouts = tickets_qs.filter(status='won').aggregate(v=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        ggr = turnover - payouts
+        bonus_cost = bonuses_qs.aggregate(v=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        net_ggr = ggr - bonus_cost
+        commission_amount = Transaction.objects.filter(
+            user=entity,
+            transaction_type='commission_payout',
+            status='completed',
+            is_successful=True,
+            timestamp__gte=start_dt if start_dt else datetime.min.replace(tzinfo=timezone.get_current_timezone()),
+            timestamp__lte=end_dt if end_dt else timezone.now(),
+        ).aggregate(v=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        active_users = tickets_qs.values('user_id').distinct().count()
+        dormant_users = User.objects.filter(id__in=descendant_ids).filter(Q(last_login__lt=timezone.now() - timedelta(days=30)) | Q(last_login__isnull=True)).count()
+        deposit_volume = deposits_qs.aggregate(v=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        withdrawal_volume = withdrawals_qs.aggregate(v=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['v'] or Decimal('0.00')
+        underlying_agents = User.objects.filter(id__in=descendant_ids, user_type='agent').count()
+        cashiers_count = User.objects.filter(id__in=descendant_ids, user_type='cashier').count()
+        active_bettors = active_users
+        tickets_sold = tickets_qs.count()
+        average_stake = (turnover / Decimal(tickets_sold)) if tickets_sold else Decimal('0.00')
+        winning_percentage = (Decimal(tickets_qs.filter(status='won').count()) / Decimal(tickets_sold) * Decimal('100.00')) if tickets_sold else Decimal('0.00')
+        rows.append({
+            'entity': entity,
+            'turnover': turnover,
+            'ggr': ggr,
+            'net_ggr': net_ggr,
+            'commission': commission_amount,
+            'active_users': active_users,
+            'dormant_users': dormant_users,
+            'deposit_volume': deposit_volume,
+            'withdrawal_volume': withdrawal_volume,
+            'cashiers_count': cashiers_count,
+            'agents_count': underlying_agents,
+            'active_bettors': active_bettors,
+            'tickets_sold': tickets_sold,
+            'average_stake': average_stake,
+            'winning_percentage': winning_percentage.quantize(Decimal('0.01')) if tickets_sold else Decimal('0.00'),
+        })
+    rows.sort(key=lambda row: row['turnover'], reverse=True)
+
+    chart_labels = []
+    turnover_series = []
+    ggr_series = []
+    commission_series = []
+    if chart_user_ids:
+        daily_qs = BetTicket.objects.exclude(status__in=['deleted', 'cancelled']).filter(user_id__in=list(chart_user_ids))
+        if start_dt:
+            daily_qs = daily_qs.filter(placed_at__gte=start_dt)
+        if end_dt:
+            daily_qs = daily_qs.filter(placed_at__lte=end_dt)
+        daily_rows = (
+            daily_qs.annotate(day=TruncDate('placed_at'))
+            .values('day')
+            .annotate(
+                turnover=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()),
+                payouts=Coalesce(Sum(Case(When(status='won', then='max_winning'), default=Value(0), output_field=DecimalField())), Value(0), output_field=DecimalField()),
+            ).order_by('day')
+        )
+        commission_daily = (
+            Transaction.objects.filter(
+                user_id__in=list(chart_user_ids),
+                transaction_type='commission_payout',
+                status='completed',
+                is_successful=True,
+            )
+            .filter(timestamp__gte=start_dt if start_dt else datetime.min.replace(tzinfo=timezone.get_current_timezone()))
+            .filter(timestamp__lte=end_dt if end_dt else timezone.now())
+            .annotate(day=TruncDate('timestamp'))
+            .values('day')
+            .annotate(total=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))
+            .order_by('day')
+        )
+        commission_map = {row['day']: row['total'] for row in commission_daily}
+        for row in daily_rows:
+            day = row['day']
+            turnover_value = row['turnover'] or Decimal('0.00')
+            ggr_value = turnover_value - (row['payouts'] or Decimal('0.00'))
+            chart_labels.append(day.isoformat())
+            turnover_series.append(float(turnover_value))
+            ggr_series.append(float(ggr_value))
+            commission_series.append(float(commission_map.get(day, Decimal('0.00'))))
+
+    return rows, {
+        'labels': chart_labels,
+        'turnover': turnover_series,
+        'ggr': ggr_series,
+        'commission': commission_series,
+    }
+
+
+def _log_crm_ops_action(request, *, module, action, target_user=None, complaint=None, campaign=None, transaction_obj=None, metadata=None):
+    CRMOpsAuditLog.objects.create(
+        actor=request.user if getattr(request.user, 'is_authenticated', False) else None,
+        module=module,
+        action=action,
+        target_user=target_user,
+        complaint=complaint,
+        campaign=campaign,
+        transaction=transaction_obj,
+        ip_address=get_client_ip(request),
+        metadata=metadata or {},
+    )
+
+
+def _parse_dashboard_target_user_ids(request, *, field_name='target_user_ids'):
+    raw_values = []
+    raw_values.extend(request.POST.getlist(field_name))
+    extra_single = (request.POST.get(field_name) or '').strip()
+    if extra_single:
+        raw_values.append(extra_single)
+    legacy_single = (request.POST.get('target_user_id') or '').strip()
+    if legacy_single:
+        raw_values.append(legacy_single)
+    raw_values.extend(request.POST.getlist('selected_user_ids'))
+
+    parsed_ids = []
+    for raw in raw_values:
+        for bit in str(raw or '').split(','):
+            bit = bit.strip()
+            if bit.isdigit():
+                parsed_ids.append(int(bit))
+    return sorted(set(parsed_ids))
+
+
+def _send_ops_message_to_users(
+    request,
+    *,
+    allowed_users_qs,
+    module,
+    action='message_sent',
+    redirect_url,
+):
+    if not crm_can_message(request.user):
+        messages.error(request, 'Not allowed.')
+        return redirect(redirect_url)
+
+    target_user_ids = _parse_dashboard_target_user_ids(request)
+    if not target_user_ids:
+        messages.error(request, 'Select at least one user.')
+        return redirect(redirect_url)
+
+    title = (request.POST.get('msg_title') or '').strip() or 'Message'
+    body = (request.POST.get('msg_body') or '').strip()
+    channels = [channel.strip() for channel in request.POST.getlist('message_channels') if channel.strip()]
+    if not channels:
+        if request.POST.get('via_inapp') == '1':
+            channels.append('in_app')
+        if request.POST.get('via_email') == '1':
+            channels.append('email')
+        if request.POST.get('via_sms') == '1':
+            channels.append('sms')
+    channels = sorted(set(channels))
+
+    if not body:
+        messages.error(request, 'Message is required.')
+        return redirect(redirect_url)
+    if not channels:
+        messages.error(request, 'Select at least one delivery channel.')
+        return redirect(redirect_url)
+
+    allowed_users = list(allowed_users_qs.filter(id__in=target_user_ids).distinct())
+    if not allowed_users:
+        messages.error(request, 'Selected users are outside your scope.')
+        return redirect(redirect_url)
+
+    delivered_recipients = 0
+    for msg_target in allowed_users:
+        sent = []
+        errors = {}
+
+        if 'in_app' in channels:
+            try:
+                create_notification(
+                    recipient=msg_target,
+                    notification_type='SYSTEM_ANNOUNCEMENT',
+                    title=title,
+                    message=body,
+                    data={
+                        'popup_category': 'message',
+                        'delivery_channel': 'in_app',
+                        'url': '/notifications/',
+                    },
+                )
+                sent.append('in_app')
+            except Exception as exc:
+                errors['in_app'] = str(exc)
+
+        if 'email' in channels:
+            try:
+                from django.core.mail import EmailMultiAlternatives
+                from django.template.loader import render_to_string
+                from django.utils.html import strip_tags
+
+                if not msg_target.email:
+                    raise ValueError("Target user has no email address.")
+
+                html = render_to_string('betting/email/crm_message.html', {
+                    'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
+                    'title': title,
+                    'body': body,
+                    'user': msg_target,
+                })
+                text = strip_tags(html) or body
+                email_message = EmailMultiAlternatives(
+                    subject=title,
+                    body=text,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    to=[msg_target.email],
+                )
+                email_message.attach_alternative(html, "text/html")
+                email_message.send(fail_silently=False)
+                create_notification(
+                    recipient=msg_target,
+                    notification_type='SYSTEM_ANNOUNCEMENT',
+                    title=title,
+                    message=body,
+                    data={
+                        'popup_category': 'message',
+                        'delivery_channel': 'email',
+                        'url': '/notifications/',
+                    },
+                )
+                sent.append('email')
+            except Exception as exc:
+                errors['email'] = str(exc)
+
+        sms_status = None
+        if 'sms' in channels:
+            try:
+                from notifications.services import send_sms_ebulksms
+
+                sms_status = send_sms_ebulksms(
+                    msisdn=msg_target.phone_number or '',
+                    message=body,
+                    sender=getattr(settings, 'EBULKSMS_SENDER', None),
+                )
+                if sms_status.get('ok'):
+                    sent.append('sms')
+                else:
+                    errors['sms'] = sms_status.get('error') or sms_status.get('status') or 'failed'
+            except Exception as exc:
+                sms_status = {'ok': False, 'error': str(exc)}
+                errors['sms'] = str(exc)
+
+        if sent:
+            delivered_recipients += 1
+
+        CRMActionLog.objects.create(
+            actor=request.user,
+            target_user=msg_target,
+            action_type='MESSAGE_SENT',
+            data={
+                'channels': sent,
+                'errors': errors,
+                'sms': sms_status or {},
+                'source': 'dashboard_ops',
+                'module': module,
+            },
+        )
+        _log_crm_ops_action(
+            request,
+            module=module,
+            action=action,
+            target_user=msg_target,
+            metadata={
+                'title': title,
+                'channels': sent,
+                'errors': errors,
+            },
+        )
+
+    if delivered_recipients:
+        messages.success(request, f'Message processed for {delivered_recipients} recipient(s).')
+    else:
+        messages.error(request, 'Message was not sent. Check channel configuration and recipient details.')
+    return redirect(redirect_url)
+
+
+def _resolve_bulk_campaign_users(campaign, *, acting_user=None):
+    scope_user = acting_user or campaign.created_by
+    scope_qs = _ops_targetable_users_queryset(scope_user or User())
+    site_config = SiteConfiguration.load()
+    if campaign.target_group == 'all_users':
+        return scope_qs.filter(is_active=True)
+    if campaign.target_group == 'all_agents':
+        return scope_qs.filter(user_type='agent', is_active=True)
+    if campaign.target_group == 'all_super_agents':
+        return scope_qs.filter(user_type='super_agent', is_active=True)
+    if campaign.target_group == 'all_retail_managers':
+        return scope_qs.filter(user_type='retail_manager', is_active=True)
+    if campaign.target_group == 'specific_agents':
+        return scope_qs.filter(id__in=(campaign.target_agent_ids or []), user_type='agent', is_active=True)
+    if campaign.target_group == 'custom_users':
+        return scope_qs.filter(id__in=(campaign.target_user_ids or []), is_active=True)
+    if campaign.target_group == 'dormant_users':
+        return scope_qs.filter(Q(last_login__lt=timezone.now() - timedelta(days=30)) | Q(last_login__isnull=True), is_active=True)
+    if campaign.target_group == 'high_value_users':
+        ids = list(
+            Transaction.objects.filter(
+                user__in=scope_qs,
+                transaction_type='deposit',
+                status='completed',
+                is_successful=True,
+            ).values('user_id').annotate(total=Sum('amount')).filter(total__gte=site_config.crm_large_deposit_threshold).values_list('user_id', flat=True)
+        )
+        return scope_qs.filter(id__in=ids, is_active=True)
+    if campaign.target_group == 'recent_registrations':
+        return scope_qs.filter(date_joined__gte=timezone.now() - timedelta(days=7), is_active=True)
+    if campaign.target_group == 'failed_deposit_users':
+        ids = list(
+            Transaction.objects.filter(
+                user__in=scope_qs,
+                transaction_type='deposit',
+                status='failed',
+            ).values('user_id').annotate(total=Count('id')).filter(total__gte=site_config.crm_failed_deposit_repeat_threshold).values_list('user_id', flat=True)
+        )
+        return scope_qs.filter(id__in=ids, is_active=True)
+    if campaign.target_group == 'pending_withdrawal_users':
+        ids = list(UserWithdrawal.objects.filter(user__in=scope_qs, status='pending').values_list('user_id', flat=True).distinct())
+        return scope_qs.filter(id__in=ids, is_active=True)
+    return scope_qs.none()
+
+
+def _next_campaign_schedule(current_at, pattern):
+    if not current_at:
+        current_at = timezone.now()
+    now = timezone.now()
+    step = None
+    if pattern == 'daily':
+        step = timedelta(days=1)
+    elif pattern == 'weekly':
+        step = timedelta(days=7)
+    elif pattern == 'monthly':
+        step = timedelta(days=30)
+    if step is None:
+        return None
+
+    next_run = current_at + step
+    while next_run <= now:
+        next_run += step
+    return next_run
+
+
+def send_bulk_message_campaign_now(campaign_id, *, acting_user=None):
+    campaign = BulkMessageCampaign.objects.filter(id=campaign_id).select_related('created_by', 'template').first()
+    if not campaign:
+        return 0
+    recipients_qs = _resolve_bulk_campaign_users(campaign, acting_user=acting_user)
+    recipients = list(recipients_qs.only('id', 'email', 'phone_number', 'username', 'first_name', 'last_name'))
+    campaign.status = 'processing'
+    campaign.last_error = ''
+    campaign.save(update_fields=['status', 'last_error', 'updated_at'])
+
+    delivered_count = 0
+    failed_count = 0
+    for recipient in recipients:
+        delivery_status = 'failed'
+        error_message = ''
+        provider_response = {}
+        sent_at = timezone.now()
+        try:
+            if campaign.channel == 'in_app':
+                notification = create_notification(
+                    recipient=recipient,
+                    notification_type='SYSTEM_ANNOUNCEMENT',
+                    title=campaign.subject or 'Notification',
+                    message=campaign.message,
+                    data={
+                        'campaign_id': campaign.id,
+                        'popup_category': 'message',
+                        'delivery_channel': 'in_app',
+                        'url': '/notifications/',
+                    },
+                )
+                provider_response = {'notification_id': notification.id}
+                delivery_status = 'sent'
+            elif campaign.channel == 'email':
+                from django.core.mail import EmailMultiAlternatives
+                if not recipient.email:
+                    raise ValueError('missing_email')
+                html = render_to_string('betting/email/crm_message.html', {
+                    'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
+                    'title': campaign.subject or 'Notification',
+                    'body': campaign.message,
+                    'user': recipient,
+                })
+                text = strip_tags(html) or campaign.message
+                message = EmailMultiAlternatives(
+                    subject=campaign.subject or 'Notification',
+                    body=text,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    to=[recipient.email],
+                )
+                message.attach_alternative(html, 'text/html')
+                message.send(fail_silently=False)
+                delivery_status = 'sent'
+            elif campaign.channel == 'sms':
+                from notifications.services import send_sms_ebulksms
+                provider_response = send_sms_ebulksms(
+                    msisdn=recipient.phone_number or '',
+                    message=campaign.message,
+                    sender=getattr(settings, 'EBULKSMS_SENDER', None),
+                )
+                if provider_response.get('ok'):
+                    delivery_status = 'sent'
+                else:
+                    error_message = provider_response.get('error') or provider_response.get('status') or 'sms_failed'
+            else:
+                raise ValueError('unsupported_channel')
+        except Exception as exc:
+            error_message = str(exc)
+
+        if delivery_status == 'sent':
+            delivered_count += 1
+        else:
+            failed_count += 1
+
+        BulkMessageDelivery.objects.create(
+            campaign=campaign,
+            recipient=recipient,
+            channel=campaign.channel,
+            status=delivery_status,
+            error_message=error_message[:255],
+            provider_response=provider_response or {},
+            sent_at=sent_at if delivery_status == 'sent' else None,
+        )
+
+    campaign.recipients_count = len(recipients)
+    campaign.delivered_count = delivered_count
+    campaign.failed_count = failed_count
+    campaign.opened_count = 0
+    campaign.clicked_count = 0
+    campaign.conversion_count = 0
+    campaign.sent_at = timezone.now()
+    if failed_count and delivered_count:
+        campaign.status = 'partial'
+    elif failed_count and not delivered_count:
+        campaign.status = 'failed'
+        campaign.last_error = 'All deliveries failed.'
+    else:
+        campaign.status = 'sent'
+    next_run_at = _next_campaign_schedule(campaign.schedule_at or campaign.sent_at, campaign.recurring_pattern)
+    if next_run_at:
+        campaign.next_run_at = next_run_at
+        campaign.schedule_at = next_run_at
+        campaign.status = 'scheduled'
+    campaign.save(
+        update_fields=[
+            'recipients_count', 'delivered_count', 'failed_count', 'opened_count', 'clicked_count',
+            'conversion_count', 'sent_at', 'status', 'last_error', 'next_run_at', 'schedule_at', 'updated_at'
+        ]
+    )
+    CRMOpsAuditLog.objects.create(
+        actor=acting_user,
+        module='bulk_messaging',
+        action='campaign_sent',
+        campaign=campaign,
+        metadata={
+            'scheduled_run': acting_user is None,
+            'channel': campaign.channel,
+            'target_group': campaign.target_group,
+            'delivered_count': delivered_count,
+            'failed_count': failed_count,
+            'status': campaign.status,
+            'recurring_pattern': campaign.recurring_pattern,
+            'next_run_at': campaign.next_run_at.isoformat() if campaign.next_run_at else '',
+        },
+    )
+    return delivered_count
+
+
+def process_due_bulk_message_campaigns(*, acting_user=None, limit=20):
+    due_campaigns = BulkMessageCampaign.objects.filter(status='scheduled', schedule_at__lte=timezone.now()).order_by('schedule_at')[:limit]
+    processed = 0
+    for campaign in due_campaigns:
+        send_bulk_message_campaign_now(campaign.id, acting_user=acting_user)
+        processed += 1
+    return processed
 
 
 def log_admin_activity(request, action_description, action_type='UPDATE', affected_object=None):
@@ -5051,6 +5934,18 @@ def agent_dashboard(request):
     locked_end_date = (request.GET.get('locked_end_date') or '').strip()
     locked_appeal_start_date = (request.GET.get('locked_appeal_start_date') or '').strip()
     locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
+    dormant_q = (request.GET.get('dormant_q') or '').strip()
+    dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
+    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
+    dormant_agent = (request.GET.get('dormant_agent') or '').strip()
+    dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
+    dormant_status = (request.GET.get('dormant_status') or '').strip()
+    complaint_q = (request.GET.get('complaint_q') or '').strip()
+    complaint_type = (request.GET.get('complaint_type') or '').strip()
+    complaint_status = (request.GET.get('complaint_status') or '').strip()
+    complaint_priority = (request.GET.get('complaint_priority') or '').strip()
+    performance_entity = (request.GET.get('performance_entity') or 'super_agent').strip() or 'super_agent'
+    performance_q = (request.GET.get('performance_q') or '').strip()
     start_date = None
     end_date = None
     try:
@@ -9661,7 +10556,7 @@ def account_unlock_appeals_export(request):
 
 
 @login_required
-@user_passes_test(is_crm_user)
+@user_passes_test_403(is_crm_user)
 def crm_dashboard(request):
     tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
     active_tab = (tab_raw or 'overview').strip() or 'overview'
@@ -9687,6 +10582,30 @@ def crm_dashboard(request):
     locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
     comm_msg_title = (request.POST.get('campaign_title') or '').strip()
     comm_msg_body = (request.POST.get('campaign_message') or '').strip()
+    dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
+    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
+    dormant_agent = (request.GET.get('dormant_agent') or '').strip()
+    dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
+    dormant_retail_manager = (request.GET.get('dormant_retail_manager') or '').strip()
+    dormant_status = (request.GET.get('dormant_status') or '').strip()
+    complaint_q = (request.GET.get('complaint_q') or '').strip()
+    complaint_type = (request.GET.get('complaint_type') or '').strip()
+    complaint_status = (request.GET.get('complaint_status') or '').strip()
+    complaint_priority = (request.GET.get('complaint_priority') or '').strip()
+    deposit_status_filter = (request.GET.get('deposit_status_filter') or '').strip()
+    deposit_gateway = (request.GET.get('deposit_gateway') or '').strip()
+    deposit_flag = (request.GET.get('deposit_flag') or '').strip()
+    performance_entity = (request.GET.get('performance_entity') or 'super_agent').strip() or 'super_agent'
+    performance_q = (request.GET.get('performance_q') or '').strip()
+    activation_category = (request.GET.get('activation_category') or 'registered_never_deposited').strip() or 'registered_never_deposited'
+    activation_q = (request.GET.get('activation_q') or '').strip()
+    activation_user_type = (request.GET.get('activation_user_type') or '').strip()
+    activation_agent = (request.GET.get('activation_agent') or '').strip()
+    activation_super_agent = (request.GET.get('activation_super_agent') or '').strip()
+    activation_retail_manager = (request.GET.get('activation_retail_manager') or '').strip()
+    activation_status = (request.GET.get('activation_status') or '').strip()
+    campaign_channel_filter = (request.GET.get('campaign_channel') or '').strip()
+    campaign_target_group_filter = (request.GET.get('campaign_target_group') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -9745,6 +10664,23 @@ def crm_dashboard(request):
     metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
     metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
     top_fixtures, top_period_options, selected_top_period_id = build_top_fixtures_by_betting_period(selected_top_period_id_raw)
+    complaint_form = CustomerComplaintForm(user_queryset=_ops_targetable_users_queryset(request.user))
+    complaint_action_form = CustomerComplaintActionForm()
+    complaint_note_form = CustomerComplaintNoteForm()
+    complaint_action_target_id = None
+    complaint_note_target_id = None
+    bulk_template_form = BulkMessageTemplateForm()
+    bulk_campaign_form = BulkMessageCampaignForm(
+        agent_queryset=_ops_targetable_users_queryset(request.user).filter(user_type='agent'),
+        template_queryset=BulkMessageTemplate.objects.filter(is_active=True),
+        user_queryset=_ops_targetable_users_queryset(request.user),
+    )
+    threshold_form = CRMThresholdSettingsForm(instance=SiteConfiguration.load())
+    crm_assignable_users = list(
+        User.objects.filter(Q(user_type='crm') | Q(user_type='admin'))
+        .only('id', 'email', 'username')
+        .order_by('email')[:100]
+    )
 
     if request.method == 'POST' and active_tab == 'communications':
         if not crm_can_message(request.user):
@@ -9782,6 +10718,164 @@ def crm_dashboard(request):
             )
             messages.success(request, 'Broadcast sent.')
             return redirect(f"{reverse('betting:crm_dashboard')}?tab=communications")
+
+    if request.method == 'POST' and request.POST.get('send_dashboard_message') == '1':
+        return _send_ops_message_to_users(
+            request,
+            allowed_users_qs=_ops_targetable_users_queryset(request.user),
+            module=(request.POST.get('module') or active_tab or 'bulk_messaging').strip() or 'bulk_messaging',
+            redirect_url=f"{reverse('betting:crm_dashboard')}?tab={active_tab}",
+        )
+
+    if request.method == 'POST' and active_tab == 'complaints':
+        complaint_redirect = f"{reverse('betting:crm_dashboard')}?tab=complaints"
+        if request.POST.get('create_complaint') == '1':
+            complaint_form = CustomerComplaintForm(request.POST, user_queryset=_ops_targetable_users_queryset(request.user))
+            if complaint_form.is_valid():
+                complaint = complaint_form.save(commit=False)
+                complaint.created_by = request.user
+                if not _ops_targetable_users_queryset(request.user).filter(id=complaint.user_id).exists():
+                    messages.error(request, 'Selected user is outside your scope.')
+                    return redirect(complaint_redirect)
+                complaint.save()
+                CustomerComplaintNote.objects.create(
+                    complaint=complaint,
+                    author=request.user,
+                    note='Complaint created from CRM dashboard.',
+                    is_internal=True,
+                )
+                _log_crm_ops_action(request, module='complaints', action='complaint_created', target_user=complaint.user, complaint=complaint)
+                messages.success(request, 'Complaint created.')
+                return redirect(complaint_redirect)
+            messages.error(request, 'Unable to create complaint.')
+        elif request.POST.get('update_complaint') == '1':
+            complaint = get_object_or_404(_complaint_scope_queryset(request.user), id=request.POST.get('complaint_id'))
+            action_form = CustomerComplaintActionForm(request.POST)
+            if action_form.is_valid():
+                old_status = complaint.status
+                complaint.status = action_form.cleaned_data['status']
+                complaint.priority = action_form.cleaned_data['priority']
+                complaint.assigned_to = action_form.cleaned_data['assigned_to']
+                if complaint.status in ['resolved', 'closed'] and not complaint.resolved_at:
+                    complaint.resolved_at = timezone.now()
+                elif complaint.status not in ['resolved', 'closed']:
+                    complaint.resolved_at = None
+                complaint.save(update_fields=['status', 'priority', 'assigned_to', 'resolved_at', 'updated_at'])
+                admin_note = (action_form.cleaned_data.get('admin_note') or '').strip()
+                if admin_note:
+                    CustomerComplaintNote.objects.create(
+                        complaint=complaint,
+                        author=request.user,
+                        note=admin_note,
+                        is_internal=True,
+                    )
+                _log_crm_ops_action(
+                    request,
+                    module='complaints',
+                    action='complaint_updated',
+                    target_user=complaint.user,
+                    complaint=complaint,
+                    metadata={'from_status': old_status, 'to_status': complaint.status},
+                )
+                messages.success(request, 'Complaint updated.')
+                return redirect(complaint_redirect)
+            complaint_action_form = action_form
+            complaint_action_target_id = complaint.id
+            messages.error(request, 'Unable to update complaint.')
+        elif request.POST.get('add_complaint_note') == '1':
+            complaint = get_object_or_404(_complaint_scope_queryset(request.user), id=request.POST.get('complaint_id'))
+            complaint_note_form = CustomerComplaintNoteForm(request.POST)
+            if complaint_note_form.is_valid():
+                note = complaint_note_form.save(commit=False)
+                note.complaint = complaint
+                note.author = request.user
+                note.save()
+                _log_crm_ops_action(request, module='complaints', action='complaint_note_added', target_user=complaint.user, complaint=complaint)
+                messages.success(request, 'Complaint note added.')
+                return redirect(complaint_redirect)
+            complaint_note_target_id = complaint.id
+            messages.error(request, 'Unable to add complaint note.')
+
+    if request.method == 'POST' and active_tab == 'deposit_monitoring' and request.POST.get('escalate_deposit') == '1':
+        deposit_redirect = f"{reverse('betting:crm_dashboard')}?tab=deposit_monitoring"
+        tx = get_object_or_404(_deposit_scope_queryset(request.user), id=request.POST.get('transaction_id'))
+        escalation_note = (request.POST.get('escalation_note') or '').strip()
+        _log_crm_ops_action(
+            request,
+            module='deposit_monitoring',
+            action='deposit_escalated',
+            target_user=tx.user,
+            transaction_obj=tx,
+            metadata={
+                'note': escalation_note,
+                'status': tx.status,
+                'gateway': getattr(tx, 'payment_gateway', ''),
+                'amount': str(tx.amount or Decimal('0.00')),
+            },
+        )
+        messages.success(request, 'Deposit issue escalated and logged.')
+        return redirect(deposit_redirect)
+
+    if request.method == 'POST' and active_tab == 'bulk_messaging':
+        bulk_redirect = f"{reverse('betting:crm_dashboard')}?tab=bulk_messaging"
+        if not crm_can_message(request.user):
+            messages.error(request, 'Not allowed.')
+            return redirect(bulk_redirect)
+        if request.POST.get('save_bulk_template') == '1':
+            bulk_template_form = BulkMessageTemplateForm(request.POST)
+            if bulk_template_form.is_valid():
+                template = bulk_template_form.save(commit=False)
+                template.created_by = request.user
+                template.save()
+                _log_crm_ops_action(request, module='bulk_messaging', action='template_created', metadata={'template_id': template.id})
+                messages.success(request, 'Template saved.')
+                return redirect(bulk_redirect)
+            messages.error(request, 'Unable to save template.')
+        elif request.POST.get('save_bulk_campaign') == '1':
+            bulk_campaign_form = BulkMessageCampaignForm(
+                request.POST,
+                agent_queryset=_ops_targetable_users_queryset(request.user).filter(user_type='agent'),
+                template_queryset=BulkMessageTemplate.objects.filter(is_active=True),
+                user_queryset=_ops_targetable_users_queryset(request.user),
+            )
+            if bulk_campaign_form.is_valid():
+                campaign = bulk_campaign_form.save(commit=False)
+                campaign.created_by = request.user
+                campaign.target_agent_ids = [agent.id for agent in bulk_campaign_form.cleaned_data.get('target_agent_ids') or []]
+                campaign.target_user_ids = bulk_campaign_form.cleaned_data.get('target_user_ids_list') or []
+                campaign.filter_snapshot = {
+                    'channel': campaign.channel,
+                    'target_group': campaign.target_group,
+                }
+                send_now_flag = bool(request.POST.get('send_now'))
+                if send_now_flag or not campaign.schedule_at or campaign.schedule_at <= timezone.now():
+                    campaign.status = 'processing'
+                else:
+                    campaign.status = 'scheduled'
+                campaign.save()
+                _log_crm_ops_action(request, module='bulk_messaging', action='campaign_created', campaign=campaign, metadata={'channel': campaign.channel, 'target_group': campaign.target_group})
+                if campaign.status == 'processing':
+                    delivered = send_bulk_message_campaign_now(campaign.id, acting_user=request.user)
+                    messages.success(request, f'Campaign processed for {delivered} recipient(s).')
+                else:
+                    messages.success(request, 'Campaign scheduled.')
+                return redirect(bulk_redirect)
+            messages.error(request, 'Unable to save campaign.')
+    if request.method == 'POST' and request.POST.get('update_crm_thresholds') == '1':
+        threshold_redirect = f"{reverse('betting:crm_dashboard')}?tab=deposit_monitoring"
+        threshold_form = CRMThresholdSettingsForm(request.POST, instance=SiteConfiguration.load())
+        if threshold_form.is_valid():
+            threshold_form.save()
+            _log_crm_ops_action(request, module='deposit_monitoring', action='thresholds_updated')
+            messages.success(request, 'Deposit monitoring thresholds updated.')
+            return redirect(threshold_redirect)
+        messages.error(request, 'Unable to update thresholds.')
+
+    if active_tab == 'bulk_messaging' and crm_can_message(request.user):
+        try:
+            process_due_bulk_message_campaigns(acting_user=request.user, limit=10)
+        except Exception:
+            pass
 
     users = User.objects.none()
     if q:
@@ -10211,6 +11305,99 @@ def crm_dashboard(request):
             AgentTransferLog.objects.select_related('agent', 'old_super_agent', 'new_super_agent', 'transferred_by').order_by('-created_at')[:5]
         )
 
+    crm_filter_agents = list(_ops_targetable_users_queryset(request.user).filter(user_type='agent').only('id', 'username', 'email').order_by('username', 'email')[:200])
+    crm_filter_super_agents = list(_ops_targetable_users_queryset(request.user).filter(user_type='super_agent').only('id', 'username', 'email').order_by('username', 'email')[:200])
+    crm_filter_retail_managers = list(User.objects.filter(user_type='retail_manager').only('id', 'username', 'email').order_by('username', 'email')[:200])
+
+    dormant_cards, dormant_rows = _build_dormant_center_data(
+        request.user,
+        query=q,
+        user_type=dormant_user_type,
+        agent_id=dormant_agent,
+        super_agent_id=dormant_super_agent,
+        retail_manager_id=dormant_retail_manager,
+        status=dormant_status,
+        bucket=dormant_bucket,
+    )
+    dormant_page = Paginator(dormant_rows, 50).get_page(request.GET.get('dormant_page') or 1) if active_tab == 'dormant_accounts' else None
+
+    complaint_stats = {
+        'open': _complaint_scope_queryset(request.user).filter(status='open').count(),
+        'pending': _complaint_scope_queryset(request.user).filter(status='pending').count(),
+        'resolved': _complaint_scope_queryset(request.user).filter(status='resolved').count(),
+        'escalated': _complaint_scope_queryset(request.user).filter(status='escalated').count(),
+    }
+    complaints_page = None
+    if active_tab == 'complaints':
+        complaints_qs = _apply_complaint_filters(
+            _complaint_scope_queryset(request.user),
+            query=complaint_q,
+            complaint_type=complaint_type,
+            status=complaint_status,
+            priority=complaint_priority,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        complaints_page = Paginator(complaints_qs, 25).get_page(request.GET.get('complaint_page') or 1)
+
+    deposit_cards, deposit_rows = _build_deposit_monitoring_data(
+        request.user,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        status=deposit_status_filter,
+        gateway=deposit_gateway,
+        flag=deposit_flag,
+    )
+    deposit_page = Paginator(deposit_rows, 50).get_page(request.GET.get('deposit_page') or 1) if active_tab == 'deposit_monitoring' else None
+
+    performance_rows = []
+    performance_page = None
+    performance_chart = {'labels': [], 'turnover': [], 'ggr': [], 'commission': []}
+    performance_top_super_agents = []
+    performance_top_agents = []
+    performance_top_retail_managers = []
+    if active_tab == 'agent_performance':
+        performance_rows, performance_chart = _build_agent_performance_rows(
+            request.user,
+            entity_type=performance_entity,
+            start_dt=metrics_start_dt,
+            end_dt=metrics_end_dt,
+            query=performance_q,
+        )
+        performance_page = Paginator(performance_rows, 25).get_page(request.GET.get('performance_page') or 1)
+        performance_top_super_agents = _build_agent_performance_rows(request.user, entity_type='super_agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
+        performance_top_agents = _build_agent_performance_rows(request.user, entity_type='agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
+        performance_top_retail_managers = _build_agent_performance_rows(request.user, entity_type='retail_manager', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
+
+    activation_cards, activation_rows = _build_activation_center_data(
+        request.user,
+        query=activation_q,
+        user_type=activation_user_type,
+        agent_id=activation_agent,
+        super_agent_id=activation_super_agent,
+        retail_manager_id=activation_retail_manager,
+        status=activation_status,
+        category=activation_category,
+    )
+    activation_page = Paginator(activation_rows, 50).get_page(request.GET.get('activation_page') or 1) if active_tab == 'user_activation' else None
+
+    bulk_campaigns_page = None
+    bulk_templates = []
+    bulk_recent_deliveries = []
+    if active_tab == 'bulk_messaging':
+        bulk_qs = BulkMessageCampaign.objects.select_related('created_by', 'template').order_by('-created_at')
+        if campaign_channel_filter:
+            bulk_qs = bulk_qs.filter(channel=campaign_channel_filter)
+        if campaign_target_group_filter:
+            bulk_qs = bulk_qs.filter(target_group=campaign_target_group_filter)
+        bulk_campaigns_page = Paginator(bulk_qs, 25).get_page(request.GET.get('campaign_page') or 1)
+        bulk_templates = list(BulkMessageTemplate.objects.order_by('category', 'name')[:50])
+        bulk_recent_deliveries = list(BulkMessageDelivery.objects.select_related('campaign', 'recipient').order_by('-created_at')[:30])
+
+    ops_audit_logs = list(
+        CRMOpsAuditLog.objects.select_related('actor', 'target_user', 'complaint', 'campaign', 'transaction').order_by('-created_at')[:100]
+    )
+
     context = {
         'active_tab': active_tab,
         'q': q,
@@ -10269,11 +11456,70 @@ def crm_dashboard(request):
         'locked_end_date': locked_end_date,
         'locked_appeal_start_date': locked_appeal_start_date,
         'locked_appeal_end_date': locked_appeal_end_date,
+        'crm_filter_agents': crm_filter_agents,
+        'crm_filter_super_agents': crm_filter_super_agents,
+        'crm_filter_retail_managers': crm_filter_retail_managers,
+        'dormant_bucket': dormant_bucket,
+        'dormant_user_type': dormant_user_type,
+        'dormant_agent': dormant_agent,
+        'dormant_super_agent': dormant_super_agent,
+        'dormant_retail_manager': dormant_retail_manager,
+        'dormant_status': dormant_status,
+        'dormant_cards': dormant_cards,
+        'dormant_page': dormant_page,
+        'complaint_q': complaint_q,
+        'complaint_type': complaint_type,
+        'complaint_status': complaint_status,
+        'complaint_priority': complaint_priority,
+        'complaint_stats': complaint_stats,
+        'complaints_page': complaints_page,
+        'complaint_form': complaint_form,
+        'complaint_action_form': complaint_action_form,
+        'complaint_action_target_id': complaint_action_target_id,
+        'complaint_note_form': complaint_note_form,
+        'complaint_note_target_id': complaint_note_target_id,
+        'deposit_status_filter': deposit_status_filter,
+        'deposit_gateway': deposit_gateway,
+        'deposit_flag': deposit_flag,
+        'deposit_cards': deposit_cards,
+        'deposit_page': deposit_page,
+        'performance_entity': performance_entity,
+        'performance_q': performance_q,
+        'performance_page': performance_page,
+        'performance_chart': performance_chart,
+        'performance_top_super_agents': performance_top_super_agents,
+        'performance_top_agents': performance_top_agents,
+        'performance_top_retail_managers': performance_top_retail_managers,
+        'activation_category': activation_category,
+        'activation_q': activation_q,
+        'activation_user_type': activation_user_type,
+        'activation_agent': activation_agent,
+        'activation_super_agent': activation_super_agent,
+        'activation_retail_manager': activation_retail_manager,
+        'activation_status': activation_status,
+        'activation_cards': activation_cards,
+        'activation_page': activation_page,
+        'bulk_campaigns_page': bulk_campaigns_page,
+        'bulk_templates': bulk_templates,
+        'bulk_recent_deliveries': bulk_recent_deliveries,
+        'bulk_template_form': bulk_template_form,
+        'bulk_campaign_form': bulk_campaign_form,
+        'threshold_form': threshold_form,
+        'campaign_channel_filter': campaign_channel_filter,
+        'campaign_target_group_filter': campaign_target_group_filter,
+        'ops_audit_logs': ops_audit_logs,
+        'complaint_type_choices': CustomerComplaint.COMPLAINT_TYPE_CHOICES,
+        'complaint_status_choices': CustomerComplaint.STATUS_CHOICES,
+        'complaint_priority_choices': CustomerComplaint.PRIORITY_CHOICES,
+        'crm_assignable_users': crm_assignable_users,
+        'bulk_channel_choices': BulkMessageCampaign.CHANNEL_CHOICES,
+        'bulk_target_group_choices': BulkMessageCampaign.TARGET_GROUP_CHOICES,
+        'bulk_recurring_choices': BulkMessageCampaign.RECURRING_CHOICES,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 
 @login_required
-@user_passes_test(is_crm_user)
+@user_passes_test_403(is_crm_user)
 def crm_activity_feed(request):
     limit = 20
 
@@ -10327,8 +11573,210 @@ def crm_activity_feed(request):
     return JsonResponse({'events': events[:limit]})
 
 @login_required
-@user_passes_test(is_retail_manager)
+@login_required
+@user_passes_test_403(is_crm_user)
+def crm_export(request):
+    dataset = (request.GET.get('dataset') or '').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    q = (request.GET.get('q') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+    dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
+    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
+    dormant_agent = (request.GET.get('dormant_agent') or '').strip()
+    dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
+    dormant_retail_manager = (request.GET.get('dormant_retail_manager') or '').strip()
+    dormant_status = (request.GET.get('dormant_status') or '').strip()
+    complaint_q = (request.GET.get('complaint_q') or '').strip()
+    complaint_type = (request.GET.get('complaint_type') or '').strip()
+    complaint_status = (request.GET.get('complaint_status') or '').strip()
+    complaint_priority = (request.GET.get('complaint_priority') or '').strip()
+    deposit_status_filter = (request.GET.get('deposit_status_filter') or '').strip()
+    deposit_gateway = (request.GET.get('deposit_gateway') or '').strip()
+    deposit_flag = (request.GET.get('deposit_flag') or '').strip()
+    performance_entity = (request.GET.get('performance_entity') or 'super_agent').strip() or 'super_agent'
+    performance_q = (request.GET.get('performance_q') or '').strip()
+    activation_category = (request.GET.get('activation_category') or 'registered_never_deposited').strip() or 'registered_never_deposited'
+    activation_q = (request.GET.get('activation_q') or '').strip()
+    activation_user_type = (request.GET.get('activation_user_type') or '').strip()
+    activation_agent = (request.GET.get('activation_agent') or '').strip()
+    activation_super_agent = (request.GET.get('activation_super_agent') or '').strip()
+    activation_retail_manager = (request.GET.get('activation_retail_manager') or '').strip()
+    activation_status = (request.GET.get('activation_status') or '').strip()
+    campaign_channel_filter = (request.GET.get('campaign_channel') or '').strip()
+    campaign_target_group_filter = (request.GET.get('campaign_target_group') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, '%Y-%m-%d'))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, '%Y-%m-%d')
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+
+    rows = []
+    title = dataset or 'crm_export'
+
+    if dataset == 'dormant_accounts':
+        _, dormant_rows = _build_dormant_center_data(
+            request.user,
+            query=q,
+            user_type=dormant_user_type,
+            agent_id=dormant_agent,
+            super_agent_id=dormant_super_agent,
+            retail_manager_id=dormant_retail_manager,
+            status=dormant_status,
+            bucket=dormant_bucket,
+        )
+        for user_obj in dormant_rows:
+            rows.append({
+                'username': user_obj.username or user_obj.email or '',
+                'full_name': user_obj.get_full_name() or '',
+                'user_type': user_obj.get_user_type_display(),
+                'last_login': user_obj.last_login.isoformat(sep=' ', timespec='seconds') if user_obj.last_login else '',
+                'last_bet': user_obj.last_bet_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_bet_at', None) else '',
+                'last_deposit': user_obj.last_deposit_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_deposit_at', None) else '',
+                'wallet_balance': str(getattr(user_obj, 'wallet_balance_annotated', Decimal('0.00')) or Decimal('0.00')),
+                'status': 'Locked' if user_obj.is_locked else ('Active' if user_obj.is_active else 'Inactive'),
+            })
+        title = 'crm_dormant_accounts'
+
+    elif dataset == 'complaints':
+        complaints_qs = _apply_complaint_filters(
+            _complaint_scope_queryset(request.user),
+            query=complaint_q,
+            complaint_type=complaint_type,
+            status=complaint_status,
+            priority=complaint_priority,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        for complaint in complaints_qs[:5000]:
+            rows.append({
+                'created_at': complaint.created_at.isoformat(sep=' ', timespec='seconds') if complaint.created_at else '',
+                'complaint_type': complaint.get_complaint_type_display(),
+                'user': complaint.user.username or complaint.user.email or '',
+                'subject': complaint.subject,
+                'status': complaint.get_status_display(),
+                'priority': complaint.get_priority_display(),
+                'assigned_to': getattr(complaint.assigned_to, 'email', '') or getattr(complaint.assigned_to, 'username', '') or '',
+                'resolved_at': complaint.resolved_at.isoformat(sep=' ', timespec='seconds') if complaint.resolved_at else '',
+            })
+        title = 'crm_complaints'
+
+    elif dataset == 'deposit_monitoring':
+        _, deposit_rows = _build_deposit_monitoring_data(
+            request.user,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            status=deposit_status_filter,
+            gateway=deposit_gateway,
+            flag=deposit_flag,
+        )
+        for row in deposit_rows:
+            tx = row['transaction']
+            rows.append({
+                'date': tx.timestamp.isoformat(sep=' ', timespec='seconds') if tx.timestamp else '',
+                'user': tx.user.username or tx.user.email or '',
+                'amount': str(tx.amount or Decimal('0.00')),
+                'gateway': getattr(tx, 'get_payment_gateway_display', lambda: getattr(tx, 'payment_gateway', ''))(),
+                'status': tx.status,
+                'reference': tx.external_reference or tx.paystack_reference or str(tx.id),
+                'attempts': row['attempts'],
+                'large_deposit': 'yes' if row['is_large'] else 'no',
+                'repeat_failed': 'yes' if row['is_repeat_failed'] else 'no',
+            })
+        title = 'crm_deposit_monitoring'
+
+    elif dataset == 'agent_performance':
+        performance_rows, _ = _build_agent_performance_rows(
+            request.user,
+            entity_type=performance_entity,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            query=performance_q,
+        )
+        for row in performance_rows:
+            entity = row['entity']
+            rows.append({
+                'entity': entity.username or entity.email or '',
+                'entity_type': entity.get_user_type_display(),
+                'turnover': str(row['turnover']),
+                'ggr': str(row['ggr']),
+                'net_ggr': str(row['net_ggr']),
+                'commission': str(row['commission']),
+                'active_users': row['active_users'],
+                'dormant_users': row['dormant_users'],
+                'deposit_volume': str(row['deposit_volume']),
+                'withdrawal_volume': str(row['withdrawal_volume']),
+                'cashiers': row['cashiers_count'],
+                'agents': row['agents_count'],
+                'tickets_sold': row['tickets_sold'],
+                'average_stake': str(row['average_stake']),
+                'winning_percentage': str(row['winning_percentage']),
+            })
+        title = 'crm_agent_performance'
+
+    elif dataset == 'user_activation':
+        _, activation_rows = _build_activation_center_data(
+            request.user,
+            query=activation_q,
+            user_type=activation_user_type,
+            agent_id=activation_agent,
+            super_agent_id=activation_super_agent,
+            retail_manager_id=activation_retail_manager,
+            status=activation_status,
+            category=activation_category,
+        )
+        for user_obj in activation_rows:
+            rows.append({
+                'user': user_obj.username or user_obj.email or '',
+                'registration_date': user_obj.date_joined.isoformat(sep=' ', timespec='seconds') if user_obj.date_joined else '',
+                'last_login': user_obj.last_login.isoformat(sep=' ', timespec='seconds') if user_obj.last_login else '',
+                'deposit_amount': str(getattr(user_obj, 'deposits_amount', Decimal('0.00')) or Decimal('0.00')),
+                'bets_placed': int(getattr(user_obj, 'bets_count', 0) or 0),
+                'status': 'Locked' if user_obj.is_locked else ('Active' if user_obj.is_active else 'Inactive'),
+            })
+        title = 'crm_user_activation'
+
+    elif dataset == 'bulk_messaging':
+        campaigns_qs = BulkMessageCampaign.objects.select_related('created_by', 'template').order_by('-created_at')
+        if campaign_channel_filter:
+            campaigns_qs = campaigns_qs.filter(channel=campaign_channel_filter)
+        if campaign_target_group_filter:
+            campaigns_qs = campaigns_qs.filter(target_group=campaign_target_group_filter)
+        for campaign in campaigns_qs[:5000]:
+            rows.append({
+                'created_at': campaign.created_at.isoformat(sep=' ', timespec='seconds') if campaign.created_at else '',
+                'subject': campaign.subject,
+                'channel': campaign.get_channel_display(),
+                'target_group': campaign.get_target_group_display(),
+                'status': campaign.get_status_display(),
+                'recipients': campaign.recipients_count,
+                'delivered': campaign.delivered_count,
+                'failed': campaign.failed_count,
+                'opened': campaign.opened_count,
+                'clicked': campaign.clicked_count,
+                'scheduled_for': campaign.schedule_at.isoformat(sep=' ', timespec='seconds') if campaign.schedule_at else '',
+                'sent_at': campaign.sent_at.isoformat(sep=' ', timespec='seconds') if campaign.sent_at else '',
+            })
+        title = 'crm_bulk_messaging'
+
+    else:
+        return HttpResponse("Unknown dataset.", status=400)
+
+    return _export_simple_rows(rows=rows, title=title, fmt=fmt)
+
+
+@user_passes_test_403(is_retail_manager)
 def retail_activity_feed(request):
+    limit = 30
     limit = 30
     network_users = get_retail_network_users_qs(request.user).only('id')
 
@@ -10386,7 +11834,7 @@ def retail_activity_feed(request):
 
 
 @login_required
-@user_passes_test(is_retail_manager)
+@user_passes_test_403(is_retail_manager)
 def retail_dashboard(request):
     tab_raw = (request.POST.get('tab') if request.method == 'POST' else request.GET.get('tab')) or 'overview'
     active_tab = (tab_raw or 'overview').strip() or 'overview'
@@ -10412,6 +11860,18 @@ def retail_dashboard(request):
     locked_end_date = (request.GET.get('locked_end_date') or '').strip()
     locked_appeal_start_date = (request.GET.get('locked_appeal_start_date') or '').strip()
     locked_appeal_end_date = (request.GET.get('locked_appeal_end_date') or '').strip()
+    dormant_q = (request.GET.get('dormant_q') or '').strip()
+    dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
+    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
+    dormant_agent = (request.GET.get('dormant_agent') or '').strip()
+    dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
+    dormant_status = (request.GET.get('dormant_status') or '').strip()
+    complaint_q = (request.GET.get('complaint_q') or '').strip()
+    complaint_type = (request.GET.get('complaint_type') or '').strip()
+    complaint_status = (request.GET.get('complaint_status') or '').strip()
+    complaint_priority = (request.GET.get('complaint_priority') or '').strip()
+    performance_entity = (request.GET.get('performance_entity') or 'super_agent').strip() or 'super_agent'
+    performance_q = (request.GET.get('performance_q') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -10451,6 +11911,11 @@ def retail_dashboard(request):
 
     note_entry, _ = RetailManagerDashboardNote.objects.get_or_create(retail_manager=request.user)
     note_form = RetailManagerDashboardNoteForm(instance=note_entry)
+    complaint_form = CustomerComplaintForm(user_queryset=_ops_targetable_users_queryset(request.user))
+    complaint_action_form = CustomerComplaintActionForm()
+    complaint_note_form = CustomerComplaintNoteForm()
+    complaint_action_target_id = None
+    complaint_note_target_id = None
 
     if request.method == 'POST' and active_tab == 'note' and request.POST.get('save_note') == '1':
         note_form = RetailManagerDashboardNoteForm(request.POST, instance=note_entry)
@@ -10467,6 +11932,64 @@ def retail_dashboard(request):
                 qd['end_date'] = end_date_str
             return redirect(f"{reverse('betting:retail_dashboard')}?{qd.urlencode()}")
         messages.error(request, 'Unable to save note. Please review the editor content and try again.')
+
+    if request.method == 'POST' and active_tab == 'complaints':
+        retail_complaint_redirect = f"{reverse('betting:retail_dashboard')}?tab=complaints"
+        if request.POST.get('create_complaint') == '1':
+            complaint_form = CustomerComplaintForm(request.POST, user_queryset=_ops_targetable_users_queryset(request.user))
+            if complaint_form.is_valid():
+                complaint = complaint_form.save(commit=False)
+                complaint.created_by = request.user
+                if not _ops_targetable_users_queryset(request.user).filter(id=complaint.user_id).exists():
+                    messages.error(request, 'Selected user is outside your network.')
+                    return redirect(retail_complaint_redirect)
+                complaint.save()
+                CustomerComplaintNote.objects.create(
+                    complaint=complaint,
+                    author=request.user,
+                    note='Complaint created from Retail Manager dashboard.',
+                    is_internal=True,
+                )
+                _log_crm_ops_action(request, module='complaints', action='retail_complaint_created', target_user=complaint.user, complaint=complaint)
+                messages.success(request, 'Complaint created.')
+                return redirect(retail_complaint_redirect)
+            messages.error(request, 'Unable to create complaint.')
+        elif request.POST.get('update_complaint') == '1':
+            complaint = get_object_or_404(_complaint_scope_queryset(request.user), id=request.POST.get('complaint_id'))
+            action_form = CustomerComplaintActionForm(request.POST)
+            if action_form.is_valid():
+                complaint.status = action_form.cleaned_data['status']
+                complaint.priority = action_form.cleaned_data['priority']
+                admin_note = (action_form.cleaned_data.get('admin_note') or '').strip()
+                if complaint.status in ['resolved', 'closed'] and not complaint.resolved_at:
+                    complaint.resolved_at = timezone.now()
+                complaint.save(update_fields=['status', 'priority', 'resolved_at', 'updated_at'])
+                if admin_note:
+                    CustomerComplaintNote.objects.create(
+                        complaint=complaint,
+                        author=request.user,
+                        note=admin_note,
+                        is_internal=True,
+                    )
+                _log_crm_ops_action(request, module='complaints', action='retail_complaint_updated', target_user=complaint.user, complaint=complaint)
+                messages.success(request, 'Complaint updated.')
+                return redirect(retail_complaint_redirect)
+            complaint_action_form = action_form
+            complaint_action_target_id = complaint.id
+            messages.error(request, 'Unable to update complaint.')
+        elif request.POST.get('add_complaint_note') == '1':
+            complaint = get_object_or_404(_complaint_scope_queryset(request.user), id=request.POST.get('complaint_id'))
+            complaint_note_form = CustomerComplaintNoteForm(request.POST)
+            if complaint_note_form.is_valid():
+                note = complaint_note_form.save(commit=False)
+                note.complaint = complaint
+                note.author = request.user
+                note.save()
+                _log_crm_ops_action(request, module='complaints', action='retail_complaint_note_added', target_user=complaint.user, complaint=complaint)
+                messages.success(request, 'Complaint note added.')
+                return redirect(retail_complaint_redirect)
+            complaint_note_target_id = complaint.id
+            messages.error(request, 'Unable to add complaint note.')
 
     master_agents = get_retail_manager_master_agents(request.user)
     super_agents = get_retail_manager_super_agents(request.user, master_agents_qs=master_agents)
@@ -10891,6 +12414,54 @@ def retail_dashboard(request):
         except Exception:
             players_page = players_paginator.page(1)
 
+    dormant_cards, dormant_rows = _build_dormant_center_data(
+        request.user,
+        query=dormant_q,
+        user_type=dormant_user_type,
+        agent_id=dormant_agent,
+        super_agent_id=dormant_super_agent,
+        retail_manager_id='',
+        status=dormant_status,
+        bucket=dormant_bucket,
+    )
+    dormant_page = Paginator(dormant_rows, 50).get_page(request.GET.get('dormant_page') or 1) if active_tab == 'dormant_accounts' else None
+
+    complaint_stats = {
+        'open': _complaint_scope_queryset(request.user).filter(status='open').count(),
+        'pending': _complaint_scope_queryset(request.user).filter(status='pending').count(),
+        'resolved': _complaint_scope_queryset(request.user).filter(status='resolved').count(),
+        'escalated': _complaint_scope_queryset(request.user).filter(status='escalated').count(),
+    }
+    complaints_page = None
+    if active_tab == 'complaints':
+        complaints_qs = _apply_complaint_filters(
+            _complaint_scope_queryset(request.user),
+            query=complaint_q,
+            complaint_type=complaint_type,
+            status=complaint_status,
+            priority=complaint_priority,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        complaints_page = Paginator(complaints_qs, 25).get_page(request.GET.get('complaint_page') or 1)
+
+    performance_rows = []
+    performance_page = None
+    performance_chart = {'labels': [], 'turnover': [], 'ggr': [], 'commission': []}
+    performance_top_super_agents = []
+    performance_top_agents = []
+    if active_tab == 'agent_performance':
+        performance_rows, performance_chart = _build_agent_performance_rows(
+            request.user,
+            entity_type=performance_entity if performance_entity in ['super_agent', 'agent'] else 'super_agent',
+            start_dt=metrics_start_dt,
+            end_dt=metrics_end_dt,
+            query=performance_q,
+        )
+        performance_page = Paginator(performance_rows, 25).get_page(request.GET.get('performance_page') or 1)
+        performance_top_super_agents = _build_agent_performance_rows(request.user, entity_type='super_agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
+        performance_top_agents = _build_agent_performance_rows(request.user, entity_type='agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
+
     context = {
         'active_tab': active_tab,
         'start_date': start_date_str,
@@ -10957,12 +12528,40 @@ def retail_dashboard(request):
         'locked_end_date': locked_end_date,
         'locked_appeal_start_date': locked_appeal_start_date,
         'locked_appeal_end_date': locked_appeal_end_date,
+        'dormant_q': dormant_q,
+        'dormant_bucket': dormant_bucket,
+        'dormant_user_type': dormant_user_type,
+        'dormant_agent': dormant_agent,
+        'dormant_super_agent': dormant_super_agent,
+        'dormant_status': dormant_status,
+        'dormant_cards': dormant_cards,
+        'dormant_page': dormant_page,
+        'complaint_q': complaint_q,
+        'complaint_type': complaint_type,
+        'complaint_status': complaint_status,
+        'complaint_priority': complaint_priority,
+        'complaint_stats': complaint_stats,
+        'complaints_page': complaints_page,
+        'complaint_form': complaint_form,
+        'complaint_action_form': complaint_action_form,
+        'complaint_action_target_id': complaint_action_target_id,
+        'complaint_note_form': complaint_note_form,
+        'complaint_note_target_id': complaint_note_target_id,
+        'performance_entity': performance_entity,
+        'performance_q': performance_q,
+        'performance_page': performance_page,
+        'performance_chart': performance_chart,
+        'performance_top_super_agents': performance_top_super_agents,
+        'performance_top_agents': performance_top_agents,
+        'complaint_type_choices': CustomerComplaint.COMPLAINT_TYPE_CHOICES,
+        'complaint_status_choices': CustomerComplaint.STATUS_CHOICES,
+        'complaint_priority_choices': CustomerComplaint.PRIORITY_CHOICES,
     }
     return render(request, 'betting/retail_dashboard.html', context)
 
 
 @login_required
-@user_passes_test(is_retail_manager)
+@user_passes_test_403(is_retail_manager)
 def retail_player_detail(request, user_id):
     target = get_object_or_404(User, id=user_id, user_type='player')
     if not get_retail_network_users_qs(request.user).filter(id=target.id).exists():
@@ -11018,12 +12617,24 @@ def retail_player_detail(request, user_id):
 
 
 @login_required
-@user_passes_test(is_retail_manager)
+@user_passes_test_403(is_retail_manager)
 def retail_export(request):
     dataset = (request.GET.get('dataset') or '').strip().lower()
     fmt = (request.GET.get('format') or 'csv').strip().lower()
     start_date_str = (request.GET.get('start_date') or '').strip()
     end_date_str = (request.GET.get('end_date') or '').strip()
+    dormant_q = (request.GET.get('dormant_q') or '').strip()
+    dormant_bucket = (request.GET.get('dormant_bucket') or 'login_7').strip() or 'login_7'
+    dormant_user_type = (request.GET.get('dormant_user_type') or '').strip()
+    dormant_agent = (request.GET.get('dormant_agent') or '').strip()
+    dormant_super_agent = (request.GET.get('dormant_super_agent') or '').strip()
+    dormant_status = (request.GET.get('dormant_status') or '').strip()
+    complaint_q = (request.GET.get('complaint_q') or '').strip()
+    complaint_type = (request.GET.get('complaint_type') or '').strip()
+    complaint_status = (request.GET.get('complaint_status') or '').strip()
+    complaint_priority = (request.GET.get('complaint_priority') or '').strip()
+    performance_entity = (request.GET.get('performance_entity') or 'super_agent').strip() or 'super_agent'
+    performance_q = (request.GET.get('performance_q') or '').strip()
 
     start_dt = None
     end_dt = None
@@ -11154,80 +12765,88 @@ def retail_export(request):
             })
         title = "shops"
 
+    elif dataset == 'dormant_accounts':
+        _, dormant_rows = _build_dormant_center_data(
+            request.user,
+            query=dormant_q,
+            user_type=dormant_user_type,
+            agent_id=dormant_agent,
+            super_agent_id=dormant_super_agent,
+            retail_manager_id='',
+            status=dormant_status,
+            bucket=dormant_bucket,
+        )
+        for user_obj in dormant_rows:
+            rows.append({
+                'username': user_obj.username or user_obj.email or '',
+                'full_name': user_obj.get_full_name() or '',
+                'user_type': user_obj.get_user_type_display(),
+                'last_login': user_obj.last_login.isoformat(sep=' ', timespec='seconds') if user_obj.last_login else '',
+                'last_bet': user_obj.last_bet_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_bet_at', None) else '',
+                'last_deposit': user_obj.last_deposit_at.isoformat(sep=' ', timespec='seconds') if getattr(user_obj, 'last_deposit_at', None) else '',
+                'wallet_balance': str(getattr(user_obj, 'wallet_balance_annotated', Decimal('0.00')) or Decimal('0.00')),
+                'status': 'Locked' if user_obj.is_locked else ('Active' if user_obj.is_active else 'Inactive'),
+            })
+        title = "dormant_accounts"
+
+    elif dataset == 'complaints':
+        qs = _apply_complaint_filters(
+            _complaint_scope_queryset(request.user),
+            query=complaint_q,
+            complaint_type=complaint_type,
+            status=complaint_status,
+            priority=complaint_priority,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        for complaint in qs[:5000]:
+            rows.append({
+                'created_at': complaint.created_at.isoformat(sep=' ', timespec='seconds') if complaint.created_at else '',
+                'complaint_type': complaint.get_complaint_type_display(),
+                'user': complaint.user.username or complaint.user.email or '',
+                'subject': complaint.subject,
+                'status': complaint.get_status_display(),
+                'priority': complaint.get_priority_display(),
+                'assigned_to': getattr(complaint.assigned_to, 'email', '') or getattr(complaint.assigned_to, 'username', '') or '',
+                'resolved_at': complaint.resolved_at.isoformat(sep=' ', timespec='seconds') if complaint.resolved_at else '',
+            })
+        title = "complaints"
+
+    elif dataset == 'agent_performance':
+        performance_rows, _ = _build_agent_performance_rows(
+            request.user,
+            entity_type=performance_entity if performance_entity in ['super_agent', 'agent'] else 'super_agent',
+            start_dt=start_dt,
+            end_dt=end_dt,
+            query=performance_q,
+        )
+        for row in performance_rows:
+            entity = row['entity']
+            rows.append({
+                'entity': entity.username or entity.email or '',
+                'entity_type': entity.get_user_type_display(),
+                'turnover': str(row['turnover']),
+                'ggr': str(row['ggr']),
+                'net_ggr': str(row['net_ggr']),
+                'commission': str(row['commission']),
+                'active_users': row['active_users'],
+                'dormant_users': row['dormant_users'],
+                'deposit_volume': str(row['deposit_volume']),
+                'withdrawal_volume': str(row['withdrawal_volume']),
+                'cashiers': row['cashiers_count'],
+                'agents': row['agents_count'],
+                'active_bettors': row['active_bettors'],
+                'tickets_sold': row['tickets_sold'],
+                'average_stake': str(row['average_stake']),
+                'winning_percentage': str(row['winning_percentage']),
+            })
+        title = "agent_performance"
+
     else:
         return HttpResponse("Unknown dataset.", status=400)
 
     filename_base = f"retail_{title}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
-
-    if fmt == 'csv':
-        import csv
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="{filename_base}.csv"'
-        fieldnames = list(rows[0].keys()) if rows else []
-        writer = csv.DictWriter(response, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-        return response
-
-    if fmt == 'xlsx':
-        import io
-        import pandas as pd
-        output = io.BytesIO()
-        df = pd.DataFrame(rows)
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name=title[:31] or 'Sheet1')
-        output.seek(0)
-        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = f'attachment; filename="{filename_base}.xlsx"'
-        return response
-
-    if fmt == 'pdf':
-        from weasyprint import HTML
-        def esc(s):
-            return (str(s or '')
-                    .replace('&', '&amp;')
-                    .replace('<', '&lt;')
-                    .replace('>', '&gt;')
-                    .replace('"', '&quot;')
-                    .replace("'", '&#39;'))
-
-        cols = list(rows[0].keys()) if rows else []
-        head = ''.join([f"<th>{esc(c)}</th>" for c in cols])
-        body = ''.join([
-            "<tr>" + ''.join([f"<td>{esc(r.get(c))}</td>" for c in cols]) + "</tr>"
-            for r in rows[:2000]
-        ])
-        html = f"""
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <style>
-              body {{ font-family: Arial, sans-serif; font-size: 11px; }}
-              h2 {{ margin: 0 0 8px 0; }}
-              .meta {{ color: #666; margin-bottom: 12px; }}
-              table {{ width: 100%; border-collapse: collapse; }}
-              th, td {{ border: 1px solid #ddd; padding: 6px; vertical-align: top; }}
-              th {{ background: #f3f5f7; text-align: left; }}
-              tr:nth-child(even) td {{ background: #fafafa; }}
-            </style>
-          </head>
-          <body>
-            <h2>Retail Report: {esc(title)}</h2>
-            <div class="meta">Range: {esc(start_dt.date().isoformat())} → {esc(end_dt.date().isoformat())}</div>
-            <table>
-              <thead><tr>{head}</tr></thead>
-              <tbody>{body}</tbody>
-            </table>
-          </body>
-        </html>
-        """
-        pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
-        response = HttpResponse(pdf_bytes, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="{filename_base}.pdf"'
-        return response
-
-    return HttpResponse("Unknown format.", status=400)
+    return _export_simple_rows(rows=rows, title=filename_base, fmt=fmt)
 
 
 @login_required

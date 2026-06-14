@@ -79,6 +79,9 @@
     <li class="nav-item"><a class="nav-link {% if active_tab == 'bets' %}active{% endif %}" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}">Bets</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'finance' %}active{% endif %}" href="?tab=finance&start_date={{ start_date }}&end_date={{ end_date }}">Finance</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'commissions' %}active{% endif %}" href="?tab=commissions&start_date={{ start_date }}&end_date={{ end_date }}">Commissions</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'dormant_accounts' %}active{% endif %}" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}">Dormant Accounts</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'complaints' %}active{% endif %}" href="?tab=complaints&start_date={{ start_date }}&end_date={{ end_date }}">Complaints</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'agent_performance' %}active{% endif %}" href="?tab=agent_performance&start_date={{ start_date }}&end_date={{ end_date }}">Agent Performance</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'risk' %}active{% endif %}" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}">Risk</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'locked_accounts' %}active{% endif %}" href="?tab=locked_accounts&start_date={{ start_date }}&end_date={{ end_date }}" title="Open locked accounts tab">Locked Accounts <span class="badge rounded-pill locked-counter-clickable {% if locked_accounts_summary.locked_downlines %}bg-danger text-white locked-counter-attention{% else %}bg-light text-dark{% endif %} ms-1" title="Open locked accounts tab">{{ locked_accounts_summary.locked_downlines }}</span></a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
@@ -318,6 +321,18 @@
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {% if active_tab == 'dormant_accounts' %}
+  {% include 'betting/includes/retail_dashboard_dormant_accounts.html' %}
+  {% endif %}
+
+  {% if active_tab == 'complaints' %}
+  {% include 'betting/includes/retail_dashboard_complaints.html' %}
+  {% endif %}
+
+  {% if active_tab == 'agent_performance' %}
+  {% include 'betting/includes/retail_dashboard_agent_performance.html' %}
   {% endif %}
 
   {% if active_tab == 'locked_accounts' %}
@@ -1128,7 +1143,7 @@
   })();
 </script>
 
-{% if active_tab == 'overview' %}
+{% if active_tab == 'overview' or active_tab == 'agent_performance' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   (function () {
@@ -1170,6 +1185,23 @@
           datasets: [
             { label: 'Deposits', data: deposits, backgroundColor: 'rgba(0,200,83,0.35)' },
             { label: 'Withdrawals', data: withdrawals, backgroundColor: 'rgba(255,82,82,0.35)' },
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const performanceCtx = document.getElementById('retailPerformanceChart');
+    if (performanceCtx) {
+      const perf = {{ performance_chart|safe }};
+      new Chart(performanceCtx, {
+        type: 'line',
+        data: {
+          labels: perf.labels || [],
+          datasets: [
+            { label: 'Turnover', data: perf.turnover || [], borderColor: '#0B3D2E', backgroundColor: 'rgba(11,61,46,0.10)', tension: 0.25 },
+            { label: 'GGR', data: perf.ggr || [], borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.10)', tension: 0.25 },
+            { label: 'Commission', data: perf.commission || [], borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.10)', tension: 0.25 },
           ]
         },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }

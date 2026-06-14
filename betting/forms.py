@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.mail import send_mail, get_connection
 from django.contrib.auth.hashers import make_password
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration
 from .services.usernames import create_agent_and_cashiers
 from pending_registration.models import PendingAgentRegistration
 
@@ -1560,6 +1560,152 @@ class CRMWithdrawalDecisionForm(forms.Form):
         if action == 'reject' and not reason:
             self.add_error('reason', 'Reason is required when rejecting a withdrawal.')
         return cleaned_data
+
+
+class CustomerComplaintForm(forms.ModelForm):
+    class Meta:
+        model = CustomerComplaint
+        fields = ('user', 'complaint_type', 'subject', 'description', 'priority')
+        widgets = {
+            'user': forms.Select(attrs={'class': 'form-select'}),
+            'complaint_type': forms.Select(attrs={'class': 'form-select'}),
+            'subject': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Complaint subject'}),
+            'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the complaint'}),
+            'priority': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        user_queryset = kwargs.pop('user_queryset', None)
+        super().__init__(*args, **kwargs)
+        self.fields['user'].queryset = (user_queryset or User.objects.none()).order_by('username', 'email')
+        self.fields['user'].label_from_instance = lambda u: f"{u.username or u.email} ({u.get_user_type_display()})"
+
+
+class CustomerComplaintActionForm(forms.Form):
+    complaint_id = forms.IntegerField(widget=forms.HiddenInput())
+    status = forms.ChoiceField(choices=CustomerComplaint.STATUS_CHOICES, widget=forms.Select(attrs={'class': 'form-select form-select-sm'}))
+    priority = forms.ChoiceField(choices=CustomerComplaint.PRIORITY_CHOICES, widget=forms.Select(attrs={'class': 'form-select form-select-sm'}))
+    assigned_to = forms.ModelChoiceField(
+        queryset=User.objects.filter(Q(user_type='crm') | Q(user_type='admin')).order_by('email'),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-select form-select-sm'}),
+    )
+    admin_note = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control form-control-sm', 'rows': 2, 'placeholder': 'Internal update or resolution note'}),
+    )
+
+    def clean_assigned_to(self):
+        assigned_to = self.cleaned_data.get('assigned_to')
+        if assigned_to and not (assigned_to.is_superuser or assigned_to.user_type in ['crm', 'admin']):
+            raise ValidationError('Only CRM/Admin users can be assigned.')
+        return assigned_to
+
+
+class CustomerComplaintNoteForm(forms.ModelForm):
+    class Meta:
+        model = CustomerComplaintNote
+        fields = ('note', 'is_internal')
+        widgets = {
+            'note': forms.Textarea(attrs={'class': 'form-control form-control-sm', 'rows': 2, 'placeholder': 'Add internal note'}),
+            'is_internal': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class BulkMessageTemplateForm(forms.ModelForm):
+    class Meta:
+        model = BulkMessageTemplate
+        fields = ('name', 'category', 'default_channel', 'subject', 'message', 'is_active')
+        widgets = {
+            'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Template name'}),
+            'category': forms.Select(attrs={'class': 'form-select'}),
+            'default_channel': forms.Select(attrs={'class': 'form-select'}),
+            'subject': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Subject'}),
+            'message': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Template message'}),
+            'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class BulkMessageCampaignForm(forms.ModelForm):
+    target_agent_ids = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(user_type='agent').order_by('username', 'email'),
+        required=False,
+        widget=forms.SelectMultiple(attrs={'class': 'form-select'}),
+    )
+    target_users = forms.ModelMultipleChoiceField(
+        queryset=User.objects.none(),
+        required=False,
+        widget=forms.SelectMultiple(attrs={'class': 'form-select'}),
+    )
+    target_user_ids = forms.CharField(required=False, widget=forms.HiddenInput())
+    send_now = forms.BooleanField(required=False, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+
+    class Meta:
+        model = BulkMessageCampaign
+        fields = ('template', 'subject', 'message', 'channel', 'target_group', 'schedule_at', 'recurring_pattern')
+        widgets = {
+            'template': forms.Select(attrs={'class': 'form-select'}),
+            'subject': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Subject'}),
+            'message': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Message'}),
+            'channel': forms.Select(attrs={'class': 'form-select'}),
+            'target_group': forms.Select(attrs={'class': 'form-select'}),
+            'schedule_at': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
+            'recurring_pattern': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        agent_queryset = kwargs.pop('agent_queryset', None)
+        template_queryset = kwargs.pop('template_queryset', None)
+        user_queryset = kwargs.pop('user_queryset', None)
+        super().__init__(*args, **kwargs)
+        if agent_queryset is not None:
+            self.fields['target_agent_ids'].queryset = agent_queryset.order_by('username', 'email')
+        if template_queryset is not None:
+            self.fields['template'].queryset = template_queryset.order_by('category', 'name')
+        if user_queryset is not None:
+            self.fields['target_users'].queryset = user_queryset.order_by('username', 'email')
+        self.fields['message'].required = False
+        self.fields['target_users'].label_from_instance = lambda u: f"{u.username or u.email} ({u.get_user_type_display()})"
+
+    def clean(self):
+        cleaned_data = super().clean()
+        template = cleaned_data.get('template')
+        target_group = cleaned_data.get('target_group')
+        target_user_ids_raw = (cleaned_data.get('target_user_ids') or '').strip()
+        target_user_ids = []
+        if target_user_ids_raw:
+            for bit in target_user_ids_raw.split(','):
+                bit = bit.strip()
+                if bit.isdigit():
+                    target_user_ids.append(int(bit))
+        target_user_ids.extend(user.id for user in (cleaned_data.get('target_users') or []))
+        cleaned_data['target_user_ids_list'] = sorted(set(target_user_ids))
+
+        if template:
+            if not cleaned_data.get('subject'):
+                cleaned_data['subject'] = template.subject
+            if not cleaned_data.get('message'):
+                cleaned_data['message'] = template.message
+            if not cleaned_data.get('channel'):
+                cleaned_data['channel'] = template.default_channel
+
+        if target_group == 'specific_agents' and not cleaned_data.get('target_agent_ids'):
+            self.add_error('target_agent_ids', 'Select at least one agent.')
+        if target_group == 'custom_users' and not cleaned_data.get('target_user_ids_list'):
+            self.add_error('target_users', 'Select at least one user for a custom audience.')
+        if not cleaned_data.get('message'):
+            self.add_error('message', 'Message is required.')
+        return cleaned_data
+
+
+class CRMThresholdSettingsForm(forms.ModelForm):
+    class Meta:
+        model = SiteConfiguration
+        fields = ('crm_large_deposit_threshold', 'crm_failed_deposit_repeat_threshold')
+        widgets = {
+            'crm_large_deposit_threshold': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'crm_failed_deposit_repeat_threshold': forms.NumberInput(attrs={'class': 'form-control', 'min': '1'}),
+        }
 
 
 class RetailManagerDashboardNoteForm(forms.ModelForm):

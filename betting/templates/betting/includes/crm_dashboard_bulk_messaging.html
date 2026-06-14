@@ -1,0 +1,235 @@
+<div class="row g-3">
+  <div class="col-12 col-xl-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-light fw-semibold">Message Templates</div>
+      <div class="card-body">
+        <form method="post" class="row g-2">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="bulk_messaging">
+          <input type="hidden" name="save_bulk_template" value="1">
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Name</label>
+            {{ bulk_template_form.name }}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Category</label>
+            {{ bulk_template_form.category }}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Default Channel</label>
+            {{ bulk_template_form.default_channel }}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Subject</label>
+            {{ bulk_template_form.subject }}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Message</label>
+            {{ bulk_template_form.message }}
+          </div>
+          <div class="col-12 form-check ms-1">
+            {{ bulk_template_form.is_active }}
+            <label class="form-check-label small" for="{{ bulk_template_form.is_active.id_for_label }}">Active</label>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-primary" type="submit">Save Template</button>
+          </div>
+        </form>
+        <hr>
+        <div class="fw-semibold mb-2">Available Templates</div>
+        {% for template in bulk_templates %}
+        <div class="border rounded p-2 mb-2">
+          <div class="fw-semibold small">{{ template.name }}</div>
+          <div class="text-muted small">{{ template.get_category_display }} • {{ template.get_default_channel_display }}</div>
+        </div>
+        {% empty %}
+        <div class="text-muted small">No templates saved yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-8">
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-light fw-semibold">Create Campaign</div>
+      <div class="card-body">
+        <form method="post" class="row g-2">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="bulk_messaging">
+          <input type="hidden" name="save_bulk_campaign" value="1">
+          {% if bulk_campaign_form.non_field_errors %}
+          <div class="col-12">
+            <div class="alert alert-danger py-2 mb-1">{{ bulk_campaign_form.non_field_errors }}</div>
+          </div>
+          {% endif %}
+          <div class="col-12 col-md-4">
+            <label class="form-label small text-muted mb-1">Template</label>
+            {{ bulk_campaign_form.template }}
+          </div>
+          <div class="col-12 col-md-4">
+            <label class="form-label small text-muted mb-1">Channel</label>
+            {{ bulk_campaign_form.channel }}
+          </div>
+          <div class="col-12 col-md-4">
+            <label class="form-label small text-muted mb-1">Target Group</label>
+            {{ bulk_campaign_form.target_group }}
+          </div>
+          <div class="col-12 js-bulk-agents-field">
+            <label class="form-label small text-muted mb-1">Specific Agents</label>
+            {{ bulk_campaign_form.target_agent_ids }}
+            {% if bulk_campaign_form.target_agent_ids.errors %}
+            <div class="text-danger small mt-1">{{ bulk_campaign_form.target_agent_ids.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+          <div class="col-12 js-bulk-users-field">
+            <label class="form-label small text-muted mb-1">Custom Users</label>
+            {{ bulk_campaign_form.target_users }}
+            <div class="text-muted small mt-1">Used only when target group is set to Custom Users.</div>
+            {% if bulk_campaign_form.target_users.errors %}
+            <div class="text-danger small mt-1">{{ bulk_campaign_form.target_users.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label small text-muted mb-1">Subject</label>
+            {{ bulk_campaign_form.subject }}
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label small text-muted mb-1">Schedule Date</label>
+            {{ bulk_campaign_form.schedule_at }}
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label small text-muted mb-1">Recurring</label>
+            {{ bulk_campaign_form.recurring_pattern }}
+          </div>
+          <div class="col-12">
+            <label class="form-label small text-muted mb-1">Message</label>
+            {{ bulk_campaign_form.message }}
+          </div>
+          <div class="col-12 form-check ms-1">
+            <input class="form-check-input" type="checkbox" name="send_now" id="crmCampaignSendNow" value="1">
+            <label class="form-check-label small" for="crmCampaignSendNow">Send Now</label>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-primary" type="submit">Save Campaign</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-light">
+        <form method="get" class="row g-2 align-items-end">
+          <input type="hidden" name="tab" value="bulk_messaging">
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Channel</label>
+            <select name="campaign_channel" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for value, label in bulk_channel_choices %}
+              <option value="{{ value }}" {% if campaign_channel_filter == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6 col-md-5">
+            <label class="form-label small text-muted mb-1">Target Group</label>
+            <select name="campaign_target_group" class="form-select form-select-sm">
+              <option value="">All</option>
+              {% for value, label in bulk_target_group_choices %}
+              <option value="{{ value }}" {% if campaign_target_group_filter == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+          </div>
+          <div class="col-6 col-md-2">
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=bulk_messaging&format=xlsx&campaign_channel={{ campaign_channel_filter }}&campaign_target_group={{ campaign_target_group_filter }}">Export</a>
+          </div>
+        </form>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Date Sent</th>
+                <th>Subject</th>
+                <th>Channel</th>
+                <th>Recipients</th>
+                <th>Delivered</th>
+                <th>Failed</th>
+                <th>Opened</th>
+                <th>Clicked</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for campaign in bulk_campaigns_page %}
+              <tr>
+                <td class="text-nowrap">{{ campaign.sent_at|date:"Y-m-d H:i"|default:campaign.created_at|date:"Y-m-d H:i" }}</td>
+                <td>
+                  <div class="fw-semibold">{{ campaign.subject|default:"-" }}</div>
+                  <div class="text-muted small">{{ campaign.get_target_group_display }}</div>
+                </td>
+                <td class="text-muted small">{{ campaign.get_channel_display }}</td>
+                <td>{{ campaign.recipients_count }}</td>
+                <td>{{ campaign.delivered_count }}</td>
+                <td>{{ campaign.failed_count }}</td>
+                <td>{{ campaign.opened_count }}</td>
+                <td>{{ campaign.clicked_count }}</td>
+                <td class="text-muted small">{{ campaign.get_status_display }}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="9" class="text-center text-muted py-4">No campaigns found.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header bg-light fw-semibold">Recent Deliveries</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Time</th>
+                <th>Channel</th>
+                <th>Recipient</th>
+                <th>Campaign</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for delivery in bulk_recent_deliveries %}
+              <tr>
+                <td class="text-nowrap">{{ delivery.sent_at|date:"Y-m-d H:i"|default:delivery.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-muted small">{{ delivery.get_channel_display }}</td>
+                <td class="text-muted small">{{ delivery.recipient.username|default:delivery.recipient.email }}</td>
+                <td class="text-muted small">{{ delivery.campaign.subject|default:"-" }}</td>
+                <td class="text-muted small">{{ delivery.get_status_display }}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="5" class="text-center text-muted py-4">No delivery history yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% if bulk_campaigns_page %}
+<div class="d-flex justify-content-between align-items-center mt-3">
+  <div class="text-muted small">Page {{ bulk_campaigns_page.number }} of {{ bulk_campaigns_page.paginator.num_pages }}</div>
+  <div class="d-flex gap-2">
+    {% if bulk_campaigns_page.has_previous %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=bulk_messaging&campaign_channel={{ campaign_channel_filter }}&campaign_target_group={{ campaign_target_group_filter }}&campaign_page={{ bulk_campaigns_page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% if bulk_campaigns_page.has_next %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=bulk_messaging&campaign_channel={{ campaign_channel_filter }}&campaign_target_group={{ campaign_target_group_filter }}&campaign_page={{ bulk_campaigns_page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

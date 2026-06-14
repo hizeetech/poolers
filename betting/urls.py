@@ -60,6 +60,7 @@ urlpatterns = [
     path('agent/cashier/credit/<int:cashier_id>/', views.agent_credit_cashier, name='agent_credit_cashier'),
     path('master-agent/dashboard/', views.master_agent_dashboard, name='master_agent_dashboard'),
     path('super-agent/dashboard/', views.super_agent_dashboard, name='super_agent_dashboard'),
+    path('downline/dormant-agents/export/', views.downline_dormant_agents_export, name='downline_dormant_agents_export'),
     path('downline/users/', views.downline_users, name='downline_users'),
     path('downline/bets/', views.downline_bets, name='downline_bets'),
 

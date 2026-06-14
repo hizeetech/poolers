@@ -3,6 +3,9 @@
     #super-agent-locked-accounts {
         scroll-margin-top: 90px;
     }
+    #downline-dormant-agents {
+        scroll-margin-top: 90px;
+    }
     {% include 'betting/includes/locked_counter_styles.html' %}
     .locked-counter-clickable {
         text-decoration: none;
@@ -12,7 +15,7 @@
 <div class="container py-5 position-relative">
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
         <h2 class="fw-bold text-primary mb-0">
-            {% if user.user_type == 'agent' %} Agent Dashboard {% elif user.user_type == 'cashier' %} Cashier Dashboard {% else %} Dashboard {% endif %}
+            {% if user.user_type == 'agent' %}Agent Dashboard{% elif user.user_type == 'cashier' %}Cashier Dashboard{% elif user.user_type == 'super_agent' %}Super Agent Dashboard{% elif user.user_type == 'master_agent' %}Master Agent Dashboard{% else %}Dashboard{% endif %}
         </h2>
         <div class="d-flex flex-column align-items-end gap-2 w-100 w-md-auto">
             <div class="btn-group btn-group-sm" role="group" aria-label="Dashboard scope">
@@ -500,6 +503,244 @@
     </div>
     {% endif %}
 
+    {% if user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center mt-5 mb-3 gap-3" id="downline-dormant-agents">
+        <div>
+            <h3 class="fw-bold text-secondary mb-0">Dormant Agents</h3>
+            <div class="text-muted small">Agents are listed only when both the agent account and every mapped cashier are inactive.</div>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:downline_dormant_agents_export' %}?format=csv&start_date={{ current_start_date }}&end_date={{ current_end_date }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}">CSV</a>
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:downline_dormant_agents_export' %}?format=xlsx&start_date={{ current_start_date }}&end_date={{ current_end_date }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}">Excel</a>
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:downline_dormant_agents_export' %}?format=pdf&start_date={{ current_start_date }}&end_date={{ current_end_date }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}">PDF</a>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <a class="text-decoration-none" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}#downline-dormant-agents">
+                <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-primary border-4">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Total Dormant Agents</h6>
+                        <h2 class="card-title fw-bold text-primary">{{ dormant_agents_summary.total }}</h2>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a class="text-decoration-none" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket=login_7&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}#downline-dormant-agents">
+                <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-info border-4 {% if dormant_bucket == 'login_7' %}border-primary{% endif %}">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Dormant 7 Days</h6>
+                        <h2 class="card-title fw-bold text-info">{{ dormant_agents_summary.login_7 }}</h2>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a class="text-decoration-none" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket=login_14&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}#downline-dormant-agents">
+                <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-warning border-4 {% if dormant_bucket == 'login_14' %}border-primary{% endif %}">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Dormant 14 Days</h6>
+                        <h2 class="card-title fw-bold text-warning">{{ dormant_agents_summary.login_14 }}</h2>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-md-3">
+            <a class="text-decoration-none" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket=login_30&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}#downline-dormant-agents">
+                <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-danger border-4 {% if dormant_bucket == 'login_30' %}border-primary{% endif %}">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">Dormant 30 Days</h6>
+                        <h2 class="card-title fw-bold text-danger">{{ dormant_agents_summary.login_30 }}</h2>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <div class="card app-glass-card shadow-sm rounded-3 mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end mb-4">
+                <input type="hidden" name="scope" value="{{ metrics_scope }}">
+                <input type="hidden" name="sort_by" value="{{ current_sort_by }}">
+                <input type="hidden" name="sort_dir" value="{{ current_sort_dir }}">
+                <div class="col-md-3">
+                    <label class="form-label small text-muted mb-1">Search</label>
+                    <input type="text" name="dormant_q" value="{{ dormant_q }}" class="form-control form-control-sm" placeholder="Agent username or name">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Dormant Days</label>
+                    <select name="dormant_bucket" class="form-select form-select-sm">
+                        <option value="login_7" {% if dormant_bucket == 'login_7' %}selected{% endif %}>7 Days</option>
+                        <option value="login_14" {% if dormant_bucket == 'login_14' %}selected{% endif %}>14 Days</option>
+                        <option value="login_30" {% if dormant_bucket == 'login_30' %}selected{% endif %}>30 Days</option>
+                    </select>
+                </div>
+                {% if user.user_type == 'master_agent' %}
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Super Agent</label>
+                    <select name="dormant_super_agent" class="form-select form-select-sm">
+                        <option value="">All</option>
+                        {% for sa in dormant_super_agent_choices %}
+                        <option value="{{ sa.id }}" {% if dormant_super_agent == sa.id|stringformat:'s' %}selected{% endif %}>{{ sa.username|default:sa.email }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Status</label>
+                    <select name="dormant_status" class="form-select form-select-sm">
+                        <option value="">All</option>
+                        <option value="active" {% if dormant_status == 'active' %}selected{% endif %}>Active</option>
+                        <option value="inactive" {% if dormant_status == 'inactive' %}selected{% endif %}>Inactive</option>
+                        <option value="locked" {% if dormant_status == 'locked' %}selected{% endif %}>Locked</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Start Date</label>
+                    <input type="date" name="start_date" value="{{ current_start_date }}" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">End Date</label>
+                    <input type="date" name="end_date" value="{{ current_end_date }}" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-2 d-flex gap-2">
+                    <button class="btn btn-sm btn-primary flex-fill" type="submit">Filter</button>
+                    <a class="btn btn-sm btn-outline-secondary" href="{% if user.user_type == 'master_agent' %}{% url 'betting:master_agent_dashboard' %}{% else %}{% url 'betting:super_agent_dashboard' %}{% endif %}#downline-dormant-agents">Reset</a>
+                </div>
+            </form>
+
+            <div class="row g-3 mb-4">
+                <div class="{% if user.user_type == 'master_agent' %}col-lg-4{% else %}col-lg-6{% endif %}">
+                    <div class="card border-0 bg-light h-100">
+                        <div class="card-body">
+                            <h6 class="text-muted">Dormant Agents Trend</h6>
+                            <canvas id="dormantAgentsTrendChart" height="180"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="{% if user.user_type == 'master_agent' %}col-lg-4{% else %}col-lg-6{% endif %}">
+                    <div class="card border-0 bg-light h-100">
+                        <div class="card-body">
+                            <h6 class="text-muted">Active vs Dormant Agents</h6>
+                            <canvas id="dormantAgentsActiveChart" height="180"></canvas>
+                        </div>
+                    </div>
+                </div>
+                {% if user.user_type == 'master_agent' %}
+                <div class="col-lg-4">
+                    <div class="card border-0 bg-light h-100">
+                        <div class="card-body">
+                            <h6 class="text-muted">Dormant Agents by Super Agent</h6>
+                            <canvas id="dormantAgentsBySuperChart" height="180"></canvas>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Agent Username</th>
+                            <th>Agent Name</th>
+                            <th>Super Agent</th>
+                            <th>Last Agent Activity</th>
+                            <th>Last Downline Activity</th>
+                            <th class="text-center">Number of Cashiers</th>
+                            <th class="text-center">Dormant Days</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in dormant_agents_rows %}
+                        <tr>
+                            <td>
+                                <button class="btn btn-link p-0 text-decoration-none fw-semibold" type="button" data-bs-toggle="collapse" data-bs-target="#dormantAgent{{ u.id }}" aria-expanded="false" aria-controls="dormantAgent{{ u.id }}">
+                                    {{ u.username|default:u.email|default:"-" }}
+                                </button>
+                            </td>
+                            <td>{{ u.get_full_name|default:"-" }}</td>
+                            <td>{% if u.super_agent %}{{ u.super_agent.username|default:u.super_agent.email|default:"-" }}{% else %}-{% endif %}</td>
+                            <td class="text-nowrap text-muted small">{% if u.last_agent_activity_at %}{{ u.last_agent_activity_at|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</td>
+                            <td class="text-nowrap text-muted small">{% if u.last_downline_activity_at %}{{ u.last_downline_activity_at|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</td>
+                            <td class="text-center">{{ u.cashiers_count }}</td>
+                            <td class="text-center">{{ u.dormant_days|default_if_none:"-" }}</td>
+                        </tr>
+                        <tr class="collapse" id="dormantAgent{{ u.id }}">
+                            <td colspan="7" class="bg-light">
+                                <div class="row g-3 py-2">
+                                    <div class="col-lg-4">
+                                        <div class="fw-semibold mb-2">Agent Details</div>
+                                        <div class="small text-muted">Username</div>
+                                        <div>{{ u.username|default:u.email|default:"-" }}</div>
+                                        <div class="small text-muted mt-2">Agent Name</div>
+                                        <div>{{ u.get_full_name|default:"-" }}</div>
+                                        <div class="small text-muted mt-2">Status</div>
+                                        <div>{% if u.is_locked %}Locked{% elif u.is_active %}Active{% else %}Inactive{% endif %}</div>
+                                    </div>
+                                    <div class="col-lg-4">
+                                        <div class="fw-semibold mb-2">Activity Snapshot</div>
+                                        <div class="small text-muted">Last Agent Login</div>
+                                        <div>{{ u.last_login|date:"Y-m-d H:i"|default:"Never" }}</div>
+                                        <div class="small text-muted mt-2">Last Agent Bet</div>
+                                        <div>{{ u.agent_last_bet_at|date:"Y-m-d H:i"|default:"Never" }}</div>
+                                        <div class="small text-muted mt-2">Last Deposit Date</div>
+                                        <div>{{ u.agent_last_deposit_at|date:"Y-m-d H:i"|default:"Never" }}</div>
+                                        <div class="small text-muted mt-2">Last Downline Activity</div>
+                                        <div>{{ u.last_downline_activity_at|date:"Y-m-d H:i"|default:"Never" }}</div>
+                                        <div class="small text-muted mt-2">Dormant Days</div>
+                                        <div>{{ u.dormant_days|default_if_none:"-" }}</div>
+                                    </div>
+                                    <div class="col-lg-4">
+                                        <div class="fw-semibold mb-2">Mapped Cashiers</div>
+                                        {% if u.mapped_cashiers_rows %}
+                                        <ul class="list-group list-group-flush">
+                                            {% for cashier in u.mapped_cashiers_rows %}
+                                            <li class="list-group-item px-0 bg-transparent d-flex justify-content-between align-items-start">
+                                                <div>
+                                                    <div class="fw-semibold">{{ cashier.username|default:cashier.email|default:"-" }}</div>
+                                                    <div class="small text-muted">{{ cashier.get_full_name|default:"No name" }}</div>
+                                                </div>
+                                                <div class="text-end small text-muted">
+                                                    <div>Last Login</div>
+                                                    <div>{{ cashier.last_login|date:"Y-m-d H:i"|default:"Never" }}</div>
+                                                </div>
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% else %}
+                                        <div class="text-muted small">No mapped cashiers found.</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="7" class="text-center text-muted py-4">No dormant agents found for this hierarchy.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {% if dormant_agents_page %}
+            <div class="d-flex justify-content-between align-items-center mt-3">
+                <div class="text-muted small">Page {{ dormant_agents_page.number }} of {{ dormant_agents_page.paginator.num_pages }}</div>
+                <div class="d-flex gap-2">
+                    {% if dormant_agents_page.has_previous %}
+                    <a class="btn btn-sm btn-outline-secondary" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_agents_page.previous_page_number }}#downline-dormant-agents">Prev</a>
+                    {% endif %}
+                    {% if dormant_agents_page.has_next %}
+                    <a class="btn btn-sm btn-outline-secondary" href="?scope={{ metrics_scope }}&start_date={{ current_start_date }}&end_date={{ current_end_date }}&sort_by={{ current_sort_by }}&sort_dir={{ current_sort_dir }}&dormant_q={{ dormant_q }}&dormant_bucket={{ dormant_bucket }}&dormant_super_agent={{ dormant_super_agent }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_agents_page.next_page_number }}#downline-dormant-agents">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     <div class="d-flex justify-content-between align-items-center mt-5 mb-3">
         <h3 class="fw-bold text-secondary mb-0">Downline Bet Tickets</h3>
         <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#downlineTicketsCollapse" aria-expanded="true" aria-controls="downlineTicketsCollapse">
@@ -800,8 +1041,72 @@
 </div>
 
 {% include 'betting/includes/account_unlock_appeal_script.html' %}
+{% if user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endif %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        if (window.Chart) {
+            const trendCanvas = document.getElementById('dormantAgentsTrendChart');
+            if (trendCanvas) {
+                const trend = {{ dormant_agents_trend_chart|safe }};
+                new Chart(trendCanvas, {
+                    type: 'line',
+                    data: {
+                        labels: trend.labels || [],
+                        datasets: [{
+                            label: 'Dormant Agents',
+                            data: trend.values || [],
+                            borderColor: '#0d6efd',
+                            backgroundColor: 'rgba(13, 110, 253, 0.12)',
+                            fill: true,
+                            tension: 0.35,
+                        }]
+                    },
+                    options: {responsive: true, maintainAspectRatio: false}
+                });
+            }
+
+            const activeCanvas = document.getElementById('dormantAgentsActiveChart');
+            if (activeCanvas) {
+                const activeDormant = {{ dormant_agents_active_chart|safe }};
+                new Chart(activeCanvas, {
+                    type: 'doughnut',
+                    data: {
+                        labels: activeDormant.labels || [],
+                        datasets: [{
+                            data: activeDormant.values || [],
+                            backgroundColor: ['#198754', '#dc3545'],
+                        }]
+                    },
+                    options: {responsive: true, maintainAspectRatio: false}
+                });
+            }
+
+            const bySuperCanvas = document.getElementById('dormantAgentsBySuperChart');
+            if (bySuperCanvas) {
+                const bySuper = {{ dormant_agents_by_super_chart|safe }};
+                new Chart(bySuperCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: bySuper.labels || [],
+                        datasets: [{
+                            label: 'Dormant Agents',
+                            data: bySuper.values || [],
+                            backgroundColor: '#6f42c1',
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {beginAtZero: true, ticks: {precision: 0}}
+                        }
+                    }
+                });
+            }
+        }
+
         const searchInput = document.getElementById('ticketSearchInput');
         const statusFilter = document.getElementById('ticketStatusFilter');
         const tableBody = document.getElementById('downlineTicketsBody');

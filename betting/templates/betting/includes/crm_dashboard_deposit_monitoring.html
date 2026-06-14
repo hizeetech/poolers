@@ -1,0 +1,195 @@
+<div class="row g-3">
+  <div class="col-12">
+    <div class="card shadow-sm">
+      <div class="card-header bg-light">
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3">
+          <div>
+            <div class="fw-semibold">Deposit Monitoring</div>
+            <div class="text-muted small">Track deposit success, failures, large deposits, and repeated failed depositors.</div>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=deposit_monitoring&format=csv&start_date={{ start_date }}&end_date={{ end_date }}&deposit_status_filter={{ deposit_status_filter }}&deposit_gateway={{ deposit_gateway }}&deposit_flag={{ deposit_flag }}">CSV</a>
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=deposit_monitoring&format=xlsx&start_date={{ start_date }}&end_date={{ end_date }}&deposit_status_filter={{ deposit_status_filter }}&deposit_gateway={{ deposit_gateway }}&deposit_flag={{ deposit_flag }}">Excel</a>
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=deposit_monitoring&format=pdf&start_date={{ start_date }}&end_date={{ end_date }}&deposit_status_filter={{ deposit_status_filter }}&deposit_gateway={{ deposit_gateway }}&deposit_flag={{ deposit_flag }}">PDF</a>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row g-3 mb-3">
+          <div class="col-6 col-lg-2">
+            <div class="card h-100">
+              <div class="card-body">
+                <div class="text-muted small">Successful Today</div>
+                <div class="fs-4 fw-bold">{{ deposit_cards.successful_today }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-2">
+            <div class="card h-100">
+              <div class="card-body">
+                <div class="text-muted small">Pending</div>
+                <div class="fs-4 fw-bold">{{ deposit_cards.pending }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-2">
+            <div class="card h-100">
+              <div class="card-body">
+                <div class="text-muted small">Failed</div>
+                <div class="fs-4 fw-bold">{{ deposit_cards.failed }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="card h-100">
+              <div class="card-body">
+                <div class="text-muted small">Large Deposits</div>
+                <div class="fs-4 fw-bold">{{ deposit_cards.large }}</div>
+                <div class="text-muted small">Threshold: ₦{{ deposit_cards.large_threshold|floatformat:2 }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="card h-100">
+              <div class="card-body">
+                <div class="text-muted small">Repeated Failed Depositors</div>
+                <div class="fs-4 fw-bold">{{ deposit_cards.repeat_failed }}</div>
+                <div class="text-muted small">Threshold: {{ deposit_cards.repeat_threshold }}+ failed deposits</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mb-3">
+          <div class="col-12 col-xl-8">
+            <form method="get" class="row g-2 align-items-end">
+              <input type="hidden" name="tab" value="deposit_monitoring">
+              <div class="col-6 col-md-3">
+                <label class="form-label small text-muted mb-1">Status</label>
+                <select name="deposit_status_filter" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="completed" {% if deposit_status_filter == 'completed' %}selected{% endif %}>Successful</option>
+                  <option value="pending" {% if deposit_status_filter == 'pending' %}selected{% endif %}>Pending</option>
+                  <option value="failed" {% if deposit_status_filter == 'failed' %}selected{% endif %}>Failed</option>
+                </select>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label small text-muted mb-1">Gateway</label>
+                <select name="deposit_gateway" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="paystack" {% if deposit_gateway == 'paystack' %}selected{% endif %}>Paystack</option>
+                  <option value="monnify" {% if deposit_gateway == 'monnify' %}selected{% endif %}>Monnify</option>
+                  <option value="kora" {% if deposit_gateway == 'kora' %}selected{% endif %}>Kora</option>
+                </select>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label small text-muted mb-1">Flag</label>
+                <select name="deposit_flag" class="form-select form-select-sm">
+                  <option value="">All</option>
+                  <option value="large" {% if deposit_flag == 'large' %}selected{% endif %}>Large Deposits</option>
+                  <option value="repeat_failed" {% if deposit_flag == 'repeat_failed' %}selected{% endif %}>Repeated Failed</option>
+                </select>
+              </div>
+              <input type="hidden" name="start_date" value="{{ start_date }}">
+              <input type="hidden" name="end_date" value="{{ end_date }}">
+              <div class="col-6 col-md-3">
+                <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+              </div>
+            </form>
+          </div>
+          <div class="col-12 col-xl-4">
+            <form method="post" class="border rounded p-3 h-100 bg-light">
+              {% csrf_token %}
+              <input type="hidden" name="tab" value="deposit_monitoring">
+              <input type="hidden" name="update_crm_thresholds" value="1">
+              <div class="fw-semibold mb-2">Threshold Settings</div>
+              <div class="mb-2">
+                <label class="form-label small text-muted mb-1">Large Deposit Threshold</label>
+                {{ threshold_form.crm_large_deposit_threshold }}
+              </div>
+              <div class="mb-2">
+                <label class="form-label small text-muted mb-1">Repeated Failed Threshold</label>
+                {{ threshold_form.crm_failed_deposit_repeat_threshold }}
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit">Save Thresholds</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Date</th>
+                <th>User</th>
+                <th class="text-end">Amount</th>
+                <th>Gateway</th>
+                <th>Status</th>
+                <th>Reference</th>
+                <th>Attempts</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in deposit_page %}
+              {% with tx=row.transaction %}
+              <tr>
+                <td class="text-nowrap">{{ tx.timestamp|date:"Y-m-d H:i"|default:"-" }}</td>
+                <td>
+                  <div class="fw-semibold">{{ tx.user.username|default:tx.user.email|default:"-" }}</div>
+                  <div class="text-muted small">{{ tx.user.get_full_name|default:"-" }}</div>
+                </td>
+                <td class="text-end fw-semibold">₦{{ tx.amount|floatformat:2 }}</td>
+                <td class="text-muted small">{{ tx.get_payment_gateway_display|default:tx.payment_gateway|default:"-" }}</td>
+                <td>
+                  {% if tx.status == 'completed' %}
+                  <span class="badge bg-success">Successful</span>
+                  {% elif tx.status == 'pending' %}
+                  <span class="badge bg-warning text-dark">Pending</span>
+                  {% else %}
+                  <span class="badge bg-danger">Failed</span>
+                  {% endif %}
+                  {% if row.is_large %}<span class="badge bg-info text-dark ms-1">Large</span>{% endif %}
+                  {% if row.is_repeat_failed %}<span class="badge bg-dark ms-1">Repeated Failed</span>{% endif %}
+                </td>
+                <td class="text-muted small">{{ tx.external_reference|default:tx.paystack_reference|default:tx.id }}</td>
+                <td>{{ row.attempts }}</td>
+                <td class="text-end">
+                  <div class="btn-group btn-group-sm">
+                    <a class="btn btn-outline-primary" href="{% url 'betting:crm_user_detail' tx.user.id %}">View User</a>
+                    <button type="button" class="btn btn-outline-secondary js-open-crm-message-modal" data-user-id="{{ tx.user.id }}" data-user-label="{{ tx.user.username|default:tx.user.email|default:'User' }}" data-channels="sms,in_app">Contact</button>
+                  </div>
+                  <form method="post" class="d-inline-block ms-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="tab" value="deposit_monitoring">
+                    <input type="hidden" name="escalate_deposit" value="1">
+                    <input type="hidden" name="transaction_id" value="{{ tx.id }}">
+                    <input type="hidden" name="escalation_note" value="Escalated from deposit monitoring table.">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Escalate</button>
+                  </form>
+                </td>
+              </tr>
+              {% endwith %}
+              {% empty %}
+              <tr><td colspan="8" class="text-center text-muted py-4">No deposits found for the selected filters.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% if deposit_page %}
+<div class="d-flex justify-content-between align-items-center">
+  <div class="text-muted small">Page {{ deposit_page.number }} of {{ deposit_page.paginator.num_pages }}</div>
+  <div class="d-flex gap-2">
+    {% if deposit_page.has_previous %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=deposit_monitoring&start_date={{ start_date }}&end_date={{ end_date }}&deposit_status_filter={{ deposit_status_filter }}&deposit_gateway={{ deposit_gateway }}&deposit_flag={{ deposit_flag }}&deposit_page={{ deposit_page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% if deposit_page.has_next %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=deposit_monitoring&start_date={{ start_date }}&end_date={{ end_date }}&deposit_status_filter={{ deposit_status_filter }}&deposit_gateway={{ deposit_gateway }}&deposit_flag={{ deposit_flag }}&deposit_page={{ deposit_page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

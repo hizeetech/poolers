@@ -117,6 +117,24 @@
       <button class="nav-link {% if active_tab == 'communications' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#communications" type="button" role="tab">Communications</button>
     </li>
     <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'dormant_accounts' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#dormant_accounts" type="button" role="tab">Dormant Accounts</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'complaints' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#complaints" type="button" role="tab">Complaints</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'deposit_monitoring' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#deposit_monitoring" type="button" role="tab">Deposit Monitoring</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'agent_performance' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agent_performance" type="button" role="tab">Agent Performance</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'user_activation' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#user_activation" type="button" role="tab">User Activation</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'bulk_messaging' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#bulk_messaging" type="button" role="tab">Bulk Messaging</button>
+    </li>
+    <li class="nav-item" role="presentation">
       <button class="nav-link {% if active_tab == 'risk' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#risk" type="button" role="tab">Risk</button>
     </li>
     <li class="nav-item" role="presentation">
@@ -452,7 +470,13 @@
                   <td class="fw-semibold">{{ t.ticket_id }}</td>
                   <td class="text-muted small">
                     <div class="fw-semibold text-dark">
-                      {{ t.user.agent.get_full_name|default:t.user.agent.email|default:t.user.agent.username|default:"-" }}
+                      {% with agent=t.user.agent %}
+                      {% if agent %}
+                      {{ agent.get_full_name|default:agent.username|default:agent.email|default:"-" }}
+                      {% else %}
+                      -
+                      {% endif %}
+                      {% endwith %}
                     </div>
                   </td>
                   <td class="text-muted small"><div class="fw-semibold text-dark">{{ t.user.username|default:"-" }}</div></td>
@@ -653,8 +677,8 @@
                     <td class="text-muted small">{{ ag.email|default:ag.username }}</td>
                     <td class="text-muted small">{{ ag.username|default:"-" }}</td>
                     <td class="text-muted small">{{ ag.phone_number|default:"-" }}</td>
-                    <td class="text-muted small">{{ ag.master_agent.email|default:"-" }}</td>
-                    <td class="text-muted small">{{ ag.super_agent.email|default:"-" }}</td>
+                    <td class="text-muted small">{% if ag.master_agent %}{{ ag.master_agent.email|default:ag.master_agent.username|default:"-" }}{% else %}-{% endif %}</td>
+                    <td class="text-muted small">{% if ag.super_agent %}{{ ag.super_agent.email|default:ag.super_agent.username|default:"-" }}{% else %}-{% endif %}</td>
                     <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_user_detail' ag.id %}">Open</a></td>
                   </tr>
                   {% empty %}
@@ -829,7 +853,7 @@
                 <tr>
                   <td class="text-nowrap">{{ c.created_at|date:"Y-m-d H:i" }}</td>
                   <td class="fw-semibold">{{ c.title }}</td>
-                  <td class="text-muted small">{{ c.created_by.email|default:"-" }}</td>
+                  <td class="text-muted small">{% if c.created_by %}{{ c.created_by.email|default:c.created_by.username|default:"-" }}{% else %}-{% endif %}</td>
                   <td class="text-muted small">{% if c.sent_at %}Sent{% else %}Queued{% endif %}</td>
                 </tr>
                 {% empty %}
@@ -840,6 +864,30 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'dormant_accounts' %}show active{% endif %}" id="dormant_accounts" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_dormant_accounts.html' %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'complaints' %}show active{% endif %}" id="complaints" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_complaints.html' %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'deposit_monitoring' %}show active{% endif %}" id="deposit_monitoring" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_deposit_monitoring.html' %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'agent_performance' %}show active{% endif %}" id="agent_performance" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_agent_performance.html' %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'user_activation' %}show active{% endif %}" id="user_activation" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_user_activation.html' %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'bulk_messaging' %}show active{% endif %}" id="bulk_messaging" role="tabpanel">
+      {% include 'betting/includes/crm_dashboard_bulk_messaging.html' %}
     </div>
 
     <div class="tab-pane fade {% if active_tab == 'risk' %}show active{% endif %}" id="risk" role="tabpanel">
@@ -1103,9 +1151,9 @@
                     {% for item in recent_agent_transfers %}
                     <tr>
                       <td class="text-nowrap">{{ item.created_at|date:"Y-m-d H:i" }}</td>
-                      <td class="text-muted small">{{ item.agent.username|default:item.agent.email|default:"-" }}</td>
-                      <td class="text-muted small">{{ item.old_super_agent.username|default:item.old_super_agent.email|default:"-" }}</td>
-                      <td class="text-muted small">{{ item.new_super_agent.username|default:item.new_super_agent.email|default:"-" }}</td>
+                      <td class="text-muted small">{% if item.agent %}{{ item.agent.username|default:item.agent.email|default:"-" }}{% else %}-{% endif %}</td>
+                      <td class="text-muted small">{% if item.old_super_agent %}{{ item.old_super_agent.username|default:item.old_super_agent.email|default:"-" }}{% else %}-{% endif %}</td>
+                      <td class="text-muted small">{% if item.new_super_agent %}{{ item.new_super_agent.username|default:item.new_super_agent.email|default:"-" }}{% else %}-{% endif %}</td>
                     </tr>
                     {% empty %}
                     <tr><td colspan="4" class="text-center text-muted py-4">No transfer history yet.</td></tr>
@@ -1296,12 +1344,57 @@
                 <tr>
                   <td class="text-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
                   <td class="text-uppercase small">{{ a.action_type }}</td>
-                  <td class="text-muted small">{{ a.actor.email|default:"-" }}</td>
-                  <td class="text-muted small">{{ a.target_user.email|default:"-" }}</td>
+                  <td class="text-muted small">{% if a.actor %}{{ a.actor.email|default:a.actor.username|default:"-" }}{% else %}-{% endif %}</td>
+                  <td class="text-muted small">{% if a.target_user %}{{ a.target_user.email|default:a.target_user.username|default:"-" }}{% else %}-{% endif %}</td>
                   <td class="text-muted small">{{ a.reason|default:"-" }}</td>
                 </tr>
                 {% empty %}
                 <tr><td colspan="5" class="text-center text-muted py-4">No audit logs found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-light fw-semibold">CRM Operations Audit Trail</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Module</th>
+                  <th>Action</th>
+                  <th>Performed By</th>
+                  <th>Target User</th>
+                  <th>IP Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in ops_audit_logs %}
+                <tr>
+                  <td class="text-nowrap">{{ log.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="text-muted small">{{ log.get_module_display }}</td>
+                  <td class="text-muted small">{{ log.action }}</td>
+                  <td class="text-muted small">
+                    {% if log.actor %}
+                    {{ log.actor.username|default:log.actor.email|default:"System" }}
+                    {% else %}
+                    System
+                    {% endif %}
+                  </td>
+                  <td class="text-muted small">
+                    {% if log.target_user %}
+                    {{ log.target_user.username|default:log.target_user.email|default:"-" }}
+                    {% else %}
+                    -
+                    {% endif %}
+                  </td>
+                  <td class="text-muted small">{{ log.ip_address|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No operations audit logs found.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -1315,6 +1408,7 @@
 
 {{ charts_data|json_script:"crm-charts-data" }}
 {% include 'betting/includes/account_unlock_appeal_script.html' %}
+{% include 'betting/includes/crm_dashboard_message_modal.html' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   (function () {
@@ -1421,6 +1515,97 @@
       } else {
         topBody.innerHTML = topFixtures.map(r => `<tr><td>${(r.label || '').replaceAll('<','&lt;').replaceAll('>','&gt;')}</td><td class="text-end fw-semibold">${r.picks || 0}</td></tr>`).join('');
       }
+    }
+
+    const performanceCanvas = document.getElementById('crmPerformanceChart');
+    if (performanceCanvas && window.Chart) {
+      const perf = {{ performance_chart|safe }};
+      new Chart(performanceCanvas, {
+        type: 'line',
+        data: {
+          labels: perf.labels || [],
+          datasets: [
+            { label: 'Turnover', data: perf.turnover || [], borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.10)', tension: 0.25 },
+            { label: 'GGR', data: perf.ggr || [], borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.10)', tension: 0.25 },
+            { label: 'Commission', data: perf.commission || [], borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.10)', tension: 0.25 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    const bulkForms = document.querySelectorAll('.js-dashboard-bulk-message-form');
+    bulkForms.forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        const selector = form.getAttribute('data-hidden-target');
+        const hiddenInput = selector ? document.querySelector(selector) : null;
+        if (!hiddenInput) return;
+        const checked = Array.from(form.querySelectorAll('.js-dashboard-user-checkbox:checked')).map((el) => el.value);
+        hiddenInput.value = checked.join(',');
+        if (!checked.length) {
+          event.preventDefault();
+          window.alert('Select at least one user.');
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-dashboard-select-all').forEach((toggle) => {
+      toggle.addEventListener('change', () => {
+        const selector = toggle.getAttribute('data-checkboxes');
+        if (!selector) return;
+        document.querySelectorAll(selector).forEach((checkbox) => {
+          checkbox.checked = toggle.checked;
+        });
+      });
+    });
+
+    document.querySelectorAll('form').forEach((form) => {
+      const bulkCampaignFlag = form.querySelector('input[name="save_bulk_campaign"][value="1"]');
+      const targetGroupField = form.querySelector('select[name="target_group"]');
+      const agentsField = form.querySelector('.js-bulk-agents-field');
+      const usersField = form.querySelector('.js-bulk-users-field');
+      if (!bulkCampaignFlag || !targetGroupField || !agentsField || !usersField) return;
+
+      const syncBulkAudienceFields = () => {
+        const targetGroup = targetGroupField.value || '';
+        agentsField.style.display = targetGroup === 'specific_agents' ? '' : 'none';
+        usersField.style.display = targetGroup === 'custom_users' ? '' : 'none';
+      };
+
+      syncBulkAudienceFields();
+      targetGroupField.addEventListener('change', syncBulkAudienceFields);
+    });
+
+    const messageModalEl = document.getElementById('crmDashboardMessageModal');
+    const messageTargetLabel = document.getElementById('crmDashboardMessageTargetLabel');
+    const messageTargetIds = document.getElementById('crmDashboardMessageTargetIds');
+    const messageModuleInput = messageModalEl ? messageModalEl.querySelector('input[name="module"]') : null;
+    const messageTabInput = messageModalEl ? messageModalEl.querySelector('input[name="tab"]') : null;
+    if (messageModalEl && messageTargetIds) {
+      const modalInstance = (typeof bootstrap !== 'undefined' && bootstrap.Modal) ? bootstrap.Modal.getOrCreateInstance(messageModalEl) : null;
+      document.querySelectorAll('.js-open-crm-message-modal').forEach((button) => {
+        button.addEventListener('click', () => {
+          const userId = button.getAttribute('data-user-id') || '';
+          const userLabel = button.getAttribute('data-user-label') || 'Selected user';
+          const channels = (button.getAttribute('data-channels') || 'in_app').split(',');
+          messageTargetIds.value = userId;
+          if (messageTargetLabel) {
+            messageTargetLabel.textContent = `Recipient: ${userLabel}`;
+          }
+          if (messageModuleInput) {
+            messageModuleInput.value = '{{ active_tab }}';
+          }
+          if (messageTabInput) {
+            messageTabInput.value = '{{ active_tab }}';
+          }
+          messageModalEl.querySelectorAll('input[name="message_channels"]').forEach((checkbox) => {
+            checkbox.checked = channels.includes(checkbox.value);
+          });
+          if (modalInstance) {
+            modalInstance.show();
+          }
+        });
+      });
     }
 
     const feedUrl = "{% url 'betting:crm_activity_feed' %}";

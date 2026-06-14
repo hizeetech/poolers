@@ -61,7 +61,10 @@ from .models import (
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
     AgentTransferLog,
     AccountUnlockAppeal, AccountLockAuditLog,
-    FinanceAuditLog, CRMActionLog, WithdrawalReport
+    FinanceAuditLog, CRMActionLog, WithdrawalReport,
+    CustomerComplaint, CustomerComplaintNote,
+    BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery,
+    CRMOpsAuditLog,
 )
 from . import signals
 
@@ -1881,6 +1884,70 @@ class CRMActionLogAdmin(admin.ModelAdmin):
         return request.user.is_superuser
 
 
+class CustomerComplaintAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'complaint_type', 'user', 'subject', 'status', 'priority', 'assigned_to')
+    list_filter = ('complaint_type', 'status', 'priority', 'created_at', 'resolved_at')
+    search_fields = ('user__email', 'user__username', 'subject', 'description', 'assigned_to__email', 'assigned_to__username')
+    autocomplete_fields = ('user', 'assigned_to', 'created_by')
+    list_select_related = ('user', 'assigned_to', 'created_by')
+    date_hierarchy = 'created_at'
+
+
+class CustomerComplaintNoteAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'complaint', 'author', 'is_internal')
+    list_filter = ('is_internal', 'created_at')
+    search_fields = ('complaint__subject', 'author__email', 'author__username', 'note')
+    autocomplete_fields = ('complaint', 'author')
+    list_select_related = ('complaint', 'author')
+    date_hierarchy = 'created_at'
+
+
+class BulkMessageTemplateAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'default_channel', 'is_active', 'created_by', 'created_at')
+    list_filter = ('category', 'default_channel', 'is_active', 'created_at')
+    search_fields = ('name', 'subject', 'message', 'created_by__email', 'created_by__username')
+    autocomplete_fields = ('created_by',)
+    list_select_related = ('created_by',)
+    date_hierarchy = 'created_at'
+
+
+class BulkMessageCampaignAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'subject', 'channel', 'target_group', 'status', 'recipients_count', 'delivered_count', 'failed_count', 'created_by')
+    list_filter = ('channel', 'target_group', 'status', 'recurring_pattern', 'created_at', 'sent_at')
+    search_fields = ('subject', 'message', 'created_by__email', 'created_by__username')
+    autocomplete_fields = ('template', 'created_by')
+    list_select_related = ('template', 'created_by')
+    date_hierarchy = 'created_at'
+
+
+class BulkMessageDeliveryAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'campaign', 'recipient', 'channel', 'status', 'sent_at')
+    list_filter = ('channel', 'status', 'created_at', 'sent_at')
+    search_fields = ('campaign__subject', 'recipient__email', 'recipient__username', 'error_message')
+    autocomplete_fields = ('campaign', 'recipient')
+    list_select_related = ('campaign', 'recipient')
+    date_hierarchy = 'created_at'
+
+
+class CRMOpsAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'module', 'action', 'actor', 'target_user', 'complaint', 'campaign', 'transaction', 'ip_address')
+    list_filter = ('module', 'action', 'created_at')
+    search_fields = ('actor__email', 'actor__username', 'target_user__email', 'target_user__username', 'complaint__subject', 'campaign__subject', 'ip_address')
+    readonly_fields = [f.name for f in CRMOpsAuditLog._meta.fields]
+    autocomplete_fields = ('actor', 'target_user', 'complaint', 'campaign', 'transaction')
+    list_select_related = ('actor', 'target_user', 'complaint', 'campaign', 'transaction')
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
 class AgentTransferLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'agent', 'old_super_agent', 'new_super_agent', 'transferred_by')
     list_filter = ('created_at', 'old_super_agent', 'new_super_agent', 'transferred_by')
@@ -1975,6 +2042,12 @@ betting_admin_site.register(RetailManagerSuperAgentMapping, RetailManagerSuperAg
 betting_admin_site.register(RetailManagerAgentMapping, RetailManagerAgentMappingAdmin)
 betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
 betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
+betting_admin_site.register(CustomerComplaint, CustomerComplaintAdmin)
+betting_admin_site.register(CustomerComplaintNote, CustomerComplaintNoteAdmin)
+betting_admin_site.register(BulkMessageTemplate, BulkMessageTemplateAdmin)
+betting_admin_site.register(BulkMessageCampaign, BulkMessageCampaignAdmin)
+betting_admin_site.register(BulkMessageDelivery, BulkMessageDeliveryAdmin)
+betting_admin_site.register(CRMOpsAuditLog, CRMOpsAuditLogAdmin)
 betting_admin_site.register(AgentTransferLog, AgentTransferLogAdmin)
 betting_admin_site.register(AccountUnlockAppeal, AccountUnlockAppealAdmin)
 betting_admin_site.register(AccountLockAuditLog, AccountLockAuditLogAdmin)
@@ -2341,6 +2414,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         }),
         ('Ticket Void Settings', {
             'fields': ('enable_global_cashier_voiding',),
+        }),
+        ('CRM Operations', {
+            'fields': ('crm_large_deposit_threshold', 'crm_failed_deposit_repeat_threshold'),
+            'description': 'Thresholds used by CRM deposit monitoring and failed deposit flagging.',
         }),
         ('Bet Permission Settings', {
             'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),

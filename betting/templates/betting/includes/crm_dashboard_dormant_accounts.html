@@ -1,0 +1,234 @@
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3">
+      <div>
+        <div class="fw-semibold">Dormant Accounts Center</div>
+        <div class="text-muted small">Identify inactive users and re-engage them across the platform hierarchy.</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=csv&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">CSV</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=xlsx&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_export' %}?dataset=dormant_accounts&format=pdf&q={{ q }}&start_date={{ start_date }}&end_date={{ end_date }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">PDF</a>
+      </div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-lg">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_7&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+          <div class="card h-100 {% if dormant_bucket == 'login_7' %}border-primary{% endif %}">
+            <div class="card-body">
+              <div class="text-muted small">Dormant 7 Days</div>
+              <div class="fs-4 fw-bold">{{ dormant_cards.login_7 }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-6 col-lg">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_14&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+          <div class="card h-100 {% if dormant_bucket == 'login_14' %}border-primary{% endif %}">
+            <div class="card-body">
+              <div class="text-muted small">Dormant 14 Days</div>
+              <div class="fs-4 fw-bold">{{ dormant_cards.login_14 }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-6 col-lg">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=login_30&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+          <div class="card h-100 {% if dormant_bucket == 'login_30' %}border-primary{% endif %}">
+            <div class="card-body">
+              <div class="text-muted small">Dormant 30 Days</div>
+              <div class="fs-4 fw-bold">{{ dormant_cards.login_30 }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-6 col-lg">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=no_bets&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+          <div class="card h-100 {% if dormant_bucket == 'no_bets' %}border-primary{% endif %}">
+            <div class="card-body">
+              <div class="text-muted small">No Bets</div>
+              <div class="fs-4 fw-bold">{{ dormant_cards.no_bets }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+      <div class="col-6 col-lg">
+        <a class="text-decoration-none" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket=no_deposits&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}">
+          <div class="card h-100 {% if dormant_bucket == 'no_deposits' %}border-primary{% endif %}">
+            <div class="card-body">
+              <div class="text-muted small">No Deposits</div>
+              <div class="fs-4 fw-bold">{{ dormant_cards.no_deposits }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+
+    <form method="get" class="row g-2 align-items-end mb-3">
+      <input type="hidden" name="tab" value="dormant_accounts">
+      <div class="col-12 col-md-3">
+        <label class="form-label small text-muted mb-1">Search</label>
+        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Username, name, email or phone">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small text-muted mb-1">User Type</label>
+        <select name="dormant_user_type" class="form-select form-select-sm">
+          <option value="">All</option>
+          <option value="player" {% if dormant_user_type == 'player' %}selected{% endif %}>Player</option>
+          <option value="agent" {% if dormant_user_type == 'agent' %}selected{% endif %}>Agent</option>
+          <option value="super_agent" {% if dormant_user_type == 'super_agent' %}selected{% endif %}>Super Agent</option>
+          <option value="retail_manager" {% if dormant_user_type == 'retail_manager' %}selected{% endif %}>Retail Manager</option>
+          <option value="cashier" {% if dormant_user_type == 'cashier' %}selected{% endif %}>Cashier</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small text-muted mb-1">Agent</label>
+        <select name="dormant_agent" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for ag in crm_filter_agents %}
+          <option value="{{ ag.id }}" {% if dormant_agent == ag.id|stringformat:"s" %}selected{% endif %}>{{ ag.username|default:ag.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small text-muted mb-1">Super Agent</label>
+        <select name="dormant_super_agent" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for sa in crm_filter_super_agents %}
+          <option value="{{ sa.id }}" {% if dormant_super_agent == sa.id|stringformat:"s" %}selected{% endif %}>{{ sa.username|default:sa.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small text-muted mb-1">Retail Manager</label>
+        <select name="dormant_retail_manager" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for rm in crm_filter_retail_managers %}
+          <option value="{{ rm.id }}" {% if dormant_retail_manager == rm.id|stringformat:"s" %}selected{% endif %}>{{ rm.username|default:rm.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-1">
+        <label class="form-label small text-muted mb-1">Status</label>
+        <select name="dormant_status" class="form-select form-select-sm">
+          <option value="">All</option>
+          <option value="active" {% if dormant_status == 'active' %}selected{% endif %}>Active</option>
+          <option value="inactive" {% if dormant_status == 'inactive' %}selected{% endif %}>Inactive</option>
+          <option value="locked" {% if dormant_status == 'locked' %}selected{% endif %}>Locked</option>
+        </select>
+      </div>
+      <input type="hidden" name="dormant_bucket" value="{{ dormant_bucket }}">
+      <input type="hidden" name="start_date" value="{{ start_date }}">
+      <input type="hidden" name="end_date" value="{{ end_date }}">
+      <div class="col-12">
+        <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+      </div>
+    </form>
+
+    <form method="post" class="js-dashboard-bulk-message-form" data-hidden-target="#crmDormantTargetIds">
+      {% csrf_token %}
+      <input type="hidden" name="tab" value="dormant_accounts">
+      <input type="hidden" name="module" value="dormant_accounts">
+      <input type="hidden" name="send_dashboard_message" value="1">
+      <input type="hidden" name="target_user_ids" id="crmDormantTargetIds">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th><input type="checkbox" class="form-check-input js-dashboard-select-all" data-checkboxes=".js-dormant-user-checkbox"></th>
+              <th>Username</th>
+              <th>Full Name</th>
+              <th>User Type</th>
+              <th>Last Login</th>
+              <th>Last Bet</th>
+              <th>Last Deposit</th>
+              <th class="text-end">Wallet Balance</th>
+              <th>Status</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in dormant_page %}
+            <tr>
+              <td><input type="checkbox" class="form-check-input js-dormant-user-checkbox js-dashboard-user-checkbox" value="{{ u.id }}"></td>
+              <td class="fw-semibold">{{ u.username|default:u.email|default:"-" }}</td>
+              <td>{{ u.get_full_name|default:"-" }}</td>
+              <td class="text-uppercase small">{{ u.get_user_type_display }}</td>
+              <td class="text-nowrap text-muted small">{{ u.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td class="text-nowrap text-muted small">{{ u.last_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td class="text-nowrap text-muted small">{{ u.last_deposit_at|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td class="text-end fw-semibold">₦{{ u.wallet_balance_annotated|floatformat:2 }}</td>
+              <td>
+                {% if u.is_locked %}
+                <span class="badge bg-danger">Locked</span>
+                {% elif u.is_active %}
+                <span class="badge bg-success">Active</span>
+                {% else %}
+                <span class="badge bg-secondary">Inactive</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="btn-group btn-group-sm">
+                  <button type="button" class="btn btn-outline-secondary js-open-crm-message-modal" data-user-id="{{ u.id }}" data-user-label="{{ u.username|default:u.email|default:'User' }}" data-channels="sms">SMS</button>
+                  <button type="button" class="btn btn-outline-secondary js-open-crm-message-modal" data-user-id="{{ u.id }}" data-user-label="{{ u.username|default:u.email|default:'User' }}" data-channels="email">Email</button>
+                  <button type="button" class="btn btn-outline-secondary js-open-crm-message-modal" data-user-id="{{ u.id }}" data-user-label="{{ u.username|default:u.email|default:'User' }}" data-channels="in_app">In-App</button>
+                  <a class="btn btn-outline-primary" href="{% url 'betting:crm_user_detail' u.id %}">Profile</a>
+                </div>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="10" class="text-center text-muted py-4">No dormant users found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="border rounded p-3 mt-3 bg-light">
+        <div class="fw-semibold mb-2">Bulk Actions</div>
+        <div class="row g-2">
+          <div class="col-12 col-lg-3">
+            <label class="form-label small text-muted mb-1">Subject</label>
+            <input type="text" name="msg_title" class="form-control form-control-sm" placeholder="Dormancy reminder">
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label small text-muted mb-1">Message</label>
+            <textarea name="msg_body" class="form-control form-control-sm" rows="2" required></textarea>
+          </div>
+          <div class="col-12 col-lg-3">
+            <label class="form-label small text-muted mb-1 d-block">Channels</label>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="sms" id="dormantBulkSms">
+              <label class="form-check-label" for="dormantBulkSms">SMS</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="email" id="dormantBulkEmail">
+              <label class="form-check-label" for="dormantBulkEmail">Email</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" name="message_channels" value="in_app" id="dormantBulkInApp" checked>
+              <label class="form-check-label" for="dormantBulkInApp">Notification</label>
+            </div>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-sm btn-primary" type="submit">Send Bulk Message</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% if dormant_page %}
+<div class="d-flex justify-content-between align-items-center">
+  <div class="text-muted small">Page {{ dormant_page.number }} of {{ dormant_page.paginator.num_pages }}</div>
+  <div class="d-flex gap-2">
+    {% if dormant_page.has_previous %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% if dormant_page.has_next %}
+    <a class="btn btn-sm btn-outline-secondary" href="?tab=dormant_accounts&start_date={{ start_date }}&end_date={{ end_date }}&q={{ q }}&dormant_bucket={{ dormant_bucket }}&dormant_user_type={{ dormant_user_type }}&dormant_agent={{ dormant_agent }}&dormant_super_agent={{ dormant_super_agent }}&dormant_retail_manager={{ dormant_retail_manager }}&dormant_status={{ dormant_status }}&dormant_page={{ dormant_page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

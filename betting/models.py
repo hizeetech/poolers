@@ -83,6 +83,17 @@ class SiteConfiguration(models.Model):
         verbose_name="Enable Ticket Voiding For All Cashiers",
         help_text="If enabled, all cashiers can submit ticket void requests. If disabled, agent-level cashier permissions apply.",
     )
+    crm_large_deposit_threshold = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('100000.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Deposit amount at or above this threshold is treated as a large deposit for CRM monitoring.",
+    )
+    crm_failed_deposit_repeat_threshold = models.PositiveIntegerField(
+        default=3,
+        help_text="Minimum number of failed deposits before a user is flagged as a repeated failed depositor.",
+    )
     
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -1942,6 +1953,232 @@ class AccountLockAuditLog(models.Model):
     def __str__(self):
         target = getattr(self.locked_user, 'username', None) or getattr(self.locked_user, 'email', None) or f"user#{self.locked_user_id}"
         return f"{self.get_action_display()} - {target}"
+
+
+class CustomerComplaint(models.Model):
+    COMPLAINT_TYPE_CHOICES = (
+        ('ticket', 'Ticket Complaints'),
+        ('wallet', 'Wallet Complaints'),
+        ('withdrawal', 'Withdrawal Complaints'),
+        ('deposit', 'Deposit Complaints'),
+        ('commission', 'Commission Complaints'),
+    )
+    STATUS_CHOICES = (
+        ('open', 'Open'),
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('resolved', 'Resolved'),
+        ('escalated', 'Escalated'),
+        ('closed', 'Closed'),
+    )
+    PRIORITY_CHOICES = (
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    )
+
+    complaint_type = models.CharField(max_length=30, choices=COMPLAINT_TYPE_CHOICES, db_index=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='customer_complaints')
+    subject = models.CharField(max_length=255)
+    description = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open', db_index=True)
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium', db_index=True)
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_customer_complaints',
+        limit_choices_to=Q(user_type='crm') | Q(user_type='admin'),
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_customer_complaints',
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.get_complaint_type_display()} - {self.subject}"
+
+
+class CustomerComplaintNote(models.Model):
+    complaint = models.ForeignKey(CustomerComplaint, on_delete=models.CASCADE, related_name='notes')
+    author = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='customer_complaint_notes')
+    note = models.TextField()
+    is_internal = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Complaint Note #{self.id}"
+
+
+class BulkMessageTemplate(models.Model):
+    CATEGORY_CHOICES = (
+        ('promotions', 'Promotions'),
+        ('bonus_offers', 'Bonus Offers'),
+        ('account_alerts', 'Account Alerts'),
+        ('kyc_reminders', 'KYC Reminders'),
+        ('deposit_reminders', 'Deposit Reminders'),
+        ('dormancy_reminders', 'Dormancy Reminders'),
+        ('commission_updates', 'Commission Updates'),
+    )
+    CHANNEL_CHOICES = (
+        ('sms', 'SMS'),
+        ('email', 'Email'),
+        ('in_app', 'In-App Notification'),
+    )
+
+    name = models.CharField(max_length=120)
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, db_index=True)
+    subject = models.CharField(max_length=160, blank=True, default='')
+    message = models.TextField()
+    default_channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default='in_app')
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='bulk_message_templates_created')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+class BulkMessageCampaign(models.Model):
+    CHANNEL_CHOICES = (
+        ('sms', 'SMS'),
+        ('email', 'Email'),
+        ('in_app', 'In-App Notification'),
+    )
+    TARGET_GROUP_CHOICES = (
+        ('all_users', 'All Users'),
+        ('all_agents', 'All Agents'),
+        ('all_super_agents', 'All Super Agents'),
+        ('all_retail_managers', 'All Retail Managers'),
+        ('specific_agents', 'Specific Agents'),
+        ('dormant_users', 'Dormant Users'),
+        ('high_value_users', 'High Value Users'),
+        ('recent_registrations', 'Recent Registrations'),
+        ('failed_deposit_users', 'Users With Failed Deposits'),
+        ('pending_withdrawal_users', 'Users With Pending Withdrawals'),
+        ('custom_users', 'Custom Users'),
+    )
+    STATUS_CHOICES = (
+        ('draft', 'Draft'),
+        ('scheduled', 'Scheduled'),
+        ('processing', 'Processing'),
+        ('sent', 'Sent'),
+        ('partial', 'Partial'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    )
+    RECURRING_CHOICES = (
+        ('none', 'One-off'),
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('monthly', 'Monthly'),
+    )
+
+    template = models.ForeignKey(BulkMessageTemplate, on_delete=models.SET_NULL, null=True, blank=True, related_name='campaigns')
+    subject = models.CharField(max_length=160, blank=True, default='')
+    message = models.TextField()
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, db_index=True)
+    target_group = models.CharField(max_length=40, choices=TARGET_GROUP_CHOICES, db_index=True)
+    schedule_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    recurring_pattern = models.CharField(max_length=20, choices=RECURRING_CHOICES, default='none', db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', db_index=True)
+    target_user_ids = models.JSONField(blank=True, default=list)
+    target_agent_ids = models.JSONField(blank=True, default=list)
+    filter_snapshot = models.JSONField(blank=True, default=dict)
+    recipients_count = models.PositiveIntegerField(default=0)
+    delivered_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    opened_count = models.PositiveIntegerField(default=0)
+    clicked_count = models.PositiveIntegerField(default=0)
+    conversion_count = models.PositiveIntegerField(default=0)
+    sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_error = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='bulk_message_campaigns_created')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.subject or f"Campaign #{self.pk}"
+
+
+class BulkMessageDelivery(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed'),
+        ('opened', 'Opened'),
+        ('clicked', 'Clicked'),
+        ('converted', 'Converted'),
+    )
+
+    campaign = models.ForeignKey(BulkMessageCampaign, on_delete=models.CASCADE, related_name='deliveries')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bulk_message_deliveries')
+    channel = models.CharField(max_length=20, choices=BulkMessageCampaign.CHANNEL_CHOICES, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    error_message = models.CharField(max_length=255, blank=True, default='')
+    provider_response = models.JSONField(blank=True, default=dict)
+    sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    opened_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    clicked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    converted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.campaign_id}:{self.recipient_id}:{self.channel}"
+
+
+class CRMOpsAuditLog(models.Model):
+    MODULE_CHOICES = (
+        ('dormant_accounts', 'Dormant Accounts'),
+        ('complaints', 'Complaints'),
+        ('deposit_monitoring', 'Deposit Monitoring'),
+        ('agent_performance', 'Agent Performance'),
+        ('user_activation', 'User Activation'),
+        ('bulk_messaging', 'Bulk Messaging'),
+    )
+
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_ops_actions')
+    module = models.CharField(max_length=40, choices=MODULE_CHOICES, db_index=True)
+    action = models.CharField(max_length=80, db_index=True)
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_ops_targets')
+    complaint = models.ForeignKey('CustomerComplaint', on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+    campaign = models.ForeignKey('BulkMessageCampaign', on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+    transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_ops_audit_logs')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.actor.email if self.actor else 'System'
+        return f"{self.module}:{self.action} by {who}"
 
 
 class FinanceAuditLog(models.Model):

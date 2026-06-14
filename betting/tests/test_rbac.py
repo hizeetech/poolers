@@ -1,9 +1,11 @@
 from django.test import TestCase, Client
 from django.urls import reverse
 from decimal import Decimal
+from datetime import timedelta
 from unittest.mock import patch
 from django.utils import timezone
-from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket
+from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket, BulkMessageCampaign, BulkMessageDelivery, BulkMessageTemplate, CRMOpsAuditLog, SiteConfiguration, CustomerComplaint, CustomerComplaintNote
+from betting.views import process_due_bulk_message_campaigns
 from notifications.models import Notification, NotificationCampaign
 from notifications.tasks import send_campaign
 from betting.tasks import _maybe_alert_stuck_deposit
@@ -86,7 +88,619 @@ class RBACTests(TestCase):
 
         self.client.force_login(self.player)
         resp2 = self.client.get(reverse('betting:crm_dashboard'))
-        self.assertNotEqual(resp2.status_code, 200)
+        self.assertEqual(resp2.status_code, 403)
+
+    def test_crm_dashboard_renders_system_ops_audit_rows_with_null_actor(self):
+        CRMOpsAuditLog.objects.create(
+            actor=None,
+            module='bulk_messaging',
+            action='scheduled_campaign_processed',
+            target_user=self.player,
+            metadata={'source': 'scheduler'},
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('betting:crm_dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'System')
+        self.assertContains(response, self.player.email)
+
+    def test_retail_dashboard_requires_retail_manager_role(self):
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse('betting:retail_dashboard'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_crm_export_requires_crm_role_and_returns_scoped_csv(self):
+        self.client.force_login(self.cashier)
+        forbidden_response = self.client.get(reverse('betting:crm_export'), {
+            'dataset': 'dormant_accounts',
+            'format': 'csv',
+            'dormant_bucket': 'login_7',
+        })
+        self.assertEqual(forbidden_response.status_code, 403)
+
+        self.player.last_login = timezone.now() - timedelta(days=10)
+        self.player.save(update_fields=['last_login'])
+
+        self.client.force_login(self.crm_viewer)
+        allowed_response = self.client.get(reverse('betting:crm_export'), {
+            'dataset': 'dormant_accounts',
+            'format': 'csv',
+            'dormant_bucket': 'login_7',
+        })
+        self.assertEqual(allowed_response.status_code, 200)
+        exported_identifier = self.player.username or self.player.email
+        self.assertIn(exported_identifier, allowed_response.content.decode())
+
+    def test_crm_bulk_campaign_supports_custom_users_with_template_defaults(self):
+        template = BulkMessageTemplate.objects.create(
+            name='Dormancy Reminder',
+            category='dormancy_reminders',
+            default_channel='in_app',
+            subject='We miss you',
+            message='Come back and place your next bet.',
+            is_active=True,
+            created_by=self.crm_viewer,
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'bulk_messaging',
+            'save_bulk_campaign': '1',
+            'template': str(template.id),
+            'channel': 'in_app',
+            'target_group': 'custom_users',
+            'target_users': [str(self.player.id)],
+            'subject': '',
+            'message': '',
+            'recurring_pattern': 'none',
+            'send_now': '1',
+        })
+        self.assertNotEqual(response.status_code, 500)
+
+        campaign = BulkMessageCampaign.objects.latest('created_at')
+        self.assertEqual(campaign.target_group, 'custom_users')
+        self.assertEqual(campaign.subject, 'We miss you')
+        self.assertEqual(campaign.message, 'Come back and place your next bet.')
+        self.assertEqual(campaign.target_user_ids, [self.player.id])
+        self.assertEqual(campaign.status, 'sent')
+        self.assertEqual(campaign.recipients_count, 1)
+        self.assertEqual(campaign.delivered_count, 1)
+        self.assertTrue(BulkMessageDelivery.objects.filter(campaign=campaign, recipient=self.player, status='sent').exists())
+
+    def test_scheduled_bulk_campaigns_can_be_processed_outside_dashboard(self):
+        campaign = BulkMessageCampaign.objects.create(
+            created_by=self.crm_viewer,
+            subject='Scheduled Reminder',
+            message='This is a scheduled message.',
+            channel='in_app',
+            target_group='custom_users',
+            target_user_ids=[self.player.id],
+            schedule_at=timezone.now() - timedelta(minutes=1),
+            recurring_pattern='none',
+            status='scheduled',
+        )
+
+        processed = process_due_bulk_message_campaigns(limit=5)
+
+        self.assertEqual(processed, 1)
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.status, 'sent')
+        self.assertEqual(campaign.recipients_count, 1)
+        self.assertEqual(campaign.delivered_count, 1)
+        self.assertTrue(BulkMessageDelivery.objects.filter(campaign=campaign, recipient=self.player, status='sent').exists())
+        self.assertTrue(
+            CRMOpsAuditLog.objects.filter(
+                module='bulk_messaging',
+                action='campaign_sent',
+                campaign=campaign,
+            ).exists()
+        )
+
+    def test_recurring_bulk_campaign_reschedules_into_the_future(self):
+        overdue_schedule = timezone.now() - timedelta(days=3)
+        campaign = BulkMessageCampaign.objects.create(
+            created_by=self.crm_viewer,
+            subject='Recurring Reminder',
+            message='This is a recurring message.',
+            channel='in_app',
+            target_group='custom_users',
+            target_user_ids=[self.player.id],
+            schedule_at=overdue_schedule,
+            recurring_pattern='daily',
+            status='scheduled',
+        )
+
+        processed = process_due_bulk_message_campaigns(limit=5)
+
+        self.assertEqual(processed, 1)
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.recipients_count, 1)
+        self.assertEqual(campaign.delivered_count, 1)
+        self.assertEqual(campaign.status, 'scheduled')
+        self.assertIsNotNone(campaign.next_run_at)
+        self.assertIsNotNone(campaign.schedule_at)
+        self.assertGreater(campaign.next_run_at, timezone.now())
+        self.assertGreater(campaign.schedule_at, timezone.now())
+        self.assertTrue(BulkMessageDelivery.objects.filter(campaign=campaign, recipient=self.player, status='sent').exists())
+
+    def test_crm_bulk_messaging_export_respects_channel_and_target_group_filters(self):
+        BulkMessageCampaign.objects.create(
+            created_by=self.crm_viewer,
+            subject='Dormant Email Campaign',
+            message='Email message',
+            channel='email',
+            target_group='dormant_users',
+            status='sent',
+            recipients_count=5,
+            delivered_count=5,
+        )
+        BulkMessageCampaign.objects.create(
+            created_by=self.crm_viewer,
+            subject='Agent SMS Campaign',
+            message='SMS message',
+            channel='sms',
+            target_group='all_agents',
+            status='sent',
+            recipients_count=3,
+            delivered_count=3,
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'bulk_messaging',
+                'format': 'csv',
+                'campaign_channel': 'email',
+                'campaign_target_group': 'dormant_users',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn('Dormant Email Campaign', body)
+        self.assertNotIn('Agent SMS Campaign', body)
+
+    def test_crm_dormant_export_respects_search_query(self):
+        other_player = User.objects.create_user(
+            email='other-export-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='other_export_player',
+        )
+        Wallet.objects.create(user=other_player, balance=Decimal('15.00'))
+
+        stale_login = timezone.now() - timedelta(days=10)
+        self.player.first_name = 'DormantFilterTarget'
+        self.player.last_login = stale_login
+        self.player.save(update_fields=['first_name', 'last_login'])
+        other_player.first_name = 'DormantFilterOther'
+        other_player.last_login = stale_login
+        other_player.save(update_fields=['first_name', 'last_login'])
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'dormant_accounts',
+                'format': 'csv',
+                'dormant_bucket': 'login_7',
+                'q': 'DormantFilterTarget',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn(self.player.username or self.player.email, body)
+        self.assertNotIn(other_player.username, body)
+
+    def test_crm_deposit_monitoring_export_respects_status_gateway_and_flag_filters(self):
+        site_config = SiteConfiguration.load()
+        site_config.crm_large_deposit_threshold = Decimal('1000.00')
+        site_config.crm_failed_deposit_repeat_threshold = 2
+        site_config.save(update_fields=['crm_large_deposit_threshold', 'crm_failed_deposit_repeat_threshold'])
+
+        matched_player = User.objects.create_user(
+            email='matched-deposit-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='matched_deposit_player',
+        )
+        other_player = User.objects.create_user(
+            email='other-deposit-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='other_deposit_player',
+        )
+        Wallet.objects.create(user=matched_player, balance=Decimal('20.00'))
+        Wallet.objects.create(user=other_player, balance=Decimal('30.00'))
+
+        Transaction.objects.create(
+            user=matched_player,
+            transaction_type='deposit',
+            amount=Decimal('250.00'),
+            is_successful=False,
+            status='failed',
+            payment_gateway='paystack',
+            description='Failed deposit one',
+        )
+        matched_tx = Transaction.objects.create(
+            user=matched_player,
+            transaction_type='deposit',
+            amount=Decimal('350.00'),
+            is_successful=False,
+            status='failed',
+            payment_gateway='paystack',
+            description='Failed deposit two',
+        )
+        other_tx = Transaction.objects.create(
+            user=other_player,
+            transaction_type='deposit',
+            amount=Decimal('5000.00'),
+            is_successful=False,
+            status='failed',
+            payment_gateway='monnify',
+            description='Failed deposit other gateway',
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'deposit_monitoring',
+                'format': 'csv',
+                'deposit_status_filter': 'failed',
+                'deposit_gateway': 'paystack',
+                'deposit_flag': 'repeat_failed',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        matched_ref = matched_tx.external_reference or matched_tx.paystack_reference or str(matched_tx.id)
+        other_ref = other_tx.external_reference or other_tx.paystack_reference or str(other_tx.id)
+        self.assertIn(matched_ref, body)
+        self.assertNotIn(other_ref, body)
+
+    def test_crm_user_activation_export_respects_category_query_and_user_type_filters(self):
+        matched_player = User.objects.create_user(
+            email='matched-activation-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='matched_activation_player',
+            first_name='ActivationFilterMatch',
+        )
+        other_player = User.objects.create_user(
+            email='other-activation-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='other_activation_player',
+            first_name='ActivationFilterOther',
+        )
+        Wallet.objects.create(user=matched_player, balance=Decimal('40.00'))
+        Wallet.objects.create(user=other_player, balance=Decimal('25.00'))
+
+        Transaction.objects.create(
+            user=matched_player,
+            transaction_type='deposit',
+            amount=Decimal('100.00'),
+            is_successful=True,
+            status='completed',
+            payment_gateway='paystack',
+            description='Matched activation deposit',
+        )
+        Transaction.objects.create(
+            user=other_player,
+            transaction_type='deposit',
+            amount=Decimal('120.00'),
+            is_successful=True,
+            status='completed',
+            payment_gateway='paystack',
+            description='Other activation deposit',
+        )
+        BetTicket.objects.create(
+            user=other_player,
+            bet_type='single',
+            stake_amount=Decimal('10.00'),
+            total_odd=Decimal('3.00'),
+            potential_winning=Decimal('30.00'),
+            min_winning=Decimal('30.00'),
+            max_winning=Decimal('30.00'),
+            status='won',
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'user_activation',
+                'format': 'csv',
+                'activation_category': 'deposited_never_played',
+                'activation_q': 'ActivationFilterMatch',
+                'activation_user_type': 'player',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn(matched_player.username or matched_player.email, body)
+        self.assertNotIn(other_player.username, body)
+
+    def test_crm_complaints_export_respects_query_type_status_and_priority_filters(self):
+        matching_complaint = CustomerComplaint.objects.create(
+            complaint_type='deposit',
+            user=self.player,
+            subject='ComplaintExportTarget Deposit Delay',
+            description='ComplaintExportTarget description for deposit issue',
+            status='escalated',
+            priority='critical',
+            assigned_to=self.crm_ops,
+            created_by=self.crm_viewer,
+        )
+        CustomerComplaint.objects.create(
+            complaint_type='wallet',
+            user=self.player,
+            subject='Wallet balance issue',
+            description='Non matching complaint',
+            status='open',
+            priority='low',
+            assigned_to=self.crm_viewer,
+            created_by=self.crm_viewer,
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'complaints',
+                'format': 'csv',
+                'complaint_q': 'ComplaintExportTarget',
+                'complaint_type': 'deposit',
+                'complaint_status': 'escalated',
+                'complaint_priority': 'critical',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn(matching_complaint.subject, body)
+        self.assertNotIn('Wallet balance issue', body)
+
+    def test_crm_agent_performance_export_respects_entity_and_query_filters(self):
+        matched_super_agent = User.objects.create_user(
+            email='matched-super-agent@test.com',
+            password='pass12345',
+            user_type='super_agent',
+            username='matched_super_agent',
+            first_name='PerfExportTarget',
+        )
+        other_super_agent = User.objects.create_user(
+            email='other-super-agent@test.com',
+            password='pass12345',
+            user_type='super_agent',
+            username='other_super_agent',
+            first_name='PerfExportOther',
+        )
+        matched_agent = User.objects.create_user(
+            email='matched-agent@test.com',
+            password='pass12345',
+            user_type='agent',
+            username='matched_agent',
+            super_agent=matched_super_agent,
+        )
+        other_agent = User.objects.create_user(
+            email='other-agent@test.com',
+            password='pass12345',
+            user_type='agent',
+            username='other_agent',
+            super_agent=other_super_agent,
+        )
+        matched_player = User.objects.create_user(
+            email='matched-performance-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='matched_performance_player',
+            agent=matched_agent,
+        )
+        other_player = User.objects.create_user(
+            email='other-performance-player@test.com',
+            password='pass12345',
+            user_type='player',
+            username='other_performance_player',
+            agent=other_agent,
+        )
+        for user in [matched_super_agent, other_super_agent, matched_agent, other_agent, matched_player, other_player]:
+            Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+
+        BetTicket.objects.create(
+            user=matched_player,
+            bet_type='single',
+            stake_amount=Decimal('20.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('40.00'),
+            min_winning=Decimal('40.00'),
+            max_winning=Decimal('40.00'),
+            status='won',
+        )
+        BetTicket.objects.create(
+            user=other_player,
+            bet_type='single',
+            stake_amount=Decimal('15.00'),
+            total_odd=Decimal('1.50'),
+            potential_winning=Decimal('22.50'),
+            min_winning=Decimal('22.50'),
+            max_winning=Decimal('22.50'),
+            status='lost',
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_export'),
+            {
+                'dataset': 'agent_performance',
+                'format': 'csv',
+                'performance_entity': 'super_agent',
+                'performance_q': 'PerfExportTarget',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn(matched_super_agent.username or matched_super_agent.email, body)
+        self.assertNotIn(other_super_agent.username, body)
+
+    def test_crm_complaint_update_persists_assignment_resolution_note_and_audit(self):
+        complaint = CustomerComplaint.objects.create(
+            complaint_type='wallet',
+            user=self.player,
+            subject='Wallet issue',
+            description='Customer reported a wallet issue.',
+            status='open',
+            priority='low',
+            created_by=self.crm_viewer,
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'complaints',
+            'update_complaint': '1',
+            'complaint_id': str(complaint.id),
+            'status': 'resolved',
+            'priority': 'critical',
+            'assigned_to': str(self.crm_ops.id),
+            'admin_note': 'Resolved after wallet balance review.',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, 'resolved')
+        self.assertEqual(complaint.priority, 'critical')
+        self.assertEqual(complaint.assigned_to, self.crm_ops)
+        self.assertIsNotNone(complaint.resolved_at)
+        self.assertTrue(
+            CustomerComplaintNote.objects.filter(
+                complaint=complaint,
+                author=self.crm_viewer,
+                note='Resolved after wallet balance review.',
+                is_internal=True,
+            ).exists()
+        )
+        self.assertTrue(
+            CRMOpsAuditLog.objects.filter(
+                module='complaints',
+                action='complaint_updated',
+                complaint=complaint,
+                target_user=self.player,
+            ).exists()
+        )
+
+    def test_crm_complaint_note_add_creates_note_and_audit_log(self):
+        complaint = CustomerComplaint.objects.create(
+            complaint_type='deposit',
+            user=self.player,
+            subject='Deposit issue',
+            description='Customer reported a deposit issue.',
+            status='open',
+            priority='medium',
+            created_by=self.crm_viewer,
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'complaints',
+            'add_complaint_note': '1',
+            'complaint_id': str(complaint.id),
+            'note': 'Followed up with payment provider.',
+            'is_internal': 'on',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            CustomerComplaintNote.objects.filter(
+                complaint=complaint,
+                author=self.crm_viewer,
+                note='Followed up with payment provider.',
+                is_internal=True,
+            ).exists()
+        )
+        self.assertTrue(
+            CRMOpsAuditLog.objects.filter(
+                module='complaints',
+                action='complaint_note_added',
+                complaint=complaint,
+                target_user=self.player,
+            ).exists()
+        )
+
+    def test_crm_dashboard_message_creates_notification_action_log_and_ops_audit(self):
+        self.client.force_login(self.crm_viewer)
+        response = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'dormant_accounts',
+            'module': 'dormant_accounts',
+            'send_dashboard_message': '1',
+            'target_user_ids': str(self.player.id),
+            'msg_title': 'We miss you',
+            'msg_body': 'Come back and place your next bet.',
+            'message_channels': ['in_app'],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.player,
+                title='We miss you',
+                message='Come back and place your next bet.',
+            ).exists()
+        )
+        self.assertTrue(
+            CRMActionLog.objects.filter(
+                actor=self.crm_viewer,
+                target_user=self.player,
+                action_type='MESSAGE_SENT',
+                data__source='dashboard_ops',
+                data__module='dormant_accounts',
+            ).exists()
+        )
+        self.assertTrue(
+            CRMOpsAuditLog.objects.filter(
+                actor=self.crm_viewer,
+                module='dormant_accounts',
+                action='message_sent',
+                target_user=self.player,
+            ).exists()
+        )
+
+    def test_crm_deposit_escalation_creates_ops_audit_log(self):
+        tx = Transaction.objects.create(
+            user=self.player,
+            transaction_type='deposit',
+            amount=Decimal('250.00'),
+            is_successful=False,
+            status='failed',
+            payment_gateway='paystack',
+            description='Failed deposit for escalation test',
+        )
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.post(reverse('betting:crm_dashboard'), {
+            'tab': 'deposit_monitoring',
+            'escalate_deposit': '1',
+            'transaction_id': str(tx.id),
+            'escalation_note': 'Escalated for manual review.',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            CRMOpsAuditLog.objects.filter(
+                actor=self.crm_viewer,
+                module='deposit_monitoring',
+                action='deposit_escalated',
+                target_user=self.player,
+                transaction=tx,
+            ).exists()
+        )
 
     def test_crm_ops_can_approve_and_reject_withdrawals(self):
         self.player.wallet.balance = Decimal('0.00')

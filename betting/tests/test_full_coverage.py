@@ -1329,6 +1329,179 @@ class FullCoverageTests(TestCase):
         locked_rows = list(response.context["locked_accounts_rows"])
         self.assertEqual({row.username for row in locked_rows}, {"scope_agent", "scope_cashier"})
 
+    def test_super_agent_dormant_agents_only_include_owned_fully_inactive_hierarchy(self):
+        password = "pass12345"
+        master = User.objects.create_user(
+            email="dormant-master@test.com",
+            password=password,
+            user_type="master_agent",
+            username="dormant_master",
+        )
+        super_agent = User.objects.create_user(
+            email="dormant-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="dormant_super",
+            master_agent=master,
+        )
+        other_super_agent = User.objects.create_user(
+            email="dormant-super-other@test.com",
+            password=password,
+            user_type="super_agent",
+            username="dormant_super_other",
+            master_agent=master,
+        )
+        dormant_agent = User.objects.create_user(
+            email="dormant-owned-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="dormant_owned_agent",
+            super_agent=super_agent,
+            master_agent=master,
+            first_name="Dormant Owned",
+        )
+        active_cashier_agent = User.objects.create_user(
+            email="active-cashier-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="active_cashier_agent_dashboard",
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        outsider_agent = User.objects.create_user(
+            email="outsider-dormant-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="outsider_dormant_agent",
+            super_agent=other_super_agent,
+            master_agent=master,
+        )
+        dormant_cashier = User.objects.create_user(
+            email="dormant-owned-cashier@test.com",
+            password=password,
+            user_type="cashier",
+            username="dormant_owned_cashier",
+            agent=dormant_agent,
+        )
+        active_cashier = User.objects.create_user(
+            email="active-owned-cashier@test.com",
+            password=password,
+            user_type="cashier",
+            username="active_owned_cashier",
+            agent=active_cashier_agent,
+        )
+        for user in [master, super_agent, other_super_agent, dormant_agent, active_cashier_agent, outsider_agent, dormant_cashier, active_cashier]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+
+        stale_login = timezone.now() - datetime.timedelta(days=10)
+        recent_login = timezone.now() - datetime.timedelta(days=1)
+        User.objects.filter(id__in=[dormant_agent.id, outsider_agent.id, dormant_cashier.id, active_cashier_agent.id]).update(last_login=stale_login)
+        User.objects.filter(id=active_cashier.id).update(last_login=recent_login)
+
+        self.client.force_login(super_agent)
+        response = self.client.get(reverse("betting:super_agent_dashboard"), {"dormant_bucket": "login_7"})
+        self.assertEqual(response.status_code, 200)
+        dormant_rows = list(response.context["dormant_agents_rows"])
+        self.assertEqual({row.username for row in dormant_rows}, {"dormant_owned_agent"})
+        self.assertEqual(dormant_rows[0].mapped_cashiers_rows[0].username, "dormant_owned_cashier")
+
+        export_response = self.client.get(
+            reverse("betting:downline_dormant_agents_export"),
+            {"format": "csv", "dormant_bucket": "login_7"},
+        )
+        self.assertEqual(export_response.status_code, 200)
+        export_body = export_response.content.decode()
+        self.assertIn("dormant_owned_agent", export_body)
+        self.assertNotIn("active_cashier_agent_dashboard", export_body)
+        self.assertNotIn("outsider_dormant_agent", export_body)
+
+    def test_master_agent_dormant_agents_filter_and_export_respect_super_agent_scope(self):
+        password = "pass12345"
+        master = User.objects.create_user(
+            email="ma-dormant@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_dormant",
+        )
+        other_master = User.objects.create_user(
+            email="ma-dormant-other@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_dormant_other",
+        )
+        super_one = User.objects.create_user(
+            email="ma-super-one@test.com",
+            password=password,
+            user_type="super_agent",
+            username="ma_super_one",
+            master_agent=master,
+            first_name="Super One",
+        )
+        super_two = User.objects.create_user(
+            email="ma-super-two@test.com",
+            password=password,
+            user_type="super_agent",
+            username="ma_super_two",
+            master_agent=master,
+            first_name="Super Two",
+        )
+        outsider_super = User.objects.create_user(
+            email="ma-super-outsider@test.com",
+            password=password,
+            user_type="super_agent",
+            username="ma_super_outsider",
+            master_agent=other_master,
+        )
+        agent_one = User.objects.create_user(
+            email="ma-agent-one@test.com",
+            password=password,
+            user_type="agent",
+            username="ma_agent_one",
+            super_agent=super_one,
+            master_agent=master,
+        )
+        agent_two = User.objects.create_user(
+            email="ma-agent-two@test.com",
+            password=password,
+            user_type="agent",
+            username="ma_agent_two",
+            super_agent=super_two,
+            master_agent=master,
+        )
+        outsider_agent = User.objects.create_user(
+            email="ma-agent-outsider@test.com",
+            password=password,
+            user_type="agent",
+            username="ma_agent_outsider",
+            super_agent=outsider_super,
+            master_agent=other_master,
+        )
+        for user in [master, other_master, super_one, super_two, outsider_super, agent_one, agent_two, outsider_agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+
+        stale_login = timezone.now() - datetime.timedelta(days=15)
+        User.objects.filter(id__in=[agent_one.id, agent_two.id, outsider_agent.id]).update(last_login=stale_login)
+
+        self.client.force_login(master)
+        response = self.client.get(
+            reverse("betting:master_agent_dashboard"),
+            {"dormant_bucket": "login_14", "dormant_super_agent": str(super_two.id)},
+        )
+        self.assertEqual(response.status_code, 200)
+        dormant_rows = list(response.context["dormant_agents_rows"])
+        self.assertEqual({row.username for row in dormant_rows}, {"ma_agent_two"})
+        self.assertContains(response, "Dormant Agents by Super Agent")
+
+        export_response = self.client.get(
+            reverse("betting:downline_dormant_agents_export"),
+            {"format": "csv", "dormant_bucket": "login_14", "dormant_super_agent": str(super_two.id)},
+        )
+        self.assertEqual(export_response.status_code, 200)
+        export_body = export_response.content.decode()
+        self.assertIn("ma_agent_two", export_body)
+        self.assertNotIn("ma_agent_one", export_body)
+        self.assertNotIn("ma_agent_outsider", export_body)
+
     def test_retail_manager_can_submit_unlock_appeal_for_mapped_locked_account(self):
         password = "pass12345"
         retail_manager = User.objects.create_user(

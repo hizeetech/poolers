@@ -611,35 +611,6 @@
                 </div>
             </form>
 
-            <div class="row g-3 mb-4">
-                <div class="{% if user.user_type == 'master_agent' %}col-lg-4{% else %}col-lg-6{% endif %}">
-                    <div class="card border-0 bg-light h-100">
-                        <div class="card-body">
-                            <h6 class="text-muted">Dormant Agents Trend</h6>
-                            <canvas id="dormantAgentsTrendChart" height="180"></canvas>
-                        </div>
-                    </div>
-                </div>
-                <div class="{% if user.user_type == 'master_agent' %}col-lg-4{% else %}col-lg-6{% endif %}">
-                    <div class="card border-0 bg-light h-100">
-                        <div class="card-body">
-                            <h6 class="text-muted">Active vs Dormant Agents</h6>
-                            <canvas id="dormantAgentsActiveChart" height="180"></canvas>
-                        </div>
-                    </div>
-                </div>
-                {% if user.user_type == 'master_agent' %}
-                <div class="col-lg-4">
-                    <div class="card border-0 bg-light h-100">
-                        <div class="card-body">
-                            <h6 class="text-muted">Dormant Agents by Super Agent</h6>
-                            <canvas id="dormantAgentsBySuperChart" height="180"></canvas>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-            </div>
-
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
                     <thead class="table-light">
@@ -1041,72 +1012,8 @@
 </div>
 
 {% include 'betting/includes/account_unlock_appeal_script.html' %}
-{% if user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-{% endif %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        if (window.Chart) {
-            const trendCanvas = document.getElementById('dormantAgentsTrendChart');
-            if (trendCanvas) {
-                const trend = {{ dormant_agents_trend_chart|safe }};
-                new Chart(trendCanvas, {
-                    type: 'line',
-                    data: {
-                        labels: trend.labels || [],
-                        datasets: [{
-                            label: 'Dormant Agents',
-                            data: trend.values || [],
-                            borderColor: '#0d6efd',
-                            backgroundColor: 'rgba(13, 110, 253, 0.12)',
-                            fill: true,
-                            tension: 0.35,
-                        }]
-                    },
-                    options: {responsive: true, maintainAspectRatio: false}
-                });
-            }
-
-            const activeCanvas = document.getElementById('dormantAgentsActiveChart');
-            if (activeCanvas) {
-                const activeDormant = {{ dormant_agents_active_chart|safe }};
-                new Chart(activeCanvas, {
-                    type: 'doughnut',
-                    data: {
-                        labels: activeDormant.labels || [],
-                        datasets: [{
-                            data: activeDormant.values || [],
-                            backgroundColor: ['#198754', '#dc3545'],
-                        }]
-                    },
-                    options: {responsive: true, maintainAspectRatio: false}
-                });
-            }
-
-            const bySuperCanvas = document.getElementById('dormantAgentsBySuperChart');
-            if (bySuperCanvas) {
-                const bySuper = {{ dormant_agents_by_super_chart|safe }};
-                new Chart(bySuperCanvas, {
-                    type: 'bar',
-                    data: {
-                        labels: bySuper.labels || [],
-                        datasets: [{
-                            label: 'Dormant Agents',
-                            data: bySuper.values || [],
-                            backgroundColor: '#6f42c1',
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            y: {beginAtZero: true, ticks: {precision: 0}}
-                        }
-                    }
-                });
-            }
-        }
-
         const searchInput = document.getElementById('ticketSearchInput');
         const statusFilter = document.getElementById('ticketStatusFilter');
         const tableBody = document.getElementById('downlineTicketsBody');

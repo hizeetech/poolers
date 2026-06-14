@@ -6569,9 +6569,6 @@ def agent_dashboard(request):
     dormant_agents_summary = {'total': 0, 'login_7': 0, 'login_14': 0, 'login_30': 0}
     dormant_agents_page = None
     dormant_agents_rows = []
-    dormant_agents_chart = json.dumps({'labels': [], 'values': []})
-    dormant_agents_active_chart = json.dumps({'labels': [], 'values': []})
-    dormant_agents_by_super_chart = json.dumps({'labels': [], 'values': []})
     if user.user_type in ['super_agent', 'master_agent']:
         dormant_dataset = _build_dormant_center_dataset(
             request.user,
@@ -6591,9 +6588,6 @@ def agent_dashboard(request):
         }
         dormant_agents_page = Paginator(dormant_dataset['rows'], 25).get_page(request.GET.get('dormant_page') or 1)
         dormant_agents_rows = _attach_dormant_agent_drilldown(list(dormant_agents_page.object_list))
-        dormant_agents_chart = json.dumps(dormant_dataset['trend_chart'])
-        dormant_agents_active_chart = json.dumps(dormant_dataset['active_vs_dormant_chart'])
-        dormant_agents_by_super_chart = json.dumps(dormant_dataset['by_super_agent_chart'])
 
     context = {
         'user': user,
@@ -6642,9 +6636,6 @@ def agent_dashboard(request):
         'dormant_super_agent': dormant_super_agent,
         'dormant_status': dormant_status,
         'dormant_super_agent_choices': list(direct_super_agents_qs),
-        'dormant_agents_trend_chart': dormant_agents_chart,
-        'dormant_agents_active_chart': dormant_agents_active_chart,
-        'dormant_agents_by_super_chart': dormant_agents_by_super_chart,
     }
     return render(request, 'betting/agent_dashboard.html', context)
 

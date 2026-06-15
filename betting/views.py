@@ -11203,6 +11203,7 @@ def crm_dashboard(request):
         pending_withdrawals_qs = pending_withdrawals_qs.filter(request_time__gte=start_dt)
     if end_dt:
         pending_withdrawals_qs = pending_withdrawals_qs.filter(request_time__lte=end_dt)
+    pending_withdrawals_tab_count = pending_withdrawals_qs.count()
     pending_withdrawals = pending_withdrawals_qs[:50]
 
     pending_cashier_qs = CashierRegistrationRequest.objects.filter(status='PENDING').select_related('agent').order_by('created_at')
@@ -11210,6 +11211,7 @@ def crm_dashboard(request):
         pending_cashier_qs = pending_cashier_qs.filter(created_at__gte=start_dt)
     if end_dt:
         pending_cashier_qs = pending_cashier_qs.filter(created_at__lte=end_dt)
+    pending_cashiers_tab_count = pending_cashier_qs.count()
     pending_cashier_requests = pending_cashier_qs[:50]
 
     pending_agent_qs = PendingAgentRegistration.objects.filter(status='PENDING').order_by('created_at')
@@ -11217,6 +11219,7 @@ def crm_dashboard(request):
         pending_agent_qs = pending_agent_qs.filter(created_at__gte=start_dt)
     if end_dt:
         pending_agent_qs = pending_agent_qs.filter(created_at__lte=end_dt)
+    pending_agents_tab_count = pending_agent_qs.count()
     pending_agent_regs = pending_agent_qs[:50]
 
     platform_users_qs = User.objects.filter(is_superuser=False)
@@ -11631,6 +11634,7 @@ def crm_dashboard(request):
         end_dt=end_dt,
     )
     dormant_page = Paginator(dormant_rows, 50).get_page(request.GET.get('dormant_page') or 1) if active_tab == 'dormant_accounts' else None
+    dormant_agents_tab_count = len(dormant_rows)
 
     complaint_stats = {
         'open': _complaint_scope_queryset(request.user).filter(status='open').count(),
@@ -11735,6 +11739,10 @@ def crm_dashboard(request):
         'pending_withdrawals': pending_withdrawals,
         'pending_cashier_requests': pending_cashier_requests,
         'pending_agent_regs': pending_agent_regs,
+        'dormant_agents_tab_count': dormant_agents_tab_count,
+        'pending_withdrawals_tab_count': pending_withdrawals_tab_count,
+        'pending_cashiers_tab_count': pending_cashiers_tab_count,
+        'pending_agents_tab_count': pending_agents_tab_count,
         'audit_logs': audit_logs,
         'audit_q': audit_query,
         'audit_action_type': audit_action_type,
@@ -12344,6 +12352,42 @@ def retail_dashboard(request):
     pending_withdrawals_count = UserWithdrawal.objects.filter(user__in=network_users, status='pending').count()
     active_betting_shops = agents.filter(is_active=True).exclude(shop_address__isnull=True).exclude(shop_address__exact='').count()
 
+    pending_withdrawals_tab_qs = (
+        UserWithdrawal.objects.select_related('user')
+        .filter(user__in=network_users, status='pending')
+        .order_by('-request_time')
+    )
+    if start_dt:
+        pending_withdrawals_tab_qs = pending_withdrawals_tab_qs.filter(request_time__gte=start_dt)
+    if end_dt:
+        pending_withdrawals_tab_qs = pending_withdrawals_tab_qs.filter(request_time__lte=end_dt)
+    pending_withdrawals_tab_count = pending_withdrawals_tab_qs.count()
+    pending_withdrawals_tab_page = Paginator(pending_withdrawals_tab_qs, 50).get_page(request.GET.get('pending_withdrawals_page') or 1) if active_tab == 'pending_withdrawals' else None
+
+    pending_cashiers_tab_qs = (
+        CashierRegistrationRequest.objects.select_related('agent')
+        .filter(status='PENDING', agent__in=agents)
+        .order_by('-created_at')
+    )
+    if start_dt:
+        pending_cashiers_tab_qs = pending_cashiers_tab_qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        pending_cashiers_tab_qs = pending_cashiers_tab_qs.filter(created_at__lte=end_dt)
+    pending_cashiers_tab_count = pending_cashiers_tab_qs.count()
+    pending_cashiers_tab_page = Paginator(pending_cashiers_tab_qs, 50).get_page(request.GET.get('pending_cashiers_page') or 1) if active_tab == 'pending_cashiers' else None
+
+    pending_agents_tab_qs = (
+        PendingAgentRegistration.objects.select_related('master_agent', 'super_agent', 'registered_by')
+        .filter(status='PENDING', registered_by=request.user)
+        .order_by('-created_at')
+    )
+    if start_dt:
+        pending_agents_tab_qs = pending_agents_tab_qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        pending_agents_tab_qs = pending_agents_tab_qs.filter(created_at__lte=end_dt)
+    pending_agents_tab_count = pending_agents_tab_qs.count()
+    pending_agents_tab_page = Paginator(pending_agents_tab_qs, 50).get_page(request.GET.get('pending_agents_page') or 1) if active_tab == 'pending_agents' else None
+
     tickets_range_qs = (
         BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
         .filter(user__in=network_users, placed_at__gte=metrics_start_dt, placed_at__lte=metrics_end_dt)
@@ -12849,6 +12893,13 @@ def retail_dashboard(request):
         'dormant_status': dormant_status,
         'dormant_cards': dormant_cards,
         'dormant_page': dormant_page,
+        'dormant_agents_tab_count': len(dormant_rows),
+        'pending_withdrawals_tab_count': pending_withdrawals_tab_count,
+        'pending_cashiers_tab_count': pending_cashiers_tab_count,
+        'pending_agents_tab_count': pending_agents_tab_count,
+        'pending_withdrawals_tab_page': pending_withdrawals_tab_page,
+        'pending_cashiers_tab_page': pending_cashiers_tab_page,
+        'pending_agents_tab_page': pending_agents_tab_page,
         'complaint_q': complaint_q,
         'complaint_type': complaint_type,
         'complaint_status': complaint_status,

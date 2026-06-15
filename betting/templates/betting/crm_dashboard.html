@@ -117,7 +117,10 @@
       <button class="nav-link {% if active_tab == 'communications' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#communications" type="button" role="tab">Communications</button>
     </li>
     <li class="nav-item" role="presentation">
-      <button class="nav-link {% if active_tab == 'dormant_accounts' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#dormant_accounts" type="button" role="tab">Dormant Agents</button>
+      <button class="nav-link {% if active_tab == 'dormant_accounts' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#dormant_accounts" type="button" role="tab">
+        Dormant Agents
+        <span class="badge rounded-pill {% if dormant_agents_tab_count %}bg-danger text-white{% else %}bg-light text-dark{% endif %} ms-1">{{ dormant_agents_tab_count|default:0 }}</span>
+      </button>
     </li>
     <li class="nav-item" role="presentation">
       <button class="nav-link {% if active_tab == 'complaints' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#complaints" type="button" role="tab">Complaints</button>
@@ -138,13 +141,22 @@
       <button class="nav-link {% if active_tab == 'risk' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#risk" type="button" role="tab">Risk</button>
     </li>
     <li class="nav-item" role="presentation">
-      <button class="nav-link {% if active_tab == 'withdrawals' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#withdrawals" type="button" role="tab">Pending Withdrawals</button>
+      <button class="nav-link {% if active_tab == 'withdrawals' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#withdrawals" type="button" role="tab">
+        Pending Withdrawals
+        <span class="badge rounded-pill {% if pending_withdrawals_tab_count %}bg-danger text-white{% else %}bg-light text-dark{% endif %} ms-1">{{ pending_withdrawals_tab_count|default:0 }}</span>
+      </button>
     </li>
     <li class="nav-item" role="presentation">
-      <button class="nav-link {% if active_tab == 'cashiers' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#cashiers" type="button" role="tab">Pending Cashiers</button>
+      <button class="nav-link {% if active_tab == 'cashiers' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#cashiers" type="button" role="tab">
+        Pending Cashiers
+        <span class="badge rounded-pill {% if pending_cashiers_tab_count %}bg-danger text-white{% else %}bg-light text-dark{% endif %} ms-1">{{ pending_cashiers_tab_count|default:0 }}</span>
+      </button>
     </li>
     <li class="nav-item" role="presentation">
-      <button class="nav-link {% if active_tab == 'agents' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">Pending Agents</button>
+      <button class="nav-link {% if active_tab == 'agents' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">
+        Pending Agents
+        <span class="badge rounded-pill {% if pending_agents_tab_count %}bg-danger text-white{% else %}bg-light text-dark{% endif %} ms-1">{{ pending_agents_tab_count|default:0 }}</span>
+      </button>
     </li>
     <li class="nav-item" role="presentation">
       <button class="nav-link {% if active_tab == 'agent_management' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agent_management" type="button" role="tab">

@@ -1,0 +1,55 @@
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-2">
+      <div>
+        <div class="fw-semibold">Pending Cashiers</div>
+        <div class="text-muted small">Cashier registration requests from agents in your network.</div>
+      </div>
+      <div class="text-muted small">Total: {{ pending_cashiers_tab_count|default:0 }}</div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Requested</th>
+            <th>Agent</th>
+            <th>Cashier Username</th>
+            <th>Cashier Email</th>
+            <th class="text-center">Code</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in pending_cashiers_tab_page %}
+          <tr>
+            <td class="text-muted small text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-muted small">{{ r.agent.username|default:r.agent.email|default:"-" }}</td>
+            <td class="text-muted small">{{ r.cashier_username }}</td>
+            <td class="text-muted small">{{ r.cashier_email }}</td>
+            <td class="text-center text-muted small">{{ r.cashier_code }}</td>
+            <td class="text-muted small">{{ r.get_status_display|default:r.status }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="text-center text-muted py-4">No pending cashier requests.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pending_cashiers_tab_page %}
+    <div class="d-flex justify-content-between align-items-center mt-3">
+      <div class="text-muted small">Page {{ pending_cashiers_tab_page.number }} of {{ pending_cashiers_tab_page.paginator.num_pages }}</div>
+      <div class="d-flex gap-2">
+        {% if pending_cashiers_tab_page.has_previous %}
+        <a class="btn btn-sm btn-outline-secondary" href="?tab=pending_cashiers&start_date={{ start_date }}&end_date={{ end_date }}&pending_cashiers_page={{ pending_cashiers_tab_page.previous_page_number }}">Prev</a>
+        {% endif %}
+        {% if pending_cashiers_tab_page.has_next %}
+        <a class="btn btn-sm btn-outline-secondary" href="?tab=pending_cashiers&start_date={{ start_date }}&end_date={{ end_date }}&pending_cashiers_page={{ pending_cashiers_tab_page.next_page_number }}">Next</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>

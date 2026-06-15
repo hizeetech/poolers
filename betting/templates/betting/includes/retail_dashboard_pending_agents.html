@@ -1,0 +1,55 @@
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-2">
+      <div>
+        <div class="fw-semibold">Pending Agents</div>
+        <div class="text-muted small">Agent registration submissions awaiting approval.</div>
+      </div>
+      <div class="text-muted small">Total: {{ pending_agents_tab_count|default:0 }}</div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Requested</th>
+            <th>Full Name</th>
+            <th>Email</th>
+            <th>User Type</th>
+            <th>Super Agent</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in pending_agents_tab_page %}
+          <tr>
+            <td class="text-muted small text-nowrap">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-muted small">{{ r.full_name }}</td>
+            <td class="text-muted small">{{ r.email }}</td>
+            <td class="text-muted small">{{ r.get_user_type_display|default:r.user_type }}</td>
+            <td class="text-muted small">{% if r.super_agent %}{{ r.super_agent.username|default:r.super_agent.email|default:"-" }}{% else %}-{% endif %}</td>
+            <td class="text-muted small">{{ r.get_status_display|default:r.status }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="text-center text-muted py-4">No pending agent registrations.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pending_agents_tab_page %}
+    <div class="d-flex justify-content-between align-items-center mt-3">
+      <div class="text-muted small">Page {{ pending_agents_tab_page.number }} of {{ pending_agents_tab_page.paginator.num_pages }}</div>
+      <div class="d-flex gap-2">
+        {% if pending_agents_tab_page.has_previous %}
+        <a class="btn btn-sm btn-outline-secondary" href="?tab=pending_agents&start_date={{ start_date }}&end_date={{ end_date }}&pending_agents_page={{ pending_agents_tab_page.previous_page_number }}">Prev</a>
+        {% endif %}
+        {% if pending_agents_tab_page.has_next %}
+        <a class="btn btn-sm btn-outline-secondary" href="?tab=pending_agents&start_date={{ start_date }}&end_date={{ end_date }}&pending_agents_page={{ pending_agents_tab_page.next_page_number }}">Next</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>

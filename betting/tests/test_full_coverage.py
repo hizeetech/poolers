@@ -561,6 +561,26 @@ class FullCoverageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Performance Dashboard Target")
 
+    def test_retail_pending_tabs_render(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-pending-tabs@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_pending_tabs",
+        )
+        Wallet.objects.create(user=retail_manager, balance=Decimal("0.00"))
+
+        self.client.force_login(retail_manager)
+        for tab, marker in [
+            ("pending_withdrawals", "Pending Withdrawals"),
+            ("pending_cashiers", "Pending Cashiers"),
+            ("pending_agents", "Pending Agents"),
+        ]:
+            response = self.client.get(reverse("betting:retail_dashboard"), {"tab": tab})
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, marker)
+
     def test_retail_dormant_dashboard_and_export_apply_search_filter(self):
         password = "pass12345"
         retail_manager = User.objects.create_user(

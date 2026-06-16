@@ -1367,19 +1367,10 @@ def get_retail_manager_master_agents(user):
 def get_retail_manager_super_agents(user, *, master_agents_qs=None):
     if not is_retail_manager(user):
         return User.objects.none()
-    if master_agents_qs is None:
-        master_agents_qs = get_retail_manager_master_agents(user)
-
     direct_ids = list(
         RetailManagerSuperAgentMapping.objects.filter(retail_manager=user).values_list('super_agent_id', flat=True)
     )
     direct_qs = User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
-
-    derived_from_master_qs = (
-        User.objects.filter(user_type='super_agent', master_agent__in=master_agents_qs)
-        if master_agents_qs is not None and master_agents_qs.exists()
-        else User.objects.none()
-    )
 
     derived_super_ids = list(
         RetailManagerAgentMapping.objects.filter(retail_manager=user)
@@ -1389,7 +1380,7 @@ def get_retail_manager_super_agents(user, *, master_agents_qs=None):
     )
     derived_from_agents_qs = User.objects.filter(id__in=derived_super_ids, user_type='super_agent') if derived_super_ids else User.objects.none()
 
-    return (direct_qs | derived_from_master_qs | derived_from_agents_qs).distinct()
+    return (direct_qs | derived_from_agents_qs).distinct()
 
 def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=None):
     if not is_retail_manager(user):
@@ -1403,12 +1394,11 @@ def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=No
         master_agents_qs = get_retail_manager_master_agents(user)
     if super_agents_qs is None:
         super_agents_qs = get_retail_manager_super_agents(user, master_agents_qs=master_agents_qs)
-    derived_q = Q()
-    if super_agents_qs is not None and super_agents_qs.exists():
-        derived_q |= Q(super_agent__in=super_agents_qs)
-    if master_agents_qs is not None and master_agents_qs.exists():
-        derived_q |= Q(master_agent__in=master_agents_qs)
-    derived_qs = User.objects.filter(user_type='agent').filter(derived_q) if derived_q else User.objects.none()
+    derived_qs = (
+        User.objects.filter(user_type='agent', super_agent__in=super_agents_qs)
+        if super_agents_qs is not None and super_agents_qs.exists()
+        else User.objects.none()
+    )
     return (direct_qs | derived_qs).distinct()
 
 def get_retail_network_users_qs(user):
@@ -12130,7 +12120,7 @@ def crm_export(request):
 def retail_activity_feed(request):
     limit = 30
     limit = 30
-    network_users = get_retail_network_users_qs(request.user).only('id')
+    network_users = get_retail_network_users_qs(request.user)
 
     tickets = (
         BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
@@ -12350,12 +12340,7 @@ def retail_dashboard(request):
     total_mapped_master_agents = master_agents.count()
     total_mapped_super_agents = super_agents.count()
     total_mapped_agents = agents.count()
-    total_active_players = (
-        User.objects.filter(user_type='player', is_active=True)
-        .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents))
-        .distinct()
-        .count()
-    )
+    total_active_players = network_users.filter(user_type='player', is_active=True).count()
     online_users = (
         User.objects.filter(id__in=network_users.values_list('id', flat=True))
         .filter(downline_activity_last_seen_at__gte=timezone.now() - timedelta(minutes=5))
@@ -12780,8 +12765,7 @@ def retail_dashboard(request):
     players_page = None
     if active_tab == 'players':
         players_qs = (
-            User.objects.filter(user_type='player')
-            .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+            network_users.filter(user_type='player')
             .select_related('wallet', 'agent', 'super_agent', 'master_agent', 'state', 'vip_manager')
             .order_by('-date_joined')
         )
@@ -13056,7 +13040,7 @@ def retail_export(request):
     master_agents = get_retail_manager_master_agents(request.user)
     super_agents = get_retail_manager_super_agents(request.user, master_agents_qs=master_agents)
     agents = get_retail_manager_agents(request.user, master_agents_qs=master_agents, super_agents_qs=super_agents)
-    network_users = get_retail_network_users_qs(request.user).only('id')
+    network_users = get_retail_network_users_qs(request.user)
 
     rows = []
     title = f"{dataset or 'report'}"
@@ -13133,8 +13117,7 @@ def retail_export(request):
 
     elif dataset == 'players':
         qs = (
-            User.objects.filter(user_type='player')
-            .filter(Q(agent__in=agents) | Q(super_agent__in=super_agents) | Q(master_agent__in=master_agents))
+            network_users.filter(user_type='player')
             .select_related('wallet', 'agent', 'super_agent', 'master_agent', 'state')
             .order_by('-date_joined')
         )

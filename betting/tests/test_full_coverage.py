@@ -19,7 +19,9 @@ from betting.models import (
     AccountLockAuditLog,
     CustomerComplaint,
     CustomerComplaintNote,
+    CashierRegistrationRequest,
 )
+from pending_registration.models import PendingAgentRegistration
 from django.apps import apps
 from django.utils import timezone
 from django.db.models import Q
@@ -583,7 +585,7 @@ class FullCoverageTests(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertContains(response, marker)
 
-    def test_retail_commissions_include_agents_under_mapped_master_agent(self):
+    def test_retail_commissions_do_not_include_agents_from_shared_master_without_direct_mapping(self):
         password = "pass12345"
         retail_manager = User.objects.create_user(
             email="rm-commission-scope@test.com",
@@ -604,6 +606,13 @@ class FullCoverageTests(TestCase):
             username="sa_commission_scope",
             master_agent=master_agent,
         )
+        outsider_super_agent = User.objects.create_user(
+            email="sa-commission-outsider@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_commission_outsider",
+            master_agent=master_agent,
+        )
         agent = User.objects.create_user(
             email="agent-commission-scope@test.com",
             password=password,
@@ -612,9 +621,18 @@ class FullCoverageTests(TestCase):
             super_agent=super_agent,
             master_agent=master_agent,
         )
-        for user in [retail_manager, master_agent, super_agent, agent]:
+        outsider_agent = User.objects.create_user(
+            email="agent-commission-outsider@test.com",
+            password=password,
+            user_type="agent",
+            username="agent_commission_outsider",
+            super_agent=outsider_super_agent,
+            master_agent=master_agent,
+        )
+        for user in [retail_manager, master_agent, super_agent, outsider_super_agent, agent, outsider_agent]:
             Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
         RetailManagerMasterAgentMapping.objects.create(retail_manager=retail_manager, master_agent=master_agent)
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=super_agent)
 
         CommissionPeriod = apps.get_model("commission", "CommissionPeriod")
         WeeklyAgentCommission = apps.get_model("commission", "WeeklyAgentCommission")
@@ -630,6 +648,12 @@ class FullCoverageTests(TestCase):
             commission_total_amount=Decimal("123.45"),
             status="pending",
         )
+        WeeklyAgentCommission.objects.create(
+            agent=outsider_agent,
+            period=period,
+            commission_total_amount=Decimal("75.00"),
+            status="pending",
+        )
 
         self.client.force_login(retail_manager)
         response = self.client.get(
@@ -638,6 +662,288 @@ class FullCoverageTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "agent_commission_scope")
+        self.assertNotContains(response, "agent_commission_outsider")
+
+    def test_retail_dashboard_tabs_and_exports_do_not_leak_sibling_branch_data(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-branch-scope@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_branch_scope",
+        )
+        other_retail_manager = User.objects.create_user(
+            email="rm-branch-outsider@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_branch_outsider",
+        )
+        master_agent = User.objects.create_user(
+            email="ma-branch-scope@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_branch_scope",
+        )
+        mapped_super_agent = User.objects.create_user(
+            email="sa-branch-mapped@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_branch_mapped",
+            master_agent=master_agent,
+        )
+        outsider_super_agent = User.objects.create_user(
+            email="sa-branch-outsider@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_branch_outsider",
+            master_agent=master_agent,
+        )
+        mapped_agent = User.objects.create_user(
+            email="agent-branch-mapped@test.com",
+            password=password,
+            user_type="agent",
+            username="agent_branch_mapped",
+            super_agent=mapped_super_agent,
+            master_agent=master_agent,
+        )
+        outsider_agent = User.objects.create_user(
+            email="agent-branch-outsider@test.com",
+            password=password,
+            user_type="agent",
+            username="agent_branch_outsider",
+            super_agent=outsider_super_agent,
+            master_agent=master_agent,
+        )
+        mapped_player = User.objects.create_user(
+            email="player-branch-mapped@test.com",
+            password=password,
+            user_type="player",
+            username="player_branch_mapped",
+            agent=mapped_agent,
+            super_agent=mapped_super_agent,
+            master_agent=master_agent,
+        )
+        outsider_player = User.objects.create_user(
+            email="player-branch-outsider@test.com",
+            password=password,
+            user_type="player",
+            username="player_branch_outsider",
+            agent=outsider_agent,
+            super_agent=outsider_super_agent,
+            master_agent=master_agent,
+        )
+        for user in [
+            retail_manager,
+            other_retail_manager,
+            master_agent,
+            mapped_super_agent,
+            outsider_super_agent,
+            mapped_agent,
+            outsider_agent,
+            mapped_player,
+            outsider_player,
+        ]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+
+        RetailManagerMasterAgentMapping.objects.create(retail_manager=retail_manager, master_agent=master_agent)
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=retail_manager, super_agent=mapped_super_agent)
+        RetailManagerSuperAgentMapping.objects.create(retail_manager=other_retail_manager, super_agent=outsider_super_agent)
+
+        BetTicket.objects.create(
+            user=mapped_player,
+            stake_amount=Decimal("100.00"),
+            bet_type="single",
+            ticket_id="MAPSC001",
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("200.00"),
+            max_winning=Decimal("200.00"),
+            status="pending",
+        )
+        BetTicket.objects.create(
+            user=outsider_player,
+            stake_amount=Decimal("75.00"),
+            bet_type="single",
+            ticket_id="OUTSC001",
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("150.00"),
+            max_winning=Decimal("150.00"),
+            status="pending",
+        )
+        Transaction.objects.create(
+            user=mapped_player,
+            transaction_type="deposit",
+            amount=Decimal("300.00"),
+            is_successful=True,
+            status="completed",
+            description="mapped deposit",
+        )
+        Transaction.objects.create(
+            user=outsider_player,
+            transaction_type="deposit",
+            amount=Decimal("400.00"),
+            is_successful=True,
+            status="completed",
+            description="outsider deposit",
+        )
+        Transaction.objects.create(
+            user=mapped_agent,
+            transaction_type="commission_payout",
+            amount=Decimal("125.00"),
+            is_successful=True,
+            status="completed",
+            description="mapped commission payout",
+        )
+        Transaction.objects.create(
+            user=outsider_agent,
+            transaction_type="commission_payout",
+            amount=Decimal("225.00"),
+            is_successful=True,
+            status="completed",
+            description="outsider commission payout",
+        )
+        UserWithdrawal.objects.create(
+            user=mapped_player,
+            amount=Decimal("50.00"),
+            bank_name="Mapped Bank",
+            account_number="1111111111",
+            account_name="Mapped Player",
+            status="pending",
+        )
+        UserWithdrawal.objects.create(
+            user=outsider_player,
+            amount=Decimal("60.00"),
+            bank_name="Outsider Bank",
+            account_number="2222222222",
+            account_name="Outsider Player",
+            status="pending",
+        )
+        CashierRegistrationRequest.objects.create(
+            agent=mapped_agent,
+            first_name="Mapped",
+            last_name="Cashier",
+            other_name="Scope",
+            phone_number="08011111111",
+            cashier_code="MCS001",
+            cashier_email="mapped-cashier-scope@test.com",
+            cashier_username="mapped_cashier_scope",
+            status="PENDING",
+        )
+        CashierRegistrationRequest.objects.create(
+            agent=outsider_agent,
+            first_name="Outsider",
+            last_name="Cashier",
+            other_name="Scope",
+            phone_number="08022222222",
+            cashier_code="OCS001",
+            cashier_email="outsider-cashier-scope@test.com",
+            cashier_username="outsider_cashier_scope",
+            status="PENDING",
+        )
+        PendingAgentRegistration.objects.create(
+            full_name="Mapped Pending Agent",
+            email="mapped-pending-agent@test.com",
+            phone="08033333333",
+            password="hashed",
+            user_type="agent",
+            master_agent=master_agent,
+            super_agent=mapped_super_agent,
+            registered_by=retail_manager,
+            status="PENDING",
+        )
+        PendingAgentRegistration.objects.create(
+            full_name="Outsider Pending Agent",
+            email="outsider-pending-agent@test.com",
+            phone="08044444444",
+            password="hashed",
+            user_type="agent",
+            master_agent=master_agent,
+            super_agent=outsider_super_agent,
+            registered_by=other_retail_manager,
+            status="PENDING",
+        )
+
+        stale_login = timezone.now() - datetime.timedelta(days=10)
+        User.objects.filter(id__in=[mapped_agent.id, outsider_agent.id]).update(
+            last_login=stale_login,
+            is_locked=True,
+            locked_at=timezone.now(),
+            lock_reason="Scope test lock",
+        )
+        AccountLockAuditLog.objects.create(locked_user=mapped_agent, action="locked", lock_reason="Scope test lock")
+        AccountLockAuditLog.objects.create(locked_user=outsider_agent, action="locked", lock_reason="Scope test lock")
+
+        CommissionPeriod = apps.get_model("commission", "CommissionPeriod")
+        WeeklyAgentCommission = apps.get_model("commission", "WeeklyAgentCommission")
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=timezone.localdate() - datetime.timedelta(days=7),
+            end_date=timezone.localdate(),
+            is_processed=True,
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=mapped_agent,
+            period=period,
+            commission_total_amount=Decimal("125.00"),
+            status="pending",
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=outsider_agent,
+            period=period,
+            commission_total_amount=Decimal("225.00"),
+            status="pending",
+        )
+
+        self.client.force_login(retail_manager)
+
+        tab_expectations = [
+            ("shops", "agent_branch_outsider"),
+            ("hierarchy", "agent_branch_outsider"),
+            ("bets", "player_branch_outsider"),
+            ("finance", "player_branch_outsider"),
+            ("commissions", "agent_branch_outsider"),
+            ("dormant_accounts", "agent_branch_outsider"),
+            ("pending_withdrawals", "player_branch_outsider"),
+            ("pending_cashiers", "outsider_cashier_scope"),
+            ("pending_agents", "Outsider Pending Agent"),
+            ("agent_performance", "agent_branch_outsider"),
+            ("locked_accounts", "agent_branch_outsider"),
+            ("reports", "agent_branch_outsider"),
+        ]
+        for tab, hidden_marker in tab_expectations:
+            params = {"tab": tab}
+            if tab == "commissions":
+                params["commission_period"] = str(period.id)
+            if tab == "dormant_accounts":
+                params["dormant_bucket"] = "login_7"
+            if tab == "agent_performance":
+                params["performance_entity"] = "agent"
+            response = self.client.get(reverse("betting:retail_dashboard"), params)
+            self.assertEqual(response.status_code, 200, tab)
+            self.assertNotContains(response, hidden_marker)
+
+        export_expectations = [
+            ("bets", "player-branch-outsider@test.com"),
+            ("transactions", "player-branch-outsider@test.com"),
+            ("withdrawals", "player-branch-outsider@test.com"),
+            ("commissions", "agent-branch-outsider@test.com"),
+            ("players", "player-branch-outsider@test.com"),
+            ("shops", "agent-branch-outsider@test.com"),
+            ("dormant_accounts", "agent_branch_outsider"),
+            ("agent_performance", "agent_branch_outsider"),
+        ]
+        for dataset, hidden_marker in export_expectations:
+            params = {"dataset": dataset, "format": "csv"}
+            if dataset == "commissions":
+                params["start_date"] = period.start_date.isoformat()
+                params["end_date"] = period.end_date.isoformat()
+            if dataset == "dormant_accounts":
+                params["dormant_bucket"] = "login_7"
+            if dataset == "agent_performance":
+                params["performance_entity"] = "agent"
+            export_response = self.client.get(reverse("betting:retail_export"), params)
+            self.assertEqual(export_response.status_code, 200, dataset)
+            body = export_response.content.decode()
+            self.assertNotIn(hidden_marker, body)
 
     def test_retail_dormant_dashboard_and_export_apply_search_filter(self):
         password = "pass12345"

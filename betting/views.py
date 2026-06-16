@@ -1367,10 +1367,29 @@ def get_retail_manager_master_agents(user):
 def get_retail_manager_super_agents(user, *, master_agents_qs=None):
     if not is_retail_manager(user):
         return User.objects.none()
+    if master_agents_qs is None:
+        master_agents_qs = get_retail_manager_master_agents(user)
+
     direct_ids = list(
         RetailManagerSuperAgentMapping.objects.filter(retail_manager=user).values_list('super_agent_id', flat=True)
     )
-    return User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
+    direct_qs = User.objects.filter(id__in=direct_ids, user_type='super_agent') if direct_ids else User.objects.none()
+
+    derived_from_master_qs = (
+        User.objects.filter(user_type='super_agent', master_agent__in=master_agents_qs)
+        if master_agents_qs is not None and master_agents_qs.exists()
+        else User.objects.none()
+    )
+
+    derived_super_ids = list(
+        RetailManagerAgentMapping.objects.filter(retail_manager=user)
+        .exclude(agent__super_agent_id__isnull=True)
+        .values_list('agent__super_agent_id', flat=True)
+        .distinct()
+    )
+    derived_from_agents_qs = User.objects.filter(id__in=derived_super_ids, user_type='super_agent') if derived_super_ids else User.objects.none()
+
+    return (direct_qs | derived_from_master_qs | derived_from_agents_qs).distinct()
 
 def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=None):
     if not is_retail_manager(user):
@@ -1379,11 +1398,16 @@ def get_retail_manager_agents(user, *, master_agents_qs=None, super_agents_qs=No
         RetailManagerAgentMapping.objects.filter(retail_manager=user).values_list('agent_id', flat=True)
     )
     direct_qs = User.objects.filter(id__in=direct_ids, user_type='agent') if direct_ids else User.objects.none()
+
+    if master_agents_qs is None:
+        master_agents_qs = get_retail_manager_master_agents(user)
     if super_agents_qs is None:
-        super_agents_qs = get_retail_manager_super_agents(user)
+        super_agents_qs = get_retail_manager_super_agents(user, master_agents_qs=master_agents_qs)
     derived_q = Q()
-    if super_agents_qs.exists():
+    if super_agents_qs is not None and super_agents_qs.exists():
         derived_q |= Q(super_agent__in=super_agents_qs)
+    if master_agents_qs is not None and master_agents_qs.exists():
+        derived_q |= Q(master_agent__in=master_agents_qs)
     derived_qs = User.objects.filter(user_type='agent').filter(derived_q) if derived_q else User.objects.none()
     return (direct_qs | derived_qs).distinct()
 
@@ -1391,8 +1415,8 @@ def get_retail_network_users_qs(user):
     if not is_retail_manager(user):
         return User.objects.none()
     mas = get_retail_manager_master_agents(user)
-    sas = get_retail_manager_super_agents(user)
-    agents = get_retail_manager_agents(user, super_agents_qs=sas)
+    sas = get_retail_manager_super_agents(user, master_agents_qs=mas)
+    agents = get_retail_manager_agents(user, master_agents_qs=mas, super_agents_qs=sas)
     q = Q(id__in=list(mas.values_list('id', flat=True)))
     q |= Q(id__in=list(sas.values_list('id', flat=True)))
     q |= Q(id__in=list(agents.values_list('id', flat=True)))
@@ -4763,7 +4787,10 @@ def verify_monnify_deposit(request):
                     payload={'response': verify_data},
                 )
                 if payment_status and payment_status not in {"FAILED", "CANCELLED", "EXPIRED"}:
-                    messages.info(request, "Payment received, awaiting confirmation. Your wallet will be credited once confirmed.")
+                    messages.info(
+                        request,
+                        "Payment is not yet confirmed. If you already completed the payment, your wallet will be credited once Monnify confirms it."
+                    )
                 else:
                     messages.error(request, f"Monnify verification failed: {msg}")
         else:
@@ -4857,7 +4884,10 @@ def verify_kora_deposit(request):
                 payload={'response': response_data},
             )
             if status and status not in {"failed", "cancelled"}:
-                messages.info(request, "Payment received, awaiting confirmation. Your wallet will be credited once confirmed.")
+                messages.info(
+                    request,
+                    "Payment is not yet confirmed. If you already completed the payment, your wallet will be credited once Kora confirms it."
+                )
             else:
                 messages.error(request, f"Kora verification failed: {msg}")
             
@@ -12625,6 +12655,7 @@ def retail_dashboard(request):
     commission_rows = []
     commission_period_options = []
     selected_commission_period_id = ''
+    commission_page = None
     if active_tab == 'commissions':
         selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
         try:
@@ -12679,10 +12710,12 @@ def retail_dashboard(request):
                         'status': getattr(rec, 'status', 'pending') if rec else 'pending',
                     }
                 )
+            commission_page = Paginator(commission_rows, 50).get_page(request.GET.get('commission_page') or 1)
         except Exception:
             commission_rows = []
             commission_period_options = []
             selected_commission_period_id = ''
+            commission_page = Paginator([], 50).get_page(1)
 
     risk_logs_page = None
     risk_kind = (request.GET.get('risk_kind') or '').strip()
@@ -12858,6 +12891,7 @@ def retail_dashboard(request):
         'tx_page': tx_page,
         'withdrawals_page': withdrawals_page,
         'commission_rows': commission_rows,
+        'commission_page': commission_page,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
         'commission_agent_q': commission_agent_q,

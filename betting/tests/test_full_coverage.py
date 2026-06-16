@@ -10,6 +10,7 @@ from betting.models import (
     UserWithdrawal,
     Transaction,
     ActivityLog,
+    RetailManagerMasterAgentMapping,
     RetailManagerSuperAgentMapping,
     RetailManagerAgentMapping,
     RetailManagerDashboardNote,
@@ -19,6 +20,7 @@ from betting.models import (
     CustomerComplaint,
     CustomerComplaintNote,
 )
+from django.apps import apps
 from django.utils import timezone
 from django.db.models import Q
 import datetime
@@ -580,6 +582,62 @@ class FullCoverageTests(TestCase):
             response = self.client.get(reverse("betting:retail_dashboard"), {"tab": tab})
             self.assertEqual(response.status_code, 200)
             self.assertContains(response, marker)
+
+    def test_retail_commissions_include_agents_under_mapped_master_agent(self):
+        password = "pass12345"
+        retail_manager = User.objects.create_user(
+            email="rm-commission-scope@test.com",
+            password=password,
+            user_type="retail_manager",
+            username="rm_commission_scope",
+        )
+        master_agent = User.objects.create_user(
+            email="ma-commission-scope@test.com",
+            password=password,
+            user_type="master_agent",
+            username="ma_commission_scope",
+        )
+        super_agent = User.objects.create_user(
+            email="sa-commission-scope@test.com",
+            password=password,
+            user_type="super_agent",
+            username="sa_commission_scope",
+            master_agent=master_agent,
+        )
+        agent = User.objects.create_user(
+            email="agent-commission-scope@test.com",
+            password=password,
+            user_type="agent",
+            username="agent_commission_scope",
+            super_agent=super_agent,
+            master_agent=master_agent,
+        )
+        for user in [retail_manager, master_agent, super_agent, agent]:
+            Wallet.objects.get_or_create(user=user, defaults={"balance": Decimal("0.00")})
+        RetailManagerMasterAgentMapping.objects.create(retail_manager=retail_manager, master_agent=master_agent)
+
+        CommissionPeriod = apps.get_model("commission", "CommissionPeriod")
+        WeeklyAgentCommission = apps.get_model("commission", "WeeklyAgentCommission")
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=timezone.localdate() - datetime.timedelta(days=7),
+            end_date=timezone.localdate(),
+            is_processed=True,
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period,
+            commission_total_amount=Decimal("123.45"),
+            status="pending",
+        )
+
+        self.client.force_login(retail_manager)
+        response = self.client.get(
+            reverse("betting:retail_dashboard"),
+            {"tab": "commissions", "commission_period": str(period.id)},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "agent_commission_scope")
 
     def test_retail_dormant_dashboard_and_export_apply_search_filter(self):
         password = "pass12345"

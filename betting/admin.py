@@ -251,6 +251,45 @@ class CustomUserAdmin(UserAdmin):
         return "-"
     get_last_impersonated.short_description = "Last Impersonated"
 
+    def _resolve_pending_unlock_appeals(self, request, users, *, auto_comment):
+        user_ids = [user.pk for user in users if getattr(user, 'pk', None)]
+        if not user_ids:
+            return 0
+
+        prior_reason_map = {user.pk: (getattr(user, 'lock_reason', '') or '') for user in users if getattr(user, 'pk', None)}
+        review_time = timezone.now()
+        resolved_count = 0
+
+        appeals = (
+            AccountUnlockAppeal.objects
+            .filter(locked_user_id__in=user_ids, status='pending')
+            .select_related('locked_user', 'appealed_by')
+        )
+
+        for appeal in appeals:
+            prior_reason = prior_reason_map.get(appeal.locked_user_id, '') or ''
+            appeal.status = 'approved'
+            appeal.admin_comment = auto_comment
+            appeal.reviewed_at = review_time
+            appeal.reviewed_by = request.user
+            appeal.save(update_fields=['status', 'admin_comment', 'reviewed_at', 'reviewed_by'])
+
+            AccountLockAuditLog.objects.create(
+                locked_user=appeal.locked_user,
+                appealed_by=appeal.appealed_by,
+                reviewed_by=request.user,
+                lock_reason=prior_reason,
+                action='appeal_approved',
+                remarks=appeal.appeal_reason,
+            )
+            try:
+                views._notify_unlock_appeal_resolution(appeal, approved=True)
+            except Exception:
+                pass
+            resolved_count += 1
+
+        return resolved_count
+
     def unlock_accounts(self, request, queryset):
         targets = list(queryset)
         updated_count = queryset.update(
@@ -259,6 +298,11 @@ class CustomUserAdmin(UserAdmin):
             last_failed_login=None,
             locked_at=None,
             lock_reason=None
+        )
+        resolved_appeals = self._resolve_pending_unlock_appeals(
+            request,
+            targets,
+            auto_comment='Approved automatically because the account was unlocked from Django admin bulk action.',
         )
         
         # Log the unlock action for each user
@@ -278,7 +322,10 @@ class CustomUserAdmin(UserAdmin):
                 remarks='Account unlocked from Django admin bulk action.',
             )
             
-        self.message_user(request, f"{updated_count} account(s) successfully unlocked.")
+        message = f"{updated_count} account(s) successfully unlocked."
+        if resolved_appeals:
+            message += f" {resolved_appeals} pending unlock appeal(s) marked approved."
+        self.message_user(request, message)
     unlock_accounts.short_description = "Unlock selected accounts"
 
     fieldsets = (
@@ -400,6 +447,11 @@ class CustomUserAdmin(UserAdmin):
                     remarks='Account locked from Django admin user form.',
                 )
             else:
+                resolved_appeals = self._resolve_pending_unlock_appeals(
+                    request,
+                    [obj],
+                    auto_comment='Approved automatically because the account was unlocked from the Django admin user form.',
+                )
                 AccountLockAuditLog.objects.create(
                     locked_user=obj,
                     reviewed_by=request.user,
@@ -407,6 +459,12 @@ class CustomUserAdmin(UserAdmin):
                     action='unlocked',
                     remarks='Account unlocked from Django admin user form.',
                 )
+                if resolved_appeals:
+                    self.message_user(
+                        request,
+                        f"{resolved_appeals} pending unlock appeal(s) marked approved for this account.",
+                        level=messages.INFO,
+                    )
         elif not change and obj.is_locked:
             AccountLockAuditLog.objects.create(
                 locked_user=obj,

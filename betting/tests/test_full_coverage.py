@@ -2036,6 +2036,46 @@ class FullCoverageTests(TestCase):
         self.assertTrue(Notification.objects.filter(recipient=super_agent, title="Unlock Appeal Approved").exists())
         self.assertTrue(Notification.objects.filter(recipient=retail_manager, title="Unlock Appeal Approved").exists())
 
+    def test_admin_bulk_unlock_marks_pending_appeal_approved(self):
+        locked_agent = User.objects.create_user(
+            email="appeal-admin-bulk-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="appeal_admin_bulk_agent",
+            is_locked=True,
+            locked_at=timezone.now(),
+            lock_reason="Manual lock",
+        )
+        Wallet.objects.get_or_create(user=locked_agent, defaults={"balance": Decimal("0.00")})
+        appeal = AccountUnlockAppeal.objects.create(
+            user=locked_agent,
+            locked_user=locked_agent,
+            appealed_by=self.admin,
+            appeal_reason="Please unlock from admin.",
+            status="pending",
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("betting_admin:betting_user_changelist"),
+            {
+                "action": "unlock_accounts",
+                "_selected_action": [str(locked_agent.id)],
+                "select_across": "0",
+                "index": "0",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        locked_agent.refresh_from_db()
+        appeal.refresh_from_db()
+        self.assertFalse(locked_agent.is_locked)
+        self.assertEqual(appeal.status, "approved")
+        self.assertEqual(appeal.reviewed_by_id, self.admin.id)
+        self.assertTrue(AccountLockAuditLog.objects.filter(locked_user=locked_agent, action="appeal_approved").exists())
+        self.assertTrue(AccountLockAuditLog.objects.filter(locked_user=locked_agent, action="unlocked").exists())
+
     def test_reject_requires_comment_and_exports_enforce_permissions(self):
         password = "pass12345"
         crm_user = User.objects.create_user(

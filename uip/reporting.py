@@ -60,7 +60,9 @@ class ReportingService:
         from django.db.models import Count, F
         
         agent_stats = tickets.values(
-            username=F('user__email'), 
+            user_id=F('user_id'),
+            username=F('user__username'),
+            email=F('user__email'),
             role=F('user__user_type')
         ).annotate(
             total_sales=Sum('stake_amount'),
@@ -68,11 +70,12 @@ class ReportingService:
             total_payouts=Sum('max_winning', filter=models.Q(status='won'))
         ).order_by('-total_sales')
         
-        header = ['Agent Email', 'Role', 'Total Sales', 'Ticket Count', 'Total Payouts']
+        header = ['Username', 'Email', 'Role', 'Total Sales', 'Ticket Count', 'Total Payouts']
         rows = []
         for stat in agent_stats:
             rows.append([
-                stat['username'],
+                stat['username'] or f"user#{stat['user_id']}",
+                stat['email'],
                 stat['role'],
                 stat['total_sales'],
                 stat['ticket_count'],

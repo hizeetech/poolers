@@ -80,12 +80,9 @@ def generate_internal_email(prefix: str) -> str:
 
 def generate_cashier_email(agent_email: str, cashier_code: str) -> str:
     email = (agent_email or "").strip()
-    local, sep, domain = email.partition("@")
-    if not sep or not local or not domain:
-        return generate_internal_email(f"{cashier_code}{email}")
-
-    safe_code = re.sub(r"[^A-Za-z0-9]+", "", (cashier_code or "").strip()) or "C"
-    return f"{safe_code}{local}@{domain}"
+    if email:
+        return email
+    return generate_internal_email(f"{cashier_code}cashier")
 
 
 @transaction.atomic
@@ -151,7 +148,7 @@ def create_agent_and_cashiers(
     )
 
     cashier1 = UserModel(
-        email=generate_cashier_email(agent.email, "C1"),
+        email=agent.email,
         username=cashier1_username,
         first_name=first_name,
         last_name=last_name,
@@ -168,7 +165,7 @@ def create_agent_and_cashiers(
     cashier1.set_password(password)
 
     cashier2 = UserModel(
-        email=generate_cashier_email(agent.email, "C2"),
+        email=agent.email,
         username=cashier2_username,
         first_name=first_name,
         last_name=last_name,

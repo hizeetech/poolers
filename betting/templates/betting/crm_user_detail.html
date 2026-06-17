@@ -103,9 +103,14 @@
         <div class="card-header bg-light fw-semibold">Edit Profile</div>
         <div class="card-body">
           {% if can_edit_profiles %}
-          <form method="post" class="row g-3">
+          <form method="post" class="row g-3" data-email-check-url="{% url 'betting:check_email_usage' %}">
             {% csrf_token %}
             <input type="hidden" name="save_profile" value="1">
+            {{ profile_form.confirm_duplicate_email }}
+            {{ profile_form.sync_cashier_emails }}
+            {{ profile_form.email_warning_exclude_id }}
+            {{ profile_form.original_email }}
+            {{ profile_form.has_linked_cashiers }}
             <div class="col-md-4">
               <label class="form-label">First Name</label>
               {{ profile_form.first_name }}
@@ -120,6 +125,11 @@
               <label class="form-label">Other Name</label>
               {{ profile_form.other_name }}
               {{ profile_form.other_name.errors }}
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Email</label>
+              {{ profile_form.email }}
+              {{ profile_form.email.errors }}
             </div>
             <div class="col-md-4">
               <label class="form-label">Phone</label>

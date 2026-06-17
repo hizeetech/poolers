@@ -724,6 +724,8 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>window.duplicateEmailCheckUrl = "{% url 'betting:check_email_usage' %}";</script>
+    <script src="{% static 'betting/js/duplicate_email_warning.js' %}"></script>
     {% if user.is_authenticated %}
         <script>window.__VAPID_PUBLIC_KEY__ = "{{ vapid_public_key|escapejs }}";</script>
         <script src="{% static 'notifications/notifications_nav.js' %}"></script>

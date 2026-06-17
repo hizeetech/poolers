@@ -213,16 +213,31 @@ class State(models.Model):
         verbose_name_plural = "States"
 
 class CustomUserManager(BaseUserManager):
+    def _generate_unique_username(self, email=None, preferred=None):
+        base = (preferred or "").strip()
+        if not base and email:
+            base = (email or "").split("@")[0].strip()
+        base = re.sub(r"[^A-Za-z0-9]", "", base or "")[:40] or f"user{uuid.uuid4().hex[:8]}"
+        candidate = base
+        suffix = 1
+        while self.model.objects.filter(username__iexact=candidate).exists():
+            candidate = f"{base}{suffix}"
+            suffix += 1
+        return candidate
+
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('The Email field must be set')
         email = self.normalize_email(email)
+        username = (extra_fields.get('username') or '').strip()
+        if not username:
+            extra_fields['username'] = self._generate_unique_username(email=email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, email, password=None, **extra_fields):
+    def create_superuser(self, email=None, password=None, username=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -233,7 +248,13 @@ class CustomUserManager(BaseUserManager):
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True.')
 
-        return self.create_user(email, password, **extra_fields)
+        username = (username or extra_fields.get('username') or '').strip()
+        if username:
+            extra_fields['username'] = username
+        elif email:
+            extra_fields['username'] = self._generate_unique_username(email=email, preferred='admin')
+
+        return self.create_user(email=email, password=password, **extra_fields)
 
 class User(AbstractBaseUser, PermissionsMixin):
     USER_TYPE_CHOICES = (
@@ -274,7 +295,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('withdrawal', 'Withdrawal Officer'),
     )
 
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     username = models.CharField(max_length=50, unique=True, blank=True, null=True)
     first_name = models.CharField(max_length=100, blank=True, null=True)
     last_name = models.CharField(max_length=100, blank=True, null=True)
@@ -322,8 +343,8 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = CustomUserManager()
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []
+    USERNAME_FIELD = 'username'
+    REQUIRED_FIELDS = ['email']
 
     class Meta:
         verbose_name = 'User'
@@ -337,6 +358,13 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.first_name or ''} {self.last_name or ''}".strip() or self.email
+
+    def save(self, *args, **kwargs):
+        if not (self.username or '').strip():
+            self.username = self.__class__.objects._generate_unique_username(email=self.email)
+        if self.email:
+            self.email = self.__class__.objects.normalize_email(self.email)
+        super().save(*args, **kwargs)
 
     def get_full_name(self):
         return f"{self.first_name or ''} {self.last_name or ''}".strip() or self.email
@@ -746,7 +774,6 @@ class CashierRegistrationRequest(models.Model):
     class Meta:
         ordering = ['-created_at']
         constraints = [
-            models.UniqueConstraint(fields=['cashier_email'], name='unique_cashier_request_email'),
             models.UniqueConstraint(fields=['agent', 'cashier_code'], name='unique_cashier_request_agent_code'),
         ]
 
@@ -1676,6 +1703,28 @@ class ActivityLog(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action}"
+
+
+class EmailAuditLog(models.Model):
+    ACTION_TYPES = (
+        ('DUPLICATE_EMAIL_ASSIGNED', 'Duplicate Email Assigned'),
+        ('DUPLICATE_EMAIL_UPDATED', 'Duplicate Email Updated'),
+        ('CASHIER_EMAIL_SYNCHRONIZED', 'Cashier Email Synchronized'),
+        ('AGENT_CASHIER_EMAIL_SYNC_TRIGGERED', 'Agent Cashier Email Sync Triggered'),
+    )
+
+    target_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='email_audit_logs')
+    email = models.EmailField(blank=True, default='', db_index=True)
+    action_type = models.CharField(max_length=50, choices=ACTION_TYPES, db_index=True)
+    performed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='performed_email_audit_logs')
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action_type} - {self.email or getattr(self.target_user, 'email', '')}"
 
 class CRMActionLog(models.Model):
     ACTION_TYPES = (

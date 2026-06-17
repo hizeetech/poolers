@@ -142,6 +142,7 @@
       <div class="modal-body">
         <form method="post" action="{% url 'pending_registration:register_agent' %}">
             {% csrf_token %}
+            <input type="hidden" name="confirm_duplicate_email" value="">
             <div class="mb-3">
                 <label for="id_full_name" class="form-label fw-semibold">
                     <i class="fa-regular fa-id-card me-2"></i>Full Name <span class="text-danger">*</span>

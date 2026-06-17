@@ -72,6 +72,15 @@ cover/
 # Translations
 *.mo
 
+.env
+.env.*
+backup.json
+db.sqlite3
+mediafiles/
+.dbg/
+debug-*.md
+
+
 # Django stuff:
 
 # Flask stuff:

@@ -164,6 +164,47 @@
                             <div class="admin-quick-link-text">Open result management quickly</div>
                         </a>
                     </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{{ pending_agent_registration_admin_url }}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #dc3545 0%, #b02a37 100%);">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-start" style="gap: 10px;">
+                                    <div>
+                                        <div class="admin-quick-link-icon"><i class="fas fa-user-clock"></i></div>
+                                        <div class="admin-quick-link-title">Pending Agent Registrations</div>
+                                    </div>
+                                    <span class="badge badge-light" style="font-size: 12px; min-width: 34px;">{{ pending_agent_registration_count|default:0 }}</span>
+                                </div>
+                            </div>
+                            <div class="admin-quick-link-text">Review agent onboarding submissions waiting for approval</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{% url 'betting_admin:betting_betticket_changelist' %}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #20c997 0%, #0f9d7a 100%);">
+                            <div>
+                                <div class="admin-quick-link-icon"><i class="fas fa-ticket-alt"></i></div>
+                                <div class="admin-quick-link-title">Bet Tickets</div>
+                            </div>
+                            <div class="admin-quick-link-text">Open the full bet ticket list in the Django admin</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{% url 'betting_admin:betting_paymentgatewaydeposit_changelist' %}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #0d6efd 0%, #084298 100%);">
+                            <div>
+                                <div class="admin-quick-link-icon"><i class="fas fa-credit-card"></i></div>
+                                <div class="admin-quick-link-title">Payment Gateway Deposit</div>
+                            </div>
+                            <div class="admin-quick-link-text">Inspect gateway deposit records and reconciliation entries</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{% url 'betting_admin:betting_fixture_changelist' %}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #6610f2 0%, #520dc2 100%);">
+                            <div>
+                                <div class="admin-quick-link-icon"><i class="fas fa-futbol"></i></div>
+                                <div class="admin-quick-link-title">Fixtures</div>
+                            </div>
+                            <div class="admin-quick-link-text">Jump straight to fixture records and match management</div>
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>

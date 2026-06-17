@@ -97,7 +97,7 @@ class FullCoverageTests(TestCase):
 
     def test_all_urls_admin(self):
         """Test that Admin can access all pages without error (200 OK)."""
-        self.client.login(email='admin@test.com', password=self.password)
+        self.client.login(username=self.admin.username, password=self.password)
         
         urls_to_test = [
             ('betting:frontpage', {}),
@@ -134,7 +134,7 @@ class FullCoverageTests(TestCase):
 
     def test_agent_pages(self):
         """Test Agent specific pages."""
-        self.client.login(email='agent@test.com', password=self.password)
+        self.client.login(username=self.agent.username, password=self.password)
         
         urls = [
             ('betting:agent_dashboard', {}),
@@ -1183,7 +1183,7 @@ class FullCoverageTests(TestCase):
         )
         Wallet.objects.create(user=agent_user, balance=Decimal("0.00"))
 
-        self.assertTrue(self.client.login(email="unauth-agent@test.com", password=password))
+        self.assertTrue(self.client.login(username=agent_user.username, password=password))
         response = self.client.get(reverse("betting:agent_remapping"))
         self.assertEqual(response.status_code, 403)
         self.assertIn("Permission Denied", response.content.decode())
@@ -1251,7 +1251,7 @@ class FullCoverageTests(TestCase):
         ]:
             Wallet.objects.create(user=user, balance=balance)
 
-        self.assertTrue(self.client.login(email="crm-remap@test.com", password=password))
+        self.assertTrue(self.client.login(username=crm_user.username, password=password))
         response = self.client.post(
             reverse("betting:agent_remapping"),
             {
@@ -1599,8 +1599,8 @@ class FullCoverageTests(TestCase):
     def test_password_change_logs_user_out_from_all_active_sessions(self):
         client_one = Client()
         client_two = Client()
-        self.assertTrue(client_one.login(email='user@test.com', password=self.password))
-        self.assertTrue(client_two.login(email='user@test.com', password=self.password))
+        self.assertTrue(client_one.login(username=self.user.username, password=self.password))
+        self.assertTrue(client_two.login(username=self.user.username, password=self.password))
 
         response = client_one.post(reverse('betting:change_password'), {
             'old_password': self.password,
@@ -1874,7 +1874,8 @@ class FullCoverageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         dormant_rows = list(response.context["dormant_agents_rows"])
         self.assertEqual({row.username for row in dormant_rows}, {"ma_agent_two"})
-        self.assertContains(response, "Dormant Agents by Super Agent")
+        self.assertContains(response, "Dormant Agents")
+        self.assertContains(response, 'name="dormant_super_agent"')
 
         export_response = self.client.get(
             reverse("betting:downline_dormant_agents_export"),

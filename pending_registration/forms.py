@@ -1,10 +1,9 @@
 from django import forms
-from django.contrib.auth import get_user_model
 from .models import PendingAgentRegistration
-
-User = get_user_model()
+from betting.services.email_policy import duplicate_email_details, is_truthy, normalize_email_value
 
 class AgentRegistrationForm(forms.ModelForm):
+    confirm_duplicate_email = forms.CharField(required=False, widget=forms.HiddenInput())
     password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-control'}))
     confirm_password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-control'}))
 
@@ -23,15 +22,15 @@ class AgentRegistrationForm(forms.ModelForm):
         cleaned_data = super().clean()
         password = cleaned_data.get("password")
         confirm_password = cleaned_data.get("confirm_password")
-        email = cleaned_data.get("email")
+        email = normalize_email_value(cleaned_data.get("email"))
 
         if password and confirm_password and password != confirm_password:
             self.add_error('confirm_password', "Passwords do not match")
-            
-        if email and User.objects.filter(email=email).exists():
-             self.add_error('email', "User with this email already exists.")
-             
-        if email and PendingAgentRegistration.objects.filter(email=email, status='PENDING').exists():
-             self.add_error('email', "A pending registration for this email already exists.")
+
+        if email:
+            cleaned_data["email"] = email
+            details = duplicate_email_details(email)
+            if details["exists"] and not is_truthy(cleaned_data.get("confirm_duplicate_email")):
+                self.add_error('email', "This email is already assigned to another user. Confirm to continue.")
 
         return cleaned_data

@@ -44,7 +44,9 @@ class AlertService:
             )
             # Create Advanced Fraud Alert
             for item in metrics['bonus_abusers']:
-                user = User.objects.get(email=item['user__email'])
+                user = User.objects.filter(id=item.get('user')).first()
+                if not user:
+                    continue
                 if not FraudAlert.objects.filter(alert_type='bonus_abuse', affected_users=user, timestamp__date=timezone.now().date()).exists():
                     FraudDetectionService.create_fraud_alert(
                         alert_type='bonus_abuse',

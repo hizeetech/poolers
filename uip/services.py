@@ -464,7 +464,7 @@ class DashboardService:
         bonus_abusers = Transaction.objects.filter(
             transaction_type='bonus',
             timestamp__gte=start_of_week
-        ).values('user__email').annotate(
+        ).values('user', 'user__username', 'user__email').annotate(
             bonus_count=Count('id')
         ).filter(bonus_count__gt=3).order_by('-bonus_count')
         
@@ -474,7 +474,7 @@ class DashboardService:
         high_winners = BetTicket.objects.filter(
             status='won',
             last_updated__gte=start_of_week
-        ).values('user__email').annotate(
+        ).values('user', 'user__username', 'user__email').annotate(
             total_won=Sum('max_winning'),
             win_count=Count('id')
         ).order_by('-total_won')[:10]

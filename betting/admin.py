@@ -44,6 +44,7 @@ from .forms import (
     FixtureForm,
     FixtureUploadForm
 )
+from .services.email_policy import normalize_email_value
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 from datetime import datetime, time, timedelta
@@ -85,10 +86,18 @@ class BettingAdminSite(admin.AdminSite):
         except Exception:
             pending_crm_wallet_approval_count = 0
 
+        try:
+            from pending_registration.models import PendingAgentRegistration
+            pending_agent_registration_count = PendingAgentRegistration.objects.filter(status='PENDING').count()
+        except Exception:
+            pending_agent_registration_count = 0
+
         extra_context.update({
             'pending_crm_wallet_approval_count': pending_crm_wallet_approval_count,
             'crm_wallet_approval_admin_url': reverse(f'{self.name}:betting_crmwalletapprovalrequest_changelist'),
             'crm_wallet_dashboard_url': reverse(f'{self.name}:dashboard'),
+            'pending_agent_registration_count': pending_agent_registration_count,
+            'pending_agent_registration_admin_url': reverse(f'{self.name}:pending_registration_pendingagentregistration_changelist'),
         })
         return super().index(request, extra_context)
 
@@ -1287,19 +1296,11 @@ class PendingCashierRegistrationAdmin(admin.ModelAdmin):
             messages.error(request, "This request has no agent attached.")
             return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
 
-        if User.objects.filter(email__iexact=cashier_req.cashier_email).exists():
-            cashier_req.status = 'REJECTED'
-            cashier_req.reviewed_at = timezone.now()
-            cashier_req.admin_notes = 'Cashier email already exists.'
-            cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
-            messages.error(request, "Cashier email already exists. Request rejected.")
-            return redirect(f'{self.admin_site.name}:betting_pendingcashierregistration_changelist')
-
         raw_password = get_random_string(12)
         try:
             with db_transaction.atomic():
                 cashier = User.objects.create_user(
-                    email=cashier_req.cashier_email,
+                    email=normalize_email_value(cashier_req.cashier_email) or normalize_email_value(agent.email),
                     password=raw_password,
                     username=cashier_req.cashier_username,
                     first_name=cashier_req.first_name,

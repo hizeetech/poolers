@@ -135,8 +135,6 @@ AUTHENTICATION_BACKENDS = [
     # AxesStandaloneBackend should be the first backend
     'axes.backends.AxesStandaloneBackend',
     'betting.backends.EmailOrUsernameBackend',
-    # Django ModelBackend is the default authentication backend
-    'django.contrib.auth.backends.ModelBackend',
 ]
 
 try:
@@ -144,7 +142,6 @@ try:
     if 'test' in sys.argv:
         AUTHENTICATION_BACKENDS = [
             'betting.backends.EmailOrUsernameBackend',
-            'django.contrib.auth.backends.ModelBackend',
         ]
         MIDDLEWARE = [m for m in MIDDLEWARE if m != 'axes.middleware.AxesMiddleware']
         SILENCED_SYSTEM_CHECKS = list(globals().get('SILENCED_SYSTEM_CHECKS', [])) + ['axes.W002', 'axes.W003']

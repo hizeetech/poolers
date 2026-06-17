@@ -18,7 +18,7 @@ class WalletViewTest(TestCase):
         Wallet.objects.filter(user=self.user).delete()
 
     def test_wallet_view_creates_wallet_if_missing(self):
-        self.client.login(email='testuser@example.com', password='testpassword')
+        self.client.login(username=self.user.username, password='testpassword')
         
         # Verify wallet is missing
         self.assertFalse(Wallet.objects.filter(user=self.user).exists())
@@ -35,7 +35,7 @@ class WalletViewTest(TestCase):
         self.assertEqual(wallet.balance, Decimal('0.00'))
 
     def test_wallet_view_renders_enabled_monnify_button(self):
-        self.client.login(email='testuser@example.com', password='testpassword')
+        self.client.login(username=self.user.username, password='testpassword')
 
         response = self.client.get(reverse('betting:wallet'))
 
@@ -56,7 +56,7 @@ class WalletViewTest(TestCase):
     @patch('betting.views.requests.get')
     @patch('betting.views.requests.post')
     def test_verify_monnify_pending_status_does_not_claim_payment_received(self, mock_post, mock_get):
-        self.client.login(email='testuser@example.com', password='testpassword')
+        self.client.login(username=self.user.username, password='testpassword')
         reference = 'monnify-pending-ref'
         Transaction.objects.create(
             user=self.user,
@@ -98,7 +98,7 @@ class WalletViewTest(TestCase):
 
     @patch('betting.views.requests.get')
     def test_verify_kora_pending_status_does_not_claim_payment_received(self, mock_get):
-        self.client.login(email='testuser@example.com', password='testpassword')
+        self.client.login(username=self.user.username, password='testpassword')
         reference = 'kora-pending-ref'
         Transaction.objects.create(
             user=self.user,

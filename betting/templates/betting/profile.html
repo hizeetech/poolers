@@ -28,8 +28,14 @@
                     <h5 class="mb-0">Profile Information</h5>
                 </div>
                 <div class="card-body">
-                    <form method="post" action="{% url 'betting:profile' %}" class="needs-validation" novalidate>
-                        {% csrf_token %} {% for field in profile_form %}
+                    <form method="post" action="{% url 'betting:profile' %}" class="needs-validation" novalidate data-email-check-url="{% url 'betting:check_email_usage' %}">
+                        {% csrf_token %}
+                        {{ profile_form.confirm_duplicate_email }}
+                        {{ profile_form.sync_cashier_emails }}
+                        {{ profile_form.email_warning_exclude_id }}
+                        {{ profile_form.original_email }}
+                        {{ profile_form.has_linked_cashiers }}
+                        {% for field in profile_form %}
                         <div class="mb-3">
                             <label for="{{ field.id_for_label }}" class="form-label text-muted fw-medium">{{ field.label }}</label> {{ field }} {% if field.help_text %}
                             <div class="form-text text-muted">{{ field.help_text }}</div>

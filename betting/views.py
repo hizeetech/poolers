@@ -84,6 +84,7 @@ from .forms import (
     CustomerComplaintForm, CustomerComplaintActionForm, CustomerComplaintNoteForm, BulkMessageTemplateForm,
     BulkMessageCampaignForm, CRMThresholdSettingsForm
 )
+from .services.email_policy import duplicate_email_details, normalize_email_value, resolve_user_from_identifier
 
 # Setup logger for this app
 logger = logging.getLogger('betting') # Use the 'betting' logger defined in settings.py
@@ -403,6 +404,20 @@ def crm_can_reset_password(user):
 
 def crm_can_message(user):
     return is_crm_user(user)
+
+def crm_can_send_direct_email(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'crm_role', '') in ['supervisor']
+
+def crm_can_send_bulk_email(user):
+    if not is_crm_user(user):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    return getattr(user, 'crm_role', '') in ['supervisor']
 
 def crm_can_view_audit(user):
     if not is_crm_user(user):
@@ -2374,6 +2389,21 @@ def send_bulk_message_campaign_now(campaign_id, *, acting_user=None):
     campaign = BulkMessageCampaign.objects.filter(id=campaign_id).select_related('created_by', 'template').first()
     if not campaign:
         return 0
+    if campaign.channel == 'email':
+        actor_for_policy = acting_user or campaign.created_by
+        if actor_for_policy and not crm_can_send_bulk_email(actor_for_policy):
+            campaign.status = 'failed'
+            campaign.last_error = 'not_allowed'
+            campaign.sent_at = timezone.now()
+            campaign.save(update_fields=['status', 'last_error', 'sent_at', 'updated_at'])
+            CRMOpsAuditLog.objects.create(
+                actor=acting_user or campaign.created_by,
+                module='bulk_messaging',
+                action='campaign_blocked',
+                campaign=campaign,
+                metadata={'reason': 'email_not_allowed', 'channel': campaign.channel, 'target_group': campaign.target_group},
+            )
+            return 0
     recipients_qs = _resolve_bulk_campaign_users(campaign, acting_user=acting_user)
     recipients = list(recipients_qs.only('id', 'email', 'phone_number', 'username', 'first_name', 'last_name'))
     campaign.status = 'processing'
@@ -2568,14 +2598,7 @@ def user_login(request):
             messages.error(request, 'Too many login attempts. Please wait and try again.')
             form = LoginForm()
             return render(request, 'betting/login.html', {'form': form})
-        data = request.POST
-        try:
-            if 'identifier' not in data and 'email' in data:
-                data = request.POST.copy()
-                data['identifier'] = data.get('email')
-        except Exception:
-            data = request.POST
-        form = LoginForm(request=request, data=data)
+        form = LoginForm(request=request, data=request.POST)
         
         if form.is_valid():
             logger.debug("LoginForm is valid.")
@@ -2603,23 +2626,58 @@ def user_login(request):
     return render(request, 'betting/login.html', {'form': form})
 
 
+@ratelimit(key='ip', rate='5/m', method='POST', block=False)
+@ratelimit(key='post:identifier', rate='5/h', method='POST', block=False)
 def forgot_password(request):
     if request.method == 'POST':
+        is_testing = False
+        try:
+            import sys
+            is_testing = 'test' in sys.argv
+        except Exception:
+            is_testing = False
+        if getattr(request, 'limited', False) and not is_testing:
+            try:
+                cache_key = "email_volume:forgot_password:limited"
+                if cache.add(cache_key, 1, timeout=3600):
+                    pass
+                else:
+                    cache.incr(cache_key)
+            except Exception:
+                pass
+            return JsonResponse({'status': 'error', 'message': 'Too many requests. Please wait and try again.'})
+
+        try:
+            cache_key = "email_volume:forgot_password:requested"
+            if cache.add(cache_key, 1, timeout=3600):
+                pass
+            else:
+                cache.incr(cache_key)
+        except Exception:
+            pass
+
         form = ForgotPasswordForm(request.POST)
         if form.is_valid():
-            email = form.cleaned_data['email']
-            user = User.objects.filter(email__iexact=email).first()
+            identifier = form.cleaned_data['identifier']
+            user, resolution_error = resolve_user_from_identifier(identifier)
             
             if not user:
-                # Return JSON for SweetAlert in the template
-                return JsonResponse({'status': 'error', 'message': 'Email not found in our database.'})
+                try:
+                    cache_key = "email_volume:forgot_password:user_not_found"
+                    if cache.add(cache_key, 1, timeout=3600):
+                        pass
+                    else:
+                        cache.incr(cache_key)
+                except Exception:
+                    pass
+                return JsonResponse({'status': 'error', 'message': resolution_error or 'User not found in our database.'})
             
             # Create Reset Request
             token = secrets.token_urlsafe(32)
             expires_at = timezone.now() + timedelta(hours=2)
             
             reset_request = PasswordResetRequest.objects.create(
-                email=email,
+                email=user.email,
                 token=token,
                 user=user,
                 expires_at=expires_at,
@@ -2656,7 +2714,7 @@ def forgot_password(request):
                     subject,
                     message,
                     from_email,
-                    [email],
+                    [user.email],
                     fail_silently=False,
                     connection=connection,
                 )
@@ -2664,12 +2722,28 @@ def forgot_password(request):
                 reset_request.sent_at = timezone.now()
                 reset_request.send_error = None
                 reset_request.save(update_fields=['email_sent', 'sent_at', 'send_error'])
+                try:
+                    cache_key = "email_volume:forgot_password:sent"
+                    if cache.add(cache_key, 1, timeout=3600):
+                        pass
+                    else:
+                        cache.incr(cache_key)
+                except Exception:
+                    pass
                 return JsonResponse({'status': 'success', 'message': 'A reset link has been sent to your email.'})
             except smtplib.SMTPAuthenticationError as e:
                 logger.exception(f"Email sending failed: {str(e)}")
                 reset_request.email_sent = False
                 reset_request.send_error = str(e)
                 reset_request.save(update_fields=['email_sent', 'send_error'])
+                try:
+                    cache_key = "email_volume:forgot_password:smtp_auth_error"
+                    if cache.add(cache_key, 1, timeout=3600):
+                        pass
+                    else:
+                        cache.incr(cache_key)
+                except Exception:
+                    pass
 
                 if settings.DEBUG:
                     from django.core.mail import get_connection
@@ -2678,7 +2752,7 @@ def forgot_password(request):
                         subject,
                         message,
                         settings.DEFAULT_FROM_EMAIL or f"no-reply@{request.get_host().split(':')[0]}",
-                        [email],
+                        [user.email],
                         fail_silently=True,
                         connection=connection,
                     )
@@ -2690,10 +2764,30 @@ def forgot_password(request):
                 reset_request.email_sent = False
                 reset_request.send_error = str(e)
                 reset_request.save(update_fields=['email_sent', 'send_error'])
+                try:
+                    cache_key = "email_volume:forgot_password:send_error"
+                    if cache.add(cache_key, 1, timeout=3600):
+                        pass
+                    else:
+                        cache.incr(cache_key)
+                except Exception:
+                    pass
                 return JsonResponse({'status': 'error', 'message': 'Failed to send reset email. Please try again later.'})
     else:
         form = ForgotPasswordForm()
     return render(request, 'betting/forgot_password.html', {'form': form})
+
+
+def check_email_usage(request):
+    email = request.GET.get('email') or request.POST.get('email')
+    exclude_user_id = request.GET.get('exclude_user_id') or request.POST.get('exclude_user_id')
+    try:
+        exclude_user_id = int(exclude_user_id) if exclude_user_id else None
+    except Exception:
+        exclude_user_id = None
+
+    details = duplicate_email_details(email, exclude_user_id=exclude_user_id)
+    return JsonResponse(details)
 
 
 def reset_password(request, token):
@@ -5927,7 +6021,7 @@ def profile_view(request):
 
 
     if request.method == 'POST':
-        profile_form = ProfileEditForm(request.POST, instance=request.user)
+        profile_form = ProfileEditForm(request.POST, instance=request.user, request=request)
         password_form = PasswordChangeForm(request.user, request.POST)
         pin_create_form = WithdrawalPinCreateForm(request.POST)
         pin_reset_form = WithdrawalPinResetForm(request.POST, user=request.user)
@@ -6070,7 +6164,7 @@ def profile_view(request):
                 for error in agent_min_stake_form.non_field_errors():
                     messages.error(request, error)
     else:
-        profile_form = ProfileEditForm(instance=request.user)
+        profile_form = ProfileEditForm(instance=request.user, request=request)
         password_form = PasswordChangeForm(request.user)
         pin_create_form = WithdrawalPinCreateForm()
         pin_reset_form = WithdrawalPinResetForm(user=request.user)
@@ -8941,10 +9035,7 @@ def agent_create_cashier(request):
             next_num = max_existing + 1
 
             cashier_code = f"C{next_num}"
-            cashier_email = generate_cashier_email(agent.email, cashier_code)
-            if User.objects.filter(email__iexact=cashier_email).exists():
-                messages.error(request, f"{cashier_code} already exists for this agent.")
-                return redirect(redirect_to)
+            cashier_email = normalize_email_value(agent.email)
 
             root = None
             for c in User.objects.filter(agent=agent, user_type='cashier').exclude(username__isnull=True).only('username').order_by('date_joined'):
@@ -9032,10 +9123,7 @@ def agent_edit_cashier(request, cashier_id):
             # Email update is sensitive, usually requires verification, but for simplicity:
             new_email = request.POST.get('email')
             if new_email and new_email != cashier.email:
-                if User.objects.filter(email=new_email).exclude(id=cashier.id).exists():
-                     messages.error(request, "Email already in use by another user.")
-                     return redirect('betting:agent_cashier_list')
-                cashier.email = new_email
+                cashier.email = normalize_email_value(new_email)
             
             cashier.save()
             messages.success(request, f"Cashier {cashier.email} updated successfully.")
@@ -11170,6 +11258,10 @@ def crm_dashboard(request):
             )
             if bulk_campaign_form.is_valid():
                 campaign = bulk_campaign_form.save(commit=False)
+                if campaign.channel == 'email' and not crm_can_send_bulk_email(request.user):
+                    messages.error(request, 'Not allowed to send bulk email campaigns.')
+                    _log_crm_ops_action(request, module='bulk_messaging', action='campaign_blocked', metadata={'reason': 'email_not_allowed', 'channel': campaign.channel, 'target_group': getattr(campaign, 'target_group', '')})
+                    return redirect(bulk_redirect)
                 campaign.created_by = request.user
                 campaign.target_agent_ids = [agent.id for agent in bulk_campaign_form.cleaned_data.get('target_agent_ids') or []]
                 campaign.target_user_ids = bulk_campaign_form.cleaned_data.get('target_user_ids_list') or []
@@ -14049,12 +14141,13 @@ def finance_dashboard(request):
                 return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
 
             target_user = None
+            resolution_error = ''
             if user_ident.isdigit():
                 target_user = User.objects.filter(id=int(user_ident)).first()
             if not target_user:
-                target_user = User.objects.filter(Q(email__iexact=user_ident) | Q(username__iexact=user_ident)).first()
+                target_user, resolution_error = resolve_user_from_identifier(user_ident)
             if not target_user:
-                messages.error(request, 'User not found.')
+                messages.error(request, resolution_error or 'User not found.')
                 return redirect(f"{reverse('betting:finance_dashboard')}?tab=wallets")
 
             with db_transaction.atomic():
@@ -15267,14 +15360,14 @@ def crm_user_detail(request, user_id):
         reverse=True,
     )[:50]
 
-    profile_form = CRMUserProfileForm(instance=target)
+    profile_form = CRMUserProfileForm(instance=target, request=request)
 
     if request.method == 'POST':
         if 'save_profile' in request.POST:
             if not crm_can_edit_profiles(request.user):
                 messages.error(request, 'Not allowed.')
                 return redirect('betting:crm_user_detail', user_id=target.id)
-            profile_form = CRMUserProfileForm(request.POST, instance=target)
+            profile_form = CRMUserProfileForm(request.POST, instance=target, request=request)
             if profile_form.is_valid():
                 before = {
                     'first_name': target.first_name,
@@ -15471,6 +15564,16 @@ def crm_user_detail(request, user_id):
                 except Exception as e:
                     errors['in_app'] = str(e)
             if via_email:
+                if not crm_can_send_direct_email(request.user):
+                    errors['email'] = 'not_allowed'
+                    messages.error(request, 'Not allowed to send email messages.')
+                    CRMActionLog.objects.create(
+                        actor=request.user,
+                        target_user=msg_target,
+                        action_type='MESSAGE_SENT',
+                        data={'channels': sent, 'errors': errors, 'sms': sms_status or {}, 'blocked': 'email_not_allowed'},
+                    )
+                    return redirect('betting:crm_user_detail', user_id=target.id)
                 try:
                     from django.core.mail import EmailMultiAlternatives
                     from django.template.loader import render_to_string
@@ -15842,24 +15945,9 @@ def crm_cashier_registration_action(request, pk, action):
             messages.error(request, 'This request has no agent attached.')
             return redirect('betting:crm_dashboard')
 
-        if User.objects.filter(email__iexact=cashier_req.cashier_email).exists():
-            cashier_req.status = 'REJECTED'
-            cashier_req.reviewed_at = timezone.now()
-            cashier_req.admin_notes = 'Cashier email already exists.'
-            cashier_req.save(update_fields=['status', 'reviewed_at', 'admin_notes'])
-            CRMActionLog.objects.create(
-                actor=request.user,
-                target_user=agent,
-                action_type='CASHIER_REG_REJECTED',
-                reason='Cashier email already exists.',
-                cashier_request=cashier_req,
-            )
-            messages.error(request, 'Cashier email already exists. Request rejected.')
-            return redirect('betting:crm_dashboard')
-
         raw_password = get_random_string(12)
         cashier = User.objects.create_user(
-            email=cashier_req.cashier_email,
+            email=normalize_email_value(cashier_req.cashier_email) or normalize_email_value(agent.email),
             password=raw_password,
             username=cashier_req.cashier_username,
             first_name=cashier_req.first_name,
@@ -16171,7 +16259,7 @@ def impersonate_user(request, user_id):
 
     # Switch User (without password)
     # We need to set the backend manually because we are logging in without authentication
-    backend = 'django.contrib.auth.backends.ModelBackend' # Standard Django backend
+    backend = 'betting.backends.EmailOrUsernameBackend'
     target_user.backend = backend
     login(request, target_user)
 
@@ -16212,7 +16300,7 @@ def stop_impersonation(request):
     try:
         original_user = User.objects.get(pk=original_admin_id)
         # Re-login as admin
-        backend = 'django.contrib.auth.backends.ModelBackend'
+        backend = 'betting.backends.EmailOrUsernameBackend'
         original_user.backend = backend
         login(request, original_user)
         
@@ -16777,21 +16865,23 @@ def webauthn_register_complete(request):
 def webauthn_login_begin(request):
     try:
         data = json.loads(request.body)
-        email = data.get('email') or data.get('username')
+        identifier = (data.get('username') or '').strip()
+
+        if not identifier and (data.get('email') or '').strip():
+            return JsonResponse({'status': 'error', 'message': 'Use your username to sign in. Email login is not supported.'}, status=400)
         
         rp_id = request.get_host().split(':')[0]
         utils = WebAuthnUtils(rp_id=rp_id)
         
         user = None
-        if email:
-            rl_key = f"webauthn:auth:{_client_ip(request)}:{email}"
+        if identifier:
+            rl_key = f"webauthn:auth:{_client_ip(request)}:{identifier.lower()}"
             if _rate_limited(rl_key):
                 return JsonResponse({'status': 'error', 'message': 'Too many requests'}, status=429)
-                
-            try:
-                user = User.objects.get(email=email)
-            except User.DoesNotExist:
-                 return JsonResponse({'status': 'error', 'message': 'User not found'}, status=404)
+
+            user = User.objects.filter(username__iexact=identifier).first()
+            if not user:
+                 return JsonResponse({'status': 'error', 'message': 'No user was found with that username.'}, status=404)
                  
             if user.user_type not in ['cashier', 'agent', 'super_agent', 'master_agent', 'admin']:
                  return JsonResponse({'status': 'error', 'message': 'Biometric login not enabled for this role'}, status=403)
@@ -16870,7 +16960,7 @@ def webauthn_login_complete(request):
             if not user:
                 user = cred.user
                 
-            login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            login(request, user, backend='betting.backends.EmailOrUsernameBackend')
             
             BiometricAuthLog.objects.create(
                 user=user,

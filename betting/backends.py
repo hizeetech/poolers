@@ -7,17 +7,13 @@ class EmailOrUsernameBackend(ModelBackend):
         if password is None:
             return None
 
-        raw_identifier = identifier or username or ""
+        raw_identifier = identifier or username or kwargs.get("username") or ""
         raw_identifier = (raw_identifier or "").strip()
         if not raw_identifier:
             return None
 
         UserModel = get_user_model()
-
-        if "@" in raw_identifier:
-            user = UserModel.objects.filter(email__iexact=raw_identifier).first()
-        else:
-            user = UserModel.objects.filter(username__iexact=raw_identifier).first()
+        user = UserModel.objects.filter(username__iexact=raw_identifier).first()
 
         if not user:
             return None
@@ -29,4 +25,3 @@ class EmailOrUsernameBackend(ModelBackend):
             return user
 
         return None
-

@@ -37,17 +37,28 @@ class Command(BaseCommand):
         
         # Create or get a test player
         email = 'smokeplayer@example.com'
+        username = 'smokeplayer'
         password = 'testpassword123'
         
-        try:
-            user = User.objects.get(email=email)
+        user = User.objects.filter(username__iexact=username).first()
+        if user:
+            changed = False
+            if user.email != email:
+                user.email = email
+                changed = True
             if user.user_type != 'player':
                 user.user_type = 'player'
+                changed = True
+            if user.is_superuser:
                 user.is_superuser = False
+                changed = True
+            if user.is_staff:
                 user.is_staff = False
+                changed = True
+            if changed:
                 user.save()
-        except User.DoesNotExist:
-            user = User.objects.create_user(email=email, password=password, user_type='player')
+        else:
+            user = User.objects.create_user(email=email, password=password, username=username, user_type='player')
             # Create wallet for user
             Wallet.objects.get_or_create(user=user)
 

@@ -19,7 +19,6 @@ import re
 from betting.services.usernames import (
     generate_agent_username,
     generate_cashier_usernames,
-    generate_cashier_email,
 )
 
 User = get_user_model()
@@ -67,7 +66,16 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
             messages.warning(request, "This registration is not approved.")
             return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
 
-        user = User.objects.filter(email__iexact=pending_reg.email).first()
+        user = (
+            User.objects.filter(
+                email__iexact=pending_reg.email,
+                user_type=pending_reg.user_type,
+                master_agent=pending_reg.master_agent,
+                super_agent=pending_reg.super_agent,
+            )
+            .order_by('-id')
+            .first()
+        )
         if not user:
             messages.error(request, "Approved registration has no matching user account.")
             return redirect(f'{self.admin_site.name}:pending_registration_pendingagentregistration_changelist')
@@ -194,11 +202,8 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                     ]
 
                     for code, cashier_username, cashier_prefix in cashier_specs:
-                        cashier_email = generate_cashier_email(user.email, code)
-                        if User.objects.filter(email__iexact=cashier_email).exists():
-                            continue
                         cashier = User.objects.create_user(
-                            email=cashier_email,
+                            email=user.email,
                             password=raw_password,
                             username=cashier_username,
                             first_name=user.first_name,

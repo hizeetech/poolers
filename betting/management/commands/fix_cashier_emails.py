@@ -1,10 +1,9 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
-from betting.services.usernames import generate_cashier_email
 
 
 class Command(BaseCommand):
-    help = "Fix cashier emails to use C1/C2 prefix + agent email domain (e.g., C1agent@gmail.com)."
+    help = "Sync existing cashier emails to exactly match their parent agent email address."
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true")
@@ -23,27 +22,10 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
-            suffix = None
-            if (cashier.username or "").endswith("C1"):
-                suffix = "C1"
-            elif (cashier.username or "").endswith("C2"):
-                suffix = "C2"
-            else:
-                skipped += 1
-                continue
-
-            new_email = generate_cashier_email(agent.email, suffix)
+            new_email = (agent.email or "").strip()
             if not new_email or cashier.email == new_email:
                 skipped += 1
                 continue
-
-            if User.objects.filter(email__iexact=new_email).exclude(pk=cashier.pk).exists():
-                local, sep, domain = new_email.partition("@")
-                if sep:
-                    new_email = f"{local}+{cashier.pk}@{domain}"
-                else:
-                    skipped += 1
-                    continue
 
             if dry_run:
                 self.stdout.write(f"{cashier.pk}: {cashier.email} -> {new_email}")
@@ -54,4 +36,3 @@ class Command(BaseCommand):
             updated += 1
 
         self.stdout.write(self.style.SUCCESS(f"Done. updated={updated} skipped={skipped} dry_run={dry_run}"))
-

@@ -20,11 +20,87 @@ from django.contrib.auth.hashers import make_password
 
 from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration
 from .services.usernames import create_agent_and_cashiers
+from .services.email_policy import (
+    duplicate_email_details,
+    is_truthy,
+    log_email_audit,
+    normalize_email_value,
+    resolve_user_from_identifier,
+    sync_agent_cashier_emails,
+)
 from pending_registration.models import PendingAgentRegistration
 
 # Get the custom User model dynamically
 CustomUser = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+class DuplicateEmailConfirmationMixin:
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop("request", getattr(self, "request", None))
+        super().__init__(*args, **kwargs)
+        self.fields.setdefault("confirm_duplicate_email", forms.CharField(required=False, widget=forms.HiddenInput()))
+        self.fields.setdefault("sync_cashier_emails", forms.CharField(required=False, widget=forms.HiddenInput()))
+        self.fields.setdefault("email_warning_exclude_id", forms.IntegerField(required=False, widget=forms.HiddenInput()))
+        self.fields.setdefault("original_email", forms.CharField(required=False, widget=forms.HiddenInput()))
+        self.fields.setdefault("has_linked_cashiers", forms.CharField(required=False, widget=forms.HiddenInput()))
+        self._duplicate_email_details = {"exists": False, "matches": [], "count": 0}
+        self._email_before_save = normalize_email_value(getattr(getattr(self, "instance", None), "email", ""))
+        instance = getattr(self, "instance", None)
+        if "email_warning_exclude_id" in self.fields and getattr(instance, "pk", None):
+            self.fields["email_warning_exclude_id"].initial = instance.pk
+        if "original_email" in self.fields:
+            self.fields["original_email"].initial = self._email_before_save
+        if "has_linked_cashiers" in self.fields:
+            has_linked_cashiers = bool(
+                getattr(instance, "pk", None)
+                and getattr(instance, "user_type", "") == "agent"
+                and User.objects.filter(agent=instance, user_type="cashier").exists()
+            )
+            self.fields["has_linked_cashiers"].initial = "1" if has_linked_cashiers else "0"
+
+    def _apply_duplicate_email_validation(self, cleaned_data):
+        email = normalize_email_value(cleaned_data.get("email"))
+        if not email:
+            return cleaned_data
+        cleaned_data["email"] = email
+        exclude_user_id = getattr(getattr(self, "instance", None), "pk", None) or cleaned_data.get("email_warning_exclude_id")
+        details = duplicate_email_details(email, exclude_user_id=exclude_user_id)
+        self._duplicate_email_details = details
+        if details["exists"] and not is_truthy(cleaned_data.get("confirm_duplicate_email")):
+            self.add_error("email", "This email is already assigned to another user. Confirm to continue.")
+        return cleaned_data
+
+    def _log_duplicate_email_change(self, user):
+        if not getattr(user, "pk", None):
+            return
+        if not self._duplicate_email_details.get("exists"):
+            return
+        current_email = normalize_email_value(getattr(user, "email", ""))
+        action_type = "DUPLICATE_EMAIL_UPDATED" if self._email_before_save and self._email_before_save != current_email else "DUPLICATE_EMAIL_ASSIGNED"
+        actor = getattr(getattr(self, "request", None), "user", None)
+        if actor and not getattr(actor, "is_authenticated", False):
+            actor = None
+        log_email_audit(
+            action_type=action_type,
+            target_user=user,
+            email=current_email,
+            performed_by=actor or user,
+            metadata={"matches": self._duplicate_email_details.get("matches", [])},
+        )
+
+    def _maybe_sync_agent_cashiers(self, user):
+        if getattr(user, "user_type", "") != "agent":
+            return []
+        current_email = normalize_email_value(getattr(user, "email", ""))
+        if not self._email_before_save or self._email_before_save == current_email:
+            return []
+        if not is_truthy(self.cleaned_data.get("sync_cashier_emails")):
+            return []
+        actor = getattr(getattr(self, "request", None), "user", None)
+        if actor and not getattr(actor, "is_authenticated", False):
+            actor = None
+        return sync_agent_cashier_emails(user, current_email, actor=actor or user)
 
 
 class OddUpdateIndicatorNumberInput(forms.NumberInput):
@@ -43,7 +119,7 @@ class OddUpdateIndicatorNumberInput(forms.NumberInput):
         )
 
 # --- User Registration Form (for Frontend Self-Registration) ---
-class UserRegistrationForm(forms.ModelForm):
+class UserRegistrationForm(DuplicateEmailConfirmationMixin, forms.ModelForm):
     # Using 'password' and 'password2' for consistency with Django's auth forms
     password = forms.CharField(
         widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2'}),
@@ -113,8 +189,6 @@ class UserRegistrationForm(forms.ModelForm):
         if user_type == 'agent' and not cleaned_data.get('phone_number'):
             self.add_error('phone_number', "Agents must provide a phone number.")
         if user_type == 'agent':
-            if email and PendingAgentRegistration.objects.filter(email__iexact=email, status='PENDING').exists():
-                self.add_error('email', "A pending agent registration already exists for this email.")
             if not cleaned_data.get('first_name'):
                 self.add_error('first_name', "First Name is required.")
             if not cleaned_data.get('last_name'):
@@ -123,8 +197,8 @@ class UserRegistrationForm(forms.ModelForm):
                 self.add_error('other_name', "Other Name is required.")
             if not cleaned_data.get('state'):
                 self.add_error('state', "State is required.")
-        
-        return cleaned_data
+
+        return self._apply_duplicate_email_validation(cleaned_data)
 
     def save(self, commit=True, request=None):
         user_type = self.cleaned_data.get('user_type')
@@ -157,14 +231,15 @@ class UserRegistrationForm(forms.ModelForm):
             if commit:
                 user.save()
                 Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+                self._log_duplicate_email_change(user)
             return user
 
 
 # --- Login Form ---
 class LoginForm(AuthenticationForm):
     identifier = forms.CharField(
-        label="Email or Username",
-        widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Email or Username'})
+        label="Username",
+        widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Enter your username'})
     )
     password = forms.CharField(
         widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Password'})
@@ -177,6 +252,7 @@ class LoginForm(AuthenticationForm):
 
     def clean(self):
         from django.contrib.auth import authenticate
+        from django.contrib.auth import get_user_model
 
         identifier = self.cleaned_data.get('identifier')
         password = self.cleaned_data.get('password')
@@ -185,16 +261,15 @@ class LoginForm(AuthenticationForm):
         ip = request.META.get('REMOTE_ADDR')
         user_agent = request.META.get('HTTP_USER_AGENT', '')
 
+        UserModel = get_user_model()
+
+        if identifier and "@" in identifier:
+            raise forms.ValidationError("Use your username to log in. Email login is not supported.")
+
         # Resolve User
         user = None
         if identifier:
-            try:
-                if "@" in identifier:
-                    user = CustomUser.objects.get(email__iexact=identifier)
-                else:
-                    user = CustomUser.objects.get(username__iexact=identifier)
-            except CustomUser.DoesNotExist:
-                pass
+            user = UserModel.objects.filter(username__iexact=identifier).first()
         
         # 1. Check if Account is Locked
         if user and user.is_locked:
@@ -211,7 +286,7 @@ class LoginForm(AuthenticationForm):
 
         # 2. Attempt Authentication
         try:
-            authenticated_user = authenticate(request, username=identifier, identifier=identifier, password=password)
+            authenticated_user = authenticate(request, username=identifier, password=password)
             if not authenticated_user:
                 raise forms.ValidationError("Invalid credentials.")
 
@@ -313,16 +388,28 @@ class PasswordChangeForm(AuthPasswordChangeForm):
 
 
 # --- Profile Edit Form ---
-class ProfileEditForm(forms.ModelForm):
+class ProfileEditForm(DuplicateEmailConfirmationMixin, forms.ModelForm):
     class Meta:
         model = CustomUser
-        fields = ['first_name', 'last_name', 'phone_number', 'shop_address']
+        fields = ['first_name', 'last_name', 'email', 'phone_number', 'shop_address']
         widgets = {
             'first_name': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
+            'email': forms.EmailInput(attrs={'class': 'form-control rounded-pill'}),
             'phone_number': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
             'shop_address': forms.TextInput(attrs={'class': 'form-control rounded-pill'}),
         }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        return self._apply_duplicate_email_validation(cleaned_data)
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit:
+            self._log_duplicate_email_change(user)
+            self._maybe_sync_agent_cashiers(user)
+        return user
 
 class WithdrawalPinCreateForm(forms.Form):
     pin = forms.CharField(
@@ -666,8 +753,12 @@ class WalletTransferForm(forms.Form):
         if not recipient_user:
             try:
                 # Try to find by Email
-                recipient_user = User.objects.get(email__iexact=recipient_identifier)
-            except User.DoesNotExist:
+                email_matches = list(User.objects.filter(email__iexact=recipient_identifier)[:2])
+                if len(email_matches) == 1:
+                    recipient_user = email_matches[0]
+            except Exception:
+                recipient_user = None
+            if not recipient_user:
                 try:
                     # Try to find by Phone Number
                     recipient_user = User.objects.get(phone_number=recipient_identifier)
@@ -786,7 +877,7 @@ class CheckTicketStatusForm(forms.Form):
 
 
 # --- Admin User Forms (for Django Admin Site) ---
-class AdminUserCreationForm(DjangoUserCreationForm):
+class AdminUserCreationForm(DuplicateEmailConfirmationMixin, DjangoUserCreationForm):
     # Explicitly define password fields to match clean method and avoid inheritance issues
     password = forms.CharField(
         widget=forms.PasswordInput(attrs={'class': 'form-control'}),
@@ -867,6 +958,9 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             'password2': forms.PasswordInput(attrs={'class': 'form-control'}),
         }
 
+    class Media:
+        js = ('https://cdn.jsdelivr.net/npm/sweetalert2@11', 'betting/js/duplicate_email_warning.js')
+
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super().__init__(*args, **kwargs)
@@ -936,7 +1030,7 @@ class AdminUserCreationForm(DjangoUserCreationForm):
             if not cleaned_data.get('cashier_prefix'):
                 self.add_error('cashier_prefix', "Cashier Prefix is required for Cashier creation.")
 
-        return cleaned_data
+        return self._apply_duplicate_email_validation(cleaned_data)
 
     def save(self, commit=True):
         user = forms.ModelForm.save(self, commit=False)
@@ -983,7 +1077,6 @@ class AdminUserCreationForm(DjangoUserCreationForm):
                 from .services.usernames import (
                     generate_agent_username,
                     generate_cashier_usernames,
-                    generate_cashier_email,
                 )
 
                 user.first_name = self.cleaned_data.get('first_name')
@@ -1032,7 +1125,7 @@ class AdminUserCreationForm(DjangoUserCreationForm):
                 )
 
                 cashier1 = CustomUser.objects.create_user(
-                    email=generate_cashier_email(user.email, "C1"),
+                    email=user.email,
                     password=self.cleaned_data.get("password"),
                     username=cashier1_username,
                     first_name=user.first_name,
@@ -1048,7 +1141,7 @@ class AdminUserCreationForm(DjangoUserCreationForm):
                     is_superuser=False,
                 )
                 cashier2 = CustomUser.objects.create_user(
-                    email=generate_cashier_email(user.email, "C2"),
+                    email=user.email,
                     password=self.cleaned_data.get("password"),
                     username=cashier2_username,
                     first_name=user.first_name,
@@ -1066,6 +1159,7 @@ class AdminUserCreationForm(DjangoUserCreationForm):
 
                 Wallet.objects.get_or_create(user=cashier1, defaults={'balance': Decimal('0.00')})
                 Wallet.objects.get_or_create(user=cashier2, defaults={'balance': Decimal('0.00')})
+                self._log_duplicate_email_change(user)
 
                 return user
 
@@ -1076,14 +1170,15 @@ class AdminUserCreationForm(DjangoUserCreationForm):
                 user.user_permissions.set(self.cleaned_data['user_permissions'])
 
             Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+            self._log_duplicate_email_change(user)
 
         return user
 
 
 class ForgotPasswordForm(forms.Form):
-    email = forms.EmailField(
-        label="Email Address",
-        widget=forms.EmailInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your registered email'})
+    identifier = forms.CharField(
+        label="Username or Email Address",
+        widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-pill px-4 py-2', 'placeholder': 'Enter your username or email'})
     )
 
 class ResetPasswordForm(forms.Form):
@@ -1193,7 +1288,6 @@ class ResetPasswordForm(forms.Form):
                 from .services.usernames import (
                     generate_agent_username,
                     generate_cashier_usernames,
-                    generate_cashier_email,
                 )
 
                 user.first_name = self.cleaned_data.get('first_name')
@@ -1247,7 +1341,7 @@ class ResetPasswordForm(forms.Form):
                 )
 
                 cashier1 = CustomUser.objects.create_user(
-                    email=generate_cashier_email(user.email, "C1"),
+                    email=user.email,
                     password=self.cleaned_data.get("password"),
                     username=cashier1_username,
                     first_name=user.first_name,
@@ -1263,7 +1357,7 @@ class ResetPasswordForm(forms.Form):
                     is_superuser=False,
                 )
                 cashier2 = CustomUser.objects.create_user(
-                    email=generate_cashier_email(user.email, "C2"),
+                    email=user.email,
                     password=self.cleaned_data.get("password"),
                     username=cashier2_username,
                     first_name=user.first_name,
@@ -1281,6 +1375,7 @@ class ResetPasswordForm(forms.Form):
 
                 Wallet.objects.get_or_create(user=cashier1, defaults={'balance': Decimal('0.00')})
                 Wallet.objects.get_or_create(user=cashier2, defaults={'balance': Decimal('0.00')})
+                self._log_duplicate_email_change(user)
 
                 return user
 
@@ -1291,11 +1386,12 @@ class ResetPasswordForm(forms.Form):
                 user.user_permissions.set(self.cleaned_data['user_permissions'])
 
             Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
+            self._log_duplicate_email_change(user)
 
         return user
 
 
-class AdminUserChangeForm(DjangoUserChangeForm):
+class AdminUserChangeForm(DuplicateEmailConfirmationMixin, DjangoUserChangeForm):
     password = forms.CharField( 
         widget=forms.PasswordInput(attrs={'class': 'form-control rounded-md'}),
         required=False,
@@ -1320,6 +1416,9 @@ class AdminUserChangeForm(DjangoUserChangeForm):
         label="Confirm Withdrawal PIN"
     )
 
+    class Media:
+        js = ('https://cdn.jsdelivr.net/npm/sweetalert2@11', 'betting/js/duplicate_email_warning.js')
+
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)
         super().__init__(*args, **kwargs)
@@ -1340,7 +1439,7 @@ class AdminUserChangeForm(DjangoUserChangeForm):
             cleaned['withdrawal_pin_new'] = new_pin
             cleaned['withdrawal_pin_confirm'] = confirm_pin
 
-        return cleaned
+        return self._apply_duplicate_email_validation(cleaned)
 
     def save(self, commit=True):
         user = super().save(commit=False)
@@ -1365,6 +1464,8 @@ class AdminUserChangeForm(DjangoUserChangeForm):
                     
         if commit:
             user.save()
+            self._log_duplicate_email_change(user)
+            self._maybe_sync_agent_cashiers(user)
         return user
 
 class UserWithUsernameChoiceField(forms.ModelChoiceField):
@@ -1511,7 +1612,7 @@ class AccountUserWalletActionForm(forms.Form):
             raise ValidationError("Amount must be greater than zero.")
         return cleaned_data
 
-class CRMUserProfileForm(forms.ModelForm):
+class CRMUserProfileForm(DuplicateEmailConfirmationMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if 'vip_manager' in self.fields:
@@ -1523,6 +1624,7 @@ class CRMUserProfileForm(forms.ModelForm):
             'first_name',
             'last_name',
             'other_name',
+            'email',
             'phone_number',
             'state',
             'shop_address',
@@ -1535,6 +1637,7 @@ class CRMUserProfileForm(forms.ModelForm):
             'first_name': forms.TextInput(attrs={'class': 'form-control'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control'}),
             'other_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'email': forms.EmailInput(attrs={'class': 'form-control'}),
             'phone_number': forms.TextInput(attrs={'class': 'form-control'}),
             'state': forms.Select(attrs={'class': 'form-control'}),
             'shop_address': forms.TextInput(attrs={'class': 'form-control'}),
@@ -1543,6 +1646,17 @@ class CRMUserProfileForm(forms.ModelForm):
             'vip_level': forms.Select(attrs={'class': 'form-control'}),
             'vip_manager': forms.Select(attrs={'class': 'form-control'}),
         }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        return self._apply_duplicate_email_validation(cleaned_data)
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit:
+            self._log_duplicate_email_change(user)
+            self._maybe_sync_agent_cashiers(user)
+        return user
 
 class CRMWithdrawalDecisionForm(forms.Form):
     ACTION_CHOICES = (

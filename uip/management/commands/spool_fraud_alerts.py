@@ -37,17 +37,18 @@ class Command(BaseCommand):
 
         if metrics['bonus_abusers']:
             for item in metrics['bonus_abusers']:
-                email = item['user__email']
                 from betting.models import User
-                user = User.objects.get(email=email)
+                user = User.objects.filter(id=item.get('user')).first()
+                if not user:
+                    continue
                 if not FraudAlert.objects.filter(alert_type='bonus_abuse', affected_users=user).exists():
                     FraudDetectionService.create_fraud_alert(
                         alert_type='bonus_abuse',
-                        description=f"Backfilled: User {email} has claimed {item['bonus_count']} bonuses recently.",
+                        description=f"Backfilled: User {user.username or user.email} has claimed {item['bonus_count']} bonuses recently.",
                         severity='medium',
                         related_users=[user]
                     )
                     count += 1
-                    self.stdout.write(self.style.SUCCESS(f"Spooled bonus abuse alert for user: {email}"))
+                    self.stdout.write(self.style.SUCCESS(f"Spooled bonus abuse alert for user: {user.username or user.email}"))
 
         self.stdout.write(self.style.SUCCESS(f"Successfully spooled {count} new fraud alerts."))

@@ -8,8 +8,13 @@
     <h2 class="h3 mb-4 text-dark fw-semibold">Add New User</h2>
 
     <div class="card border-0 shadow-sm p-4">
-        <form method="post" class="row g-3">
+        <form method="post" class="row g-3" data-email-check-url="{% url 'betting:check_email_usage' %}">
             {% csrf_token %}
+            {{ form.confirm_duplicate_email }}
+            {{ form.sync_cashier_emails }}
+            {{ form.email_warning_exclude_id }}
+            {{ form.original_email }}
+            {{ form.has_linked_cashiers }}
             {% for field in form %}
                 <div class="mb-3 col-md-6">
                     <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}:</label>

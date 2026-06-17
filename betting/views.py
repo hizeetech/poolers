@@ -1752,10 +1752,10 @@ def _build_dormant_center_dataset(
     filtered_agents = []
     for agent_obj in agents:
         _attach_dormant_agent_activity_fields(agent_obj, now=now)
-        if start_dt and ((agent_obj.reference_activity_at is None) or (agent_obj.reference_activity_at < start_dt)):
-            continue
-        if end_dt and ((agent_obj.reference_activity_at is None) or (agent_obj.reference_activity_at > end_dt)):
-            continue
+        # Dormancy is a current-state signal based on the latest known activity across
+        # the agent and mapped cashiers. The dashboard-wide date range is for period
+        # analytics and should not suppress dormant counts/rows when an agent last
+        # acted before that window.
         filtered_agents.append(agent_obj)
         if _bucket_match_for_dormancy(agent_obj, 'login_7', login_cutoff_7=login_cutoff_7, login_cutoff_14=login_cutoff_14, login_cutoff_30=login_cutoff_30):
             cards['login_7'] += 1

@@ -365,6 +365,31 @@ class RBACTests(TestCase):
         self.assertNotIn('active_cashier_agent', body)
         self.assertNotIn('active_agent_hierarchy', body)
 
+    def test_crm_dormant_dashboard_counts_ignore_global_date_range(self):
+        stale_login = timezone.now() - timedelta(days=10)
+        self.agent.first_name = 'Dormant Date Range Agent'
+        self.agent.last_login = stale_login
+        self.agent.save(update_fields=['first_name', 'last_login'])
+        self.cashier.agent = self.agent
+        self.cashier.last_login = stale_login
+        self.cashier.save(update_fields=['agent', 'last_login'])
+
+        self.client.force_login(self.crm_viewer)
+        response = self.client.get(
+            reverse('betting:crm_dashboard'),
+            {
+                'tab': 'dormant_accounts',
+                'dormant_bucket': 'login_7',
+                'start_date': timezone.localdate().isoformat(),
+                'end_date': timezone.localdate().isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['dormant_cards']['login_7'], 1)
+        self.assertEqual(response.context['dormant_agents_tab_count'], 1)
+        self.assertContains(response, 'Dormant Date Range Agent')
+
     def test_crm_deposit_monitoring_export_respects_status_gateway_and_flag_filters(self):
         site_config = SiteConfiguration.load()
         site_config.crm_large_deposit_threshold = Decimal('1000.00')

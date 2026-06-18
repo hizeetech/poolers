@@ -122,6 +122,37 @@
                 color: #fff;
                 font-weight: 700;
             }
+            .admin-app-card {
+                margin-bottom: 1rem;
+            }
+            .admin-app-toggle {
+                width: 100%;
+                border: 0;
+                background: transparent;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 0;
+                color: inherit;
+                text-align: left;
+            }
+            .admin-app-toggle:focus {
+                outline: none;
+            }
+            .admin-app-toggle-icon {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                border-radius: 999px;
+                background: rgba(0, 0, 0, 0.10);
+                flex-shrink: 0;
+                font-size: 16px;
+                font-weight: 700;
+                color: #495057;
+            }
         </style>
 
         <div class="card card-outline card-light mb-3">
@@ -251,11 +282,23 @@
         <div class="row">
             <div class="col-md-6 col-sm-12">
                 {% for app in dashboard_list %}
-                    <div class="card">
+                    <div class="card admin-app-card">
                         <div class="card-header">
-                            <h5 class="m-0">{{ app.name }}</h5>
+                            <button
+                                class="admin-app-toggle is-expanded"
+                                type="button"
+                                data-toggle="collapse"
+                                data-target="#admin-app-section-{{ forloop.counter }}"
+                                aria-expanded="true"
+                                aria-controls="admin-app-section-{{ forloop.counter }}"
+                            >
+                                <h5 class="m-0">{{ app.name }}</h5>
+                                <span class="admin-app-toggle-icon" data-expanded-symbol="▼" data-collapsed-symbol="►">
+                                    ▼
+                                </span>
+                            </button>
                         </div>
-                        <div class="card-body">
+                        <div class="card-body collapse show" id="admin-app-section-{{ forloop.counter }}">
                             <table class="table table-sm">
                                 <tbody>
                                 {% for model in app.models %}
@@ -292,6 +335,48 @@
                 {% endfor %}
                 </div>
         </div>
+
+        <script>
+            document.addEventListener("DOMContentLoaded", function () {
+                document.querySelectorAll(".admin-app-toggle").forEach(function (button) {
+                    var targetSelector = button.getAttribute("data-target");
+                    if (!targetSelector) {
+                        return;
+                    }
+                    var content = document.querySelector(targetSelector);
+                    if (!content) {
+                        return;
+                    }
+
+                    function syncToggleState(isExpanded) {
+                        button.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+                        button.classList.toggle("is-expanded", !!isExpanded);
+                        var icon = button.querySelector(".admin-app-toggle-icon");
+                        if (icon) {
+                            icon.textContent = isExpanded
+                                ? (icon.getAttribute("data-expanded-symbol") || "▼")
+                                : (icon.getAttribute("data-collapsed-symbol") || "►");
+                        }
+                    }
+
+                    syncToggleState(content.classList.contains("show"));
+
+                    content.addEventListener("show.bs.collapse", function () {
+                        syncToggleState(true);
+                    });
+
+                    content.addEventListener("hide.bs.collapse", function () {
+                        syncToggleState(false);
+                    });
+
+                    button.addEventListener("click", function () {
+                        window.setTimeout(function () {
+                            syncToggleState(content.classList.contains("show"));
+                        }, 0);
+                    });
+                });
+            });
+        </script>
 
     </div>
     <div class="col-lg-3 col-12">

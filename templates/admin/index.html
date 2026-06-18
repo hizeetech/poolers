@@ -153,6 +153,24 @@
                 font-weight: 700;
                 color: #495057;
             }
+            .admin-sidebar-section-header {
+                cursor: pointer;
+                user-select: none;
+                display: flex !important;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+            }
+            .admin-sidebar-section-arrow {
+                font-size: 12px;
+                font-weight: 700;
+                line-height: 1;
+                opacity: 0.9;
+                margin-left: 8px;
+            }
+            .admin-sidebar-section-item.is-collapsed {
+                display: none !important;
+            }
         </style>
 
         <div class="card card-outline card-light mb-3">
@@ -373,6 +391,60 @@
                         window.setTimeout(function () {
                             syncToggleState(content.classList.contains("show"));
                         }, 0);
+                    });
+                });
+
+                var sidebarHeaderSelectors = [
+                    ".main-sidebar .nav-sidebar .nav-header",
+                    ".sidebar .nav-sidebar .nav-header",
+                    ".sidebar li.nav-header"
+                ];
+                var sidebarHeaders = document.querySelectorAll(sidebarHeaderSelectors.join(", "));
+                var headerSet = new Set(Array.prototype.slice.call(sidebarHeaders));
+
+                sidebarHeaders.forEach(function (header, index) {
+                    if (header.querySelector(".admin-sidebar-section-arrow")) {
+                        return;
+                    }
+
+                    header.classList.add("admin-sidebar-section-header");
+                    header.setAttribute("role", "button");
+                    header.setAttribute("tabindex", "0");
+
+                    var arrow = document.createElement("span");
+                    arrow.className = "admin-sidebar-section-arrow";
+                    arrow.textContent = "▼";
+                    header.appendChild(arrow);
+
+                    var groupedItems = [];
+                    var sibling = header.nextElementSibling;
+                    while (sibling && !headerSet.has(sibling)) {
+                        groupedItems.push(sibling);
+                        sibling.classList.add("admin-sidebar-section-item");
+                        sibling = sibling.nextElementSibling;
+                    }
+
+                    function syncSidebarHeader(isExpanded) {
+                        header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+                        arrow.textContent = isExpanded ? "▼" : "►";
+                        groupedItems.forEach(function (item) {
+                            item.classList.toggle("is-collapsed", !isExpanded);
+                        });
+                    }
+
+                    syncSidebarHeader(true);
+
+                    function toggleSidebarSection() {
+                        var isExpanded = header.getAttribute("aria-expanded") !== "false";
+                        syncSidebarHeader(!isExpanded);
+                    }
+
+                    header.addEventListener("click", toggleSidebarSection);
+                    header.addEventListener("keydown", function (event) {
+                        if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            toggleSidebarSection();
+                        }
                     });
                 });
             });

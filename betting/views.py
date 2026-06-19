@@ -1469,6 +1469,560 @@ def get_retail_network_users_qs(user):
     return User.objects.filter(q).distinct()
 
 
+def can_view_overdraft_reporting(user):
+    return bool(
+        user.is_authenticated
+        and (
+            is_retail_manager(user)
+            or is_crm_user(user)
+            or is_finance_user(user)
+            or is_account_user(user)
+        )
+    )
+
+
+def _loan_reporting_scope_queryset(user):
+    loans = Loan.objects.select_related(
+        'borrower',
+        'borrower__super_agent',
+        'borrower__master_agent',
+        'approved_by',
+        'rejected_by',
+        'lender',
+        'credit_request',
+        'credit_request__requester',
+    ).order_by('-created_at', '-id')
+    if is_retail_manager(user):
+        return loans.filter(borrower__in=get_retail_manager_agents(user))
+    return loans
+
+
+def _loan_reporting_actor_label(user_obj):
+    if not user_obj:
+        return '-'
+    if getattr(user_obj, 'is_superuser', False):
+        return 'Super Admin'
+    user_type = getattr(user_obj, 'user_type', '') or ''
+    if user_type == 'admin':
+        return 'Admin'
+    if user_type == 'finance':
+        return 'Finance User'
+    if user_type == 'account_user':
+        return 'Account User'
+    if user_type == 'crm':
+        return 'CRM User'
+    return user_obj.username or user_obj.email or f'User #{user_obj.pk}'
+
+
+def _loan_reporting_status_label(loan):
+    if loan.status == 'pending':
+        return 'Pending Approval'
+    if loan.status == 'rejected':
+        return 'Rejected'
+    if loan.status == 'settled':
+        return 'Fully Settled'
+    if loan.status == 'defaulted' and (loan.account_locked_due_to_default or getattr(loan.borrower, 'is_locked', False)):
+        return 'Locked'
+    if loan.status == 'defaulted':
+        return 'Defaulted'
+    if loan.outstanding_balance > Decimal('0.00') and loan.due_date and loan.due_date < timezone.now():
+        return 'Overdue'
+    if loan.outstanding_balance > Decimal('0.00') and loan.repaid_amount > Decimal('0.00'):
+        return 'Partially Repaid'
+    if loan.status == 'active':
+        return 'Approved'
+    return loan.get_status_display()
+
+
+def _loan_reporting_repayment_status(loan):
+    if loan.status == 'pending':
+        return 'Pending Approval'
+    if loan.status == 'rejected':
+        return 'Rejected'
+    if loan.status == 'settled' or loan.outstanding_balance <= Decimal('0.00'):
+        return 'Fully Settled'
+    if loan.status == 'defaulted':
+        return 'Defaulted'
+    if loan.due_date and loan.due_date < timezone.now():
+        return 'Overdue'
+    if loan.repaid_amount > Decimal('0.00'):
+        return 'Partially Repaid'
+    return 'Outstanding'
+
+
+def _loan_reporting_days_outstanding(loan, *, now=None):
+    now = now or timezone.now()
+    if not loan.created_at:
+        return 0
+    return max(0, (timezone.localtime(now).date() - timezone.localtime(loan.created_at).date()).days)
+
+
+def _loan_reporting_days_overdue(loan, *, now=None):
+    now = now or timezone.now()
+    if not loan.due_date or loan.outstanding_balance <= Decimal('0.00') or loan.due_date >= now:
+        return 0
+    return max(0, (timezone.localtime(now).date() - timezone.localtime(loan.due_date).date()).days)
+
+
+def _loan_reporting_parse_date_range(start_date_str, end_date_str):
+    start_dt = None
+    end_dt = None
+    try:
+        if start_date_str:
+            start_dt = timezone.make_aware(datetime.strptime(start_date_str, '%Y-%m-%d'))
+    except Exception:
+        start_dt = None
+    try:
+        if end_date_str:
+            end_raw = datetime.strptime(end_date_str, '%Y-%m-%d')
+            end_dt = timezone.make_aware(datetime.combine(end_raw.date(), datetime.max.time()))
+    except Exception:
+        end_dt = None
+    return start_dt, end_dt
+
+
+def _loan_reporting_filters_from_request(request):
+    return {
+        'q': (request.GET.get('loan_q') or '').strip(),
+        'start_date': (request.GET.get('start_date') or '').strip(),
+        'end_date': (request.GET.get('end_date') or '').strip(),
+        'retail_manager_id': (request.GET.get('loan_retail_manager') or '').strip(),
+        'master_agent_id': (request.GET.get('loan_master_agent') or '').strip(),
+        'super_agent_id': (request.GET.get('loan_super_agent') or '').strip(),
+        'agent_identifier': (request.GET.get('loan_agent') or '').strip(),
+        'status': (request.GET.get('loan_status') or '').strip(),
+        'withdrawal_locked': (request.GET.get('loan_withdrawal_locked') or '').strip(),
+        'account_locked': (request.GET.get('loan_account_locked') or '').strip(),
+        'issued_by': (request.GET.get('loan_issued_by') or '').strip(),
+        'outstanding_only': (request.GET.get('loan_outstanding_only') or '').strip(),
+        'overdue_only': (request.GET.get('loan_overdue_only') or '').strip(),
+    }
+
+
+def _apply_loan_reporting_filters(loans, *, filters, viewer):
+    q = filters.get('q') or ''
+    start_dt, end_dt = _loan_reporting_parse_date_range(filters.get('start_date'), filters.get('end_date'))
+    now = timezone.now()
+
+    if start_dt:
+        loans = loans.filter(created_at__gte=start_dt)
+    if end_dt:
+        loans = loans.filter(created_at__lte=end_dt)
+
+    if q:
+        loans = loans.filter(
+            Q(borrower__username__icontains=q)
+            | Q(borrower__email__icontains=q)
+            | Q(borrower__phone_number__icontains=q)
+            | Q(borrower__first_name__icontains=q)
+            | Q(borrower__last_name__icontains=q)
+            | Q(borrower__super_agent__username__icontains=q)
+            | Q(borrower__super_agent__email__icontains=q)
+            | Q(borrower__master_agent__username__icontains=q)
+            | Q(borrower__master_agent__email__icontains=q)
+        )
+
+    if filters.get('retail_manager_id') and not is_retail_manager(viewer):
+        retail_manager_id = filters['retail_manager_id']
+        mapped_super_ids = RetailManagerSuperAgentMapping.objects.filter(
+            retail_manager_id=retail_manager_id
+        ).values_list('super_agent_id', flat=True)
+        mapped_master_ids = RetailManagerMasterAgentMapping.objects.filter(
+            retail_manager_id=retail_manager_id
+        ).values_list('master_agent_id', flat=True)
+        direct_agent_ids = RetailManagerAgentMapping.objects.filter(
+            retail_manager_id=retail_manager_id
+        ).values_list('agent_id', flat=True)
+        loans = loans.filter(
+            Q(borrower_id__in=direct_agent_ids)
+            | Q(borrower__super_agent_id__in=mapped_super_ids)
+            | Q(borrower__master_agent_id__in=mapped_master_ids)
+        )
+
+    if filters.get('master_agent_id'):
+        loans = loans.filter(borrower__master_agent_id=filters['master_agent_id'])
+    if filters.get('super_agent_id'):
+        loans = loans.filter(borrower__super_agent_id=filters['super_agent_id'])
+    if filters.get('agent_identifier'):
+        agent_value = filters['agent_identifier']
+        loans = loans.filter(
+            Q(borrower__username__icontains=agent_value)
+            | Q(borrower__email__icontains=agent_value)
+            | Q(borrower__phone_number__icontains=agent_value)
+        )
+
+    status_filter = filters.get('status') or ''
+    if status_filter == 'pending_approval':
+        loans = loans.filter(status='pending')
+    elif status_filter == 'approved':
+        loans = loans.filter(status='active', repaid_amount=Decimal('0.00'))
+    elif status_filter == 'rejected':
+        loans = loans.filter(status='rejected')
+    elif status_filter == 'partially_repaid':
+        loans = loans.filter(
+            status__in=['active', 'overdue', 'defaulted'],
+            outstanding_balance__gt=Decimal('0.00'),
+            repaid_amount__gt=Decimal('0.00'),
+        )
+    elif status_filter == 'fully_settled':
+        loans = loans.filter(status='settled')
+    elif status_filter == 'overdue':
+        loans = loans.filter(
+            status__in=['active', 'overdue', 'defaulted'],
+            outstanding_balance__gt=Decimal('0.00'),
+            due_date__lt=now,
+        )
+    elif status_filter == 'defaulted':
+        loans = loans.filter(status='defaulted')
+    elif status_filter == 'locked':
+        loans = loans.filter(Q(account_locked_due_to_default=True) | Q(borrower__is_locked=True))
+
+    if filters.get('withdrawal_locked') == 'yes':
+        loans = loans.filter(Q(outstanding_balance__gt=Decimal('0.00')) | Q(borrower__withdrawal_locked=True))
+    elif filters.get('withdrawal_locked') == 'no':
+        loans = loans.filter(outstanding_balance__lte=Decimal('0.00'), borrower__withdrawal_locked=False)
+
+    if filters.get('account_locked') == 'yes':
+        loans = loans.filter(Q(account_locked_due_to_default=True) | Q(borrower__is_locked=True))
+    elif filters.get('account_locked') == 'no':
+        loans = loans.filter(account_locked_due_to_default=False, borrower__is_locked=False)
+
+    issued_by = filters.get('issued_by') or ''
+    if issued_by:
+        loans = loans.filter(
+            Q(approved_by__username__icontains=issued_by)
+            | Q(approved_by__email__icontains=issued_by)
+            | Q(lender__username__icontains=issued_by)
+            | Q(lender__email__icontains=issued_by)
+        )
+
+    if filters.get('outstanding_only') in {'1', 'true', 'yes', 'on'}:
+        loans = loans.filter(outstanding_balance__gt=Decimal('0.00'))
+
+    if filters.get('overdue_only') in {'1', 'true', 'yes', 'on'}:
+        loans = loans.filter(
+            status__in=['active', 'overdue', 'defaulted'],
+            outstanding_balance__gt=Decimal('0.00'),
+            due_date__lt=now,
+        )
+
+    return loans
+
+
+def _build_loan_reporting_retail_manager_map(loans):
+    borrower_ids = set()
+    super_agent_ids = set()
+    master_agent_ids = set()
+    for loan in loans:
+        borrower_ids.add(loan.borrower_id)
+        if getattr(loan.borrower, 'super_agent_id', None):
+            super_agent_ids.add(loan.borrower.super_agent_id)
+        if getattr(loan.borrower, 'master_agent_id', None):
+            master_agent_ids.add(loan.borrower.master_agent_id)
+
+    rm_by_agent = {}
+    for row in RetailManagerAgentMapping.objects.filter(agent_id__in=borrower_ids).select_related('retail_manager'):
+        rm_by_agent.setdefault(row.agent_id, row.retail_manager)
+
+    rm_by_super = {}
+    for row in RetailManagerSuperAgentMapping.objects.filter(super_agent_id__in=super_agent_ids).select_related('retail_manager'):
+        rm_by_super.setdefault(row.super_agent_id, row.retail_manager)
+
+    rm_by_master = {}
+    for row in RetailManagerMasterAgentMapping.objects.filter(master_agent_id__in=master_agent_ids).select_related('retail_manager'):
+        rm_by_master.setdefault(row.master_agent_id, row.retail_manager)
+
+    mapping = {}
+    for loan in loans:
+        borrower = loan.borrower
+        mapping[loan.id] = (
+            rm_by_agent.get(borrower.id)
+            or rm_by_super.get(getattr(borrower, 'super_agent_id', None))
+            or rm_by_master.get(getattr(borrower, 'master_agent_id', None))
+        )
+    return mapping
+
+
+def _loan_reporting_row_dict(loan, *, retail_manager_obj=None, include_retail_manager=False, now=None):
+    now = now or timezone.now()
+    borrower = loan.borrower
+    super_agent = getattr(borrower, 'super_agent', None)
+    master_agent = getattr(borrower, 'master_agent', None)
+    issued_by_user = loan.approved_by or loan.lender
+    withdrawal_locked = bool(loan.outstanding_balance > Decimal('0.00') or getattr(borrower, 'withdrawal_locked', False))
+    account_locked = bool(getattr(borrower, 'is_locked', False) or loan.account_locked_due_to_default)
+    issued_dt = timezone.localtime(loan.created_at) if loan.created_at else None
+    due_dt = timezone.localtime(loan.due_date) if loan.due_date else None
+
+    row = {
+        'loan': loan,
+        'detail_url': reverse('betting:overdraft_report_detail', args=[loan.id]),
+        'agent_username': borrower.username or borrower.email or '',
+        'agent_full_name': borrower.get_full_name() or borrower.email or borrower.username or '',
+        'agent_phone_number': borrower.phone_number or '-',
+        'agent_email': borrower.email or '',
+        'super_agent': _loan_reporting_actor_label(super_agent) if super_agent else '-',
+        'master_agent': _loan_reporting_actor_label(master_agent) if master_agent else '-',
+        'amount_given': loan.amount or Decimal('0.00'),
+        'outstanding_balance': loan.outstanding_balance or Decimal('0.00'),
+        'qualified_amount': loan.qualified_amount or Decimal('0.00'),
+        'status': _loan_reporting_status_label(loan),
+        'withdrawal_locked': 'Yes' if withdrawal_locked else 'No',
+        'account_locked': 'Yes' if account_locked else 'No',
+        'date_issued': issued_dt.strftime('%Y-%m-%d') if issued_dt else '',
+        'time_issued': issued_dt.strftime('%H:%M:%S') if issued_dt else '',
+        'issued_by': _loan_reporting_actor_label(issued_by_user),
+        'repayment_due_date': due_dt.strftime('%Y-%m-%d %H:%M:%S') if due_dt else '',
+        'repayment_status': _loan_reporting_repayment_status(loan),
+        'days_outstanding': _loan_reporting_days_outstanding(loan, now=now),
+        'days_overdue': _loan_reporting_days_overdue(loan, now=now),
+    }
+    if include_retail_manager:
+        row['retail_manager'] = _loan_reporting_actor_label(retail_manager_obj) if retail_manager_obj else '-'
+    return row
+
+
+def _build_loan_reporting_dataset(user, *, filters=None, include_retail_manager=False):
+    filters = filters or {}
+    now = timezone.now()
+    filtered_loans = list(_apply_loan_reporting_filters(_loan_reporting_scope_queryset(user), filters=filters, viewer=user))
+    retail_map = _build_loan_reporting_retail_manager_map(filtered_loans) if include_retail_manager else {}
+    rows = [
+        _loan_reporting_row_dict(
+            loan,
+            retail_manager_obj=retail_map.get(loan.id),
+            include_retail_manager=include_retail_manager,
+            now=now,
+        )
+        for loan in filtered_loans
+    ]
+
+    summary_base = Loan.objects.filter(id__in=[loan.id for loan in filtered_loans])
+    summary = summary_base.aggregate(
+        total_issued=Coalesce(Sum('amount'), Decimal('0.00')),
+        total_outstanding=Coalesce(Sum('outstanding_balance'), Decimal('0.00')),
+    )
+    summary['total_settled'] = (
+        summary_base.filter(status='settled').aggregate(total=Coalesce(Sum('amount'), Decimal('0.00')))['total']
+        or Decimal('0.00')
+    )
+    summary['total_overdue'] = (
+        summary_base.filter(
+            status__in=['active', 'overdue', 'defaulted'],
+            outstanding_balance__gt=Decimal('0.00'),
+            due_date__lt=now,
+        ).aggregate(total=Coalesce(Sum('outstanding_balance'), Decimal('0.00')))['total']
+        or Decimal('0.00')
+    )
+    borrower_ids = list(summary_base.values_list('borrower_id', flat=True))
+    summary['total_locked_accounts'] = User.objects.filter(id__in=borrower_ids, is_locked=True).count()
+    summary['total_withdrawal_locked'] = (
+        User.objects.filter(id__in=borrower_ids, withdrawal_locked=True).count()
+        + summary_base.filter(outstanding_balance__gt=Decimal('0.00'))
+        .exclude(borrower__withdrawal_locked=True)
+        .values('borrower_id')
+        .distinct()
+        .count()
+    )
+    summary['total_records'] = len(rows)
+
+    if is_retail_manager(user):
+        retail_manager_options = [user]
+        master_agent_options = list(get_retail_manager_master_agents(user).order_by('username', 'email')[:200])
+        super_agent_options = list(get_retail_manager_super_agents(user).order_by('username', 'email')[:200])
+        agent_options = list(get_retail_manager_agents(user).order_by('username', 'email')[:500])
+    else:
+        retail_manager_options = list(User.objects.filter(user_type='retail_manager').only('id', 'username', 'email').order_by('username', 'email')[:200])
+        master_agent_options = list(User.objects.filter(user_type='master_agent').only('id', 'username', 'email').order_by('username', 'email')[:300])
+        super_agent_options = list(User.objects.filter(user_type='super_agent').only('id', 'username', 'email').order_by('username', 'email')[:500])
+        agent_options = list(User.objects.filter(user_type='agent').only('id', 'username', 'email').order_by('username', 'email')[:1000])
+
+    return {
+        'rows': rows,
+        'summary': summary,
+        'filters': filters,
+        'retail_manager_options': retail_manager_options,
+        'master_agent_options': master_agent_options,
+        'super_agent_options': super_agent_options,
+        'agent_options': agent_options,
+        'status_choices': [
+            ('pending_approval', 'Pending Approval'),
+            ('approved', 'Approved'),
+            ('rejected', 'Rejected'),
+            ('partially_repaid', 'Partially Repaid'),
+            ('fully_settled', 'Fully Settled'),
+            ('overdue', 'Overdue'),
+            ('defaulted', 'Defaulted'),
+            ('locked', 'Locked'),
+        ],
+    }
+
+
+def _loan_reporting_export_rows(rows, *, include_retail_manager=False):
+    export_rows = []
+    for row in rows:
+        payload = {
+            'agent_username': row['agent_username'],
+            'agent_full_name': row['agent_full_name'],
+            'agent_phone_number': row['agent_phone_number'],
+            'agent_email': row['agent_email'],
+            'super_agent': row['super_agent'],
+            'master_agent': row['master_agent'],
+            'amount_of_overdraft_given': str(row['amount_given']),
+            'outstanding_balance': str(row['outstanding_balance']),
+            'qualified_amount': str(row['qualified_amount']),
+            'status': row['status'],
+            'withdrawal_locked': row['withdrawal_locked'],
+            'account_downline_locked': row['account_locked'],
+            'date_issued': row['date_issued'],
+            'time_issued': row['time_issued'],
+            'issued_by': row['issued_by'],
+            'repayment_due_date': row['repayment_due_date'],
+            'repayment_status': row['repayment_status'],
+            'days_outstanding': row['days_outstanding'],
+            'days_overdue': row['days_overdue'],
+        }
+        if include_retail_manager:
+            payload['retail_manager'] = row['retail_manager']
+        export_rows.append(payload)
+    return export_rows
+
+
+def _loan_reporting_querystring(filters, extra=None):
+    qd = QueryDict('', mutable=True)
+    for key, value in (filters or {}).items():
+        if value not in (None, '', False):
+            qd[key] = str(value)
+    for key, value in (extra or {}).items():
+        if value not in (None, '', False):
+            qd[key] = str(value)
+    return qd.urlencode()
+
+
+def _build_overdraft_reporting_dashboard_context(
+    request,
+    *,
+    include_retail_manager=False,
+    extra_params=None,
+    page_param='loan_page',
+    per_page=50,
+):
+    filters = _loan_reporting_filters_from_request(request)
+    dataset = _build_loan_reporting_dataset(
+        request.user,
+        filters=filters,
+        include_retail_manager=include_retail_manager,
+    )
+    page = Paginator(dataset['rows'], per_page).get_page(request.GET.get(page_param) or 1)
+    return {
+        'overdraft_reporting': dataset,
+        'overdraft_reporting_page': page,
+        'overdraft_reporting_filters': filters,
+        'overdraft_reporting_querystring': _loan_reporting_querystring(filters, extra=extra_params or {}),
+        'overdraft_reporting_reset_querystring': _loan_reporting_querystring({}, extra=extra_params or {}),
+        'overdraft_reporting_page_param': page_param,
+        'overdraft_reporting_extra_params': extra_params or {},
+    }
+
+
+def _build_overdraft_detail_context(viewer, loan):
+    scoped_loan = _loan_reporting_scope_queryset(viewer).filter(id=loan.id).first()
+    if not scoped_loan:
+        raise Http404()
+
+    retail_map = _build_loan_reporting_retail_manager_map([scoped_loan])
+    requested_by = getattr(getattr(scoped_loan, 'credit_request', None), 'requester', None)
+    audit_logs = list(scoped_loan.audit_logs.select_related('performed_by').order_by('-created_at')[:100])
+    audit_summary = {
+        'who_requested': {'actor': _loan_reporting_actor_label(requested_by) if requested_by else '-', 'timestamp': '', 'ip_address': ''},
+        'who_approved': {'actor': _loan_reporting_actor_label(scoped_loan.approved_by) if scoped_loan.approved_by else '-', 'timestamp': '', 'ip_address': ''},
+        'who_rejected': {'actor': _loan_reporting_actor_label(scoped_loan.rejected_by) if scoped_loan.rejected_by else '-', 'timestamp': '', 'ip_address': ''},
+        'who_issued': {'actor': _loan_reporting_actor_label(scoped_loan.approved_by or scoped_loan.lender), 'timestamp': '', 'ip_address': ''},
+        'who_modified': {'actor': '-', 'timestamp': '', 'ip_address': ''},
+        'who_locked_account': {'actor': '-', 'timestamp': '', 'ip_address': ''},
+        'who_unlocked_account': {'actor': '-', 'timestamp': '', 'ip_address': ''},
+    }
+    if scoped_loan.credit_request and scoped_loan.credit_request.created_at:
+        audit_summary['who_requested']['timestamp'] = timezone.localtime(scoped_loan.credit_request.created_at).strftime('%Y-%m-%d %H:%M:%S')
+    if scoped_loan.approved_at:
+        audit_summary['who_approved']['timestamp'] = timezone.localtime(scoped_loan.approved_at).strftime('%Y-%m-%d %H:%M:%S')
+        audit_summary['who_issued']['timestamp'] = timezone.localtime(scoped_loan.approved_at).strftime('%Y-%m-%d %H:%M:%S')
+    elif scoped_loan.created_at:
+        audit_summary['who_issued']['timestamp'] = timezone.localtime(scoped_loan.created_at).strftime('%Y-%m-%d %H:%M:%S')
+    if scoped_loan.rejected_at:
+        audit_summary['who_rejected']['timestamp'] = timezone.localtime(scoped_loan.rejected_at).strftime('%Y-%m-%d %H:%M:%S')
+    for entry in audit_logs:
+        entry_ts = timezone.localtime(entry.created_at).strftime('%Y-%m-%d %H:%M:%S') if entry.created_at else ''
+        entry_ip = entry.ip_address or ''
+        entry_actor = _loan_reporting_actor_label(entry.performed_by)
+        if audit_summary['who_modified']['actor'] == '-' and entry.action == 'override':
+            audit_summary['who_modified'] = {'actor': entry_actor, 'timestamp': entry_ts, 'ip_address': entry_ip}
+        if audit_summary['who_locked_account']['actor'] == '-' and entry.action == 'account_locked':
+            audit_summary['who_locked_account'] = {'actor': entry_actor, 'timestamp': entry_ts, 'ip_address': entry_ip}
+        if audit_summary['who_unlocked_account']['actor'] == '-' and entry.action == 'account_unlocked':
+            audit_summary['who_unlocked_account'] = {'actor': entry_actor, 'timestamp': entry_ts, 'ip_address': entry_ip}
+        if audit_summary['who_issued']['ip_address'] == '' and entry.action in ['manual_assigned', 'loan_approved']:
+            audit_summary['who_issued']['ip_address'] = entry_ip
+        if audit_summary['who_approved']['ip_address'] == '' and entry.action == 'loan_approved':
+            audit_summary['who_approved']['ip_address'] = entry_ip
+        if audit_summary['who_rejected']['ip_address'] == '' and entry.action == 'loan_rejected':
+            audit_summary['who_rejected']['ip_address'] = entry_ip
+        if audit_summary['who_requested']['ip_address'] == '' and entry.action == 'requested':
+            audit_summary['who_requested']['ip_address'] = entry_ip
+
+    audit_requirement_rows = [
+        {'label': 'Who Requested', **audit_summary['who_requested']},
+        {'label': 'Who Approved', **audit_summary['who_approved']},
+        {'label': 'Who Rejected', **audit_summary['who_rejected']},
+        {'label': 'Who Issued', **audit_summary['who_issued']},
+        {'label': 'Who Modified', **audit_summary['who_modified']},
+        {'label': 'Who Locked Account', **audit_summary['who_locked_account']},
+        {'label': 'Who Unlocked Account', **audit_summary['who_unlocked_account']},
+    ]
+
+    approval_history = []
+    if requested_by:
+        approval_history.append({
+            'label': 'Who Requested',
+            'actor': _loan_reporting_actor_label(requested_by),
+            'timestamp': timezone.localtime(scoped_loan.credit_request.created_at).strftime('%Y-%m-%d %H:%M:%S') if scoped_loan.credit_request and scoped_loan.credit_request.created_at else '',
+            'ip_address': '',
+        })
+    if scoped_loan.approved_by:
+        approval_history.append({
+            'label': 'Who Approved',
+            'actor': _loan_reporting_actor_label(scoped_loan.approved_by),
+            'timestamp': timezone.localtime(scoped_loan.approved_at).strftime('%Y-%m-%d %H:%M:%S') if scoped_loan.approved_at else '',
+            'ip_address': '',
+        })
+    if scoped_loan.rejected_by:
+        approval_history.append({
+            'label': 'Who Rejected',
+            'actor': _loan_reporting_actor_label(scoped_loan.rejected_by),
+            'timestamp': timezone.localtime(scoped_loan.rejected_at).strftime('%Y-%m-%d %H:%M:%S') if scoped_loan.rejected_at else '',
+            'ip_address': '',
+        })
+
+    return {
+        'loan': scoped_loan,
+        'borrower': scoped_loan.borrower,
+        'retail_manager_label': _loan_reporting_actor_label(retail_map.get(scoped_loan.id)),
+        'row': _loan_reporting_row_dict(
+            scoped_loan,
+            retail_manager_obj=retail_map.get(scoped_loan.id),
+            include_retail_manager=True,
+        ),
+        'loan_history': list(Loan.objects.filter(borrower=scoped_loan.borrower).select_related('approved_by', 'rejected_by', 'lender').order_by('-created_at')[:20]),
+        'repayment_history': list(scoped_loan.repayments.select_related('recorded_by', 'source_transaction').order_by('-created_at')[:30]),
+        'deposit_history': list(Transaction.objects.filter(user=scoped_loan.borrower, transaction_type='deposit', status='completed', is_successful=True).order_by('-timestamp')[:30]),
+        'approval_history': approval_history,
+        'audit_logs': audit_logs,
+        'audit_summary': audit_summary,
+        'audit_requirement_rows': audit_requirement_rows,
+        'qualified_amount_percentage': get_loan_settings().get('loan_percentage'),
+    }
+
+
 CRM_OPS_EXCLUDED_USER_TYPES = ['admin', 'crm', 'finance', 'account_user']
 
 
@@ -9964,6 +10518,12 @@ def account_user_dashboard(request):
     metrics_start_dt = timezone.make_aware(datetime.combine(metrics_start_date, datetime.min.time()))
     metrics_end_dt = timezone.make_aware(datetime.combine(metrics_end_date, datetime.max.time()))
     top_fixtures, top_period_options, selected_top_period_id = build_top_fixtures_by_betting_period(selected_top_period_id_raw)
+    overdraft_reporting_context = _build_overdraft_reporting_dashboard_context(
+        request,
+        include_retail_manager=True,
+        extra_params={'section': 'overdraft_center'},
+        per_page=25,
+    )
 
     platform_users_qs = User.objects.filter(is_superuser=False)
     kpi_cache_key = f"account_user:kpis:v2:{metrics_start_date.isoformat()}:{metrics_end_date.isoformat()}"
@@ -10797,6 +11357,7 @@ def account_user_dashboard(request):
         'commission_search': commission_search,
         'top_period_options': top_period_options,
         'selected_top_period_id': selected_top_period_id,
+        **overdraft_reporting_context,
     }
     return render(request, 'betting/account_user_dashboard.html', context)
 
@@ -10853,6 +11414,34 @@ def account_user_activity_feed(request):
 
     events.sort(key=lambda e: e.get('ts') or '', reverse=True)
     return JsonResponse({'events': events[:limit]})
+
+
+@login_required
+def overdraft_report_detail(request, loan_id):
+    if not can_view_overdraft_reporting(request.user):
+        return HttpResponse("Permission Denied", status=403)
+    context = _build_overdraft_detail_context(request.user, get_object_or_404(Loan, id=loan_id))
+    context['back_url'] = (request.GET.get('next') or '').strip()
+    return render(request, 'betting/overdraft_report_detail.html', context)
+
+
+@login_required
+@user_passes_test(is_account_user)
+def account_user_export(request):
+    dataset = (request.GET.get('dataset') or '').strip().lower()
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    if dataset != 'overdrafts':
+        return HttpResponseBadRequest("Unknown dataset")
+    report_context = _build_overdraft_reporting_dashboard_context(
+        request,
+        include_retail_manager=True,
+        extra_params={'section': 'overdraft_center'},
+    )
+    rows = _loan_reporting_export_rows(
+        report_context['overdraft_reporting']['rows'],
+        include_retail_manager=True,
+    )
+    return _export_simple_rows(rows=rows, title='account_user_overdraft_center', fmt=fmt)
 
 def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
     commission_rows = []
@@ -12369,6 +12958,13 @@ def crm_dashboard(request):
     ops_audit_logs = list(
         CRMOpsAuditLog.objects.select_related('actor', 'target_user', 'complaint', 'campaign', 'transaction').order_by('-created_at')[:100]
     )
+    overdraft_reporting_context = {}
+    if active_tab == 'overdraft_center':
+        overdraft_reporting_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=True,
+            extra_params={'tab': 'overdraft_center'},
+        )
 
     context = {
         'active_tab': active_tab,
@@ -12490,6 +13086,7 @@ def crm_dashboard(request):
         'bulk_channel_choices': BulkMessageCampaign.CHANNEL_CHOICES,
         'bulk_target_group_choices': BulkMessageCampaign.TARGET_GROUP_CHOICES,
         'bulk_recurring_choices': BulkMessageCampaign.RECURRING_CHOICES,
+        **overdraft_reporting_context,
     }
     return render(request, 'betting/crm_dashboard.html', context)
 
@@ -12597,7 +13194,19 @@ def crm_export(request):
     rows = []
     title = dataset or 'crm_export'
 
-    if dataset == 'dormant_accounts':
+    if dataset == 'overdrafts':
+        report_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=True,
+            extra_params={'tab': 'overdraft_center'},
+        )
+        rows = _loan_reporting_export_rows(
+            report_context['overdraft_reporting']['rows'],
+            include_retail_manager=True,
+        )
+        title = 'crm_overdraft_center'
+
+    elif dataset == 'dormant_accounts':
         _, dormant_rows = _build_dormant_center_data(
             request.user,
             query=q,
@@ -13474,6 +14083,14 @@ def retail_dashboard(request):
         performance_top_super_agents = _build_agent_performance_rows(request.user, entity_type='super_agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
         performance_top_agents = _build_agent_performance_rows(request.user, entity_type='agent', start_dt=metrics_start_dt, end_dt=metrics_end_dt, query='')[0][:10]
 
+    overdraft_reporting_context = {}
+    if active_tab == 'overdraft_monitoring':
+        overdraft_reporting_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=False,
+            extra_params={'tab': 'overdraft_monitoring'},
+        )
+
     context = {
         'active_tab': active_tab,
         'start_date': start_date_str,
@@ -13575,6 +14192,7 @@ def retail_dashboard(request):
         'complaint_type_choices': CustomerComplaint.COMPLAINT_TYPE_CHOICES,
         'complaint_status_choices': CustomerComplaint.STATUS_CHOICES,
         'complaint_priority_choices': CustomerComplaint.PRIORITY_CHOICES,
+        **overdraft_reporting_context,
     }
     return render(request, 'betting/retail_dashboard.html', context)
 
@@ -13682,7 +14300,19 @@ def retail_export(request):
     rows = []
     title = f"{dataset or 'report'}"
 
-    if dataset == 'bets':
+    if dataset == 'overdrafts':
+        report_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=False,
+            extra_params={'tab': 'overdraft_monitoring'},
+        )
+        rows = _loan_reporting_export_rows(
+            report_context['overdraft_reporting']['rows'],
+            include_retail_manager=False,
+        )
+        title = 'retail_overdraft_monitoring'
+
+    elif dataset == 'bets':
         qs = (
             BetTicket.objects.exclude(status__in=['deleted', 'cancelled'])
             .filter(user__in=network_users, placed_at__gte=start_dt, placed_at__lte=end_dt)
@@ -15433,6 +16063,14 @@ def finance_dashboard(request):
     if active_tab == 'reports':
         scheduled_reports = ScheduledFinanceReport.objects.select_related('created_by').order_by('-created_at')[:200]
 
+    overdraft_reporting_context = {}
+    if active_tab == 'overdraft_center':
+        overdraft_reporting_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=True,
+            extra_params={'tab': 'overdraft_center'},
+        )
+
     recent_events = []
     if active_tab == 'overview':
         recent_txs = list(Transaction.objects.select_related('user').order_by('-timestamp')[:15])
@@ -15552,6 +16190,7 @@ def finance_dashboard(request):
         'can_manage_ledger': finance_can_manage_ledger(request.user),
         'can_view_gateways': finance_can_view_gateways(request.user),
         'can_view_pin_logs': finance_can_view_pin_logs(request.user),
+        **overdraft_reporting_context,
     }
     return render(request, 'betting/finance_dashboard.html', context)
 
@@ -15589,7 +16228,19 @@ def finance_export(request):
     rows = []
     title = dataset or 'report'
 
-    if dataset == 'deposits':
+    if dataset == 'overdrafts':
+        report_context = _build_overdraft_reporting_dashboard_context(
+            request,
+            include_retail_manager=True,
+            extra_params={'tab': 'overdraft_center'},
+        )
+        rows = _loan_reporting_export_rows(
+            report_context['overdraft_reporting']['rows'],
+            include_retail_manager=True,
+        )
+        title = 'finance_overdraft_center'
+
+    elif dataset == 'deposits':
         qs = Transaction.objects.filter(transaction_type='deposit').filter(timestamp__gte=start_dt, timestamp__lte=end_dt).select_related('user').order_by('-timestamp')
         for tx in qs[:100000]:
             rows.append({
@@ -17254,6 +17905,8 @@ def webauthn_register_begin(request):
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
 
+@never_cache
+@ensure_csrf_cookie
 @login_required
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 def admin_manual_wallet_manager(request):

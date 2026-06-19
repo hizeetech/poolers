@@ -1,0 +1,248 @@
+{% extends 'betting/base.html' %}
+{% block title %}Overdraft Details{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Overdraft Details</h2>
+      <div class="text-muted small">Read-only drill-down view for hierarchy, repayment, deposits, and audit trail.</div>
+    </div>
+    <div class="d-flex gap-2">
+      {% if back_url %}
+      <a class="btn btn-outline-secondary" href="{{ back_url }}">Back</a>
+      {% endif %}
+      <button type="button" class="btn btn-outline-primary" onclick="window.print()">Print</button>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Agent Details</div>
+        <div class="card-body">
+          <div><span class="text-muted">Username:</span> {{ borrower.username|default:borrower.email|default:"-" }}</div>
+          <div><span class="text-muted">Full Name:</span> {{ borrower.get_full_name|default:"-" }}</div>
+          <div><span class="text-muted">Phone:</span> {{ borrower.phone_number|default:"-" }}</div>
+          <div><span class="text-muted">Email:</span> {{ borrower.email|default:"-" }}</div>
+          <div><span class="text-muted">Qualified Amount:</span> N{{ loan.qualified_amount|floatformat:2 }}</div>
+          <div><span class="text-muted">Ticket Count During Qualification:</span> {{ loan.qualification_ticket_count }}</div>
+          <div><span class="text-muted">Qualified Deposit Volume:</span> N{{ loan.qualification_deposit_volume|floatformat:2 }}</div>
+          <div><span class="text-muted">Qualified Amount Calculation:</span> {{ qualified_amount_percentage|default:"-" }}% of eligible deposits subject to platform rules.</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Hierarchy Details</div>
+        <div class="card-body">
+          <div><span class="text-muted">Retail Manager:</span> {{ retail_manager_label }}</div>
+          <div><span class="text-muted">Master Agent:</span> {{ row.master_agent }}</div>
+          <div><span class="text-muted">Super Agent:</span> {{ row.super_agent }}</div>
+          <div><span class="text-muted">Amount Issued:</span> N{{ row.amount_given|floatformat:2 }}</div>
+          <div><span class="text-muted">Outstanding Balance:</span> N{{ row.outstanding_balance|floatformat:2 }}</div>
+          <div><span class="text-muted">Status:</span> {{ row.status }}</div>
+          <div><span class="text-muted">Withdrawal Locked:</span> {{ row.withdrawal_locked }}</div>
+          <div><span class="text-muted">Account / Downline Locked:</span> {{ row.account_locked }}</div>
+          <div><span class="text-muted">Issued By:</span> {{ row.issued_by }}</div>
+          <div><span class="text-muted">Repayment Due Date:</span> {{ row.repayment_due_date|default:"-" }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Audit Requirements</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Action</th>
+                  <th>Actor</th>
+                  <th>Date / Time</th>
+                  <th>IP Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in audit_requirement_rows %}
+                <tr>
+                  <td>{{ item.label }}</td>
+                  <td>{{ item.actor|default:"-" }}</td>
+                  <td>{{ item.timestamp|default:"-" }}</td>
+                  <td>{{ item.ip_address|default:"-" }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Approval History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Step</th>
+                  <th>Actor</th>
+                  <th>Date / Time</th>
+                  <th>IP Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in approval_history %}
+                <tr>
+                  <td>{{ item.label }}</td>
+                  <td>{{ item.actor|default:"-" }}</td>
+                  <td>{{ item.timestamp|default:"-" }}</td>
+                  <td>{{ item.ip_address|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No approval history available.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Loan History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Date</th>
+                  <th class="text-end">Amount</th>
+                  <th class="text-end">Outstanding</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in loan_history %}
+                <tr>
+                  <td>{{ item.created_at|date:"Y-m-d H:i:s" }}</td>
+                  <td class="text-end">N{{ item.amount|floatformat:2 }}</td>
+                  <td class="text-end">N{{ item.outstanding_balance|floatformat:2 }}</td>
+                  <td>{{ item.get_status_display }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No loan history found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Repayment History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Date</th>
+                  <th class="text-end">Amount</th>
+                  <th>Source</th>
+                  <th>Recorded By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in repayment_history %}
+                <tr>
+                  <td>{{ item.created_at|date:"Y-m-d H:i:s" }}</td>
+                  <td class="text-end">N{{ item.amount|floatformat:2 }}</td>
+                  <td>{{ item.get_source_display }}</td>
+                  <td>{{ item.recorded_by.username|default:item.recorded_by.email|default:"System" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No repayments recorded.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Deposit History</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Date</th>
+                  <th class="text-end">Amount</th>
+                  <th>Status</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in deposit_history %}
+                <tr>
+                  <td>{{ item.timestamp|date:"Y-m-d H:i:s" }}</td>
+                  <td class="text-end">N{{ item.amount|floatformat:2 }}</td>
+                  <td>{{ item.status }}</td>
+                  <td>{{ item.external_reference|default:item.paystack_reference|default:item.id }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No deposits found.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-light fw-semibold">Audit Log</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Date</th>
+                  <th>Action</th>
+                  <th>Actor</th>
+                  <th class="text-end">Amount</th>
+                  <th>IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in audit_logs %}
+                <tr>
+                  <td>{{ item.created_at|date:"Y-m-d H:i:s" }}</td>
+                  <td>{{ item.get_action_display }}</td>
+                  <td>{{ item.performed_by.username|default:item.performed_by.email|default:"System" }}</td>
+                  <td class="text-end">{% if item.amount %}N{{ item.amount|floatformat:2 }}{% else %}-{% endif %}</td>
+                  <td>{{ item.ip_address|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No audit log entries available.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

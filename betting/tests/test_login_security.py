@@ -112,3 +112,20 @@ class LoginSecurityTest(TestCase):
         self.assertIn('no-store', cache_control)
         self.assertIn('must-revalidate', cache_control)
         self.assertIn('csrftoken', response.cookies)
+
+    def test_admin_manual_wallet_page_is_not_cached_and_sets_csrf_cookie(self):
+        admin_user = User.objects.create_superuser(
+            email='admin-wallet@test.com',
+            password=self.password,
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(reverse('betting_admin:admin_manual_wallet_manager'))
+        cache_control = response.headers.get('Cache-Control', '')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('max-age=0', cache_control)
+        self.assertIn('no-cache', cache_control)
+        self.assertIn('no-store', cache_control)
+        self.assertIn('must-revalidate', cache_control)
+        self.assertIn('csrftoken', response.cookies)

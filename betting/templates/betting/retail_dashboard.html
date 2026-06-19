@@ -87,6 +87,7 @@
     <li class="nav-item"><a class="nav-link {% if active_tab == 'agent_performance' %}active{% endif %}" href="?tab=agent_performance&start_date={{ start_date }}&end_date={{ end_date }}">Agent Performance</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'risk' %}active{% endif %}" href="?tab=risk&start_date={{ start_date }}&end_date={{ end_date }}">Risk</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'locked_accounts' %}active{% endif %}" href="?tab=locked_accounts&start_date={{ start_date }}&end_date={{ end_date }}" title="Open locked accounts tab">Locked Accounts <span class="badge rounded-pill locked-counter-clickable {% if locked_accounts_summary.locked_downlines %}bg-danger text-white locked-counter-attention{% else %}bg-light text-dark{% endif %} ms-1" title="Open locked accounts tab">{{ locked_accounts_summary.locked_downlines }}</span></a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'overdraft_monitoring' %}active{% endif %}" href="?tab=overdraft_monitoring&start_date={{ start_date }}&end_date={{ end_date }}">Overdraft / Loan Monitoring</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'reports' %}active{% endif %}" href="?tab=reports&start_date={{ start_date }}&end_date={{ end_date }}">Reports</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'note' %}active{% endif %}" href="?tab=note&start_date={{ start_date }}&end_date={{ end_date }}">Note</a></li>
   </ul>
@@ -472,6 +473,10 @@
     </div>
   </div>
   {% endif %}
+  {% endif %}
+
+  {% if active_tab == 'overdraft_monitoring' %}
+  {% include 'betting/includes/overdraft_reporting_retail.html' with title='Overdraft / Loan Monitoring' subtitle='Only overdrafts and loans belonging to agents inside your mapped hierarchy are visible here.' export_url_name='betting:retail_export' %}
   {% endif %}
 
   {% if active_tab == 'hierarchy' %}

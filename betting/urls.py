@@ -100,6 +100,7 @@ urlpatterns = [
     # Account User URLs
     path('account-user/dashboard/', views.account_user_dashboard, name='account_user_dashboard'),
     path('account-user/activity-feed/', views.account_user_activity_feed, name='account_user_activity_feed'),
+    path('account-user/export/', views.account_user_export, name='account_user_export'),
     path('super-admin/fund-account-user/', views.super_admin_fund_account_user, name='super_admin_fund_account_user'),
 
     # CRM URLs
@@ -175,6 +176,7 @@ urlpatterns = [
     path('impersonate/<int:user_id>/', views.impersonate_user, name='impersonate_user'),
     path('impersonate/stop/', views.stop_impersonation, name='stop_impersonation'),
     path('notifications/downline/mark-read/', views.mark_downline_activity_notifications_read, name='mark_downline_activity_notifications_read'),
+    path('overdraft-report/<int:loan_id>/', views.overdraft_report_detail, name='overdraft_report_detail'),
 ]
 
 # WebAuthn URLs

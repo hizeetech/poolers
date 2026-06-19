@@ -1,0 +1,172 @@
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+      <div>
+        <div class="fw-semibold">{{ title }}</div>
+        <div class="text-muted small">{{ subtitle }}</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-sm btn-outline-primary" href="{% url export_url_name %}?dataset=overdrafts&format=csv&{{ overdraft_reporting_querystring }}">CSV Export</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url export_url_name %}?dataset=overdrafts&format=xlsx&{{ overdraft_reporting_querystring }}">Excel Export</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url export_url_name %}?dataset=overdrafts&format=pdf&{{ overdraft_reporting_querystring }}">PDF Export</a>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">Print Report</button>
+      </div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Overdraft Issued</div><div class="fw-bold">N{{ overdraft_reporting.summary.total_issued|floatformat:2 }}</div></div></div>
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Outstanding</div><div class="fw-bold text-danger">N{{ overdraft_reporting.summary.total_outstanding|floatformat:2 }}</div></div></div>
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Settled</div><div class="fw-bold text-success">N{{ overdraft_reporting.summary.total_settled|floatformat:2 }}</div></div></div>
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Overdue</div><div class="fw-bold text-danger">N{{ overdraft_reporting.summary.total_overdue|floatformat:2 }}</div></div></div>
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Locked Accounts</div><div class="fw-bold">{{ overdraft_reporting.summary.total_locked_accounts }}</div></div></div>
+      <div class="col-6 col-lg-2"><div class="border rounded p-3 h-100"><div class="text-muted small">Total Withdrawal Locked</div><div class="fw-bold">{{ overdraft_reporting.summary.total_withdrawal_locked }}</div></div></div>
+    </div>
+
+    <form method="get" class="row g-2 align-items-end mb-3">
+      {% for key, value in overdraft_reporting_extra_params.items %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endfor %}
+      <div class="col-12 col-lg-3">
+        <label class="form-label small text-muted mb-1">Search</label>
+        <input type="text" name="loan_q" value="{{ overdraft_reporting.filters.q }}" class="form-control form-control-sm" placeholder="Agent, phone, super or master">
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ overdraft_reporting.filters.start_date }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ overdraft_reporting.filters.end_date }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Master Agent</label>
+        <select name="loan_master_agent" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for item in overdraft_reporting.master_agent_options %}
+          <option value="{{ item.id }}" {% if overdraft_reporting.filters.master_agent_id == item.id|stringformat:"s" %}selected{% endif %}>{{ item.username|default:item.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Super Agent</label>
+        <select name="loan_super_agent" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for item in overdraft_reporting.super_agent_options %}
+          <option value="{{ item.id }}" {% if overdraft_reporting.filters.super_agent_id == item.id|stringformat:"s" %}selected{% endif %}>{{ item.username|default:item.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Agent Username</label>
+        <input type="text" name="loan_agent" value="{{ overdraft_reporting.filters.agent_identifier }}" class="form-control form-control-sm" placeholder="Agent username">
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Status</label>
+        <select name="loan_status" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for value, label in overdraft_reporting.status_choices %}
+          <option value="{{ value }}" {% if overdraft_reporting.filters.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Withdrawal Locked</label>
+        <select name="loan_withdrawal_locked" class="form-select form-select-sm">
+          <option value="">All</option>
+          <option value="yes" {% if overdraft_reporting.filters.withdrawal_locked == 'yes' %}selected{% endif %}>Yes</option>
+          <option value="no" {% if overdraft_reporting.filters.withdrawal_locked == 'no' %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div class="col-6 col-lg-2">
+        <label class="form-label small text-muted mb-1">Account Locked</label>
+        <select name="loan_account_locked" class="form-select form-select-sm">
+          <option value="">All</option>
+          <option value="yes" {% if overdraft_reporting.filters.account_locked == 'yes' %}selected{% endif %}>Yes</option>
+          <option value="no" {% if overdraft_reporting.filters.account_locked == 'no' %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div class="col-12 col-lg-3">
+        <label class="form-label small text-muted mb-1">Issued By</label>
+        <input type="text" name="loan_issued_by" value="{{ overdraft_reporting.filters.issued_by }}" class="form-control form-control-sm" placeholder="Admin, finance, super agent">
+      </div>
+      <div class="col-6 col-lg-2">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="loan_outstanding_only" value="1" id="retailLoanOutstandingOnly" {% if overdraft_reporting.filters.outstanding_only %}checked{% endif %}>
+          <label class="form-check-label small" for="retailLoanOutstandingOnly">Outstanding Balance > 0</label>
+        </div>
+      </div>
+      <div class="col-6 col-lg-2">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="loan_overdue_only" value="1" id="retailLoanOverdueOnly" {% if overdraft_reporting.filters.overdue_only %}checked{% endif %}>
+          <label class="form-check-label small" for="retailLoanOverdueOnly">Overdue Loans</label>
+        </div>
+      </div>
+      <div class="col-12 col-lg-3 d-flex gap-2">
+        <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+        <a class="btn btn-sm btn-outline-secondary" href="?{{ overdraft_reporting_reset_querystring }}">Reset</a>
+      </div>
+    </form>
+  </div>
+  <div class="card-body border-top p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Agent Username</th>
+            <th>Agent Full Name</th>
+            <th>Agent Phone Number</th>
+            <th>Super Agent</th>
+            <th>Master Agent</th>
+            <th class="text-end">Amount of Overdraft Given</th>
+            <th class="text-end">Outstanding Balance</th>
+            <th>Overdraft Status</th>
+            <th>Withdrawal Locked</th>
+            <th>Account/Downline Locked</th>
+            <th>Date Issued</th>
+            <th>Time Issued</th>
+            <th>Issued By</th>
+            <th>Repayment Due Date</th>
+            <th>Repayment Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in overdraft_reporting_page %}
+          <tr>
+            <td><a class="text-decoration-none fw-semibold" href="{{ row.detail_url }}?next={{ request.get_full_path|urlencode }}">{{ row.agent_username|default:"-" }}</a></td>
+            <td>{{ row.agent_full_name|default:"-" }}</td>
+            <td>{{ row.agent_phone_number|default:"-" }}</td>
+            <td>{{ row.super_agent }}</td>
+            <td>{{ row.master_agent }}</td>
+            <td class="text-end">N{{ row.amount_given|floatformat:2 }}</td>
+            <td class="text-end">N{{ row.outstanding_balance|floatformat:2 }}</td>
+            <td>{{ row.status }}</td>
+            <td>{{ row.withdrawal_locked }}</td>
+            <td>{{ row.account_locked }}</td>
+            <td>{{ row.date_issued|default:"-" }}</td>
+            <td>{{ row.time_issued|default:"-" }}</td>
+            <td>{{ row.issued_by }}</td>
+            <td>{{ row.repayment_due_date|default:"-" }}</td>
+            <td>{{ row.repayment_status }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="15" class="text-center text-muted py-4">No overdraft or loan records found in your mapped hierarchy.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if overdraft_reporting_page %}
+  <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <div class="text-muted small">Page {{ overdraft_reporting_page.number }} of {{ overdraft_reporting_page.paginator.num_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if overdraft_reporting_page.has_previous %}
+      <a class="btn btn-sm btn-outline-secondary" href="?{{ overdraft_reporting_querystring }}&{{ overdraft_reporting_page_param }}={{ overdraft_reporting_page.previous_page_number }}">Prev</a>
+      {% endif %}
+      {% if overdraft_reporting_page.has_next %}
+      <a class="btn btn-sm btn-outline-secondary" href="?{{ overdraft_reporting_querystring }}&{{ overdraft_reporting_page_param }}={{ overdraft_reporting_page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>

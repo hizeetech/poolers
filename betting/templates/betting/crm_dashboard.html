@@ -129,6 +129,9 @@
       <button class="nav-link {% if active_tab == 'deposit_monitoring' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#deposit_monitoring" type="button" role="tab">Deposit Monitoring</button>
     </li>
     <li class="nav-item" role="presentation">
+      <button class="nav-link {% if active_tab == 'overdraft_center' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#overdraft_center" type="button" role="tab">Overdraft / Loan Center</button>
+    </li>
+    <li class="nav-item" role="presentation">
       <button class="nav-link {% if active_tab == 'agent_performance' %}active{% endif %}" data-bs-toggle="tab" data-bs-target="#agent_performance" type="button" role="tab">Agent Performance</button>
     </li>
     <li class="nav-item" role="presentation">
@@ -516,6 +519,10 @@
         </div>
       </div>
       {% endif %}
+    </div>
+
+    <div class="tab-pane fade {% if active_tab == 'overdraft_center' %}show active{% endif %}" id="overdraft_center" role="tabpanel">
+      {% include 'betting/includes/overdraft_reporting_global.html' with title='Overdraft / Loan Center' subtitle='Global read-only overdraft and loan visibility across all retail hierarchies.' export_url_name='betting:crm_export' %}
     </div>
 
     <div class="tab-pane fade {% if active_tab == 'commissions' %}show active{% endif %}" id="commissions" role="tabpanel">

@@ -67,15 +67,30 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1', '[::1]', 'www.shop.stakenaija.ng', 'shop.stakenaija.ng', '172.236.9.63']
+def _csv_env_list(name):
+    return [item.strip() for item in (os.getenv(name) or '').split(',') if item.strip()]
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://shop.stakenaija.ng",
-    "https://shop.stakenaija.ng",
-    "http://www.shop.stakenaija.ng",
-    "https://www.shop.stakenaija.ng",
-    "http://172.236.9.63",
+
+_default_allowed_hosts = [
+    'testserver',
+    'localhost',
+    '127.0.0.1',
+    '[::1]',
+    'www.shop.stakenaija.ng',
+    'shop.stakenaija.ng',
+    '172.236.9.63',
 ]
+ALLOWED_HOSTS = list(dict.fromkeys(_default_allowed_hosts + _csv_env_list('EXTRA_ALLOWED_HOSTS')))
+
+_csrf_origin_hosts = [
+    host for host in ALLOWED_HOSTS
+    if host not in {'testserver', 'localhost', '127.0.0.1', '[::1]'} and not host.startswith('.')
+]
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(
+    [f"http://{host}" for host in _csrf_origin_hosts]
+    + [f"https://{host}" for host in _csrf_origin_hosts]
+    + _csv_env_list('CSRF_TRUSTED_ORIGINS_EXTRA')
+))
 
 
 # Application definition

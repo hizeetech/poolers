@@ -203,6 +203,9 @@ $(document).ready(function() {
         <li class="nav-item">
             <a class="nav-link" href="#acct-commissions-section">Commissions</a>
         </li>
+        <li class="nav-item">
+            <a class="nav-link" href="#acct-overdraft-center">Overdraft / Loan Center</a>
+        </li>
     </ul>
 
     <div class="row mb-4">
@@ -474,6 +477,12 @@ $(document).ready(function() {
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4" id="acct-overdraft-center">
+        <div class="card-body p-0">
+            {% include 'betting/includes/overdraft_reporting_global.html' with title='Overdraft / Loan Center' subtitle='Global read-only overdraft and loan reporting for account operations.' export_url_name='betting:account_user_export' %}
         </div>
     </div>
 

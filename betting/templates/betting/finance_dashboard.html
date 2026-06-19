@@ -76,6 +76,7 @@
     <li class="nav-item"><a class="nav-link {% if active_tab == 'fraud' %}active{% endif %}" href="?tab=fraud&start_date={{ start_date }}&end_date={{ end_date }}">Fraud</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'settlements' %}active{% endif %}" href="?tab=settlements&start_date={{ start_date }}&end_date={{ end_date }}">Settlements</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'ledger' %}active{% endif %}" href="?tab=ledger&start_date={{ start_date }}&end_date={{ end_date }}">Ledger</a></li>
+    <li class="nav-item"><a class="nav-link {% if active_tab == 'overdraft_center' %}active{% endif %}" href="?tab=overdraft_center&start_date={{ start_date }}&end_date={{ end_date }}">Overdraft / Loan Center</a></li>
     {% if can_view_gateways %}
     <li class="nav-item"><a class="nav-link {% if active_tab == 'gateways' %}active{% endif %}" href="?tab=gateways&start_date={{ start_date }}&end_date={{ end_date }}">Gateways</a></li>
     {% endif %}
@@ -133,6 +134,10 @@
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {% if active_tab == 'overdraft_center' %}
+  {% include 'betting/includes/overdraft_reporting_global.html' with title='Overdraft / Loan Center' subtitle='Global read-only overdraft and loan reporting for finance operations.' export_url_name='betting:finance_export' %}
   {% endif %}
 
   {% if active_tab == 'bets' %}

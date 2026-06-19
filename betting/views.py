@@ -4929,11 +4929,24 @@ def check_ticket_status(request):
             'cashier_can_request_void': cashier_can_request_void,
         })
 
+    ticket_query = request.GET.copy()
+    ticket_query.pop('page', None)
+    ticket_query.pop('action', None)
+    ticket_pagination_querystring = ticket_query.urlencode()
+
     context = {
         'form': form, 
         'ticket': ticket, 
         'tickets': tickets_list,
         'tickets_page': tickets_page,
+        'ticket_page_numbers': list(
+            tickets_paginator.get_elided_page_range(
+                tickets_page.number,
+                on_each_side=1,
+                on_ends=1,
+            )
+        ),
+        'ticket_pagination_querystring': ticket_pagination_querystring,
         'void_window': void_window,
         'now': timezone.now(),
         'cashier_can_request_void': cashier_can_request_void,

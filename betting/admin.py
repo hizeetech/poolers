@@ -729,17 +729,46 @@ class SelectionInline(admin.TabularInline):
 
 
 # --- BetTicket Admin (Registered with custom site) ---
+class TicketSelectionCountFilter(admin.SimpleListFilter):
+    title = 'Single / Multiple / System'
+    parameter_name = 'selection_type'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('single', 'Single'),
+            ('multiple', 'Multiple'),
+            ('system', 'System'),
+        )
+
+    def queryset(self, request, queryset):
+        value = self.value()
+        if value not in {'single', 'multiple', 'system'}:
+            return queryset
+        return queryset.filter(bet_type=value)
+
+
 class BetTicketAdmin(admin.ModelAdmin):
     list_display = (
-        'ticket_id', 'user', 'stake_amount', 'total_odd', 'potential_winning',
+        'ticket_id', 'user', 'selection_count', 'stake_amount', 'total_odd', 'potential_winning',
         'min_winning', 'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
     )
-    list_filter = ('status', 'placed_at', 'user')
+    list_filter = ('status', TicketSelectionCountFilter, 'placed_at', 'user')
     search_fields = ('ticket_id', 'id__startswith', 'user__email__icontains')
     raw_id_fields = ('user', 'deleted_by')
     ordering = ('-placed_at',)
     inlines = [SelectionInline]
     readonly_fields = ('selections_snapshot_preview',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user', 'deleted_by').annotate(
+            annotated_selection_count=Count('selections', distinct=True)
+        )
+
+    def selection_count(self, obj):
+        return obj.original_selections_count or getattr(obj, 'annotated_selection_count', 0)
+
+    selection_count.short_description = 'No. of Selections'
+    selection_count.admin_order_field = 'original_selections_count'
 
     def selections_snapshot_preview(self, obj):
         snap = (getattr(obj, 'betting_limits_snapshot', None) or {}).get('selections_snapshot') or []

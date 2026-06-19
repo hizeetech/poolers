@@ -1799,6 +1799,98 @@ class FullCoverageTests(TestCase):
         self.assertNotIn("active_cashier_agent_dashboard", export_body)
         self.assertNotIn("outsider_dormant_agent", export_body)
 
+    def test_super_agent_dashboard_qualified_agents_table_respects_hierarchy_scope(self):
+        password = "pass12345"
+        from betting.models import SiteConfiguration
+
+        config = SiteConfiguration.load()
+        config.loan_min_ticket_count = 1
+        config.loan_min_deposit_amount = Decimal("100.00")
+        config.loan_percentage = Decimal("50.00")
+        config.save(update_fields=["loan_min_ticket_count", "loan_min_deposit_amount", "loan_percentage"])
+
+        master = User.objects.create_user(
+            email="qualified-master@test.com",
+            password=password,
+            user_type="master_agent",
+            username="qualified_master",
+        )
+        super_agent = User.objects.create_user(
+            email="qualified-super@test.com",
+            password=password,
+            user_type="super_agent",
+            username="qualified_super",
+            master_agent=master,
+        )
+        other_super_agent = User.objects.create_user(
+            email="qualified-super-other@test.com",
+            password=password,
+            user_type="super_agent",
+            username="qualified_super_other",
+            master_agent=master,
+        )
+        owned_qualified_agent = User.objects.create_user(
+            email="qualified-owned-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="qualified_owned_agent",
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        owned_unqualified_agent = User.objects.create_user(
+            email="unqualified-owned-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="unqualified_owned_agent",
+            super_agent=super_agent,
+            master_agent=master,
+        )
+        outsider_qualified_agent = User.objects.create_user(
+            email="qualified-outsider-agent@test.com",
+            password=password,
+            user_type="agent",
+            username="qualified_outsider_agent",
+            super_agent=other_super_agent,
+            master_agent=master,
+        )
+        for row_user in [master, super_agent, other_super_agent, owned_qualified_agent, owned_unqualified_agent, outsider_qualified_agent]:
+            Wallet.objects.get_or_create(user=row_user, defaults={"balance": Decimal("0.00")})
+
+        Transaction.objects.create(
+            user=owned_qualified_agent,
+            transaction_type="deposit",
+            amount=Decimal("500.00"),
+            status="completed",
+            is_successful=True,
+            payment_gateway="paystack",
+            description="Owned qualifying deposit",
+        )
+        BetTicket.objects.create(user=owned_qualified_agent, stake_amount=Decimal("100.00"), bet_type="single")
+        Transaction.objects.create(
+            user=outsider_qualified_agent,
+            transaction_type="deposit",
+            amount=Decimal("700.00"),
+            status="completed",
+            is_successful=True,
+            payment_gateway="paystack",
+            description="Outsider qualifying deposit",
+        )
+        BetTicket.objects.create(user=outsider_qualified_agent, stake_amount=Decimal("100.00"), bet_type="single")
+
+        self.client.force_login(super_agent)
+        response = self.client.get(reverse("betting:super_agent_dashboard"))
+        self.assertEqual(response.status_code, 200)
+
+        qualified_rows = list(response.context["qualified_overdraft_agent_rows"])
+        self.assertEqual(
+            [row.agent.username for row in qualified_rows],
+            ["qualified_owned_agent", "unqualified_owned_agent"],
+        )
+        self.assertTrue(qualified_rows[0].is_qualified)
+        self.assertEqual(qualified_rows[0].amount_qualified, Decimal("250.00"))
+        self.assertFalse(qualified_rows[1].is_qualified)
+        self.assertEqual(qualified_rows[1].amount_qualified, Decimal("0.00"))
+
     def test_master_agent_dormant_agents_filter_and_export_respect_super_agent_scope(self):
         password = "pass12345"
         master = User.objects.create_user(

@@ -1,0 +1,357 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Loan / Overdraft Center{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="h3 mb-1">Loan / Overdraft Center</h2>
+            <div class="text-muted">Dedicated operations view for requests, outstanding balances, overdue defaults, and settlements.</div>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-outline-secondary rounded-pill px-4">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=pending&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'pending' %}border-warning{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Pending Requests</div>
+                        <div class="fs-4 fw-bold text-warning">{{ tab_counts.pending }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=approved&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'approved' %}border-primary{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Approved Loans</div>
+                        <div class="fs-4 fw-bold text-primary">{{ tab_counts.approved }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=rejected&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'rejected' %}border-secondary{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Rejected Requests</div>
+                        <div class="fs-4 fw-bold text-secondary">{{ tab_counts.rejected }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=outstanding&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'outstanding' %}border-danger{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Outstanding Loans</div>
+                        <div class="fs-4 fw-bold text-danger">{{ tab_counts.outstanding }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=overdue&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'overdue' %}border-danger{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Overdue Loans</div>
+                        <div class="fs-4 fw-bold text-danger">{{ tab_counts.overdue }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=locked&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'locked' %}border-dark{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Locked Accounts</div>
+                        <div class="fs-4 fw-bold text-dark">{{ tab_counts.locked }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-md-3 col-xl">
+            <a class="text-decoration-none" href="?tab=settled&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}">
+                <div class="card shadow-sm h-100 {% if tab == 'settled' %}border-success{% endif %}">
+                    <div class="card-body">
+                        <div class="small text-muted">Settled Loans</div>
+                        <div class="fs-4 fw-bold text-success">{{ tab_counts.settled }}</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="mb-3">Fund Super Agent Overdraft Wallet</h5>
+                    <form method="post" class="d-flex flex-column gap-3">
+                        {% csrf_token %}
+                        <div>
+                            <label class="form-label">{{ funding_form.super_agent.label }}</label>
+                            {{ funding_form.super_agent }}
+                        </div>
+                        <div>
+                            <label class="form-label">{{ funding_form.amount.label }}</label>
+                            {{ funding_form.amount }}
+                        </div>
+                        <div>
+                            <label class="form-label">{{ funding_form.reason.label }}</label>
+                            {{ funding_form.reason }}
+                        </div>
+                        <button type="submit" name="fund_wallet_submit" class="btn btn-primary">Fund Overdraft Wallet</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0">Recent Overdraft Wallets</h5>
+                        <span class="text-muted small">Latest 10</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Super Agent</th>
+                                    <th>Total Funded</th>
+                                    <th>Used</th>
+                                    <th>Remaining</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for wallet in overdraft_wallets %}
+                                <tr>
+                                    <td>{{ wallet.super_agent.username|default:wallet.super_agent.email }}</td>
+                                    <td>₦{{ wallet.total_funded|floatformat:2 }}</td>
+                                    <td>₦{{ wallet.used_balance|floatformat:2 }}</td>
+                                    <td>₦{{ wallet.current_balance|floatformat:2 }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-3">No overdraft wallets yet.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
+                <form method="get" class="d-flex flex-column gap-2 w-100">
+                    <input type="hidden" name="tab" value="{{ tab }}">
+                    <div class="d-flex flex-column flex-md-row gap-2">
+                        <input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Search username, email, lender, reason">
+                        <select name="borrower_role" class="form-select">
+                            <option value="">All Roles</option>
+                            {% for value, label in borrower_role_choices %}
+                            <option value="{{ value }}" {% if borrower_role == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="loan_type" class="form-select">
+                            <option value="">All Loan Types</option>
+                            {% for value, label in loan_type_choices %}
+                            <option value="{{ value }}" {% if loan_type == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="lock_state" class="form-select">
+                            <option value="">All Lock States</option>
+                            <option value="locked" {% if lock_state == 'locked' %}selected{% endif %}>Locked</option>
+                            <option value="unlocked" {% if lock_state == 'unlocked' %}selected{% endif %}>Unlocked</option>
+                        </select>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="submit" class="btn btn-primary">Filter</button>
+                        <a href="?tab={{ tab }}" class="btn btn-outline-secondary">Reset</a>
+                    </div>
+                </form>
+                <div class="d-flex flex-wrap gap-2">
+                    <form method="post" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" name="run_due_enforcement" class="btn btn-sm btn-outline-danger">Run Due Enforcement</button>
+                    </form>
+                    <a class="btn btn-sm btn-outline-primary" href="?tab={{ tab }}&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}&format=csv">CSV</a>
+                    <a class="btn btn-sm btn-outline-primary" href="?tab={{ tab }}&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}&format=xlsx">Excel</a>
+                    <a class="btn btn-sm btn-outline-primary" href="?tab={{ tab }}&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}&format=pdf">PDF</a>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Records</div>
+                            <div class="fs-5 fw-bold">{{ summary.total_records }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Requested</div>
+                            <div class="fs-6 fw-bold">₦{{ summary.total_requested|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Approved</div>
+                            <div class="fs-6 fw-bold">₦{{ summary.total_approved|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Outstanding</div>
+                            <div class="fs-6 fw-bold text-danger">₦{{ summary.total_outstanding|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Overdue Balance</div>
+                            <div class="fs-6 fw-bold text-danger">₦{{ summary.overdue_balance|floatformat:2 }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <div class="card bg-light border-0 h-100">
+                        <div class="card-body">
+                            <div class="small text-muted">Locked Borrowers</div>
+                            <div class="fs-5 fw-bold">{{ summary.locked_count }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Borrower</th>
+                            <th>Role</th>
+                            <th>Super Agent / Lender</th>
+                            <th>Ticket Count</th>
+                            <th>Deposit Volume</th>
+                            <th>Qualified Amount</th>
+                            <th>Requested Amount</th>
+                            <th>Approved Amount</th>
+                            <th>Outstanding Balance</th>
+                            <th>Due Date</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                            {% if tab == 'overdue' %}
+                            <th>Withdrawal Disabled</th>
+                            <th>Account Locked</th>
+                            <th>Days Overdue</th>
+                            {% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for loan in loans_page %}
+                        <tr>
+                            <td>
+                                <div>{{ loan.borrower.username|default:loan.borrower.email }}</div>
+                                <div class="small mt-1 d-flex flex-wrap gap-2">
+                                    <a href="{% url 'betting_admin:betting_user_change' loan.borrower.id %}" class="link-secondary">Borrower</a>
+                                    <a href="{% url 'betting_admin:betting_loan_change' loan.id %}" class="link-secondary">Loan</a>
+                                    <a href="{% url 'betting_admin:betting_loanauditlog_changelist' %}?q={{ loan.id }}" class="link-secondary">Audit</a>
+                                    <a href="{% url 'betting_admin:betting_loanrepayment_changelist' %}?q={{ loan.id }}" class="link-secondary">Repayments</a>
+                                </div>
+                            </td>
+                            <td>{{ loan.borrower.get_user_type_display }}</td>
+                            <td>
+                                <div>{{ loan.lender.username|default:loan.lender.email }}</div>
+                                <div class="small mt-1">
+                                    <a href="{% url 'betting_admin:betting_user_change' loan.lender.id %}" class="link-secondary">Lender</a>
+                                </div>
+                            </td>
+                            <td>{{ loan.qualification_ticket_count }}</td>
+                            <td>₦{{ loan.qualification_deposit_volume|floatformat:2 }}</td>
+                            <td>₦{{ loan.qualified_amount|floatformat:2 }}</td>
+                            <td>₦{{ loan.requested_amount|floatformat:2 }}</td>
+                            <td>₦{{ loan.amount|floatformat:2 }}</td>
+                            <td>₦{{ loan.outstanding_balance|floatformat:2 }}</td>
+                            <td>{{ loan.due_date|date:"Y-m-d H:i"|default:"-" }}</td>
+                            <td>{{ loan.get_status_display }}</td>
+                            <td>
+                                {% if loan.status == 'pending' and loan.approval_level == 'admin' %}
+                                <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    <form method="post" class="d-flex gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <input type="hidden" name="action" value="approve">
+                                        <button type="submit" name="loan_decision_submit" class="btn btn-sm btn-success">Approve</button>
+                                    </form>
+                                    <form method="post" class="d-flex gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <input type="hidden" name="action" value="reject">
+                                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for rejection" required>
+                                        <button type="submit" name="loan_decision_submit" class="btn btn-sm btn-outline-danger">Reject</button>
+                                    </form>
+                                </div>
+                                {% elif loan.status == 'pending' and loan.approval_level == 'super_agent' %}
+                                <span class="badge bg-warning text-dark">Awaiting Super Agent</span>
+                                {% else %}
+                                <span class="text-muted small">No action</span>
+                                {% endif %}
+                            </td>
+                            {% if tab == 'overdue' %}
+                            <td>{% if loan.outstanding_balance > 0 %}Yes{% else %}No{% endif %}</td>
+                            <td>{% if loan.borrower.is_locked %}Yes{% else %}No{% endif %}</td>
+                            <td>
+                                {% if loan.due_date and loan.outstanding_balance > 0 and loan.due_date < now %}
+                                    {{ now|timesince:loan.due_date }}
+                                {% else %}
+                                    0 days
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="{% if tab == 'overdue' %}15{% else %}12{% endif %}" class="text-center text-muted py-4">
+                                No loan records found for this tab.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {% if loans_page %}
+            <div class="d-flex justify-content-between align-items-center mt-3">
+                <div class="text-muted small">Page {{ loans_page.number }} of {{ loans_page.paginator.num_pages }}</div>
+                <div class="d-flex gap-2">
+                    {% if loans_page.has_previous %}
+                    <a class="btn btn-sm btn-outline-secondary" href="?tab={{ tab }}&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}&page={{ loans_page.previous_page_number }}">Prev</a>
+                    {% endif %}
+                    {% if loans_page.has_next %}
+                    <a class="btn btn-sm btn-outline-secondary" href="?tab={{ tab }}&q={{ q }}&borrower_role={{ borrower_role }}&loan_type={{ loan_type }}&lock_state={{ lock_state }}&page={{ loans_page.next_page_number }}">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

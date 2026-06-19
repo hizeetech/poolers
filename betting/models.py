@@ -11,7 +11,7 @@ import re
 import hashlib
 import math
 import sys
-from datetime import timedelta
+from datetime import timedelta, time
 from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
 from django.db.models.signals import pre_save, post_save
@@ -94,10 +94,66 @@ class SiteConfiguration(models.Model):
         default=3,
         help_text="Minimum number of failed deposits before a user is flagged as a repeated failed depositor.",
     )
+    loan_min_ticket_count = models.PositiveIntegerField(
+        default=50,
+        help_text="Minimum valid ticket count required to qualify for an overdraft request in the current commission window.",
+    )
+    loan_min_deposit_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('50000.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Minimum successful gateway deposit volume required to qualify for an overdraft request.",
+    )
+    loan_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('50.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Percentage of qualified deposits that can be requested as overdraft.",
+    )
+    loan_application_day = models.CharField(
+        max_length=12,
+        default='friday',
+        help_text="Day of week when overdraft applications open.",
+    )
+    loan_application_time = models.TimeField(
+        default=time(16, 0),
+        help_text="Time when overdraft applications open.",
+    )
+    loan_repayment_day = models.CharField(
+        max_length=12,
+        default='saturday',
+        help_text="Day of week when overdraft repayment is due.",
+    )
+    loan_repayment_time = models.TimeField(
+        default=time(15, 0),
+        help_text="Time when overdraft repayment is due.",
+    )
     
     def save(self, *args, **kwargs):
         self.pk = 1
         super(SiteConfiguration, self).save(*args, **kwargs)
+
+    def _safe_media_file_url(self, field_file):
+        try:
+            if field_file and getattr(field_file, "name", "") and field_file.storage.exists(field_file.name):
+                return field_file.url
+        except Exception:
+            return ""
+        return ""
+
+    @property
+    def safe_logo_url(self):
+        return self._safe_media_file_url(self.logo) or f"{settings.STATIC_URL}betting/images/logo.png"
+
+    @property
+    def safe_favicon_url(self):
+        return (
+            self._safe_media_file_url(self.favicon)
+            or self._safe_media_file_url(self.logo)
+            or f"{settings.STATIC_URL}betting/images/logo.png"
+        )
 
     @classmethod
     def load(cls):
@@ -627,6 +683,73 @@ class Wallet(models.Model):
     balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
     last_updated = models.DateTimeField(auto_now=True)
 
+    @staticmethod
+    def _resident_loan_amount_from_snapshot(snapshot):
+        try:
+            value = (snapshot or {}).get("wallet_resident_amount", "0.00")
+            amount = Decimal(str(value or "0.00")).quantize(Decimal("0.01"))
+        except Exception:
+            amount = Decimal("0.00")
+        return max(Decimal("0.00"), amount)
+
+    @staticmethod
+    def _snapshot_with_resident_loan_amount(snapshot, amount):
+        snapshot_data = dict(snapshot or {})
+        snapshot_data["wallet_resident_amount"] = str(max(Decimal("0.00"), Decimal(str(amount))).quantize(Decimal("0.01")))
+        return snapshot_data
+
+    def _allocate_wallet_resident_loan_amount(self, *, loan_id, amount):
+        Loan = apps.get_model("betting", "Loan")
+        loan = (
+            Loan.objects.select_for_update()
+            .filter(pk=loan_id, borrower=self.user)
+            .first()
+        )
+        if not loan:
+            return
+        current_amount = self._resident_loan_amount_from_snapshot(loan.workflow_snapshot)
+        loan.workflow_snapshot = self._snapshot_with_resident_loan_amount(
+            loan.workflow_snapshot,
+            current_amount + Decimal(str(amount or "0.00")),
+        )
+        loan.save(update_fields=["workflow_snapshot", "updated_at"])
+
+    def _consume_wallet_resident_loan_amount(self, *, balance_after):
+        Loan = apps.get_model("betting", "Loan")
+        active_loans = list(
+            Loan.objects.select_for_update()
+            .filter(
+                borrower=self.user,
+                status__in=["active", "overdue", "defaulted", "pending"],
+            )
+            .order_by("due_date", "created_at", "id")
+        )
+        if not active_loans:
+            return
+
+        total_resident_before = Decimal("0.00")
+        for loan in active_loans:
+            total_resident_before += self._resident_loan_amount_from_snapshot(loan.workflow_snapshot)
+        total_resident_before = total_resident_before.quantize(Decimal("0.01"))
+        reduction_needed = max(Decimal("0.00"), (total_resident_before - Decimal(str(balance_after or "0.00"))).quantize(Decimal("0.01")))
+        if reduction_needed <= Decimal("0.00"):
+            return
+
+        remaining_reduction = reduction_needed
+        for loan in active_loans:
+            if remaining_reduction <= Decimal("0.00"):
+                break
+            current_amount = self._resident_loan_amount_from_snapshot(loan.workflow_snapshot)
+            if current_amount <= Decimal("0.00"):
+                continue
+            consume_amount = min(current_amount, remaining_reduction)
+            loan.workflow_snapshot = self._snapshot_with_resident_loan_amount(
+                loan.workflow_snapshot,
+                current_amount - consume_amount,
+            )
+            loan.save(update_fields=["workflow_snapshot", "updated_at"])
+            remaining_reduction = (remaining_reduction - consume_amount).quantize(Decimal("0.01"))
+
     def apply_delta(self, *, amount, actor=None, transaction_obj=None, reference="", reason="", metadata=None):
         amount_q = Decimal(str(amount)).quantize(Decimal("0.01"))
         with transaction.atomic():
@@ -652,6 +775,14 @@ class Wallet(models.Model):
                 reason=(reason or "")[:255],
                 metadata=metadata or {},
             )
+
+            metadata_map = metadata or {}
+            source = metadata_map.get("source")
+            loan_id = metadata_map.get("loan_id")
+            if amount_q > 0 and loan_id and source in {"loan_approval", "manual_overdraft"}:
+                locked._allocate_wallet_resident_loan_amount(loan_id=loan_id, amount=amount_q)
+            elif amount_q < 0:
+                locked._consume_wallet_resident_loan_amount(balance_after=after)
 
             self.balance = locked.balance
             return before, after
@@ -2713,22 +2844,248 @@ class CRMWalletApprovalRequest(CreditRequest):
 
 class Loan(models.Model):
     STATUS_CHOICES = (
+        ('pending', 'Pending'),
         ('active', 'Active'),
+        ('rejected', 'Rejected'),
+        ('overdue', 'Overdue'),
         ('settled', 'Settled'),
         ('defaulted', 'Defaulted'),
+    )
+    LOAN_TYPE_CHOICES = (
+        ('agent_overdraft', 'Agent Overdraft'),
+        ('super_agent_overdraft', 'Super Agent Overdraft'),
+        ('manual_overdraft', 'Manual Overdraft'),
+    )
+    APPROVAL_LEVEL_CHOICES = (
+        ('super_agent', 'Super Agent'),
+        ('admin', 'Admin'),
     )
     
     borrower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loans_borrowed')
     lender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loans_lent')
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
-    outstanding_balance = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    requested_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    qualified_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    qualification_ticket_count = models.PositiveIntegerField(default=0)
+    qualification_deposit_volume = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    outstanding_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    repaid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    loan_type = models.CharField(max_length=30, choices=LOAN_TYPE_CHOICES, default='agent_overdraft')
+    approval_level = models.CharField(max_length=20, choices=APPROVAL_LEVEL_CHOICES, default='super_agent')
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='loans_approved')
+    rejected_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='loans_rejected')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default='')
+    request_reason = models.TextField(blank=True, default='')
+    manual_assignment = models.BooleanField(default=False)
+    account_locked_due_to_default = models.BooleanField(default=False)
+    account_unlocked_after_settlement = models.BooleanField(default=False)
+    workflow_snapshot = models.JSONField(blank=True, default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     due_date = models.DateTimeField(null=True, blank=True)
     credit_request = models.OneToOneField(CreditRequest, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan')
+    overdraft_wallet = models.ForeignKey('OverdraftWallet', on_delete=models.SET_NULL, null=True, blank=True, related_name='funded_loans')
     
     def __str__(self):
         return f"Loan: {self.borrower} owes {self.lender} {self.outstanding_balance}"
+
+
+class LoanPendingCredit(models.Model):
+    SOURCE_CHOICES = (
+        ('gateway_deposit', 'Gateway Deposit'),
+        ('admin_credit', 'Admin Credit'),
+        ('account_user_credit', 'Account User Credit'),
+        ('crm_credit', 'CRM Credit'),
+        ('finance_credit', 'Finance Credit'),
+        ('reconcile_credit', 'Reconciled Credit'),
+    )
+
+    borrower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loan_pending_credits')
+    source = models.CharField(max_length=30, choices=SOURCE_CHOICES)
+    source_transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='loan_pending_credits',
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    remaining_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    recorded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='loan_pending_credits_recorded',
+    )
+    note = models.CharField(max_length=255, blank=True, default='')
+    metadata = models.JSONField(blank=True, default=dict)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Loan Pending Credit'
+        verbose_name_plural = 'Loan Pending Credits'
+
+    def __str__(self):
+        return f"PendingCredit({self.borrower_id}) ₦{self.remaining_amount}"
+
+
+class OverdraftWallet(models.Model):
+    super_agent = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='overdraft_wallet',
+        limit_choices_to={'user_type': 'super_agent'},
+    )
+    total_funded = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    current_balance = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['super_agent__username', 'super_agent__email']
+        verbose_name = 'Overdraft Wallet'
+        verbose_name_plural = 'Overdraft Wallets'
+
+    def __str__(self):
+        return f"Overdraft Wallet - {self.super_agent.username or self.super_agent.email}"
+
+    @property
+    def used_balance(self):
+        return max(Decimal('0.00'), (self.total_funded or Decimal('0.00')) - (self.current_balance or Decimal('0.00')))
+
+    @property
+    def remaining_balance(self):
+        return self.current_balance or Decimal('0.00')
+
+    def apply_delta(self, *, amount, actor=None, loan=None, reference="", reason="", metadata=None):
+        amount_q = Decimal(str(amount)).quantize(Decimal("0.01"))
+        with transaction.atomic():
+            locked = OverdraftWallet.objects.select_for_update().get(pk=self.pk)
+            before = Decimal(str(locked.current_balance or Decimal("0.00"))).quantize(Decimal("0.01"))
+            total_before = Decimal(str(locked.total_funded or Decimal("0.00"))).quantize(Decimal("0.01"))
+            after = (before + amount_q).quantize(Decimal("0.01"))
+            if after < Decimal("0.00"):
+                raise ValueError("Overdraft wallet balance cannot be negative.")
+            if amount_q > 0:
+                locked.total_funded = (total_before + amount_q).quantize(Decimal("0.01"))
+            locked.current_balance = after
+            locked.save(update_fields=["current_balance", "total_funded", "updated_at"])
+
+            OverdraftWalletLedgerEntry.objects.create(
+                wallet=locked,
+                super_agent=locked.super_agent,
+                actor=actor if getattr(actor, "is_authenticated", False) else None,
+                loan=loan,
+                direction="credit" if amount_q >= 0 else "debit",
+                amount=abs(amount_q),
+                balance_before=before,
+                balance_after=after,
+                reference=(reference or "")[:120],
+                reason=(reason or "")[:255],
+                metadata=metadata or {},
+            )
+
+            self.current_balance = locked.current_balance
+            self.total_funded = locked.total_funded
+            return before, after
+
+
+class OverdraftWalletLedgerEntry(models.Model):
+    DIRECTION_CHOICES = (
+        ("credit", "Credit"),
+        ("debit", "Debit"),
+    )
+
+    wallet = models.ForeignKey(OverdraftWallet, on_delete=models.CASCADE, related_name='ledger_entries')
+    super_agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='overdraft_wallet_ledger_entries')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='overdraft_wallet_actions')
+    loan = models.ForeignKey(Loan, on_delete=models.SET_NULL, null=True, blank=True, related_name='overdraft_wallet_entries')
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES, db_index=True)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    balance_before = models.DecimalField(max_digits=14, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=14, decimal_places=2)
+    reference = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    reason = models.CharField(max_length=255, blank=True, default='')
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Overdraft Wallet Ledger Entry'
+        verbose_name_plural = 'Overdraft Wallet Ledger Entries'
+
+    def __str__(self):
+        return f"OverdraftLedger({self.super_agent_id}) {self.direction} ₦{self.amount}"
+
+
+class LoanRepayment(models.Model):
+    SOURCE_CHOICES = (
+        ('gateway_deposit', 'Gateway Deposit'),
+        ('admin_credit', 'Admin Credit'),
+        ('manual_settlement', 'Manual Settlement'),
+        ('finance_credit', 'Finance Credit'),
+        ('reconcile_credit', 'Reconciled Credit'),
+    )
+
+    loan = models.ForeignKey(Loan, on_delete=models.CASCADE, related_name='repayments')
+    borrower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loan_repayments')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    source = models.CharField(max_length=30, choices=SOURCE_CHOICES)
+    source_transaction = models.ForeignKey(Transaction, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan_repayments')
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan_repayments_recorded')
+    note = models.CharField(max_length=255, blank=True, default='')
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Loan Repayment'
+        verbose_name_plural = 'Loan Repayments'
+
+    def __str__(self):
+        return f"Repayment ₦{self.amount} for loan #{self.loan_id}"
+
+
+class LoanAuditLog(models.Model):
+    ACTION_CHOICES = (
+        ('request_submitted', 'Request Submitted'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('manual_assigned', 'Manual Assigned'),
+        ('credit_reserved', 'Credit Reserved'),
+        ('repayment_received', 'Repayment Received'),
+        ('auto_deduction', 'Automatic Deduction'),
+        ('account_locked', 'Account Locked'),
+        ('account_unlocked', 'Account Unlocked'),
+        ('override', 'Override'),
+        ('loan_cleared', 'Loan Cleared'),
+    )
+
+    loan = models.ForeignKey(Loan, on_delete=models.CASCADE, related_name='audit_logs')
+    borrower = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan_audit_events')
+    performed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan_audit_actions')
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    reason = models.TextField(blank=True, default='')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Loan Audit Log'
+        verbose_name_plural = 'Loan Audit Logs'
+
+    def __str__(self):
+        return f"{self.action} - loan #{self.loan_id}"
 
 class CreditLog(models.Model):
     actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='credit_actions_performed')

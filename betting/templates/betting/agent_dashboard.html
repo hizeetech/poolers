@@ -61,17 +61,17 @@
         </div>
         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
             {% if user.user_type == 'agent' or user.user_type == 'super_agent' or user.user_type == 'master_agent' %}
-            <button type="button" class="btn btn-primary rounded-pill px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#registerAgentModal">
+            <button type="button" class="btn btn-primary rounded-3 px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#registerAgentModal">
                 <i class="fas fa-user-plus me-2"></i> Register Agent
             </button>
             {% endif %}
             {% if user.user_type == 'agent' %}
-            <button type="button" class="btn btn-outline-danger rounded-pill px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#requestCashierModal">
+            <button type="button" class="btn btn-outline-danger rounded-3 px-4 shadow-sm w-100 w-sm-auto" data-bs-toggle="modal" data-bs-target="#requestCashierModal">
                 <i class="fas fa-user-plus me-2"></i> Register Cashier
             </button>
             {% endif %}
             {% if user.user_type == 'agent' and user.can_manage_downline_wallets %}
-            <a href="{% url 'betting:wallet_transfer' %}" class="btn btn-success rounded-pill px-4 shadow-sm w-100 w-sm-auto">
+            <a href="{% url 'betting:wallet_transfer' %}" class="btn btn-success rounded-3 px-4 shadow-sm w-100 w-sm-auto">
                 <i class="fas fa-exchange-alt me-2"></i> Wallet Transfer
             </a>
             {% endif %}
@@ -116,6 +116,55 @@
             </div>
         </div>
     </div>
+
+    {% if user.user_type == 'agent' or user.user_type == 'super_agent' %}
+    <div class="row mb-4">
+        <div class="col-md-6 mb-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-warning border-4">
+                <div class="card-body">
+                    <h5 class="card-title text-muted">Loan / Overdraft</h5>
+                    <div class="small text-muted">Current Outstanding Overdraft</div>
+                    <div class="fs-3 fw-bold text-danger">₦{{ outstanding_overdraft_amount|floatformat:2 }}</div>
+                    <div class="small text-muted mt-3">Repayment Due Date</div>
+                    <div class="fw-semibold">
+                        {% if dashboard_loan and dashboard_loan.due_date %}
+                            {{ dashboard_loan.due_date|date:"l g:i A T" }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </div>
+                    <div class="small text-muted mt-3">Repayment Status</div>
+                    <div>
+                        {% if dashboard_loan %}
+                            {% if dashboard_loan.status == 'overdue' or dashboard_loan.status == 'defaulted' %}
+                            <span class="badge bg-danger">Overdue</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Outstanding</span>
+                            {% endif %}
+                        {% else %}
+                        <span class="badge bg-success">Cleared</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% if user.user_type == 'super_agent' and overdraft_wallet_card %}
+        <div class="col-md-6 mb-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3 border-start border-info border-4">
+                <div class="card-body">
+                    <h5 class="card-title text-muted">Overdraft Wallet</h5>
+                    <div class="small text-muted">Available Overdraft Fund</div>
+                    <div class="fw-bold text-success fs-4">₦{{ overdraft_wallet_card.total_funded|floatformat:2 }}</div>
+                    <div class="small text-muted mt-2">Used Overdraft Fund</div>
+                    <div class="fw-bold text-danger">₦{{ overdraft_wallet_card.used_balance|floatformat:2 }}</div>
+                    <div class="small text-muted mt-2">Remaining Overdraft Fund</div>
+                    <div class="fw-bold text-primary">₦{{ overdraft_wallet_card.current_balance|floatformat:2 }}</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <div class="row mb-4">
         <div class="col-md-6 mb-3">
@@ -203,6 +252,121 @@
             </div>
         </div>
         {% endif %}
+    </div>
+    {% endif %}
+
+    {% if user.user_type == 'super_agent' %}
+    <div class="card app-glass-card shadow-sm rounded-3 mb-4">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Mapped Agents Overdraft / Loan Qualification</h5>
+                <span class="badge bg-primary">{{ qualified_overdraft_agent_rows|length }}</span>
+            </div>
+            {% if qualified_overdraft_agent_rows %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Agent</th>
+                            <th>Ticket Count</th>
+                            <th>Qualified Deposit Volume</th>
+                            <th>Status</th>
+                            <th>Amount Qualified</th>
+                            <th>Loan State</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in qualified_overdraft_agent_rows %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ row.agent.username|default:row.agent.email }}</div>
+                                <div class="small text-muted">{{ row.agent.get_full_name|default:row.agent.email }}</div>
+                            </td>
+                            <td>{{ row.snapshot.ticket_count }}</td>
+                            <td>₦{{ row.snapshot.deposit_total|floatformat:2 }}</td>
+                            <td>
+                                {% if row.is_qualified %}
+                                <span class="badge bg-success">Qualified</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Not Qualified</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.is_qualified %}
+                                <span class="fw-bold text-success">₦{{ row.amount_qualified|floatformat:2 }}</span>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.has_outstanding_loan %}
+                                <span class="badge bg-danger">Outstanding: ₦{{ row.outstanding_overdraft_amount|floatformat:2 }}</span>
+                                {% elif row.has_pending_request %}
+                                <span class="badge bg-warning text-dark">Pending Request</span>
+                                {% else %}
+                                <span class="badge bg-success">Clear</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-muted small">No mapped agents are currently assigned under this super agent.</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if user.user_type == 'super_agent' and pending_overdraft_requests %}
+    <div class="card app-glass-card shadow-sm rounded-3 mb-4">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Pending Overdraft Requests</h5>
+                <span class="badge bg-warning text-dark">{{ pending_overdraft_requests|length }}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Agent</th>
+                            <th>Qualified Amount</th>
+                            <th>Requested Amount</th>
+                            <th>Due Date</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for loan in pending_overdraft_requests %}
+                        <tr>
+                            <td>{{ loan.borrower.username|default:loan.borrower.email }}</td>
+                            <td>₦{{ loan.qualified_amount|floatformat:2 }}</td>
+                            <td>₦{{ loan.requested_amount|floatformat:2 }}</td>
+                            <td>{{ loan.due_date|date:"M d, Y g:i A" }}</td>
+                            <td>
+                                <div class="d-flex flex-column flex-md-row gap-2">
+                                    <form action="{% url 'betting:process_overdraft_request' loan.id %}" method="post">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="approve">
+                                        <input type="hidden" name="return_to" value="{% url 'betting:super_agent_dashboard' %}">
+                                        <button type="submit" class="btn btn-sm btn-success">Approve</button>
+                                    </form>
+                                    <form action="{% url 'betting:process_overdraft_request' loan.id %}" method="post" class="d-flex gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="reject">
+                                        <input type="hidden" name="return_to" value="{% url 'betting:super_agent_dashboard' %}">
+                                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for rejection" required>
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
     {% endif %}
 

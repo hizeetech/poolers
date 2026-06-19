@@ -5,6 +5,7 @@ import re
 import traceback
 import secrets
 import smtplib
+from urllib.parse import urlencode
 from functools import wraps
 from types import SimpleNamespace
 from django.core.mail import send_mail
@@ -25,7 +26,8 @@ import logging
 import requests # For Paystack API calls
 import json
 from django.http import JsonResponse, HttpResponse, Http404, HttpResponseForbidden, HttpResponseBadRequest, QueryDict
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django.utils.crypto import get_random_string
 from django.template.loader import render_to_string
@@ -53,9 +55,31 @@ from risk.services import (
     check_ip_intelligence,
 )
 from notifications.services import create_notification
+from .services.loan_overdraft import (
+    LoanOverdraftError,
+    apply_repayment_and_credit_wallet,
+    build_qualification_snapshot,
+    can_user_transfer_from_wallet,
+    create_manual_overdraft,
+    build_wallet_overdraft_payload,
+    enforce_due_loans,
+    finance_overdue_rows,
+    fund_overdraft_wallet,
+    get_loan_settings,
+    get_or_create_overdraft_wallet,
+    get_user_outstanding_loans,
+    get_user_outstanding_loan_amount,
+    get_user_pending_credit_amount,
+    notify_loan_event,
+    reject_loan_request,
+    remit_overdraft_pending_credit,
+    submit_overdraft_request,
+    approve_loan_request,
+    user_has_outstanding_loan,
+)
 
 from .models import (
-    User, Wallet, Transaction, BettingPeriod, Fixture, PopularPick, Selection, BetTicket,
+    User, Wallet, WalletLedgerEntry, Transaction, BettingPeriod, Fixture, PopularPick, Selection, BetTicket,
     BonusRule, SystemSetting, UserWithdrawal, WithdrawalReport, AgentPayout, ActivityLog,
     CreditRequest, Loan, CreditLog, ImpersonationLog, ProcessedWithdrawal,
     SiteConfiguration, CarouselImage, PasswordResetRequest, FooterPage, State,
@@ -66,7 +90,7 @@ from .models import (
     CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery, CRMOpsAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
-    ScheduledFinanceReport
+    ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -77,7 +101,8 @@ from .forms import (
     AdminUserCreationForm, AdminUserChangeForm, WithdrawalActionForm,
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
-    CreditRequestForm, LoanSettlementForm, AdminManualWalletForm,
+    CreditRequestForm, LoanSettlementForm, AdminManualWalletForm, OverdraftRequestForm,
+    LoanCenterDecisionForm, AdminOverdraftWalletFundingForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
     RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
@@ -195,9 +220,10 @@ def _complete_deposit_transaction(*, tx, amount, gateway, reference, source, pay
         )
         raise ValueError("Amount mismatch.")
 
-    wallet, _ = Wallet.objects.select_for_update().get_or_create(user=tx.user, defaults={"balance": Decimal("0.00")})
-    wallet.apply_delta(
+    apply_repayment_and_credit_wallet(
+        user=tx.user,
         amount=amount_q,
+        source="gateway_deposit",
         actor=None,
         transaction_obj=tx,
         reference=reference or (tx.external_reference or tx.paystack_reference or str(tx.id)),
@@ -1024,8 +1050,10 @@ def process_credit_request_decision(*, actor, credit_req, action, account_user_w
             target_user=tx_in_target_user,
             description=tx_in_description
         )
-        target_wallet.apply_delta(
+        credit_result = apply_repayment_and_credit_wallet(
+            user=credit_req.requester,
             amount=credit_req.amount,
+            source='crm_credit',
             actor=actor,
             transaction_obj=tx_in,
             reference=str(credit_req.id),
@@ -1063,10 +1091,22 @@ def process_credit_request_decision(*, actor, credit_req, action, account_user_w
             reference_id=str(credit_req.id)
         )
         if funding_mode == 'superadmin_override':
-            return "CRM credit request approved by superadmin without debiting any wallet.", messages.SUCCESS
+            return (
+                "CRM credit request approved by superadmin without debiting any wallet. "
+                f"Wallet credit: ₦{credit_result.get('wallet_credit_amount') or Decimal('0.00')}. "
+                f"Reserved new credit: ₦{credit_result.get('pending_credit_amount') or Decimal('0.00')}."
+            ), messages.SUCCESS
         if funding_mode == 'account_user_wallet':
-            return f"CRM credit request approved. Debited Account User {source_wallet_user.email} and credited the target user.", messages.SUCCESS
-        return "CRM credit request approved. Funds transferred.", messages.SUCCESS
+            return (
+                f"CRM credit request approved. Debited Account User {source_wallet_user.email} and credited the target user. "
+                f"Wallet credit: ₦{credit_result.get('wallet_credit_amount') or Decimal('0.00')}. "
+                f"Reserved new credit: ₦{credit_result.get('pending_credit_amount') or Decimal('0.00')}."
+            ), messages.SUCCESS
+        return (
+            "CRM credit request approved. Funds transferred. "
+            f"Wallet credit: ₦{credit_result.get('wallet_credit_amount') or Decimal('0.00')}. "
+            f"Reserved new credit: ₦{credit_result.get('pending_credit_amount') or Decimal('0.00')}."
+        ), messages.SUCCESS
 
     if credit_req.request_type == 'crm_debit':
         target_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=credit_req.requester, defaults={'balance': Decimal('0.00')})
@@ -2584,6 +2624,8 @@ def register_user(request):
     return render(request, 'betting/register.html', {'form': form})
 
 
+@never_cache
+@ensure_csrf_cookie
 @ratelimit(key='ip', rate='5/m', method='POST', block=False)
 def user_login(request):
     logger.debug("Entering user_login view.")
@@ -4432,23 +4474,40 @@ def wallet_view(request):
     # Initialize forms based on user type
     wallet_transfer_form = None
     credit_request_form = None
+    overdraft_request_form = None
     
     # Cashiers can only request credit, not transfer freely (unless logic changes)
     # Agents/Super/Master can transfer AND request credit
     if request.user.user_type == 'cashier':
         credit_request_form = CreditRequestForm(user=request.user)
     elif request.user.user_type in ['agent', 'super_agent', 'master_agent', 'account_user']:
-                # Check permission for Master/Super Agents
-                if request.user.user_type in ['master_agent', 'super_agent'] and not getattr(request.user, 'can_manage_downline_wallets', True):
-                    wallet_transfer_form = None
-                else:
-                    wallet_transfer_form = WalletTransferForm(sender_user=request.user)
-                credit_request_form = CreditRequestForm(user=request.user)
+        # Check permission for Master/Super Agents
+        if request.user.user_type in ['master_agent', 'super_agent'] and not getattr(request.user, 'can_manage_downline_wallets', True):
+            wallet_transfer_form = None
+        else:
+            wallet_transfer_form = WalletTransferForm(sender_user=request.user)
+        if request.user.user_type in ['agent', 'super_agent']:
+            overdraft_request_form = OverdraftRequestForm(user=request.user)
+        else:
+            credit_request_form = CreditRequestForm(user=request.user)
 
     # Active Loans
-    active_loans = Loan.objects.filter(borrower=request.user, status='active')
+    active_loans = Loan.objects.filter(
+        borrower=request.user,
+        status__in=['active', 'overdue', 'defaulted'],
+        outstanding_balance__gt=Decimal('0.00'),
+    ).order_by('due_date', '-created_at')
+    pending_loan_requests = Loan.objects.filter(borrower=request.user, status='pending').order_by('-created_at')
+    qualification_snapshot = build_qualification_snapshot(request.user) if request.user.user_type in ['agent', 'super_agent'] else None
+    outstanding_overdraft_amount = get_user_outstanding_loan_amount(request.user) if request.user.user_type in ['agent', 'super_agent'] else Decimal('0.00')
+    pending_remittance_credit = get_user_pending_credit_amount(request.user) if request.user.user_type in ['agent', 'super_agent'] else Decimal('0.00')
     withdrawal_lock_expires_at = request.user.get_withdrawal_lock_expires_at()
     can_withdraw = request.user.user_type in ['agent', 'super_agent', 'master_agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm']
+    if user_has_outstanding_loan(request.user):
+        can_withdraw = False
+    can_transfer_from_wallet = can_user_transfer_from_wallet(request.user)
+
+    primary_outstanding_loan = active_loans.first()
 
     context = {
         'wallet': wallet,
@@ -4457,7 +4516,13 @@ def wallet_view(request):
         'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
         'wallet_transfer_form': wallet_transfer_form,
         'credit_request_form': credit_request_form,
+        'overdraft_request_form': overdraft_request_form,
         'active_loans': active_loans,
+        'primary_outstanding_loan': primary_outstanding_loan,
+        'pending_loan_requests': pending_loan_requests,
+        'qualification_snapshot': qualification_snapshot,
+        'outstanding_overdraft_amount': outstanding_overdraft_amount,
+        'pending_remittance_credit': pending_remittance_credit,
         'loan_settlement_form': LoanSettlementForm(request=request),
         'pending_withdrawals': pending_withdrawals,
         'withdrawal_pin_is_set': request.user.withdrawal_pin_is_set,
@@ -4467,8 +4532,40 @@ def wallet_view(request):
         'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
         'min_operating_balance': Decimal('5000.00'),
         'can_withdraw_from_wallet': can_withdraw,
+        'can_transfer_from_wallet': can_transfer_from_wallet,
     }
     return render(request, 'betting/wallet.html', context)
+
+
+@login_required
+def api_wallet_overdraft_status(request):
+    return JsonResponse({'status': 'success', **build_wallet_overdraft_payload(request.user)})
+
+
+@login_required
+@require_POST
+def remit_overdraft_pending_credit_view(request):
+    if request.user.user_type not in ['agent', 'super_agent']:
+        return JsonResponse({'status': 'error', 'message': 'Only agents and super agents can remit overdraft credits.'}, status=403)
+    try:
+        result = remit_overdraft_pending_credit(
+            user=request.user,
+            actor=request.user,
+            ip_address=get_client_ip(request),
+        )
+        payload = build_wallet_overdraft_payload(request.user)
+        return JsonResponse(
+            {
+                'status': 'success',
+                'message': (
+                    f"Overdraft remitted successfully. Loan repayment: ₦{result['repaid_amount']}. "
+                    f"Wallet credit: ₦{result['wallet_credit_amount']}."
+                ),
+                **payload,
+            }
+        )
+    except LoanOverdraftError as exc:
+        return JsonResponse({'status': 'error', 'message': str(exc)}, status=400)
 
 
 @login_required
@@ -5710,6 +5807,15 @@ def wallet_transfer(request):
         messages.error(request, "You do not have permission to credit or debit downline wallets. Please contact the administrator.")
         return redirect('betting:wallet')
 
+    if request.user.user_type == 'super_agent' and user_has_outstanding_loan(request.user):
+        CreditLog.objects.create(
+            actor=request.user,
+            action_type='wallet_transfer_denied',
+            amount=Decimal('0.00')
+        )
+        messages.error(request, "Outstanding overdraft must be cleared before wallet transfers are permitted.")
+        return redirect('betting:wallet')
+
     if request.method == 'POST':
         form = WalletTransferForm(sender_user=request.user, data=request.POST) # Pass sender_user explicitly
         if form.is_valid():
@@ -5834,6 +5940,59 @@ def submit_credit_request(request):
              for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f"{field}: {error}")
+    return redirect('betting:wallet')
+
+
+@login_required
+@require_POST
+def submit_overdraft_request_view(request):
+    if request.user.user_type not in ['agent', 'super_agent']:
+        messages.error(request, "Only agents and super agents can request overdraft.")
+        return redirect('betting:wallet')
+
+    form = OverdraftRequestForm(request.POST, user=request.user)
+    if not form.is_valid():
+        for field, errors in form.errors.items():
+            for error in errors:
+                messages.error(request, f"{field}: {error}")
+        return redirect('betting:wallet')
+
+    try:
+        submit_overdraft_request(
+            borrower=request.user,
+            requested_amount=form.cleaned_data['requested_amount'],
+            reason=form.cleaned_data.get('reason') or '',
+            ip_address=get_client_ip(request),
+        )
+        messages.success(request, "Overdraft request submitted successfully.")
+    except LoanOverdraftError as exc:
+        messages.error(request, str(exc))
+    return redirect('betting:wallet')
+
+
+@login_required
+@require_POST
+def process_overdraft_request_view(request, loan_id):
+    action = (request.POST.get('action') or '').strip().lower()
+    reason = (request.POST.get('reason') or '').strip()
+    redirect_to = (request.POST.get('return_to') or '').strip()
+
+    try:
+        if action == 'approve':
+            approve_loan_request(actor=request.user, loan_id=loan_id, ip_address=get_client_ip(request))
+            messages.success(request, "Overdraft request approved successfully.")
+        elif action == 'reject':
+            reject_loan_request(actor=request.user, loan_id=loan_id, reason=reason, ip_address=get_client_ip(request))
+            messages.success(request, "Overdraft request rejected.")
+        else:
+            messages.error(request, "Invalid overdraft request action.")
+    except LoanOverdraftError as exc:
+        messages.error(request, str(exc))
+
+    if redirect_to:
+        return redirect(redirect_to)
+    if request.user.user_type == 'super_agent':
+        return redirect('betting:super_agent_dashboard')
     return redirect('betting:wallet')
 
 @login_required
@@ -6703,6 +6862,65 @@ def agent_dashboard(request):
         dormant_agents_page = Paginator(dormant_dataset['rows'], 25).get_page(request.GET.get('dormant_page') or 1)
         dormant_agents_rows = _attach_dormant_agent_drilldown(list(dormant_agents_page.object_list))
 
+    dashboard_loan = None
+    if user.user_type in ['agent', 'super_agent']:
+        dashboard_loan = get_user_outstanding_loans(user).first()
+
+    overdraft_wallet_card = None
+    if user.user_type == 'super_agent':
+        try:
+            overdraft_wallet_card = get_or_create_overdraft_wallet(user)
+        except LoanOverdraftError:
+            overdraft_wallet_card = None
+
+    pending_overdraft_requests = []
+    if user.user_type == 'super_agent':
+        pending_overdraft_requests = list(
+            Loan.objects.filter(
+                lender=user,
+                approval_level='super_agent',
+                status='pending',
+            ).select_related('borrower').order_by('created_at')[:10]
+        )
+
+    qualified_overdraft_agent_rows = []
+    if user.user_type == 'super_agent':
+        loan_settings = get_loan_settings()
+        direct_agent_qs = User.objects.filter(
+            user_type='agent',
+            super_agent=user,
+        ).order_by('first_name', 'last_name', 'username', 'email')
+        for agent_row in direct_agent_qs:
+            snapshot = build_qualification_snapshot(agent_row)
+            meets_core_requirements = (
+                snapshot.ticket_count >= loan_settings['min_ticket_count']
+                and snapshot.deposit_total >= loan_settings['min_deposit_amount']
+            )
+            has_pending_request = Loan.objects.filter(borrower=agent_row, status='pending').exists()
+            outstanding_amount = get_user_outstanding_loan_amount(agent_row)
+            qualified_overdraft_agent_rows.append(
+                SimpleNamespace(
+                    agent=agent_row,
+                    snapshot=snapshot,
+                    is_qualified=meets_core_requirements,
+                    amount_qualified=(snapshot.qualified_amount if meets_core_requirements else Decimal('0.00')),
+                    outstanding_overdraft_amount=outstanding_amount,
+                    has_pending_request=has_pending_request,
+                    has_outstanding_loan=outstanding_amount > Decimal('0.00'),
+                    request_window_open=(timezone.localtime(timezone.now()) >= snapshot.request_open_at),
+                    can_submit_now=(snapshot.can_submit_now and not has_pending_request and outstanding_amount <= Decimal('0.00')),
+                )
+            )
+        qualified_overdraft_agent_rows.sort(
+            key=lambda row: (
+                row.is_qualified,
+                row.amount_qualified,
+                row.snapshot.deposit_total,
+                row.snapshot.ticket_count,
+            ),
+            reverse=True,
+        )
+
     context = {
         'user': user,
         'downline_users': downline_users_qs, # Pass the QuerySet
@@ -6750,6 +6968,11 @@ def agent_dashboard(request):
         'dormant_super_agent': dormant_super_agent,
         'dormant_status': dormant_status,
         'dormant_super_agent_choices': list(direct_super_agents_qs),
+        'dashboard_loan': dashboard_loan,
+        'outstanding_overdraft_amount': get_user_outstanding_loan_amount(user) if user.user_type in ['agent', 'super_agent'] else Decimal('0.00'),
+        'overdraft_wallet_card': overdraft_wallet_card,
+        'pending_overdraft_requests': pending_overdraft_requests,
+        'qualified_overdraft_agent_rows': qualified_overdraft_agent_rows,
     }
     return render(request, 'betting/agent_dashboard.html', context)
 
@@ -8429,6 +8652,320 @@ def admin_reconciliation_dashboard(request):
     return render(request, "betting/admin/reconciliation_dashboard.html", context)
 
 
+def admin_reconciled_credits_dashboard(request):
+    gateway = (request.GET.get("gateway") or "all").strip().lower()
+    if gateway not in {"all", "paystack", "kora", "monnify"}:
+        gateway = "all"
+
+    q = (request.GET.get("q") or "").strip()
+    start_date_str = (request.GET.get("start_date") or "").strip()
+    end_date_str = (request.GET.get("end_date") or "").strip()
+
+    def _parse_input_date(value):
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    start_date = _parse_input_date(start_date_str)
+    end_date = _parse_input_date(end_date_str)
+    start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time())) if start_date else None
+    end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time())) if end_date else None
+
+    credits_qs = (
+        WalletLedgerEntry.objects.filter(direction="credit")
+        .filter(Q(metadata__source="reconcile") | Q(reason__icontains="(reconcile)"))
+        .select_related("user", "transaction", "wallet")
+        .order_by("-created_at")
+    )
+
+    if gateway != "all":
+        credits_qs = credits_qs.filter(
+            Q(metadata__gateway=gateway) |
+            Q(reason__icontains=f"Deposit via {gateway}")
+        )
+
+    if q:
+        credits_qs = credits_qs.filter(
+            Q(user__email__icontains=q) |
+            Q(user__username__icontains=q) |
+            Q(reference__icontains=q) |
+            Q(reason__icontains=q) |
+            Q(transaction__external_reference__icontains=q) |
+            Q(transaction__paystack_reference__icontains=q)
+        )
+
+    if start_dt:
+        credits_qs = credits_qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        credits_qs = credits_qs.filter(created_at__lte=end_dt)
+
+    summary = credits_qs.aggregate(
+        total_count=Count("id"),
+        total_amount=Coalesce(Sum("amount"), Decimal("0.00")),
+    )
+    credits_page = Paginator(credits_qs, 50).get_page(request.GET.get("page") or 1)
+
+    context = {
+        "gateway": gateway,
+        "q": q,
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "summary": summary,
+        "credits_page": credits_page,
+    }
+    return render(request, "betting/admin/reconciled_credits_dashboard.html", context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_loan_overdraft_center(request):
+    tab = (request.GET.get("tab") or "pending").strip().lower()
+    if tab not in {"pending", "approved", "rejected", "outstanding", "overdue", "locked", "settled"}:
+        tab = "pending"
+
+    export_format = (request.GET.get("format") or "").strip().lower()
+    q = (request.GET.get("q") or "").strip()
+    borrower_role = (request.GET.get("borrower_role") or "").strip().lower()
+    loan_type = (request.GET.get("loan_type") or "").strip().lower()
+    lock_state = (request.GET.get("lock_state") or "").strip().lower()
+    page_number = request.GET.get("page") or 1
+
+    redirect_params = {"tab": tab}
+    if q:
+        redirect_params["q"] = q
+    if borrower_role:
+        redirect_params["borrower_role"] = borrower_role
+    if loan_type:
+        redirect_params["loan_type"] = loan_type
+    if lock_state:
+        redirect_params["lock_state"] = lock_state
+    if page_number:
+        redirect_params["page"] = page_number
+
+    if request.method == "POST":
+        if "loan_decision_submit" in request.POST:
+            decision_form = LoanCenterDecisionForm(request.POST)
+            funding_form = AdminOverdraftWalletFundingForm()
+            if decision_form.is_valid():
+                loan_id = decision_form.cleaned_data["loan_id"]
+                action = decision_form.cleaned_data["action"]
+                reason = decision_form.cleaned_data.get("reason") or ""
+                try:
+                    if action == "approve":
+                        approve_loan_request(actor=request.user, loan_id=loan_id, ip_address=get_client_ip(request))
+                        log_admin_activity(
+                            request,
+                            f"Approved overdraft request #{loan_id} from loan center.",
+                            action_type="LOAN_APPROVED",
+                            affected_object=f"loan:{loan_id}",
+                        )
+                        messages.success(request, f"Loan request #{loan_id} approved successfully.")
+                    else:
+                        reject_loan_request(
+                            actor=request.user,
+                            loan_id=loan_id,
+                            reason=reason,
+                            ip_address=get_client_ip(request),
+                        )
+                        log_admin_activity(
+                            request,
+                            f"Rejected overdraft request #{loan_id} from loan center. Reason: {reason}",
+                            action_type="LOAN_REJECTED",
+                            affected_object=f"loan:{loan_id}",
+                        )
+                        messages.success(request, f"Loan request #{loan_id} rejected.")
+                except LoanOverdraftError as exc:
+                    messages.error(request, str(exc))
+            else:
+                for error in decision_form.non_field_errors():
+                    messages.error(request, error)
+        elif "fund_wallet_submit" in request.POST:
+            funding_form = AdminOverdraftWalletFundingForm(request.POST)
+            decision_form = LoanCenterDecisionForm()
+            if funding_form.is_valid():
+                super_agent = funding_form.cleaned_data["super_agent"]
+                amount = funding_form.cleaned_data["amount"]
+                reason = funding_form.cleaned_data.get("reason") or ""
+                try:
+                    wallet, before, after = fund_overdraft_wallet(
+                        super_agent=super_agent,
+                        amount=amount,
+                        actor=request.user,
+                        reason=reason,
+                        ip_address=get_client_ip(request),
+                    )
+                    log_admin_activity(
+                        request,
+                        f"Funded overdraft wallet for {super_agent.username or super_agent.email} with ₦{amount}. "
+                        f"Balance moved from ₦{before} to ₦{after}.",
+                        action_type="OVERDRAFT_WALLET_FUNDED",
+                        affected_object=f"overdraft_wallet:{wallet.id}",
+                    )
+                    messages.success(
+                        request,
+                        f"Overdraft wallet for {super_agent.username or super_agent.email} funded with ₦{amount}. "
+                        f"New balance: ₦{after}."
+                    )
+                except LoanOverdraftError as exc:
+                    messages.error(request, str(exc))
+            else:
+                for field_errors in funding_form.errors.values():
+                    for error in field_errors:
+                        messages.error(request, error)
+        elif "run_due_enforcement" in request.POST:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+            processed_loans = enforce_due_loans()
+            log_admin_activity(
+                request,
+                f"Executed overdue loan enforcement from loan center. Processed {processed_loans} loan(s).",
+                action_type="LOAN_ENFORCEMENT_RUN",
+                affected_object=f"processed:{processed_loans}",
+            )
+            messages.success(request, f"Due enforcement completed. Processed {processed_loans} overdue loan(s).")
+        else:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+        return redirect(f"{reverse('betting_admin:admin_loan_overdraft_center')}?{urlencode(redirect_params)}")
+
+    decision_form = LoanCenterDecisionForm()
+    funding_form = AdminOverdraftWalletFundingForm()
+
+    loans = Loan.objects.select_related(
+        "borrower",
+        "lender",
+        "approved_by",
+        "rejected_by",
+        "overdraft_wallet",
+    ).order_by("-created_at")
+    now = timezone.now()
+
+    if tab == "pending":
+        loans = loans.filter(status="pending")
+    elif tab == "approved":
+        loans = loans.filter(approved_at__isnull=False).exclude(status="rejected")
+    elif tab == "rejected":
+        loans = loans.filter(status="rejected")
+    elif tab == "outstanding":
+        loans = loans.filter(status__in=["active", "overdue", "defaulted"], outstanding_balance__gt=Decimal("0.00"))
+    elif tab == "overdue":
+        loans = loans.filter(status__in=["active", "overdue", "defaulted"], outstanding_balance__gt=Decimal("0.00"), due_date__lt=now)
+    elif tab == "locked":
+        loans = loans.filter(account_locked_due_to_default=True)
+    elif tab == "settled":
+        loans = loans.filter(status="settled")
+
+    if q:
+        loans = loans.filter(
+            Q(borrower__email__icontains=q)
+            | Q(borrower__username__icontains=q)
+            | Q(lender__email__icontains=q)
+            | Q(lender__username__icontains=q)
+            | Q(request_reason__icontains=q)
+            | Q(rejection_reason__icontains=q)
+        )
+
+    if borrower_role:
+        loans = loans.filter(borrower__user_type=borrower_role)
+
+    if loan_type:
+        loans = loans.filter(loan_type=loan_type)
+
+    if lock_state == "locked":
+        loans = loans.filter(borrower__is_locked=True)
+    elif lock_state == "unlocked":
+        loans = loans.filter(borrower__is_locked=False)
+
+    loan_ids_for_summary = list(loans.values_list("id", flat=True))
+    summary_base = Loan.objects.filter(id__in=loan_ids_for_summary)
+    summary = summary_base.aggregate(
+        total_requested=Coalesce(Sum("requested_amount"), Decimal("0.00")),
+        total_approved=Coalesce(Sum("amount"), Decimal("0.00")),
+        total_outstanding=Coalesce(Sum("outstanding_balance"), Decimal("0.00")),
+    )
+    summary["total_records"] = len(loan_ids_for_summary)
+    summary["overdue_balance"] = (
+        summary_base.filter(outstanding_balance__gt=Decimal("0.00"), due_date__lt=now).aggregate(
+            total=Coalesce(Sum("outstanding_balance"), Decimal("0.00"))
+        )["total"]
+        or Decimal("0.00")
+    )
+    summary["locked_count"] = User.objects.filter(
+        id__in=summary_base.values_list("borrower_id", flat=True),
+        is_locked=True,
+    ).count()
+
+    if export_format in {"csv", "xlsx", "pdf"}:
+        rows = []
+        for loan in loans:
+            days_overdue = 0
+            if loan.due_date and loan.due_date < now and loan.outstanding_balance > 0:
+                days_overdue = (timezone.localtime(now).date() - timezone.localtime(loan.due_date).date()).days
+            rows.append(
+                {
+                    "loan_id": loan.id,
+                    "agent": loan.borrower.username or loan.borrower.email or "",
+                    "super_agent": loan.lender.username or loan.lender.email or "",
+                    "role": loan.borrower.get_user_type_display(),
+                    "ticket_count": loan.qualification_ticket_count,
+                    "deposit_volume": loan.qualification_deposit_volume,
+                    "qualified_amount": loan.qualified_amount,
+                    "requested_amount": loan.requested_amount,
+                    "approved_amount": loan.amount,
+                    "outstanding_balance": loan.outstanding_balance,
+                    "due_date": timezone.localtime(loan.due_date).strftime("%Y-%m-%d %H:%M:%S") if loan.due_date else "",
+                    "status": loan.get_status_display(),
+                    "withdrawal_disabled": "Yes" if loan.outstanding_balance > 0 else "No",
+                    "account_locked": "Yes" if getattr(loan.borrower, "is_locked", False) else "No",
+                    "days_overdue": days_overdue,
+                }
+            )
+        return _export_simple_rows(rows=rows, title=f"loan_overdraft_{tab}", fmt=export_format)
+
+    loans_page = Paginator(loans, 50).get_page(request.GET.get("page") or 1)
+    tab_counts = {
+        "pending": Loan.objects.filter(status="pending").count(),
+        "approved": Loan.objects.filter(approved_at__isnull=False).exclude(status="rejected").count(),
+        "rejected": Loan.objects.filter(status="rejected").count(),
+        "outstanding": Loan.objects.filter(status__in=["active", "overdue", "defaulted"], outstanding_balance__gt=Decimal("0.00")).count(),
+        "overdue": Loan.objects.filter(status__in=["active", "overdue", "defaulted"], outstanding_balance__gt=Decimal("0.00"), due_date__lt=now).count(),
+        "locked": Loan.objects.filter(account_locked_due_to_default=True).count(),
+        "settled": Loan.objects.filter(status="settled").count(),
+    }
+
+    overdraft_wallets = list(
+        OverdraftWallet.objects.select_related("super_agent").order_by("-updated_at")[:10]
+    )
+
+    context = {
+        "tab": tab,
+        "q": q,
+        "borrower_role": borrower_role,
+        "loan_type": loan_type,
+        "lock_state": lock_state,
+        "tab_counts": tab_counts,
+        "loans_page": loans_page,
+        "now": now,
+        "decision_form": decision_form,
+        "funding_form": funding_form,
+        "overdraft_wallets": overdraft_wallets,
+        "summary": summary,
+        "borrower_role_choices": [
+            ("agent", "Agent"),
+            ("super_agent", "Super Agent"),
+        ],
+        "loan_type_choices": [
+            ("agent_overdraft", "Agent Overdraft"),
+            ("super_agent_overdraft", "Super Agent Overdraft"),
+            ("manual_overdraft", "Manual Overdraft"),
+        ],
+    }
+    return render(request, "betting/admin/loan_overdraft_center.html", context)
+
+
 @login_required
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 def admin_celery_health(request):
@@ -9877,8 +10414,10 @@ def account_user_dashboard(request):
                                     reason=tx_account.description,
                                     metadata={"target_user_id": target_user.id, "source": "account_user_dashboard"},
                                 )
-                                target_wallet.apply_delta(
+                                credit_result = apply_repayment_and_credit_wallet(
+                                    user=target_user,
                                     amount=amount,
+                                    source='account_user_credit',
                                     actor=request.user,
                                     transaction_obj=tx_target,
                                     reference=str(tx_account.id),
@@ -9912,6 +10451,12 @@ def account_user_dashboard(request):
                             )
 
                             messages.success(request, f"Successfully {action}ed {amount} for {target_user.email}.")
+                            if action == 'credit':
+                                messages.info(
+                                    request,
+                                    f"Wallet credit: ₦{credit_result.get('wallet_credit_amount') or Decimal('0.00')}. "
+                                    f"Reserved new credit: ₦{credit_result.get('pending_credit_amount') or Decimal('0.00')}."
+                                )
                             found_user = None 
                             
                     except InvalidOperation as e:
@@ -14000,9 +14545,10 @@ def finance_dashboard(request):
                 messages.info(request, 'Deposit already completed.')
                 return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
             with db_transaction.atomic():
-                w = Wallet.objects.select_for_update().get(user=tx.user)
-                w.apply_delta(
+                repayment_result = apply_repayment_and_credit_wallet(
+                    user=tx.user,
                     amount=tx.amount,
+                    source="gateway_deposit",
                     actor=request.user,
                     transaction_obj=tx,
                     reference=(tx.external_reference or tx.paystack_reference or str(tx.id)),
@@ -14045,7 +14591,14 @@ def finance_dashboard(request):
                     )
                     JournalLine.objects.create(entry=je, account=cash, debit=tx.amount, credit=Decimal('0.00'), related_user=tx.user)
                     JournalLine.objects.create(entry=je, account=liab, debit=Decimal('0.00'), credit=tx.amount, related_user=tx.user)
-            messages.success(request, 'Deposit completed and wallet credited.')
+            repaid_amount = repayment_result.get("repaid_amount") or Decimal("0.00")
+            wallet_credit_amount = repayment_result.get("wallet_credit_amount") or Decimal("0.00")
+            pending_credit_amount = repayment_result.get("pending_credit_amount") or Decimal("0.00")
+            messages.success(
+                request,
+                f"Deposit completed. Loan repayment: ₦{repaid_amount}. "
+                f"Wallet credit: ₦{wallet_credit_amount}. Reserved new credit: ₦{pending_credit_amount}."
+            )
             return redirect(f"{reverse('betting:finance_dashboard')}?tab=reconciliation")
 
         if request.POST.get('reverse_tx') == '1':
@@ -16756,11 +17309,33 @@ def admin_manual_wallet_manager(request):
                     action = action_form.cleaned_data['action']
                     amount = action_form.cleaned_data['amount']
                     description = action_form.cleaned_data['description']
+                    is_overdraft_loan = action_form.cleaned_data.get('is_overdraft_loan')
                     
                     try:
                         with db_transaction.atomic():
                             target_wallet = Wallet.objects.select_for_update().get(user=target_user)
-                            
+
+                            if action == 'credit' and is_overdraft_loan:
+                                loan = create_manual_overdraft(
+                                    actor=request.user,
+                                    borrower=target_user,
+                                    amount=amount,
+                                    reason=description,
+                                    ip_address=get_client_ip(request),
+                                )
+                                log_admin_activity(
+                                    request,
+                                    f"Manual overdraft assignment of {amount} for {target_user.email}. Reason: {description}",
+                                    action_type="MANUAL_OVERDRAFT",
+                                    affected_object=target_user.email,
+                                )
+                                messages.success(
+                                    request,
+                                    f"Manual overdraft of ₦{amount} assigned to {target_user.email}. "
+                                    f"Loan #{loan.id} is now active and the wallet balance has been increased."
+                                )
+                                return redirect('betting_admin:admin_manual_wallet_manager')
+
                             if action == 'credit':
                                 tx_type = 'manual_credit'
                             elif action == 'debit':
@@ -16777,14 +17352,26 @@ def admin_manual_wallet_manager(request):
                                 is_successful=True,
                                 description=f"Admin Manual {action.title()}: {description}"
                             )
-                            target_wallet.apply_delta(
-                                amount=(amount if action == "credit" else -amount),
-                                actor=request.user,
-                                transaction_obj=tx,
-                                reference=str(tx.id),
-                                reason=tx.description,
-                                metadata={"source": "admin_manual_wallet_manager", "action": action},
-                            )
+                            if action == "credit":
+                                repayment_result = apply_repayment_and_credit_wallet(
+                                    user=target_user,
+                                    amount=amount,
+                                    source="admin_credit",
+                                    actor=request.user,
+                                    transaction_obj=tx,
+                                    reference=str(tx.id),
+                                    reason=tx.description,
+                                    metadata={"source": "admin_manual_wallet_manager", "action": action},
+                                )
+                            else:
+                                target_wallet.apply_delta(
+                                    amount=-amount,
+                                    actor=request.user,
+                                    transaction_obj=tx,
+                                    reference=str(tx.id),
+                                    reason=tx.description,
+                                    metadata={"source": "admin_manual_wallet_manager", "action": action},
+                                )
                             
                             log_admin_activity(
                                 request, 
@@ -16792,9 +17379,22 @@ def admin_manual_wallet_manager(request):
                                 action_type=f"MANUAL_{action.upper()}",
                                 affected_object=target_user.email
                             )
-                            messages.success(request, f"Successfully {action}ed ₦{amount} for {target_user.email}.")
+                            if action == "credit":
+                                repaid_amount = repayment_result.get("repaid_amount") or Decimal("0.00")
+                                wallet_credit_amount = repayment_result.get("wallet_credit_amount") or Decimal("0.00")
+                                pending_credit_amount = repayment_result.get("pending_credit_amount") or Decimal("0.00")
+                                messages.success(
+                                    request,
+                                    f"Successfully credited ₦{amount} for {target_user.email}. "
+                                    f"Loan repayment: ₦{repaid_amount}. Wallet credit: ₦{wallet_credit_amount}. "
+                                    f"Reserved new credit: ₦{pending_credit_amount}."
+                                )
+                            else:
+                                messages.success(request, f"Successfully debited ₦{amount} for {target_user.email}.")
                             return redirect('betting_admin:admin_manual_wallet_manager')
                             
+                    except LoanOverdraftError as e:
+                        messages.error(request, str(e))
                     except InvalidOperation as e:
                         messages.error(request, str(e))
                     except Exception as e:

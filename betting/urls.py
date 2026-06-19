@@ -45,6 +45,9 @@ urlpatterns = [
     path('credit-request/submit/', views.submit_credit_request, name='submit_credit_request'),
     path('credit-request/manage/', views.manage_credit_requests, name='manage_credit_requests'),
     path('credit-request/approve/<int:request_id>/', views.approve_credit_request, name='approve_credit_request'),
+    path('overdraft/request/', views.submit_overdraft_request_view, name='submit_overdraft_request'),
+    path('overdraft/<int:loan_id>/process/', views.process_overdraft_request_view, name='process_overdraft_request'),
+    path('overdraft/remit/', views.remit_overdraft_pending_credit_view, name='remit_overdraft_pending_credit'),
     path('loan/settle/<int:loan_id>/', views.settle_loan, name='settle_loan'),
 
     # User Profile & Dashboard
@@ -143,6 +146,7 @@ urlpatterns = [
     path('api/get-ticket-details/', views.get_ticket_details_json, name='get_ticket_details_json'),
     path('api/log-ticket-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
     path('api/user-wallet/', views.api_user_wallet, name='api_user_wallet'),
+    path('api/wallet-overdraft-status/', views.api_wallet_overdraft_status, name='api_wallet_overdraft_status'),
     path('api/betting-limits/', views.api_betting_limits, name='api_betting_limits'),
     path('api/downline-wallet-balance/', views.api_downline_wallet_balance, name='api_downline_wallet_balance'),
     path('api/deposit/initiate/', views.api_initiate_deposit, name='api_initiate_deposit'),

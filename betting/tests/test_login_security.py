@@ -102,3 +102,13 @@ class LoginSecurityTest(TestCase):
             'password': 'any'
         })
         self.assertTrue(LoginAttempt.objects.filter(username_attempted='ghost@example.com', status='failed').exists())
+
+    def test_login_page_is_not_cached_and_sets_csrf_cookie(self):
+        response = self.client.get(self.login_url)
+        cache_control = response.headers.get('Cache-Control', '')
+
+        self.assertIn('max-age=0', cache_control)
+        self.assertIn('no-cache', cache_control)
+        self.assertIn('no-store', cache_control)
+        self.assertIn('must-revalidate', cache_control)
+        self.assertIn('csrftoken', response.cookies)

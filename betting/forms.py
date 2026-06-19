@@ -273,6 +273,10 @@ class LoginForm(AuthenticationForm):
         
         # 1. Check if Account is Locked
         if user and user.is_locked:
+            lock_message = (
+                (user.lock_reason or "").strip()
+                or "Your account has been locked due to multiple failed login attempts. Please contact support or administrator."
+            )
             LoginAttempt.objects.create(
                 user=user,
                 username_attempted=identifier,
@@ -280,9 +284,7 @@ class LoginForm(AuthenticationForm):
                 user_agent=user_agent,
                 status='locked'
             )
-            raise forms.ValidationError(
-                "Your account has been locked due to multiple failed login attempts. Please contact support or administrator."
-            )
+            raise forms.ValidationError(lock_message)
 
         # 2. Attempt Authentication
         try:
@@ -1559,6 +1561,99 @@ class LoanSettlementForm(forms.Form):
         super().__init__(*args, **kwargs)
 
 
+class OverdraftRequestForm(forms.Form):
+    requested_amount = forms.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+        widget=forms.NumberInput(attrs={"class": "form-control rounded-pill", "placeholder": "Requested amount"}),
+    )
+    reason = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control rounded-3",
+                "rows": 3,
+                "placeholder": "Optional reason / note for this overdraft request",
+            }
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        user = self.user
+        amount = cleaned_data.get("requested_amount")
+        if not user:
+            raise ValidationError("User context is required.")
+        from .services.loan_overdraft import build_qualification_snapshot, user_has_outstanding_loan
+
+        if user.user_type not in ["agent", "super_agent"]:
+            raise ValidationError("Only agents and super agents can request overdraft.")
+        if user_has_outstanding_loan(user):
+            raise ValidationError("Outstanding overdraft must be cleared before a new request can be submitted.")
+        snapshot = build_qualification_snapshot(user)
+        self.snapshot = snapshot
+        if not snapshot.can_submit_now:
+            raise ValidationError(snapshot.blockers[0])
+        if amount and amount > snapshot.qualified_amount:
+            raise ValidationError("Requested amount cannot exceed the qualified loan amount.")
+        return cleaned_data
+
+
+class LoanCenterDecisionForm(forms.Form):
+    action = forms.ChoiceField(
+        choices=(("approve", "Approve"), ("reject", "Reject")),
+        widget=forms.HiddenInput(),
+    )
+    loan_id = forms.IntegerField(widget=forms.HiddenInput())
+    reason = forms.CharField(
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control form-control-sm",
+                "placeholder": "Reason for rejection",
+            }
+        ),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        action = (cleaned_data.get("action") or "").strip().lower()
+        reason = (cleaned_data.get("reason") or "").strip()
+        if action not in {"approve", "reject"}:
+            raise ValidationError("Invalid loan action.")
+        if action == "reject" and not reason:
+            raise ValidationError("Reason for rejection is required.")
+        return cleaned_data
+
+
+class AdminOverdraftWalletFundingForm(forms.Form):
+    super_agent = forms.ModelChoiceField(
+        queryset=User.objects.filter(user_type="super_agent", is_active=True).order_by("username", "email"),
+        widget=forms.Select(attrs={"class": "form-select"}),
+        empty_label="Select super agent",
+    )
+    amount = forms.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+        widget=forms.NumberInput(attrs={"class": "form-control", "placeholder": "Funding amount"}),
+    )
+    reason = forms.CharField(
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "placeholder": "Optional funding note",
+            }
+        ),
+    )
+
+
 
 # Aliases for compatibility with betting/admin.py
 UserCreationForm = AdminUserCreationForm 
@@ -1995,12 +2090,17 @@ class AdminManualWalletForm(forms.Form):
     action = forms.ChoiceField(choices=ACTION_CHOICES, widget=forms.RadioSelect(attrs={'class': 'form-check-input'}))
     amount = forms.DecimalField(max_digits=12, decimal_places=2, min_value=0.01, widget=forms.NumberInput(attrs={'class': 'form-control'}))
     description = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}), required=False)
+    is_overdraft_loan = forms.BooleanField(required=False, label="Overdraft / Loan")
 
     def clean(self):
         cleaned_data = super().clean()
         amount = cleaned_data.get('amount')
+        action = cleaned_data.get('action')
+        is_overdraft_loan = cleaned_data.get('is_overdraft_loan')
         if amount and amount <= 0:
             raise ValidationError("Amount must be greater than zero.")
+        if is_overdraft_loan and action != 'credit':
+            raise ValidationError("Overdraft / Loan can only be used with a credit action.")
         return cleaned_data
 
 class FixtureUploadForm(forms.Form):

@@ -66,12 +66,15 @@
                     <div class="fw-semibold">Last Webhook / Reconcile</div>
                     <div class="text-muted small">Per gateway timestamps from the gateway event log</div>
                 </div>
-                <form method="post" class="d-flex gap-2 align-items-center">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="reconcile_now">
-                    <input type="hidden" name="gateway" value="{{ gateway }}">
-                    <button class="btn btn-sm btn-primary rounded-pill" type="submit">Reconcile Now</button>
-                </form>
+                <div class="d-flex gap-2 align-items-center">
+                    <a class="btn btn-sm btn-outline-secondary rounded-pill" href="{% url 'betting_admin:admin_reconciled_credits_dashboard' %}?gateway={{ gateway }}">View Reconciled Credits</a>
+                    <form method="post" class="d-flex gap-2 align-items-center">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reconcile_now">
+                        <input type="hidden" name="gateway" value="{{ gateway }}">
+                        <button class="btn btn-sm btn-primary rounded-pill" type="submit">Reconcile Now</button>
+                    </form>
+                </div>
             </div>
             <div class="table-responsive mt-3">
                 <table class="table table-sm table-striped mb-0">

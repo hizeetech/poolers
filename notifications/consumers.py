@@ -34,3 +34,6 @@ class NotificationsConsumer(AsyncWebsocketConsumer):
 
     async def finance_event(self, event):
         await self.send(text_data=json.dumps({"type": "finance_event", "payload": event.get("payload", {})}))
+
+    async def wallet_event(self, event):
+        await self.send(text_data=json.dumps({"type": "wallet_event", "payload": event.get("payload", {})}))

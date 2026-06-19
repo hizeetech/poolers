@@ -127,6 +127,19 @@ $(document).ready(function() {
                                 <div class="form-text">Provide a reason for this manual adjustment.</div>
                             </div>
 
+                            <div class="form-check form-switch mb-3">
+                                {{ action_form.is_overdraft_loan }}
+                                <label class="form-check-label" for="{{ action_form.is_overdraft_loan.id_for_label }}">
+                                    {{ action_form.is_overdraft_loan.label }}
+                                </label>
+                                <div class="form-text">
+                                    When enabled for a credit, this is recorded as an overdraft/loan instead of a normal wallet funding.
+                                </div>
+                                {% if action_form.is_overdraft_loan.errors %}
+                                <div class="text-danger small mt-1">{{ action_form.is_overdraft_loan.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+
                             <button type="submit" name="perform_action" class="btn btn-success w-100 rounded-pill py-2 fw-bold">
                                 <i class="fas fa-check-circle me-2"></i> Execute Transaction
                             </button>

@@ -66,6 +66,7 @@ from .models import (
     CustomerComplaint, CustomerComplaintNote,
     BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery,
     CRMOpsAuditLog,
+    OverdraftWallet, OverdraftWalletLedgerEntry, LoanRepayment, LoanAuditLog,
 )
 from . import signals
 
@@ -157,6 +158,8 @@ class BettingAdminSite(admin.AdminSite):
             path('reports/ticket/settle-won/<uuid:ticket_id>/', self.admin_view(views.admin_settle_won_ticket_single), name='admin_settle_won_ticket_single'), 
             path('reports/tickets-by-event/', self.admin_view(views.admin_tickets_by_event_report), name='admin_tickets_by_event_report'),
             path('ops/reconciliation/', self.admin_view(views.admin_reconciliation_dashboard), name='admin_reconciliation_dashboard'),
+            path('ops/reconciled-credits/', self.admin_view(views.admin_reconciled_credits_dashboard), name='admin_reconciled_credits_dashboard'),
+            path('ops/loan-overdraft-center/', self.admin_view(views.admin_loan_overdraft_center), name='admin_loan_overdraft_center'),
             path('ops/celery-health/', self.admin_view(views.admin_celery_health), name='admin_celery_health'),
             path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
 
@@ -2478,6 +2481,18 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'fields': ('crm_large_deposit_threshold', 'crm_failed_deposit_repeat_threshold'),
             'description': 'Thresholds used by CRM deposit monitoring and failed deposit flagging.',
         }),
+        ('Loan / Overdraft Settings', {
+            'fields': (
+                'loan_min_ticket_count',
+                'loan_min_deposit_amount',
+                'loan_percentage',
+                'loan_application_day',
+                'loan_application_time',
+                'loan_repayment_day',
+                'loan_repayment_time',
+            ),
+            'description': 'Business rules that control overdraft qualification, opening window, and repayment deadline.',
+        }),
         ('Bet Permission Settings', {
             'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),
             'description': 'Configure which types of bets are allowed based on the number of selections.'
@@ -2740,10 +2755,71 @@ class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
 
 @admin.register(Loan)
 class LoanAdmin(admin.ModelAdmin):
-    list_display = ('borrower', 'lender', 'amount', 'outstanding_balance', 'status', 'created_at', 'due_date')
-    list_filter = ('status', 'created_at')
-    search_fields = ('borrower__email', 'lender__email')
-    readonly_fields = ('created_at',)
+    list_display = (
+        'id',
+        'borrower',
+        'lender',
+        'loan_type',
+        'approval_level',
+        'requested_amount',
+        'amount',
+        'outstanding_balance',
+        'status',
+        'due_date',
+        'approved_by',
+        'created_at',
+    )
+    list_filter = ('status', 'loan_type', 'approval_level', 'manual_assignment', 'account_locked_due_to_default', 'created_at')
+    search_fields = ('borrower__email', 'borrower__username', 'lender__email', 'lender__username', 'rejection_reason', 'request_reason')
+    readonly_fields = (
+        'created_at',
+        'approved_at',
+        'rejected_at',
+        'settled_at',
+        'qualification_ticket_count',
+        'qualification_deposit_volume',
+        'workflow_snapshot',
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'borrower', 'lender', 'approved_by', 'rejected_by', 'overdraft_wallet'
+        )
+
+class OverdraftWalletAdmin(admin.ModelAdmin):
+    list_display = ('super_agent', 'total_funded', 'used_balance', 'current_balance', 'updated_at')
+    search_fields = ('super_agent__email', 'super_agent__username')
+    readonly_fields = ('created_at', 'updated_at', 'used_balance', 'remaining_balance')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('super_agent')
+
+class OverdraftWalletLedgerEntryAdmin(admin.ModelAdmin):
+    list_display = ('wallet', 'super_agent', 'direction', 'amount', 'balance_before', 'balance_after', 'reference', 'created_at')
+    list_filter = ('direction', 'created_at')
+    search_fields = ('super_agent__email', 'super_agent__username', 'reference', 'reason')
+    readonly_fields = [field.name for field in OverdraftWalletLedgerEntry._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+class LoanRepaymentAdmin(admin.ModelAdmin):
+    list_display = ('loan', 'borrower', 'amount', 'source', 'recorded_by', 'created_at')
+    list_filter = ('source', 'created_at')
+    search_fields = ('borrower__email', 'borrower__username', 'loan__id', 'note')
+    readonly_fields = [field.name for field in LoanRepayment._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+class LoanAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('loan', 'borrower', 'performed_by', 'action', 'amount', 'created_at')
+    list_filter = ('action', 'created_at')
+    search_fields = ('borrower__email', 'borrower__username', 'loan__id', 'reason', 'ip_address')
+    readonly_fields = [field.name for field in LoanAuditLog._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
 
 class CreditLogAdmin(admin.ModelAdmin):
     list_display = ('actor', 'target_user', 'action_type', 'amount', 'status', 'timestamp')
@@ -2755,6 +2831,10 @@ class CreditLogAdmin(admin.ModelAdmin):
 betting_admin_site.register(CreditRequest, CreditRequestAdmin)
 betting_admin_site.register(CRMWalletApprovalRequest, CRMWalletApprovalRequestAdmin)
 betting_admin_site.register(Loan, LoanAdmin)
+betting_admin_site.register(OverdraftWallet, OverdraftWalletAdmin)
+betting_admin_site.register(OverdraftWalletLedgerEntry, OverdraftWalletLedgerEntryAdmin)
+betting_admin_site.register(LoanRepayment, LoanRepaymentAdmin)
+betting_admin_site.register(LoanAuditLog, LoanAuditLogAdmin)
 betting_admin_site.register(CreditLog, CreditLogAdmin)
 
 

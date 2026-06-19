@@ -210,6 +210,16 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_reconciled_credits_dashboard' %}active{% endif %}" href="{% url 'betting_admin:admin_reconciled_credits_dashboard' %}">
+                        <i class="fas fa-coins"></i> Reconciled Credits
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_loan_overdraft_center' %}active{% endif %}" href="{% url 'betting_admin:admin_loan_overdraft_center' %}">
+                        <i class="fas fa-hand-holding-usd"></i> Loan / Overdraft Center
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if request.resolver_match.view_name == 'betting_admin:admin_celery_health' %}active{% endif %}" href="{% url 'betting_admin:admin_celery_health' %}">
                         <i class="fas fa-heartbeat"></i> Celery Health
                     </a>

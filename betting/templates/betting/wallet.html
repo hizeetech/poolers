@@ -31,6 +31,39 @@
         backdrop-filter: blur(10px);
     }
 
+    .wallet-section-card {
+        height: 100%;
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        border-radius: 20px;
+        box-shadow: 0 16px 35px rgba(15, 23, 42, 0.08);
+    }
+
+    .wallet-section-card .card-body {
+        padding: 1.5rem;
+    }
+
+    .wallet-section-title {
+        font-size: 1.1rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+
+    .wallet-summary-card {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 248, 255, 0.92));
+    }
+
+    .wallet-loan-card {
+        background: linear-gradient(135deg, rgba(255,193,7,0.12), rgba(220,53,69,0.08));
+        border-color: rgba(255,193,7,0.28);
+    }
+
+    .wallet-grid > [class*="col-"] {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+
     .wallet-title {
         letter-spacing: 0.2px;
     }
@@ -61,27 +94,88 @@
 {% block content %}
 <div class="wallet-page">
 <div class="container py-5 position-relative">
-    <div class="row justify-content-center">
-        <div class="col-md-10 col-lg-9">
-            <div class="card wallet-card shadow-lg border-0 rounded-4 mb-4">
-                <div class="card-body p-4 p-md-5">
-                    <h2 class="card-title text-center mb-4 fw-bold text-dark wallet-title">My Wallet</h2>
+    <div class="text-center mb-4">
+        <h2 class="fw-bold text-dark wallet-title mb-0">My Wallet</h2>
+    </div>
 
-                    <div class="text-center mb-4 wallet-balance">
+    <div class="row g-4 wallet-grid">
+        <div class="col-lg-6">
+            <div class="card wallet-card wallet-section-card wallet-summary-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-dark">Wallet Overview</div>
+                    <div class="text-center wallet-balance mb-0">
                         <p class="lead text-muted mb-1">Current Balance</p>
                         <h3 class="fw-bold text-success fs-1 mb-0" id="wallet-balance-display" data-wallet-balance="{{ wallet.balance }}">₦{{ wallet.balance|floatformat:2 }}</h3>
                     </div>
+                </div>
+            </div>
 
-                    {# Deposit Section #}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-primary">Deposit Funds</h4>
-                    <form id="depositForm" action="{% url 'betting:initiate_deposit' %}" method="post" class="mb-4">
+            {% if request.user.user_type == 'agent' or request.user.user_type == 'super_agent' %}
+            <div class="card wallet-card wallet-section-card wallet-loan-card border-0">
+                <div class="card-body">
+                    <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+                        <div>
+                            <div class="wallet-section-title text-dark">Loan / Overdraft</div>
+                            <div class="text-muted small">Current Outstanding Overdraft</div>
+                            <div class="fs-3 fw-bold text-danger" id="loanOutstandingAmount">₦{{ outstanding_overdraft_amount|floatformat:2 }}</div>
+                            <div class="text-muted small mt-3">New Credit</div>
+                            <div class="d-flex flex-column flex-sm-row gap-2 mt-2">
+                                <button type="button" class="btn btn-outline-primary rounded-pill" id="newCreditDisplayBtn" disabled>
+                                    New Credit: ₦<span id="loanPendingCreditAmount">{{ pending_remittance_credit|floatformat:2 }}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn btn-danger rounded-pill d-flex align-items-center justify-content-center gap-2"
+                                    id="remitOverdraftBtn"
+                                    {% if not primary_outstanding_loan or pending_remittance_credit <= 0 %}disabled{% endif %}
+                                >
+                                    <span id="remitOverdraftBtnText">Remit Overdraft</span>
+                                    <span id="remitOverdraftBtnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="text-md-end">
+                            <div class="text-muted small">You Owe The Company</div>
+                            <div class="fw-semibold mb-2" id="loanOweCompanyAmount">₦{{ outstanding_overdraft_amount|floatformat:2 }}</div>
+                            <div class="text-muted small">Repayment Due Date</div>
+                            <div class="fw-semibold mb-2" id="loanDueDateDisplay">
+                                {% if primary_outstanding_loan and primary_outstanding_loan.due_date %}
+                                    {{ primary_outstanding_loan.due_date|date:"l g:i A T" }}
+                                {% elif qualification_snapshot %}
+                                    {{ qualification_snapshot.due_at|date:"l g:i A T" }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </div>
+                            <div class="text-muted small">Repayment Status</div>
+                            <div id="loanRepaymentStatusWrap">
+                                {% if primary_outstanding_loan %}
+                                    {% if primary_outstanding_loan.status == 'overdue' or primary_outstanding_loan.status == 'defaulted' %}
+                                    <span class="badge bg-danger" id="loanRepaymentStatusBadge">Overdue</span>
+                                    {% else %}
+                                    <span class="badge bg-warning text-dark" id="loanRepaymentStatusBadge">Outstanding</span>
+                                    {% endif %}
+                                {% elif pending_loan_requests %}
+                                    <span class="badge bg-info text-dark" id="loanRepaymentStatusBadge">Pending Approval</span>
+                                {% else %}
+                                    <span class="badge bg-success" id="loanRepaymentStatusBadge">Cleared</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-primary">Deposit Funds</div>
+                    <form id="depositForm" action="{% url 'betting:initiate_deposit' %}" method="post" class="mb-0">
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="id_amount_deposit" class="form-label">Amount (₦)</label>
                             <input type="number" name="amount" id="id_amount_deposit" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 5000" min="100" required>
                         </div>
-                        
                         <div class="row g-2 mb-3">
                             <div class="col-md-4">
                                 <button type="submit" name="gateway" value="paystack" id="paystack-button" class="btn btn-primary rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
@@ -99,151 +193,372 @@
                                 </button>
                             </div>
                         </div>
-                        
                         <input type="hidden" name="gateway_hidden" id="gateway_hidden" value="paystack">
                     </form>
-                    <p class="text-center text-muted small">Choose your preferred payment gateway</p>
+                    <p class="text-center text-muted small mb-0 mt-3">Choose your preferred payment gateway</p>
+                </div>
+            </div>
 
-
-                    {# Withdrawal Section - Restricted to Agents #}
-                    {% if can_withdraw_from_wallet %}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-danger">Withdraw Funds</h4>
-                    <div class="rounded-4 p-3 mb-3" style="background:#fff5f5;border:1px solid rgba(220,53,69,0.18);">
-                        <div class="d-flex justify-content-between align-items-center small">
-                            <span class="text-muted">Available Balance</span>
-                            <span class="fw-bold" id="withdrawAvailableBalance">—</span>
+            {% if overdraft_request_form and qualification_snapshot %}
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-warning">Request Credit / Loan</div>
+                    <div class="rounded-4 p-3 mb-3" style="background:#fffdf3;border:1px solid rgba(255,193,7,0.25);">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <div class="small text-muted">Ticket Count Since Tuesday</div>
+                                <div class="fw-bold" id="qualificationTicketCount">{{ qualification_snapshot.ticket_count }}</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="small text-muted">Qualified Deposit Volume</div>
+                                <div class="fw-bold" id="qualificationDepositTotal">₦{{ qualification_snapshot.deposit_total|floatformat:2 }}</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="small text-muted">Qualified Loan Amount</div>
+                                <div class="fw-bold text-success" id="qualificationQualifiedAmount">₦{{ qualification_snapshot.qualified_amount|floatformat:2 }}</div>
+                            </div>
                         </div>
-                        <div class="d-flex justify-content-between align-items-center small mt-1">
-                            <span class="text-muted">Operating Balance Reserved</span>
-                            <span class="fw-bold" id="withdrawReservedBalance">—</span>
+                        <div class="small text-muted mt-3">
+                            Request window opens {{ qualification_snapshot.request_open_at|date:"l g:i A T" }}. Repayment is due {{ qualification_snapshot.due_at|date:"l g:i A T" }}.
                         </div>
-                        <div class="d-flex justify-content-between align-items-center small mt-1">
-                            <span class="text-muted">Withdrawable Amount</span>
-                            <span class="fw-bold" id="withdrawWithdrawableAmount">—</span>
+                        {% if qualification_snapshot.blockers %}
+                        <div class="mt-3">
+                            {% for blocker in qualification_snapshot.blockers %}
+                            <div class="small text-danger">{{ blocker }}</div>
+                            {% endfor %}
                         </div>
-                        <div class="text-danger small mt-2 d-none" id="withdrawDisabledNotice">
-                            Withdrawals are unavailable because your wallet must retain a minimum operating balance of ₦5,000.
-                        </div>
+                        {% endif %}
                     </div>
-                    <form id="withdrawForm" action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-4">
+                    <form action="{% url 'betting:submit_overdraft_request' %}" method="post" class="mb-0">
                         {% csrf_token %}
+                        {% for field in overdraft_request_form %}
                         <div class="mb-3">
-                            <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
-                            <input type="number" name="amount" id="id_amount_withdraw" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 2000" min="100" required>
-                            <div class="text-danger small mt-1 d-none" id="withdrawAmountError"></div>
+                            <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.errors %}
+                            <div class="text-danger small">{{ field.errors|striptags }}</div>
+                            {% endif %}
                         </div>
-                        <div class="mb-3">
-                            <label for="id_bank_name" class="form-label">Bank Name</label>
-                            <input type="text" name="bank_name" id="id_bank_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Zenith Bank" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="id_account_name" class="form-label">Account Name</label>
-                            <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.withdrawal_account_name }}" readonly required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="id_account_number" class="form-label">Account Number</label>
-                            <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
-                        </div>
-                        {% if request.user.withdrawal_locked %}
-                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
-                            <div class="text-danger small mt-2 text-center">
-                                Withdrawal access has been disabled.
-                                {% if withdrawal_lock_expires_at %}
-                                    Retry after {{ withdrawal_lock_expires_at|date:"M d, Y H:i" }} or contact administrator.
-                                {% else %}
-                                    Retry after 24 hours or contact administrator.
-                                {% endif %}
-                            </div>
-                        {% elif not request.user.withdrawal_pin_is_set %}
-                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
-                            <div class="text-muted small mt-2 text-center">
-                                Please create your Withdrawal PIN first on your <a href="{% url 'betting:profile' %}" class="text-decoration-none">profile</a>.
-                            </div>
+                        {% endfor %}
+                        {% if qualification_snapshot.can_submit_now and not primary_outstanding_loan and not pending_loan_requests %}
+                        <button type="submit" class="btn btn-warning rounded-pill px-4 py-2 w-100 text-white">Submit Request</button>
                         {% else %}
-                            <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center gap-2">
-                                <span id="withdrawBtnText">Request Withdrawal</span>
-                                <span id="withdrawBtnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                            </button>
+                        <button type="button" class="btn btn-warning rounded-pill px-4 py-2 w-100 text-white" disabled title="{% if qualification_snapshot.blockers %}{{ qualification_snapshot.blockers.0 }}{% elif primary_outstanding_loan %}Outstanding overdraft must be cleared before a new request can be submitted.{% elif pending_loan_requests %}You already have a pending overdraft request.{% else %}Loan requests open every Friday at 4:00 PM WAT.{% endif %}">
+                            Submit Request
+                        </button>
                         {% endif %}
                     </form>
-                    {% if pending_withdrawals %}
-                    <div class="rounded-4 p-3 mb-4" style="background:#fff; border:1px solid rgba(0,0,0,0.08);">
-                        <div class="fw-bold mb-2">Pending Withdrawal Requests</div>
-                        <div class="table-responsive">
-                            <table class="table table-sm align-middle mb-0">
-                                <thead>
-                                    <tr class="text-muted small">
-                                        <th>ID</th>
-                                        <th>Amount</th>
-                                        <th>Bank</th>
-                                        <th>Account</th>
-                                        <th>Requested</th>
-                                        <th>Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for w in pending_withdrawals %}
-                                    <tr>
-                                        <td class="small">{{ w.id|truncatechars:10 }}</td>
-                                        <td class="fw-bold text-danger">₦{{ w.amount|floatformat:2 }}</td>
-                                        <td class="small">{{ w.bank_name }}</td>
-                                        <td class="small">{{ w.account_number }}</td>
-                                        <td class="small text-muted">{{ w.request_time|date:"M d, Y H:i" }}</td>
-                                        <td><span class="badge bg-warning text-dark text-uppercase">{{ w.status }}</span></td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
+                    {% if pending_loan_requests %}
+                    <div class="rounded-4 p-3 mt-3" style="background:#f8f9fa;border:1px solid rgba(0,0,0,0.08);">
+                        <div class="fw-bold mb-2">Pending Overdraft Requests</div>
+                        {% for loan in pending_loan_requests %}
+                        <div class="small text-muted mb-1">
+                            ₦{{ loan.requested_amount|floatformat:2 }} requested on {{ loan.created_at|date:"M d, Y H:i" }} and awaiting {{ loan.get_approval_level_display }} review.
                         </div>
-                        <div class="text-muted small mt-2">
-                            You can submit additional withdrawals as long as you keep the ₦5,000 operating balance reserved.
-                        </div>
+                        {% endfor %}
                     </div>
                     {% endif %}
-                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
 
-                    {# Wallet Transfer Section (Conditional) #}
-                    {% if wallet_transfer_form %}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-info">Wallet Transfer</h4>
-                    <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-4">
-                        {% csrf_token %}
-                        <div class="mb-3">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <label for="id_recipient_email" class="form-label mb-1">Recipient</label>
-                                <div class="small text-muted" id="recipient-balance-wrap">
-                                    Available Balance: <span class="fw-bold" id="recipient-balance-value">—</span>
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div id="outstandingLoansSection" class="{% if not active_loans %}d-none{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="wallet-section-title text-danger mb-0">Outstanding Overdrafts</div>
+                            <div class="small text-muted">
+                                Total Outstanding: <span class="fw-bold text-danger" id="outstandingLoansTotalDisplay">₦{{ outstanding_overdraft_amount|floatformat:2 }}</span>
+                            </div>
+                        </div>
+                        <div id="outstandingLoansList">
+                            {% for loan in active_loans %}
+                            <div class="card border-danger mb-3">
+                                <div class="card-body text-danger">
+                                    <h5 class="card-title">Overdraft from {{ loan.lender.username|default:loan.lender.email }}</h5>
+                                    <p class="card-text mb-0">
+                                        Outstanding Balance: <strong>₦{{ loan.outstanding_balance|floatformat:2 }}</strong><br>
+                                        Due Date: {{ loan.due_date|date:"M d, Y g:i A T"|default:"-" }}<br>
+                                        Status: {{ loan.get_status_display }}
+                                    </p>
+                                    <div class="small text-muted mt-2">
+                                        Incoming credits are first held as New Credit. Use the Remit Overdraft button above to settle the overdraft, and any excess will be added to your wallet balance.
+                                    </div>
                                 </div>
                             </div>
-                            <select name="recipient_identifier" id="id_recipient_email" class="form-control" required style="width: 100%;">
-                                <!-- Options loaded via AJAX -->
-                            </select>
+                            {% endfor %}
                         </div>
-                        <div class="mb-3">
-                            <label for="id_transfer_amount" class="form-label">Amount (₦)</label>
-                            <input type="number" name="amount" id="id_transfer_amount" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 1000" min="100" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="id_transaction_type" class="form-label">Transaction Type</label>
-                            <select name="transaction_type" id="id_transaction_type" class="form-select rounded-pill px-4 py-2" required>
-                                <option value="credit">Credit (Transfer Out)</option>
-                                <option value="debit">Debit (Take From)</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label for="id_description" class="form-label">Description (Optional)</label>
-                            <input type="text" name="description" id="id_description" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Funds for betting">
-                        </div>
-                        <button type="submit" class="btn btn-info rounded-pill px-4 py-2 w-100">Perform Transfer</button>
-                    </form>
-                    {% endif %}
+                    </div>
+                    <div id="noOutstandingLoansSection" class="{% if active_loans %}d-none{% endif %}">
+                        <div class="wallet-section-title text-danger mb-3">Outstanding Overdrafts</div>
+                        <div class="text-muted small">No outstanding overdraft at the moment.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-                    {# Credit Request Section #}
-                    {% if credit_request_form %}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-warning">Request Credit / Loan</h4>
-                    <form action="{% url 'betting:submit_credit_request' %}" method="post" class="mb-4">
+        <div class="col-lg-6">
+            {% if request.user.user_type == 'agent' or request.user.user_type == 'super_agent' %}
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-danger">Withdraw Funds</div>
+                    <div
+                        class="alert alert-danger rounded-4 mb-4 {% if can_withdraw_from_wallet %}d-none{% endif %}"
+                        id="withdrawBlockedByOverdraft"
+                    >
+                        <div class="fw-bold mb-1">Withdrawal Disabled</div>
+                        <div>Outstanding overdraft must be cleared before withdrawals are permitted.</div>
+                    </div>
+                    <div id="withdrawEnabledSection" class="{% if not can_withdraw_from_wallet %}d-none{% endif %}">
+                        <div class="rounded-4 p-3 mb-3" style="background:#fff5f5;border:1px solid rgba(220,53,69,0.18);">
+                            <div class="d-flex justify-content-between align-items-center small">
+                                <span class="text-muted">Available Balance</span>
+                                <span class="fw-bold" id="withdrawAvailableBalance">—</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center small mt-1">
+                                <span class="text-muted">Operating Balance Reserved</span>
+                                <span class="fw-bold" id="withdrawReservedBalance">—</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center small mt-1">
+                                <span class="text-muted">Withdrawable Amount</span>
+                                <span class="fw-bold" id="withdrawWithdrawableAmount">—</span>
+                            </div>
+                            <div class="text-danger small mt-2 d-none" id="withdrawDisabledNotice">
+                                Withdrawals are unavailable because your wallet must retain a minimum operating balance of ₦5,000.
+                            </div>
+                        </div>
+                        <form id="withdrawForm" action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-0">
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
+                                <input type="number" name="amount" id="id_amount_withdraw" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 2000" min="100" required>
+                                <div class="text-danger small mt-1 d-none" id="withdrawAmountError"></div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_bank_name" class="form-label">Bank Name</label>
+                                <input type="text" name="bank_name" id="id_bank_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Zenith Bank" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_account_name" class="form-label">Account Name</label>
+                                <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.withdrawal_account_name }}" readonly required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_account_number" class="form-label">Account Number</label>
+                                <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
+                            </div>
+                            {% if request.user.withdrawal_locked %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                                <div class="text-danger small mt-2 text-center">
+                                    Withdrawal access has been disabled.
+                                    {% if withdrawal_lock_expires_at %}
+                                        Retry after {{ withdrawal_lock_expires_at|date:"M d, Y H:i" }} or contact administrator.
+                                    {% else %}
+                                        Retry after 24 hours or contact administrator.
+                                    {% endif %}
+                                </div>
+                            {% elif not request.user.withdrawal_pin_is_set %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                                <div class="text-muted small mt-2 text-center">
+                                    Please create your Withdrawal PIN first on your <a href="{% url 'betting:profile' %}" class="text-decoration-none">profile</a>.
+                                </div>
+                            {% else %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center gap-2">
+                                    <span id="withdrawBtnText">Request Withdrawal</span>
+                                    <span id="withdrawBtnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                </button>
+                            {% endif %}
+                        </form>
+                        {% if pending_withdrawals %}
+                        <div class="rounded-4 p-3 mt-3" style="background:#fff; border:1px solid rgba(0,0,0,0.08);">
+                            <div class="fw-bold mb-2">Pending Withdrawal Requests</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle mb-0">
+                                    <thead>
+                                        <tr class="text-muted small">
+                                            <th>ID</th>
+                                            <th>Amount</th>
+                                            <th>Bank</th>
+                                            <th>Account</th>
+                                            <th>Requested</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for w in pending_withdrawals %}
+                                        <tr>
+                                            <td class="small">{{ w.id|truncatechars:10 }}</td>
+                                            <td class="fw-bold text-danger">₦{{ w.amount|floatformat:2 }}</td>
+                                            <td class="small">{{ w.bank_name }}</td>
+                                            <td class="small">{{ w.account_number }}</td>
+                                            <td class="small text-muted">{{ w.request_time|date:"M d, Y H:i" }}</td>
+                                            <td><span class="badge bg-warning text-dark text-uppercase">{{ w.status }}</span></td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="text-muted small mt-2">
+                                You can submit additional withdrawals as long as you keep the ₦5,000 operating balance reserved.
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% elif can_withdraw_from_wallet %}
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-danger">Withdraw Funds</div>
+                    <div id="withdrawEnabledSection">
+                        <div class="rounded-4 p-3 mb-3" style="background:#fff5f5;border:1px solid rgba(220,53,69,0.18);">
+                            <div class="d-flex justify-content-between align-items-center small">
+                                <span class="text-muted">Available Balance</span>
+                                <span class="fw-bold" id="withdrawAvailableBalance">—</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center small mt-1">
+                                <span class="text-muted">Operating Balance Reserved</span>
+                                <span class="fw-bold" id="withdrawReservedBalance">—</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center small mt-1">
+                                <span class="text-muted">Withdrawable Amount</span>
+                                <span class="fw-bold" id="withdrawWithdrawableAmount">—</span>
+                            </div>
+                            <div class="text-danger small mt-2 d-none" id="withdrawDisabledNotice">
+                                Withdrawals are unavailable because your wallet must retain a minimum operating balance of ₦5,000.
+                            </div>
+                        </div>
+                        <form id="withdrawForm" action="{% url 'betting:withdraw_funds' %}" method="post" class="mb-0">
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <label for="id_amount_withdraw" class="form-label">Amount (₦)</label>
+                                <input type="number" name="amount" id="id_amount_withdraw" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 2000" min="100" required>
+                                <div class="text-danger small mt-1 d-none" id="withdrawAmountError"></div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_bank_name" class="form-label">Bank Name</label>
+                                <input type="text" name="bank_name" id="id_bank_name" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Zenith Bank" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_account_name" class="form-label">Account Name</label>
+                                <input type="text" name="account_name" id="id_account_name" class="form-control rounded-pill px-4 py-2" value="{{ request.user.withdrawal_account_name }}" readonly required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_account_number" class="form-label">Account Number</label>
+                                <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
+                            </div>
+                            {% if request.user.withdrawal_locked %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                                <div class="text-danger small mt-2 text-center">
+                                    Withdrawal access has been disabled.
+                                    {% if withdrawal_lock_expires_at %}
+                                        Retry after {{ withdrawal_lock_expires_at|date:"M d, Y H:i" }} or contact administrator.
+                                    {% else %}
+                                        Retry after 24 hours or contact administrator.
+                                    {% endif %}
+                                </div>
+                            {% elif not request.user.withdrawal_pin_is_set %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
+                                <div class="text-muted small mt-2 text-center">
+                                    Please create your Withdrawal PIN first on your <a href="{% url 'betting:profile' %}" class="text-decoration-none">profile</a>.
+                                </div>
+                            {% else %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center gap-2">
+                                    <span id="withdrawBtnText">Request Withdrawal</span>
+                                    <span id="withdrawBtnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                </button>
+                            {% endif %}
+                        </form>
+                        {% if pending_withdrawals %}
+                        <div class="rounded-4 p-3 mt-3" style="background:#fff; border:1px solid rgba(0,0,0,0.08);">
+                            <div class="fw-bold mb-2">Pending Withdrawal Requests</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle mb-0">
+                                    <thead>
+                                        <tr class="text-muted small">
+                                            <th>ID</th>
+                                            <th>Amount</th>
+                                            <th>Bank</th>
+                                            <th>Account</th>
+                                            <th>Requested</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for w in pending_withdrawals %}
+                                        <tr>
+                                            <td class="small">{{ w.id|truncatechars:10 }}</td>
+                                            <td class="fw-bold text-danger">₦{{ w.amount|floatformat:2 }}</td>
+                                            <td class="small">{{ w.bank_name }}</td>
+                                            <td class="small">{{ w.account_number }}</td>
+                                            <td class="small text-muted">{{ w.request_time|date:"M d, Y H:i" }}</td>
+                                            <td><span class="badge bg-warning text-dark text-uppercase">{{ w.status }}</span></td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="text-muted small mt-2">
+                                You can submit additional withdrawals as long as you keep the ₦5,000 operating balance reserved.
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if wallet_transfer_form %}
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-info">Wallet Transfer</div>
+                    <div
+                        class="alert alert-danger rounded-4 mb-4 {% if can_transfer_from_wallet %}d-none{% endif %}"
+                        id="transferBlockedByOverdraft"
+                    >
+                        <div class="fw-bold mb-1">Wallet Transfer Disabled</div>
+                        <div>Outstanding overdraft must be cleared before wallet transfers are permitted for a super agent.</div>
+                    </div>
+                    <div id="transferEnabledSection" class="{% if not can_transfer_from_wallet %}d-none{% endif %}">
+                        <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-0" id="walletTransferForm">
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <label for="id_recipient_email" class="form-label mb-1">Recipient</label>
+                                    <div class="small text-muted" id="recipient-balance-wrap">
+                                        Available Balance: <span class="fw-bold" id="recipient-balance-value">—</span>
+                                    </div>
+                                </div>
+                                <select name="recipient_identifier" id="id_recipient_email" class="form-control" required style="width: 100%;">
+                                    <!-- Options loaded via AJAX -->
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_transfer_amount" class="form-label">Amount (₦)</label>
+                                <input type="number" name="amount" id="id_transfer_amount" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 1000" min="100" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_transaction_type" class="form-label">Transaction Type</label>
+                                <select name="transaction_type" id="id_transaction_type" class="form-select rounded-pill px-4 py-2" required>
+                                    <option value="credit">Credit (Transfer Out)</option>
+                                    <option value="debit">Debit (Take From)</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="id_description" class="form-label">Description (Optional)</label>
+                                <input type="text" name="description" id="id_description" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Funds for betting">
+                            </div>
+                            <button type="submit" class="btn btn-info rounded-pill px-4 py-2 w-100" id="walletTransferSubmitBtn">Perform Transfer</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if credit_request_form %}
+            <div class="card wallet-card wallet-section-card border-0">
+                <div class="card-body">
+                    <div class="wallet-section-title text-warning">Request Credit / Loan</div>
+                    <form action="{% url 'betting:submit_credit_request' %}" method="post" class="mb-0">
                         {% csrf_token %}
                         {% for field in credit_request_form %}
                         <div class="mb-3">
@@ -256,79 +571,57 @@
                         {% endfor %}
                         <button type="submit" class="btn btn-warning rounded-pill px-4 py-2 w-100 text-white">Submit Request</button>
                     </form>
-                    <div class="text-center mb-4">
+                    <div class="text-center mt-3">
                          <a href="{% url 'betting:manage_credit_requests' %}" class="btn btn-outline-warning rounded-pill">Manage Credit Requests</a>
                     </div>
-                    {% endif %}
-
-                    {# Active Loans Section #}
-                    {% if active_loans %}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-danger">Active Loans (You Owe)</h4>
-                    {% for loan in active_loans %}
-                    <div class="card border-danger mb-3">
-                        <div class="card-body text-danger">
-                            <h5 class="card-title">Loan from {{ loan.lender.email }}</h5>
-                            <p class="card-text">
-                                Outstanding Balance: <strong>₦{{ loan.outstanding_balance|floatformat:2 }}</strong><br>
-                                Date Taken: {{ loan.created_at|date:"M d, Y" }}
-                            </p>
-                            <form action="{% url 'betting:settle_loan' loan.id %}" method="post">
-                                {% csrf_token %}
-                                {{ loan_settlement_form.as_p }}
-                                <button type="submit" class="btn btn-danger btn-sm rounded-pill w-100">Settle Loan</button>
-                            </form>
-                        </div>
-                    </div>
-                    {% endfor %}
-                    {% endif %} {# Recent Transactions Section #}
-                    <hr class="my-4">
-                    <h4 class="fw-bold mb-3 text-secondary">Recent Transactions</h4>
-                    {% if transactions %}
-                    <div class="table-responsive">
-                        <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm" style="color: black;">
-                            <thead class="bg-light">
-                                <tr>
-                                    <th scope="col">Date</th>
-                                    <th scope="col">Type</th>
-                                    <th scope="col">Amount</th>
-                                    <th scope="col">Status</th>
-                                    <th scope="col">Description</th>
-                                    <th scope="col">Details</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for transaction in transactions %}
-                                <tr>
-                                    <td>{{ transaction.timestamp|date:"M d, Y H:i" }}</td>
-                                    <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}" style="color: black !important;">
-                                                {{ transaction.get_transaction_type_display }}
-                                            </span></td>
-                                    <td>₦{{ transaction.amount|floatformat:2 }}</td>
-                                    <td>
-                                        <span class="badge bg-{{ transaction.status|lower }}" style="color: black !important;">
-                                                    {{ transaction.get_status_display }}
-                                                </span>
-                                    </td>
-                                    <td>{{ transaction.description }}</td>
-                                    <td class="text-nowrap">
-                                        {% if transaction.transaction_type == 'deposit' and transaction.external_reference %}
-                                            <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:deposit_status' transaction.external_reference %}">View</a>
-                                        {% else %}
-                                            <span class="text-muted small">-</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    {% else %}
-                    <p class="text-center text-muted">No recent transactions.</p>
-                    {% endif %}
-
                 </div>
             </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card wallet-card wallet-section-card border-0 mt-4">
+        <div class="card-body">
+            <div class="wallet-section-title text-secondary">Recent Transactions</div>
+            <div class="table-responsive {% if not transactions %}d-none{% endif %}" id="recentTransactionsTableWrap">
+                <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm" style="color: black;">
+                    <thead class="bg-light">
+                        <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">Type</th>
+                            <th scope="col">Amount</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Description</th>
+                            <th scope="col">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentTransactionsTableBody">
+                        {% for transaction in transactions %}
+                        <tr>
+                            <td>{{ transaction.timestamp|date:"M d, Y H:i" }}</td>
+                            <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}" style="color: black !important;">
+                                        {{ transaction.get_transaction_type_display }}
+                                    </span></td>
+                            <td>₦{{ transaction.amount|floatformat:2 }}</td>
+                            <td>
+                                <span class="badge bg-{{ transaction.status|lower }}" style="color: black !important;">
+                                            {{ transaction.get_status_display }}
+                                        </span>
+                            </td>
+                            <td>{{ transaction.description }}</td>
+                            <td class="text-nowrap">
+                                {% if transaction.transaction_type == 'deposit' and transaction.external_reference %}
+                                    <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:deposit_status' transaction.external_reference %}">View</a>
+                                {% else %}
+                                    <span class="text-muted small">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-center text-muted mb-0 {% if transactions %}d-none{% endif %}" id="recentTransactionsEmptyState">No recent transactions.</p>
         </div>
     </div>
 </div>
@@ -532,6 +825,9 @@
         const withdrawableEl = document.getElementById('withdrawWithdrawableAmount');
         const disabledNotice = document.getElementById('withdrawDisabledNotice');
         const balanceDisplay = document.getElementById('wallet-balance-display');
+        const withdrawEnabledSection = document.getElementById('withdrawEnabledSection');
+        const withdrawBlockedByOverdraft = document.getElementById('withdrawBlockedByOverdraft');
+        let overdraftBlocked = !!(withdrawBlockedByOverdraft && !withdrawBlockedByOverdraft.classList.contains('d-none'));
 
         const formatNaira = (n) => {
             const v = Number(n);
@@ -571,12 +867,34 @@
                 amountInput.setAttribute('max', maxStr);
             }
 
+            if (withdrawEnabledSection) {
+                withdrawEnabledSection.classList.toggle('d-none', overdraftBlocked);
+            }
+            if (withdrawBlockedByOverdraft) {
+                withdrawBlockedByOverdraft.classList.toggle('d-none', !overdraftBlocked);
+            }
+            if (overdraftBlocked) {
+                if (withdrawBtnText) withdrawBtn.disabled = true;
+                setAmountError('');
+                return;
+            }
+
             const disableForReserve = withdrawable <= 0.000001;
             if (disabledNotice) disabledNotice.classList.toggle('d-none', !disableForReserve);
             if (disableForReserve) {
                 if (withdrawBtnText) withdrawBtn.disabled = true;
                 setAmountError('');
+                return;
             }
+
+            const currentAmount = Number(String((amountInput && amountInput.value) || '').trim());
+            if (Number.isFinite(currentAmount) && currentAmount > withdrawable + 0.000001) {
+                setAmountError(`Maximum withdrawable amount is ${formatNaira(withdrawable)} (₦5,000 reserved).`);
+                if (withdrawBtnText) withdrawBtn.disabled = true;
+                return;
+            }
+            setAmountError('');
+            if (withdrawBtnText) withdrawBtn.disabled = false;
         };
 
         const setConfirmLoading = (isLoading) => {
@@ -731,8 +1049,20 @@
         }
 
         refreshWithdrawLimits();
+        document.addEventListener('wallet-balance-updated', refreshWithdrawLimits);
+        document.addEventListener('wallet-overdraft-state-updated', function (event) {
+            const detail = event && event.detail ? event.detail : {};
+            if (typeof detail.can_withdraw_from_wallet !== 'undefined') {
+                overdraftBlocked = !detail.can_withdraw_from_wallet;
+            }
+            refreshWithdrawLimits();
+        });
         if (amountInput) {
             amountInput.addEventListener('input', function () {
+                if (overdraftBlocked) {
+                    setAmountError('');
+                    return;
+                }
                 const available = getAvailableBalance();
                 const reserved = Number.isFinite(minOperating) ? minOperating : 5000;
                 const withdrawable = Math.max(0, available - reserved);
@@ -751,6 +1081,337 @@
                 if (withdrawBtnText) withdrawBtn.disabled = false;
             });
         }
+    });
+</script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const balanceDisplay = document.getElementById('wallet-balance-display');
+        const navBalanceDisplay = document.getElementById('live-wallet-balance');
+        const outstandingEl = document.getElementById('loanOutstandingAmount');
+        const oweEl = document.getElementById('loanOweCompanyAmount');
+        const dueDateEl = document.getElementById('loanDueDateDisplay');
+        const statusBadge = document.getElementById('loanRepaymentStatusBadge');
+        const pendingCreditEl = document.getElementById('loanPendingCreditAmount');
+        const remitBtn = document.getElementById('remitOverdraftBtn');
+        const remitBtnText = document.getElementById('remitOverdraftBtnText');
+        const remitBtnSpinner = document.getElementById('remitOverdraftBtnSpinner');
+        const outstandingLoansSection = document.getElementById('outstandingLoansSection');
+        const noOutstandingLoansSection = document.getElementById('noOutstandingLoansSection');
+        const outstandingLoansTotalDisplay = document.getElementById('outstandingLoansTotalDisplay');
+        const outstandingLoansList = document.getElementById('outstandingLoansList');
+        const transferBlockedByOverdraft = document.getElementById('transferBlockedByOverdraft');
+        const transferEnabledSection = document.getElementById('transferEnabledSection');
+        const walletTransferForm = document.getElementById('walletTransferForm');
+        const walletTransferSubmitBtn = document.getElementById('walletTransferSubmitBtn');
+        const recentTransactionsTableWrap = document.getElementById('recentTransactionsTableWrap');
+        const recentTransactionsTableBody = document.getElementById('recentTransactionsTableBody');
+        const recentTransactionsEmptyState = document.getElementById('recentTransactionsEmptyState');
+        const qualificationTicketCount = document.getElementById('qualificationTicketCount');
+        const qualificationDepositTotal = document.getElementById('qualificationDepositTotal');
+        const qualificationQualifiedAmount = document.getElementById('qualificationQualifiedAmount');
+        const csrfTokenInput = document.querySelector('input[name=csrfmiddlewaretoken]');
+        const csrfToken = csrfTokenInput ? csrfTokenInput.value : '';
+
+        if (!balanceDisplay || !outstandingEl || !pendingCreditEl || !remitBtn) {
+            return;
+        }
+
+        const formatNaira = (value) => {
+            const numeric = Number(value || 0);
+            if (!Number.isFinite(numeric)) {
+                return '₦0.00';
+            }
+            return '₦' + new Intl.NumberFormat('en-NG', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(numeric);
+        };
+
+        const setRemitLoading = (isLoading) => {
+            if (remitBtnSpinner) remitBtnSpinner.classList.toggle('d-none', !isLoading);
+            if (remitBtnText) remitBtnText.textContent = isLoading ? 'Remitting...' : 'Remit Overdraft';
+            remitBtn.disabled = isLoading;
+        };
+
+        const escapeHtml = (value) => String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const getTxTypeBadgeClass = (transactionType) => {
+            switch (String(transactionType || '').toLowerCase()) {
+                case 'deposit':
+                case 'wallet_transfer_in':
+                case 'manual_credit':
+                    return 'bg-success';
+                case 'wallet_transfer_out':
+                case 'withdrawal':
+                    return 'bg-danger';
+                case 'loan_repayment':
+                    return 'bg-warning text-dark';
+                default:
+                    return 'bg-secondary';
+            }
+        };
+
+        const getTxStatusBadgeClass = (status) => {
+            switch (String(status || '').toLowerCase()) {
+                case 'completed':
+                case 'success':
+                    return 'bg-success';
+                case 'pending':
+                    return 'bg-warning text-dark';
+                case 'failed':
+                case 'cancelled':
+                    return 'bg-danger';
+                default:
+                    return 'bg-secondary';
+            }
+        };
+
+        const renderOutstandingLoans = (loans, totalOutstanding) => {
+            const loanRows = Array.isArray(loans) ? loans : [];
+            if (outstandingLoansTotalDisplay) {
+                outstandingLoansTotalDisplay.textContent = formatNaira(totalOutstanding || 0);
+            }
+            if (outstandingLoansSection) {
+                outstandingLoansSection.classList.toggle('d-none', loanRows.length === 0);
+            }
+            if (noOutstandingLoansSection) {
+                noOutstandingLoansSection.classList.toggle('d-none', loanRows.length > 0);
+            }
+            if (!outstandingLoansList) return;
+            outstandingLoansList.innerHTML = loanRows.map((loan) => `
+                <div class="card border-danger mb-3">
+                    <div class="card-body text-danger">
+                        <h5 class="card-title">Overdraft from ${escapeHtml(loan.lender_name)}</h5>
+                        <p class="card-text">
+                            Outstanding Balance: <strong>${formatNaira(loan.outstanding_balance || 0)}</strong><br>
+                            Due Date: ${escapeHtml(loan.due_date_display || '-')}<br>
+                            Status: ${escapeHtml(loan.status_display || loan.status || '-')}
+                        </p>
+                        <div class="small text-muted">
+                            Incoming credits are first held as New Credit. Use the Remit Overdraft button above to settle the overdraft, and any excess will be added to your wallet balance.
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        const renderRecentTransactions = (transactions) => {
+            const txRows = Array.isArray(transactions) ? transactions : [];
+            if (recentTransactionsTableWrap) {
+                recentTransactionsTableWrap.classList.toggle('d-none', txRows.length === 0);
+            }
+            if (recentTransactionsEmptyState) {
+                recentTransactionsEmptyState.classList.toggle('d-none', txRows.length > 0);
+            }
+            if (!recentTransactionsTableBody) return;
+            recentTransactionsTableBody.innerHTML = txRows.map((transaction) => {
+                const detailsHtml = transaction.details_url
+                    ? `<a class="btn btn-sm btn-outline-primary" href="${escapeHtml(transaction.details_url)}">View</a>`
+                    : '<span class="text-muted small">-</span>';
+                return `
+                    <tr>
+                        <td>${escapeHtml(transaction.timestamp_display || '-')}</td>
+                        <td><span class="badge ${getTxTypeBadgeClass(transaction.transaction_type)}" style="color: black !important;">${escapeHtml(transaction.transaction_type_display || '-') }</span></td>
+                        <td>${formatNaira(transaction.amount || 0)}</td>
+                        <td><span class="badge ${getTxStatusBadgeClass(transaction.status)}" style="color: black !important;">${escapeHtml(transaction.status_display || '-')}</span></td>
+                        <td>${escapeHtml(transaction.description || '')}</td>
+                        <td class="text-nowrap">${detailsHtml}</td>
+                    </tr>
+                `;
+            }).join('');
+        };
+
+        const syncTransferState = (canTransferFromWallet) => {
+            const isAllowed = !!canTransferFromWallet;
+            if (transferEnabledSection) {
+                transferEnabledSection.classList.toggle('d-none', !isAllowed);
+            }
+            if (transferBlockedByOverdraft) {
+                transferBlockedByOverdraft.classList.toggle('d-none', isAllowed);
+            }
+            if (!walletTransferForm) return;
+            const controls = walletTransferForm.querySelectorAll('input, select, textarea, button');
+            controls.forEach((control) => {
+                if (control === walletTransferSubmitBtn) {
+                    control.disabled = !isAllowed;
+                    return;
+                }
+                control.disabled = !isAllowed;
+            });
+        };
+
+        const syncWalletState = (payload) => {
+            if (!payload) return;
+            if (typeof payload.wallet_balance !== 'undefined') {
+                balanceDisplay.setAttribute('data-wallet-balance', payload.wallet_balance);
+                balanceDisplay.textContent = formatNaira(payload.wallet_balance);
+                if (navBalanceDisplay) {
+                    navBalanceDisplay.innerHTML = 'Balance : ' + formatNaira(payload.wallet_balance);
+                }
+            }
+            if (typeof payload.outstanding_overdraft_amount !== 'undefined') {
+                const formattedOutstanding = formatNaira(payload.outstanding_overdraft_amount);
+                outstandingEl.textContent = formattedOutstanding;
+                if (oweEl) oweEl.textContent = formattedOutstanding;
+                renderOutstandingLoans(payload.outstanding_loans, payload.outstanding_overdraft_amount);
+            }
+            if (typeof payload.can_transfer_from_wallet !== 'undefined') {
+                syncTransferState(payload.can_transfer_from_wallet);
+            }
+            if (typeof payload.pending_remittance_credit !== 'undefined') {
+                const pendingNumeric = Number(payload.pending_remittance_credit || 0);
+                pendingCreditEl.textContent = new Intl.NumberFormat('en-NG', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(Number.isFinite(pendingNumeric) ? pendingNumeric : 0);
+            }
+            if (qualificationTicketCount && typeof payload.qualification_ticket_count !== 'undefined') {
+                qualificationTicketCount.textContent = payload.qualification_ticket_count;
+            }
+            if (qualificationDepositTotal && typeof payload.qualification_deposit_total !== 'undefined') {
+                qualificationDepositTotal.textContent = formatNaira(payload.qualification_deposit_total);
+            }
+            if (qualificationQualifiedAmount && typeof payload.qualification_qualified_amount !== 'undefined') {
+                qualificationQualifiedAmount.textContent = formatNaira(payload.qualification_qualified_amount);
+            }
+            if (dueDateEl && typeof payload.due_date_display !== 'undefined') {
+                dueDateEl.textContent = payload.due_date_display || '-';
+            }
+            if (statusBadge && typeof payload.repayment_status !== 'undefined') {
+                statusBadge.textContent = payload.repayment_status;
+                statusBadge.className = 'badge';
+                if (payload.repayment_badge === 'danger') {
+                    statusBadge.classList.add('bg-danger');
+                } else if (payload.repayment_badge === 'warning') {
+                    statusBadge.classList.add('bg-warning', 'text-dark');
+                } else if (payload.repayment_badge === 'info') {
+                    statusBadge.classList.add('bg-info', 'text-dark');
+                } else {
+                    statusBadge.classList.add('bg-success');
+                }
+            }
+            if (typeof payload.recent_transactions !== 'undefined') {
+                renderRecentTransactions(payload.recent_transactions);
+            }
+            remitBtn.disabled = !payload.can_remit_overdraft;
+            document.dispatchEvent(new CustomEvent('wallet-overdraft-state-updated', { detail: payload }));
+            document.dispatchEvent(new CustomEvent('wallet-balance-updated'));
+        };
+
+        const fetchWalletOverdraftState = async () => {
+            try {
+                const response = await fetch('{% url "betting:api_wallet_overdraft_status" %}', {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.status === 'success') {
+                    syncWalletState(data);
+                }
+            } catch (error) {
+                console.debug('Wallet overdraft status refresh failed:', error);
+            }
+        };
+
+        const connectWalletSocket = () => {
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
+            let socket = null;
+            let reconnectTimer = null;
+
+            const scheduleReconnect = () => {
+                if (reconnectTimer) return;
+                reconnectTimer = window.setTimeout(() => {
+                    reconnectTimer = null;
+                    connect();
+                }, 3000);
+            };
+
+            const connect = () => {
+                try {
+                    socket = new WebSocket(wsUrl);
+                } catch (error) {
+                    scheduleReconnect();
+                    return;
+                }
+
+                socket.onopen = function () {
+                    fetchWalletOverdraftState();
+                };
+
+                socket.onmessage = function (event) {
+                    try {
+                        const data = JSON.parse(event.data || '{}');
+                        if (data.type === 'wallet_event' && data.payload) {
+                            syncWalletState(data.payload);
+                        }
+                    } catch (error) {
+                        console.debug('Wallet socket parse failed:', error);
+                    }
+                };
+
+                socket.onclose = function () {
+                    scheduleReconnect();
+                };
+
+                socket.onerror = function () {
+                    try {
+                        socket.close();
+                    } catch (error) {
+                        scheduleReconnect();
+                    }
+                };
+            };
+
+            connect();
+        };
+
+        remitBtn.addEventListener('click', async function () {
+            if (remitBtn.disabled) return;
+            setRemitLoading(true);
+            try {
+                const response = await fetch('{% url "betting:remit_overdraft_pending_credit" %}', {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.status === 'success') {
+                    syncWalletState(data);
+                    await Swal.fire({
+                        icon: 'success',
+                        title: 'Success',
+                        text: data.message || 'Overdraft remitted successfully.'
+                    });
+                    return;
+                }
+                await Swal.fire({
+                    icon: 'error',
+                    title: 'Oops...',
+                    text: data.message || 'Unable to remit overdraft right now.'
+                });
+            } catch (error) {
+                await Swal.fire({
+                    icon: 'error',
+                    title: 'Oops...',
+                    text: 'An error occurred while remitting the overdraft.'
+                });
+            } finally {
+                setRemitLoading(false);
+                fetchWalletOverdraftState();
+            }
+        });
+
+        fetchWalletOverdraftState();
+        connectWalletSocket();
+        window.setInterval(fetchWalletOverdraftState, 30000);
     });
 </script>
 

@@ -346,11 +346,7 @@
             <div class="modal-body" id="ticket-content-to-print">
                 <div class="ticket-print">
                     <div class="text-center mb-1">
-                        {% if site_config.logo %}
-                            <img src="{{ site_config.logo.url }}" alt="{{ site_config.site_name }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
-                        {% else %}
-                            <img src="{% static 'betting/images/StakeNaija.png' %}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
-                        {% endif %}
+                        <img src="{{ site_config.safe_logo_url }}" alt="{{ site_config.site_name|default:'StakeNaija' }}" class="ticket-logo" style="width: 90%; max-width: 90%; height: auto; object-fit: contain; display: block; margin: 0 auto;">
                     </div>
 
                     <table class="table table-sm mb-2" style="border: 1px solid #000; border-collapse: collapse; width: 100%;">

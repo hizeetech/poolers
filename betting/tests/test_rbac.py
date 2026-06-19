@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import timedelta
 from unittest.mock import patch
 from django.utils import timezone
-from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket, BulkMessageCampaign, BulkMessageDelivery, BulkMessageTemplate, CRMOpsAuditLog, SiteConfiguration, CustomerComplaint, CustomerComplaintNote
+from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket, BulkMessageCampaign, BulkMessageDelivery, BulkMessageTemplate, CRMOpsAuditLog, SiteConfiguration, CustomerComplaint, CustomerComplaintNote, Loan, OverdraftWallet
 from betting.views import process_due_bulk_message_campaigns
 from notifications.models import Notification, NotificationCampaign
 from notifications.tasks import send_campaign
@@ -105,6 +105,349 @@ class RBACTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'System')
         self.assertContains(response, self.player.email)
+
+    def test_admin_reconciled_credits_dashboard_lists_reconcile_wallet_credits(self):
+        tx = Transaction.objects.create(
+            user=self.player,
+            transaction_type='deposit',
+            amount=Decimal('250.00'),
+            status='completed',
+            is_successful=True,
+            payment_gateway='paystack',
+            external_reference='recon-ref-123',
+            description='Online deposit via paystack successful.',
+        )
+        self.player.wallet.apply_delta(
+            amount=Decimal('250.00'),
+            actor=None,
+            transaction_obj=tx,
+            reference='recon-ref-123',
+            reason='Deposit via paystack (reconcile)',
+            metadata={'gateway': 'paystack', 'source': 'reconcile'},
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('betting_admin:admin_reconciled_credits_dashboard'),
+            {'gateway': 'paystack', 'q': 'recon-ref-123'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'recon-ref-123')
+        self.assertContains(response, self.player.email)
+        self.assertEqual(response.context['summary']['total_count'], 1)
+
+    def test_admin_loan_center_can_approve_pending_super_agent_request(self):
+        loan = Loan.objects.create(
+            borrower=self.super_agent,
+            lender=self.admin,
+            amount=Decimal('0.00'),
+            requested_amount=Decimal('500.00'),
+            qualified_amount=Decimal('500.00'),
+            outstanding_balance=Decimal('0.00'),
+            status='pending',
+            loan_type='super_agent_overdraft',
+            approval_level='admin',
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('betting_admin:admin_loan_overdraft_center') + '?tab=pending',
+            {
+                'loan_id': str(loan.id),
+                'action': 'approve',
+                'loan_decision_submit': '1',
+            },
+            follow=True,
+        )
+
+        loan.refresh_from_db()
+        self.super_agent.wallet.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(loan.status, 'active')
+        self.assertEqual(loan.outstanding_balance, Decimal('500.00'))
+        self.assertEqual(self.super_agent.wallet.balance, Decimal('500.00'))
+
+    def test_admin_loan_center_can_fund_super_agent_overdraft_wallet(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('betting_admin:admin_loan_overdraft_center'),
+            {
+                'super_agent': str(self.super_agent.id),
+                'amount': '1200.00',
+                'reason': 'Initial overdraft funding',
+                'fund_wallet_submit': '1',
+            },
+            follow=True,
+        )
+
+        wallet = OverdraftWallet.objects.get(super_agent=self.super_agent)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(wallet.total_funded, Decimal('1200.00'))
+        self.assertEqual(wallet.current_balance, Decimal('1200.00'))
+
+    def test_admin_loan_center_can_run_due_enforcement(self):
+        loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('300.00'),
+            requested_amount=Decimal('300.00'),
+            qualified_amount=Decimal('300.00'),
+            outstanding_balance=Decimal('300.00'),
+            status='active',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(days=1),
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('betting_admin:admin_loan_overdraft_center') + '?tab=overdue',
+            {
+                'run_due_enforcement': '1',
+            },
+            follow=True,
+        )
+
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(loan.status, 'overdue')
+        self.assertTrue(loan.account_locked_due_to_default)
+        self.assertTrue(self.agent.is_locked)
+
+    def test_admin_loan_center_filters_and_summary_follow_filtered_results(self):
+        overdue_agent_loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('450.00'),
+            requested_amount=Decimal('450.00'),
+            qualified_amount=Decimal('450.00'),
+            outstanding_balance=Decimal('300.00'),
+            status='overdue',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(days=2),
+            qualification_ticket_count=60,
+            qualification_deposit_volume=Decimal('900.00'),
+            account_locked_due_to_default=True,
+        )
+        self.agent.is_locked = True
+        self.agent.lock_reason = 'Due to an unsettled overdraft/loan obligation, your account has been disabled.'
+        self.agent.save(update_fields=['is_locked', 'lock_reason'])
+
+        Loan.objects.create(
+            borrower=self.super_agent,
+            lender=self.admin,
+            amount=Decimal('700.00'),
+            requested_amount=Decimal('700.00'),
+            qualified_amount=Decimal('700.00'),
+            outstanding_balance=Decimal('0.00'),
+            status='settled',
+            loan_type='super_agent_overdraft',
+            approval_level='admin',
+            qualification_ticket_count=70,
+            qualification_deposit_volume=Decimal('1400.00'),
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('betting_admin:admin_loan_overdraft_center'),
+            {
+                'tab': 'overdue',
+                'borrower_role': 'agent',
+                'loan_type': 'agent_overdraft',
+                'lock_state': 'locked',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['loans_page'].object_list), [overdue_agent_loan])
+        self.assertEqual(response.context['summary']['total_records'], 1)
+        self.assertEqual(response.context['summary']['total_requested'], Decimal('450.00'))
+        self.assertEqual(response.context['summary']['total_outstanding'], Decimal('300.00'))
+        self.assertEqual(response.context['summary']['overdue_balance'], Decimal('300.00'))
+        self.assertEqual(response.context['summary']['locked_count'], 1)
+
+    def test_admin_loan_center_filtered_csv_export_matches_filtered_rows(self):
+        targeted_loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('350.00'),
+            requested_amount=Decimal('350.00'),
+            qualified_amount=Decimal('350.00'),
+            outstanding_balance=Decimal('200.00'),
+            status='overdue',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(days=3),
+        )
+        self.agent.is_locked = True
+        self.agent.lock_reason = 'Due to an unsettled overdraft/loan obligation, your account has been disabled.'
+        self.agent.save(update_fields=['is_locked', 'lock_reason'])
+
+        other_super_agent = User.objects.create_user(
+            email='other_super_agent@test.com',
+            password=self.password,
+            user_type='super_agent',
+        )
+        other_agent = User.objects.create_user(
+            email='other_agent@test.com',
+            password=self.password,
+            user_type='agent',
+            super_agent=other_super_agent,
+        )
+        Wallet.objects.get_or_create(user=other_super_agent, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=other_agent, defaults={'balance': Decimal('0.00')})
+        Loan.objects.create(
+            borrower=other_agent,
+            lender=other_super_agent,
+            amount=Decimal('900.00'),
+            requested_amount=Decimal('900.00'),
+            qualified_amount=Decimal('900.00'),
+            outstanding_balance=Decimal('400.00'),
+            status='overdue',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(days=1),
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('betting_admin:admin_loan_overdraft_center'),
+            {
+                'tab': 'overdue',
+                'borrower_role': 'agent',
+                'loan_type': 'agent_overdraft',
+                'lock_state': 'locked',
+                'format': 'csv',
+            },
+        )
+
+        content = response.content.decode()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(str(targeted_loan.id), content)
+        self.assertIn(self.agent.username or self.agent.email, content)
+        self.assertNotIn(other_agent.username or other_agent.email, content)
+
+    def test_super_agent_can_approve_pending_agent_overdraft_request_from_processing_view(self):
+        self.agent.super_agent = self.super_agent
+        self.agent.save(update_fields=['super_agent'])
+        OverdraftWallet.objects.create(
+            super_agent=self.super_agent,
+            total_funded=Decimal('1000.00'),
+            current_balance=Decimal('1000.00'),
+        )
+        loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('0.00'),
+            requested_amount=Decimal('250.00'),
+            qualified_amount=Decimal('250.00'),
+            outstanding_balance=Decimal('0.00'),
+            status='pending',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+        )
+
+        self.client.force_login(self.super_agent)
+        response = self.client.post(
+            reverse('betting:process_overdraft_request', args=[loan.id]),
+            {
+                'action': 'approve',
+                'return_to': reverse('betting:super_agent_dashboard'),
+            },
+        )
+
+        loan.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        wallet = OverdraftWallet.objects.get(super_agent=self.super_agent)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse('betting:super_agent_dashboard'))
+        self.assertEqual(loan.status, 'active')
+        self.assertEqual(loan.outstanding_balance, Decimal('250.00'))
+        self.assertEqual(self.agent.wallet.balance, Decimal('250.00'))
+        self.assertEqual(wallet.current_balance, Decimal('750.00'))
+
+    def test_admin_loan_center_locked_tab_returns_only_locked_defaulted_loans(self):
+        locked_loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('400.00'),
+            requested_amount=Decimal('400.00'),
+            qualified_amount=Decimal('400.00'),
+            outstanding_balance=Decimal('250.00'),
+            status='overdue',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(days=1),
+            account_locked_due_to_default=True,
+        )
+        self.agent.is_locked = True
+        self.agent.lock_reason = 'Due to an unsettled overdraft/loan obligation, your account has been disabled.'
+        self.agent.save(update_fields=['is_locked', 'lock_reason'])
+
+        unlocked_agent = User.objects.create_user(
+            email='unlocked_agent_tab@test.com',
+            password=self.password,
+            user_type='agent',
+        )
+        Wallet.objects.get_or_create(user=unlocked_agent, defaults={'balance': Decimal('0.00')})
+        Loan.objects.create(
+            borrower=unlocked_agent,
+            lender=self.super_agent,
+            amount=Decimal('500.00'),
+            requested_amount=Decimal('500.00'),
+            qualified_amount=Decimal('500.00'),
+            outstanding_balance=Decimal('500.00'),
+            status='active',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() + timedelta(days=1),
+            account_locked_due_to_default=False,
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('betting_admin:admin_loan_overdraft_center'), {'tab': 'locked'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['loans_page'].object_list), [locked_loan])
+
+    def test_admin_loan_center_settled_tab_returns_only_settled_loans(self):
+        settled_loan = Loan.objects.create(
+            borrower=self.super_agent,
+            lender=self.admin,
+            amount=Decimal('600.00'),
+            requested_amount=Decimal('600.00'),
+            qualified_amount=Decimal('600.00'),
+            outstanding_balance=Decimal('0.00'),
+            repaid_amount=Decimal('600.00'),
+            status='settled',
+            loan_type='super_agent_overdraft',
+            approval_level='admin',
+            settled_at=timezone.now(),
+        )
+        Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('300.00'),
+            requested_amount=Decimal('300.00'),
+            qualified_amount=Decimal('300.00'),
+            outstanding_balance=Decimal('150.00'),
+            status='active',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('betting_admin:admin_loan_overdraft_center'), {'tab': 'settled'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['loans_page'].object_list), [settled_loan])
 
     def test_retail_dashboard_requires_retail_manager_role(self):
         self.client.force_login(self.agent)

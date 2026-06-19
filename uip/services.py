@@ -7,11 +7,21 @@ from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.core.cache import cache
 from datetime import timedelta
+from types import SimpleNamespace
 import redis
 from betting.models import BetTicket, User, Transaction, UserWithdrawal, Wallet, AgentPayout, LoginAttempt, Selection
 from .models import Alert, FraudAlert, AlertAffectedUser, InvestigationCase, AdminActionLog
 
 class DashboardService:
+    @staticmethod
+    def _leaderboard_agent_obj(row):
+        return SimpleNamespace(
+            id=row.get('user__agent_id'),
+            first_name=row.get('user__agent__first_name', '') or '',
+            last_name=row.get('user__agent__last_name', '') or '',
+            email=row.get('user__agent__email', '') or '',
+        )
+
     @staticmethod
     def get_redis_client():
         try:
@@ -133,7 +143,7 @@ class DashboardService:
             })
 
         # 2. Recent High Value Bets (> 5000)
-        large_bets = BetTicket.objects.filter(stake_amount__gte=5000).order_by('-placed_at')[:limit]
+        large_bets = BetTicket.objects.select_related('user').filter(stake_amount__gte=5000).order_by('-placed_at')[:limit]
         for bet in large_bets:
             activity_list.append({
                 'type': 'bet_placed',
@@ -144,7 +154,7 @@ class DashboardService:
             })
 
         # 3. Recent Transactions (Deposits/Withdrawals)
-        transactions = Transaction.objects.filter(amount__gte=5000).order_by('-timestamp')[:limit]
+        transactions = Transaction.objects.select_related('user').filter(amount__gte=5000).order_by('-timestamp')[:limit]
         for tx in transactions:
              activity_list.append({
                 'type': 'transaction',
@@ -269,65 +279,106 @@ class DashboardService:
 
         ticket_statuses = ['pending', 'won', 'lost', 'cashed_out']
         money_field = DecimalField(max_digits=18, decimal_places=2)
+        group_fields = [
+            'user__agent_id',
+            'user__agent__first_name',
+            'user__agent__last_name',
+            'user__agent__email',
+        ]
 
-        base = User.objects.filter(user_type='agent').annotate(
-            total_turnover=Coalesce(
-                Sum(
-                    'agents_under__bet_tickets__stake_amount',
-                    filter=Q(
-                        agents_under__bet_tickets__placed_at__gte=start_time,
-                        agents_under__bet_tickets__placed_at__lte=end_time,
-                        agents_under__bet_tickets__status__in=ticket_statuses,
-                    )
-                ),
-                Value(0),
-                output_field=money_field,
-            ),
-            tickets_sold=Coalesce(
-                Count(
-                    'agents_under__bet_tickets',
-                    filter=Q(
-                        agents_under__bet_tickets__placed_at__gte=start_time,
-                        agents_under__bet_tickets__placed_at__lte=end_time,
-                        agents_under__bet_tickets__status__in=ticket_statuses,
-                    ),
-                    distinct=True,
-                ),
-                0
-            ),
-            winnings_paid=Coalesce(
-                Sum(
-                    'agents_under__bet_tickets__max_winning',
-                    filter=Q(
-                        agents_under__bet_tickets__last_updated__gte=start_time,
-                        agents_under__bet_tickets__last_updated__lte=end_time,
-                        agents_under__bet_tickets__status='won',
-                    )
-                ),
-                Value(0),
-                output_field=money_field,
-            ),
-            total_deposits=Coalesce(
-                Sum(
-                    'agents_under__transactions__amount',
-                    filter=Q(
-                        agents_under__transactions__transaction_type='deposit',
-                        agents_under__transactions__is_successful=True,
-                        agents_under__transactions__status='completed',
-                        agents_under__transactions__timestamp__gte=start_time,
-                        agents_under__transactions__timestamp__lte=end_time,
-                    )
-                ),
-                Value(0),
-                output_field=money_field,
-            ),
+        turnover_rows = list(
+            BetTicket.objects.filter(
+                user__agent__user_type='agent',
+                placed_at__gte=start_time,
+                placed_at__lte=end_time,
+                status__in=ticket_statuses,
+            )
+            .values(*group_fields)
+            .annotate(
+                total_turnover=Coalesce(Sum('stake_amount'), Value(0), output_field=money_field),
+                tickets_sold=Count('id', distinct=True),
+            )
+            .order_by('-total_turnover')
         )
 
-        top_deposits = list(base.order_by('-total_deposits')[:limit])
-        top_turnover = list(base.order_by('-total_turnover')[:limit])
+        winnings_map = {
+            row['user__agent_id']: row['winnings_paid']
+            for row in BetTicket.objects.filter(
+                user__agent__user_type='agent',
+                status='won',
+                last_updated__gte=start_time,
+                last_updated__lte=end_time,
+            )
+            .values('user__agent_id')
+            .annotate(
+                winnings_paid=Coalesce(Sum('max_winning'), Value(0), output_field=money_field),
+            )
+        }
+
+        deposits_rows = list(
+            Transaction.objects.filter(
+                user__agent__user_type='agent',
+                transaction_type='deposit',
+                is_successful=True,
+                status='completed',
+                timestamp__gte=start_time,
+                timestamp__lte=end_time,
+            )
+            .values(*group_fields)
+            .annotate(
+                total_deposits=Coalesce(Sum('amount'), Value(0), output_field=money_field),
+            )
+            .order_by('-total_deposits')
+        )
+        deposits_map = {
+            row['user__agent_id']: row['total_deposits']
+            for row in deposits_rows
+        }
+
+        leaderboard_rows = []
+        for row in turnover_rows:
+            agent_obj = DashboardService._leaderboard_agent_obj(row)
+            agent_id = row['user__agent_id']
+            leaderboard_rows.append(
+                SimpleNamespace(
+                    id=agent_id,
+                    first_name=agent_obj.first_name,
+                    last_name=agent_obj.last_name,
+                    email=agent_obj.email,
+                    total_turnover=row['total_turnover'],
+                    tickets_sold=row['tickets_sold'],
+                    winnings_paid=winnings_map.get(agent_id, 0),
+                    total_deposits=deposits_map.get(agent_id, 0),
+                )
+            )
+
+        top_turnover = leaderboard_rows[:limit]
+
+        top_deposits = [
+            SimpleNamespace(
+                id=row['user__agent_id'],
+                first_name=row.get('user__agent__first_name', '') or '',
+                last_name=row.get('user__agent__last_name', '') or '',
+                email=row.get('user__agent__email', '') or '',
+                total_deposits=row['total_deposits'],
+                total_turnover=next(
+                    (leader.total_turnover for leader in leaderboard_rows if leader.id == row['user__agent_id']),
+                    0,
+                ),
+                tickets_sold=next(
+                    (leader.tickets_sold for leader in leaderboard_rows if leader.id == row['user__agent_id']),
+                    0,
+                ),
+                winnings_paid=next(
+                    (leader.winnings_paid for leader in leaderboard_rows if leader.id == row['user__agent_id']),
+                    0,
+                ),
+            )
+            for row in deposits_rows[:limit]
+        ]
 
         leaderboard_profit = []
-        for a in base.only('id', 'email')[:limit * 3]:
+        for a in leaderboard_rows:
             turnover = float(getattr(a, 'total_turnover', 0) or 0)
             winnings = float(getattr(a, 'winnings_paid', 0) or 0)
             revenue = turnover - winnings

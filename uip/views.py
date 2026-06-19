@@ -4,6 +4,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.http import JsonResponse
 from django.http import HttpResponse
+from django.db.models import Q
 from datetime import timedelta
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -67,7 +68,7 @@ def uip_dashboard(request):
     recent_activity = DashboardService.get_recent_activity()
     
     # Fraud Alerts Filtering
-    fraud_alerts = FraudAlert.objects.prefetch_related('affected_user_details__user')
+    fraud_alerts = FraudAlert.objects.order_by('-timestamp').prefetch_related('affected_user_details__user')
     
     alert_type = request.GET.get('alert_type')
     if alert_type:
@@ -90,7 +91,7 @@ def uip_dashboard(request):
             Q(related_ips__contains=[search])
         ).distinct()
     
-    fraud_alerts = fraud_alerts.order_by('-timestamp')[:50]
+    fraud_alerts = fraud_alerts[:50]
     
     betting_periods = BettingPeriod.objects.filter(is_active=True).order_by('-start_date')[:10]
     context = {

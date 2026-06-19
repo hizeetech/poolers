@@ -63,4 +63,25 @@
         });
     });
 </script>
+{% if form.non_field_errors %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const errors = [
+            {% for error in form.non_field_errors %}
+            "{{ error|escapejs }}",
+            {% endfor %}
+        ];
+        const lockedLoanError = errors.find(function (item) {
+            return item.toLowerCase().includes('overdraft/loan obligation');
+        });
+        if (lockedLoanError && typeof Swal !== 'undefined') {
+            Swal.fire({
+                icon: 'error',
+                title: 'Account Disabled',
+                text: lockedLoanError
+            });
+        }
+    });
+</script>
+{% endif %}
 {% endblock content %}

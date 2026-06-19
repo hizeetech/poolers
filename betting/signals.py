@@ -3,10 +3,11 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
-from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride
+from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, Loan, LoanPendingCredit
 from .middleware import get_current_user, get_current_request
 from .utils import get_ip_details, get_client_ip, log_debug, clear_bonus_rules_cache, clear_betting_limits_cache
 from notifications.services import create_notification
+from .services.loan_overdraft import build_wallet_overdraft_payload
 from django.core.cache import cache
 import threading
 from channels.layers import get_channel_layer
@@ -139,6 +140,28 @@ def _broadcast_finance_event(payload):
         )
     except Exception:
         return
+
+
+def _broadcast_wallet_event_for_user(user):
+    if not user:
+        return
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        payload = build_wallet_overdraft_payload(user)
+        async_to_sync(channel_layer.group_send)(
+            f"notifications_user_{user.id}",
+            {"type": "wallet.event", "payload": payload},
+        )
+    except Exception:
+        return
+
+
+def _schedule_wallet_event_for_user(user):
+    if not user:
+        return
+    transaction.on_commit(lambda: _broadcast_wallet_event_for_user(user))
 
 @receiver(post_save, sender=User)
 def log_user_changes(sender, instance, created, **kwargs):
@@ -402,6 +425,27 @@ def retail_tx_broadcast(sender, instance, created, **kwargs):
             "kpi_deltas": kpi,
         }
     )
+    _schedule_wallet_event_for_user(instance.user)
+
+
+@receiver(post_save, sender=Wallet)
+def wallet_realtime_push_on_save(sender, instance, **kwargs):
+    _schedule_wallet_event_for_user(instance.user)
+
+
+@receiver(post_save, sender=Loan)
+def loan_realtime_push_on_save(sender, instance, **kwargs):
+    _schedule_wallet_event_for_user(instance.borrower)
+
+
+@receiver(post_save, sender=LoanPendingCredit)
+def pending_credit_realtime_push_on_save(sender, instance, **kwargs):
+    _schedule_wallet_event_for_user(instance.borrower)
+
+
+@receiver(post_delete, sender=LoanPendingCredit)
+def pending_credit_realtime_push_on_delete(sender, instance, **kwargs):
+    _schedule_wallet_event_for_user(instance.borrower)
 
 @receiver(post_save, sender=User)
 def create_user_wallet(sender, instance, created, **kwargs):

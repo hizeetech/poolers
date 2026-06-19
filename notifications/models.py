@@ -17,6 +17,15 @@ class Notification(models.Model):
         ("SYSTEM_ANNOUNCEMENT", "System Announcement"),
         ("RISK_ALERT", "Risk Alert"),
         ("DEPOSIT_REMINDER", "Deposit Reminder"),
+        ("LOAN_REQUEST_SUBMITTED", "Loan Request Submitted"),
+        ("LOAN_REQUEST_PENDING_REVIEW", "Loan Request Pending Review"),
+        ("LOAN_APPROVED", "Loan Approved"),
+        ("LOAN_REJECTED", "Loan Rejected"),
+        ("LOAN_REPAYMENT_RECEIVED", "Loan Repayment Received"),
+        ("LOAN_ACCOUNT_LOCKED", "Loan Account Locked"),
+        ("LOAN_ACCOUNT_UNLOCKED", "Loan Account Unlocked"),
+        ("LOAN_CLEARED", "Loan Cleared"),
+        ("LOAN_MANUAL_ASSIGNED", "Manual Loan Assigned"),
     )
 
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")

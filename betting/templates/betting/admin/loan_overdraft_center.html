@@ -291,7 +291,21 @@
                             <td>₦{{ loan.amount|floatformat:2 }}</td>
                             <td>₦{{ loan.outstanding_balance|floatformat:2 }}</td>
                             <td>{{ loan.due_date|date:"Y-m-d H:i"|default:"-" }}</td>
-                            <td>{{ loan.get_status_display }}</td>
+                            <td>
+                                <div>{{ loan.get_status_display }}</div>
+                                {% if loan.lock_override_active %}
+                                <div class="small mt-1">
+                                    <span class="badge bg-info text-dark">Override Unlock Active</span>
+                                </div>
+                                <div class="small text-muted mt-1">
+                                    {{ loan.lock_override_by_label|default:"Super Admin" }}
+                                    {% if loan.lock_override_at %}on {{ loan.lock_override_at }}{% endif %}
+                                </div>
+                                {% if loan.lock_override_reason %}
+                                <div class="small text-muted">{{ loan.lock_override_reason }}</div>
+                                {% endif %}
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if loan.status == 'pending' and loan.approval_level == 'admin' %}
                                 <div class="d-flex flex-column gap-2" style="min-width: 220px;">
@@ -311,6 +325,15 @@
                                 </div>
                                 {% elif loan.status == 'pending' and loan.approval_level == 'super_agent' %}
                                 <span class="badge bg-warning text-dark">Awaiting Super Agent</span>
+                                {% elif loan.lock_override_active %}
+                                <span class="badge bg-info text-dark">Override Unlock Active</span>
+                                {% elif loan.can_override_unlock %}
+                                <form method="post" class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                    <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for override unlock" required>
+                                    <button type="submit" name="override_unlock_submit" class="btn btn-sm btn-outline-dark">Override Unlock</button>
+                                </form>
                                 {% else %}
                                 <span class="text-muted small">No action</span>
                                 {% endif %}

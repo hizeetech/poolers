@@ -13,11 +13,13 @@ from django.utils import timezone
 
 from betting.models import (
     AccountLockAuditLog,
+    AccountUnlockAppeal,
     BetTicket,
     Loan,
     LoanAuditLog,
     LoanPendingCredit,
     LoanRepayment,
+    LoginAttempt,
     OverdraftWallet,
     SiteConfiguration,
     Transaction,
@@ -710,6 +712,126 @@ def _loan_lock_targets(borrower: User):
     return targets
 
 
+def loan_has_active_lock_override(loan: Loan) -> bool:
+    snapshot = getattr(loan, "workflow_snapshot", {}) or {}
+    return bool(snapshot.get("lock_override_active"))
+
+
+def loan_lock_override_details(loan: Loan) -> dict:
+    snapshot = getattr(loan, "workflow_snapshot", {}) or {}
+    return {
+        "active": bool(snapshot.get("lock_override_active")),
+        "reason": (snapshot.get("lock_override_reason") or "").strip(),
+        "performed_at": snapshot.get("lock_override_at") or "",
+        "performed_by_id": snapshot.get("lock_override_by_id"),
+        "performed_by_label": snapshot.get("lock_override_by_label") or "",
+    }
+
+
+@transaction.atomic
+def override_unlock_loan_without_payment(*, actor: User, loan_id: int, reason: str, ip_address=None):
+    if not getattr(actor, "is_authenticated", False) or not getattr(actor, "is_superuser", False):
+        raise LoanOverdraftError("Only Super Admin can override unlock overdue overdraft accounts without payment.")
+
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("borrower", "lender")
+        .get(id=loan_id)
+    )
+    borrower = loan.borrower
+    reason = (reason or "").strip()
+    if not reason:
+        raise LoanOverdraftError("Override unlock reason is required.")
+    if loan.outstanding_balance <= Decimal("0.00"):
+        raise LoanOverdraftError("This loan has no outstanding balance.")
+    if loan.due_date and loan.due_date >= timezone.now() and not (loan.account_locked_due_to_default or getattr(borrower, "is_locked", False)):
+        raise LoanOverdraftError("Override unlock is available only for overdue or currently locked loan accounts.")
+    if loan_has_active_lock_override(loan):
+        raise LoanOverdraftError("An override unlock is already active for this loan.")
+
+    unlocked_targets = []
+    skipped_targets = []
+    override_remark = f"Overdraft lock override approved without repayment for loan #{loan.id}. Reason: {reason}"
+
+    for target in _loan_lock_targets(borrower):
+        if not getattr(target, "is_locked", False):
+            skipped_targets.append(target.id)
+            continue
+        current_reason = (getattr(target, "lock_reason", "") or "").strip()
+        if current_reason and "overdraft/loan obligation" not in current_reason.lower():
+            skipped_targets.append(target.id)
+            continue
+        target.is_locked = False
+        target.locked_at = None
+        target.lock_reason = ""
+        target.failed_login_attempts = 0
+        target.last_failed_login = None
+        target.save(update_fields=["is_locked", "locked_at", "lock_reason", "failed_login_attempts", "last_failed_login"])
+        LoginAttempt.objects.create(
+            user=target,
+            username_attempted=target.email,
+            ip_address=ip_address,
+            status="unlocked",
+        )
+        AccountLockAuditLog.objects.create(
+            locked_user=target,
+            reviewed_by=actor,
+            lock_reason=current_reason or LOAN_LOCK_REASON,
+            action="unlocked",
+            remarks=override_remark,
+        )
+        unlocked_targets.append(target)
+
+    snapshot = dict(getattr(loan, "workflow_snapshot", {}) or {})
+    snapshot.update(
+        {
+            "lock_override_active": True,
+            "lock_override_reason": reason,
+            "lock_override_at": timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M:%S"),
+            "lock_override_by_id": actor.id,
+            "lock_override_by_label": actor.username or actor.email or f"user#{actor.id}",
+            "lock_override_unlock_count": len(unlocked_targets),
+        }
+    )
+    loan.workflow_snapshot = snapshot
+    loan.account_locked_due_to_default = False
+    loan.save(update_fields=["workflow_snapshot", "account_locked_due_to_default", "updated_at"])
+
+    audit_metadata = {
+        "override_type": "unlock_without_payment",
+        "override_active": True,
+        "unlocked_target_ids": [target.id for target in unlocked_targets],
+        "skipped_target_ids": skipped_targets,
+        "preserved_outstanding_balance": f"{quantize_money(loan.outstanding_balance):.2f}",
+    }
+    create_loan_audit(
+        loan=loan,
+        action="override",
+        performed_by=actor,
+        amount=loan.outstanding_balance,
+        reason=reason,
+        ip_address=ip_address,
+        metadata=audit_metadata,
+    )
+    create_loan_audit(
+        loan=loan,
+        action="account_unlocked",
+        performed_by=actor,
+        amount=loan.outstanding_balance,
+        reason=override_remark,
+        ip_address=ip_address,
+        metadata=audit_metadata,
+    )
+    notify_loan_event(
+        user=borrower,
+        title="Account Unlocked By Override",
+        message="Your account access has been restored by Super Admin override. The outstanding overdraft remains unpaid.",
+        notification_type="LOAN_ACCOUNT_UNLOCKED",
+        data={"loan_id": loan.id, "override_unlock": True},
+    )
+    return loan, unlocked_targets
+
+
 def _auto_unlock_loan_targets(borrower: User):
     targets = _loan_lock_targets(borrower)
     unlocked_any = False
@@ -762,6 +884,8 @@ def _auto_unlock_loan_targets(borrower: User):
 
 def _lock_defaulting_borrower(*, loan: Loan):
     if loan.account_locked_due_to_default:
+        return
+    if loan_has_active_lock_override(loan):
         return
     for target in _loan_lock_targets(loan.borrower):
         if getattr(target, "is_locked", False):

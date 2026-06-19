@@ -70,7 +70,10 @@ from .services.loan_overdraft import (
     get_user_outstanding_loans,
     get_user_outstanding_loan_amount,
     get_user_pending_credit_amount,
+    loan_has_active_lock_override,
+    loan_lock_override_details,
     notify_loan_event,
+    override_unlock_loan_without_payment,
     reject_loan_request,
     remit_overdraft_pending_credit,
     submit_overdraft_request,
@@ -102,7 +105,7 @@ from .forms import (
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm, OverdraftRequestForm,
-    LoanCenterDecisionForm, AdminOverdraftWalletFundingForm,
+    LoanCenterDecisionForm, AdminOverdraftWalletFundingForm, LoanOverrideUnlockForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
     RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
@@ -9316,6 +9319,7 @@ def admin_loan_overdraft_center(request):
         if "loan_decision_submit" in request.POST:
             decision_form = LoanCenterDecisionForm(request.POST)
             funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
             if decision_form.is_valid():
                 loan_id = decision_form.cleaned_data["loan_id"]
                 action = decision_form.cleaned_data["action"]
@@ -9352,6 +9356,7 @@ def admin_loan_overdraft_center(request):
         elif "fund_wallet_submit" in request.POST:
             funding_form = AdminOverdraftWalletFundingForm(request.POST)
             decision_form = LoanCenterDecisionForm()
+            override_unlock_form = LoanOverrideUnlockForm()
             if funding_form.is_valid():
                 super_agent = funding_form.cleaned_data["super_agent"]
                 amount = funding_form.cleaned_data["amount"]
@@ -9382,9 +9387,47 @@ def admin_loan_overdraft_center(request):
                 for field_errors in funding_form.errors.values():
                     for error in field_errors:
                         messages.error(request, error)
+        elif "override_unlock_submit" in request.POST:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm(request.POST)
+            if not request.user.is_superuser:
+                messages.error(request, "Only Super Admin can override unlock overdue overdraft accounts without payment.")
+            elif override_unlock_form.is_valid():
+                loan_id = override_unlock_form.cleaned_data["loan_id"]
+                reason = override_unlock_form.cleaned_data["reason"]
+                try:
+                    loan, unlocked_targets = override_unlock_loan_without_payment(
+                        actor=request.user,
+                        loan_id=loan_id,
+                        reason=reason,
+                        ip_address=get_client_ip(request),
+                    )
+                    unlocked_labels = ", ".join(
+                        target.username or target.email or f"user#{target.id}"
+                        for target in unlocked_targets
+                    ) or "No currently locked targets"
+                    log_admin_activity(
+                        request,
+                        f"Applied overdraft override unlock without payment for loan #{loan_id}. "
+                        f"Unlocked: {unlocked_labels}. Reason: {reason}",
+                        action_type="LOAN_OVERRIDE_UNLOCK",
+                        affected_object=f"loan:{loan_id}",
+                    )
+                    messages.success(
+                        request,
+                        f"Override unlock applied for loan #{loan_id}. Outstanding balance remains unpaid."
+                    )
+                except LoanOverdraftError as exc:
+                    messages.error(request, str(exc))
+            else:
+                for field_errors in override_unlock_form.errors.values():
+                    for error in field_errors:
+                        messages.error(request, error)
         elif "run_due_enforcement" in request.POST:
             decision_form = LoanCenterDecisionForm()
             funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
             processed_loans = enforce_due_loans()
             log_admin_activity(
                 request,
@@ -9396,10 +9439,12 @@ def admin_loan_overdraft_center(request):
         else:
             decision_form = LoanCenterDecisionForm()
             funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
         return redirect(f"{reverse('betting_admin:admin_loan_overdraft_center')}?{urlencode(redirect_params)}")
 
     decision_form = LoanCenterDecisionForm()
     funding_form = AdminOverdraftWalletFundingForm()
+    override_unlock_form = LoanOverrideUnlockForm()
 
     loans = Loan.objects.select_related(
         "borrower",
@@ -9493,6 +9538,21 @@ def admin_loan_overdraft_center(request):
         return _export_simple_rows(rows=rows, title=f"loan_overdraft_{tab}", fmt=export_format)
 
     loans_page = Paginator(loans, 50).get_page(request.GET.get("page") or 1)
+    for loan in loans_page.object_list:
+        override_meta = loan_lock_override_details(loan)
+        loan.lock_override_active = override_meta["active"]
+        loan.lock_override_reason = override_meta["reason"]
+        loan.lock_override_by_label = override_meta["performed_by_label"]
+        loan.lock_override_at = override_meta["performed_at"]
+        loan.can_override_unlock = bool(
+            request.user.is_superuser
+            and loan.outstanding_balance > Decimal("0.00")
+            and (
+                loan.account_locked_due_to_default
+                or getattr(loan.borrower, "is_locked", False)
+            )
+            and not loan.lock_override_active
+        )
     tab_counts = {
         "pending": Loan.objects.filter(status="pending").count(),
         "approved": Loan.objects.filter(approved_at__isnull=False).exclude(status="rejected").count(),
@@ -9518,8 +9578,10 @@ def admin_loan_overdraft_center(request):
         "now": now,
         "decision_form": decision_form,
         "funding_form": funding_form,
+        "override_unlock_form": override_unlock_form,
         "overdraft_wallets": overdraft_wallets,
         "summary": summary,
+        "is_superadmin": request.user.is_superuser,
         "borrower_role_choices": [
             ("agent", "Agent"),
             ("super_agent", "Super Agent"),

@@ -49,6 +49,8 @@
     </form>
   </div>
 
+  {% include 'betting/includes/ticket_transactions_widget.html' with widget=ticket_transactions_widget widget_title='CRM Ticket Transactions' %}
+
   {% if q %}
   <div class="card shadow-sm mb-4">
     <div class="card-header bg-light d-flex justify-content-between align-items-center">

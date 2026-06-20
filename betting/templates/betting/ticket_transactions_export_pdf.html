@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #222; }
+    h1 { margin: 0 0 8px 0; font-size: 20px; }
+    .meta-grid { margin: 0 0 16px 0; }
+    .meta-grid table { width: 100%; border-collapse: collapse; }
+    .meta-grid td { border: 1px solid #ddd; padding: 6px 8px; }
+    .summary-grid { margin-bottom: 16px; }
+    .summary-grid table { width: 100%; border-collapse: collapse; }
+    .summary-grid th, .summary-grid td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+    .summary-grid th { background: #f5f7fa; }
+    .statement-table { width: 100%; border-collapse: collapse; }
+    .statement-table th, .statement-table td { border: 1px solid #ddd; padding: 6px 8px; vertical-align: top; }
+    .statement-table th { background: #f5f7fa; }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+
+  <div class="meta-grid">
+    <table>
+      <tbody>
+        {% for key, value in meta.items %}
+        <tr>
+          <td><strong>{{ key|title|cut:"_" }}</strong></td>
+          <td>{{ value }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="summary-grid">
+    <table>
+      <thead>
+        <tr>
+          <th>Opening Balance</th>
+          <th>Current Balance</th>
+          <th>Total Deposits</th>
+          <th>Total Stakes</th>
+          <th>Total Winnings</th>
+          <th>Voids Refunded</th>
+          <th>Total Withdrawals</th>
+          <th>Commission Credits</th>
+          <th>Net Movement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>₦{{ summary.opening_balance|floatformat:2 }}</td>
+          <td>₦{{ summary.current_balance|floatformat:2 }}</td>
+          <td>₦{{ summary.total_deposits|floatformat:2 }}</td>
+          <td>₦{{ summary.total_stakes|floatformat:2 }}</td>
+          <td>₦{{ summary.total_winnings|floatformat:2 }}</td>
+          <td>₦{{ summary.total_voids_refunded|floatformat:2 }}</td>
+          <td>₦{{ summary.total_withdrawals|floatformat:2 }}</td>
+          <td>₦{{ summary.commission_credits|floatformat:2 }}</td>
+          <td>₦{{ summary.net_movement|floatformat:2 }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <table class="statement-table">
+    <thead>
+      <tr>
+        {% if rows %}
+          {% for key, value in rows.0.items %}
+          <th>{{ key }}</th>
+          {% endfor %}
+        {% else %}
+          <th>No data</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        {% for key, value in row.items %}
+        <td>{{ value }}</td>
+        {% endfor %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td>No data available for the selected filters.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

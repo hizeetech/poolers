@@ -1,0 +1,72 @@
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-light d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+    <div>
+      <div class="fw-semibold">{{ widget_title|default:"Ticket Transactions" }}</div>
+      <div class="text-muted small">Embedded wallet ledger preview with recent balance movements.</div>
+    </div>
+    <a href="{{ widget.open_full_url }}" class="btn btn-sm btn-outline-primary">Open Full Ledger</a>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-xl-3">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Opening Balance</div>
+          <div class="fw-bold">₦{{ widget.summary.opening_balance|floatformat:2 }}</div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Current Balance</div>
+          <div class="fw-bold text-success">₦{{ widget.summary.current_balance|floatformat:2 }}</div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Net Movement</div>
+          <div class="fw-bold {% if widget.summary.net_movement >= 0 %}text-success{% else %}text-danger{% endif %}">
+            ₦{{ widget.summary.net_movement|floatformat:2 }}
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Entries</div>
+          <div class="fw-bold">{{ widget.entry_count }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Date/Time</th>
+            <th>User</th>
+            <th>Reference</th>
+            <th>Type</th>
+            <th class="text-end">Debit</th>
+            <th class="text-end">Credit</th>
+            <th class="text-end">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in widget.entries %}
+          <tr>
+            <td class="text-nowrap">{{ item.created_at|date:"Y-m-d H:i" }}</td>
+            <td>{{ item.user.username|default:item.user.email }}</td>
+            <td class="text-muted small">{{ item.reference|default:"-" }}</td>
+            <td>{{ item.transaction_type }}</td>
+            <td class="text-end">{% if item.debit > 0 %}₦{{ item.debit|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td class="text-end">{% if item.credit > 0 %}₦{{ item.credit|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td class="text-end fw-semibold">₦{{ item.balance_after|floatformat:2 }}</td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="text-center text-muted py-4">No ticket transaction ledger entries available for this dashboard scope.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

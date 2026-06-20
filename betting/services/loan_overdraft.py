@@ -883,7 +883,7 @@ def _auto_unlock_loan_targets(borrower: User):
         )
 
 
-def _lock_defaulting_borrower(*, loan: Loan):
+def _lock_defaulting_borrower(*, loan: Loan, actor: User | None = None, ip_address=None, remarks_override: str = ""):
     if loan.account_locked_due_to_default:
         return
     if loan_has_active_lock_override(loan):
@@ -898,17 +898,20 @@ def _lock_defaulting_borrower(*, loan: Loan):
         logout_user_from_all_active_sessions(target)
         AccountLockAuditLog.objects.create(
             locked_user=target,
+            locked_by=actor if getattr(actor, "is_authenticated", False) else None,
             action="locked",
             lock_reason=LOAN_LOCK_REASON,
-            remarks=f"Locked due to overdue overdraft loan #{loan.id}.",
+            remarks=remarks_override or f"Locked due to overdue overdraft loan #{loan.id}.",
         )
     loan.account_locked_due_to_default = True
     loan.save(update_fields=["account_locked_due_to_default", "updated_at"])
     create_loan_audit(
         loan=loan,
         action="account_locked",
+        performed_by=actor if getattr(actor, "is_authenticated", False) else None,
         amount=loan.outstanding_balance,
-        reason=LOAN_LOCK_REASON,
+        reason=remarks_override or LOAN_LOCK_REASON,
+        ip_address=ip_address,
     )
     notify_loan_event(
         user=loan.borrower,
@@ -917,6 +920,66 @@ def _lock_defaulting_borrower(*, loan: Loan):
         notification_type="LOAN_ACCOUNT_LOCKED",
         data={"loan_id": loan.id},
     )
+
+
+@transaction.atomic
+def relock_loan_after_override(*, actor: User, loan_id: int, reason: str, ip_address=None):
+    if not getattr(actor, "is_authenticated", False) or not getattr(actor, "is_superuser", False):
+        raise LoanOverdraftError("Only Super Admin can re-lock overdue overdraft accounts after override unlock.")
+
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("borrower", "lender")
+        .get(id=loan_id)
+    )
+    reason = (reason or "").strip()
+    if not reason:
+        raise LoanOverdraftError("Re-lock reason is required.")
+    if loan.outstanding_balance <= Decimal("0.00"):
+        raise LoanOverdraftError("This loan has no outstanding balance.")
+    if not loan_has_active_lock_override(loan):
+        raise LoanOverdraftError("This loan does not have an active override unlock to reverse.")
+
+    relock_remark = f"Re-locked after override unlock for loan #{loan.id}. Reason: {reason}"
+    snapshot = dict(getattr(loan, "workflow_snapshot", {}) or {})
+    previous_override_reason = (snapshot.get("lock_override_reason") or "").strip()
+    snapshot.update(
+        {
+            "lock_override_active": False,
+            "lock_relock_reason": reason,
+            "lock_relock_at": timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M:%S"),
+            "lock_relock_by_id": actor.id,
+            "lock_relock_by_label": actor.username or actor.email or f"user#{actor.id}",
+        }
+    )
+    loan.workflow_snapshot = snapshot
+    loan.save(update_fields=["workflow_snapshot", "updated_at"])
+
+    _lock_defaulting_borrower(
+        loan=loan,
+        actor=actor,
+        ip_address=ip_address,
+        remarks_override=relock_remark,
+    )
+
+    locked_targets = [
+        target for target in _loan_lock_targets(loan.borrower)
+        if getattr(target, "is_locked", False) and (getattr(target, "lock_reason", "") or "").strip() == LOAN_LOCK_REASON
+    ]
+    create_loan_audit(
+        loan=loan,
+        action="override",
+        performed_by=actor,
+        amount=loan.outstanding_balance,
+        reason=reason,
+        ip_address=ip_address,
+        metadata={
+            "override_type": "relock_after_override",
+            "previous_override_reason": previous_override_reason,
+            "relocked_target_ids": [target.id for target in locked_targets],
+        },
+    )
+    return loan, locked_targets
 
 
 def _apply_amount_to_outstanding_loans(*, user: User, amount, source: str, actor=None, transaction_obj=None, reference="", reason="", metadata=None):

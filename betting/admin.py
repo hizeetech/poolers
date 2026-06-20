@@ -161,6 +161,7 @@ class BettingAdminSite(admin.AdminSite):
             path('ops/reconciliation/', self.admin_view(views.admin_reconciliation_dashboard), name='admin_reconciliation_dashboard'),
             path('ops/reconciled-credits/', self.admin_view(views.admin_reconciled_credits_dashboard), name='admin_reconciled_credits_dashboard'),
             path('ops/loan-overdraft-center/', self.admin_view(views.admin_loan_overdraft_center), name='admin_loan_overdraft_center'),
+            path('ops/ticket-transactions/', self.admin_view(views.admin_ticket_transactions), name='admin_ticket_transactions'),
             path('ops/celery-health/', self.admin_view(views.admin_celery_health), name='admin_celery_health'),
             path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
 
@@ -1593,6 +1594,8 @@ class ApprovedNewCashierAdmin(admin.ModelAdmin):
 
 # --- UserWithdrawal Admin ---
 class UserWithdrawalAdmin(admin.ModelAdmin):
+    change_list_template = "betting/admin/userwithdrawal_change_list.html"
+
     def short_id(self, obj):
         return str(getattr(obj, 'id', '') or '')[:8]
     short_id.short_description = "ID"

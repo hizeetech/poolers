@@ -1,0 +1,344 @@
+from decimal import Decimal
+
+from django.core.management import call_command
+from django.test import TestCase
+from django.urls import reverse
+
+from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
+
+
+class TicketTransactionLedgerTests(TestCase):
+    def setUp(self):
+        self.password = "password123"
+        self.agent = User.objects.create_user(
+            email="ledger-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="ledger_agent",
+        )
+        self.cashier = User.objects.create_user(
+            email="ledger-cashier@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="ledger_cashier",
+            agent=self.agent,
+        )
+        self.other_agent = User.objects.create_user(
+            email="ledger-other-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="ledger_other_agent",
+        )
+        self.super_agent = User.objects.create_user(
+            email="ledger-super-agent@test.com",
+            password=self.password,
+            user_type="super_agent",
+            username="ledger_super_agent",
+        )
+        self.admin_user = User.objects.create_user(
+            email="ledger-admin@test.com",
+            password=self.password,
+            user_type="admin",
+            username="ledger_admin",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.other_cashier = User.objects.create_user(
+            email="ledger-other-cashier@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="ledger_other_cashier",
+            agent=self.other_agent,
+        )
+        for user in [self.agent, self.cashier, self.other_agent, self.super_agent, self.admin_user, self.other_cashier]:
+            Wallet.objects.create(user=user, balance=Decimal("0.00"))
+
+    def _create_ticket(self, user):
+        return BetTicket.objects.create(
+            user=user,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("200.00"),
+            status="pending",
+            bet_type="single",
+        )
+
+    def test_wallet_apply_delta_creates_ticket_transaction_ledger_entry(self):
+        ticket = self._create_ticket(self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("200.00"))
+        tx = Transaction.objects.create(
+            user=self.cashier,
+            transaction_type="bet_placement",
+            amount=Decimal("100.00"),
+            is_successful=True,
+            status="completed",
+            description=f"Placed bet on ticket {ticket.ticket_id}",
+            related_bet_ticket=ticket,
+        )
+
+        wallet = Wallet.objects.get(user=self.cashier)
+        wallet.apply_delta(
+            amount=-Decimal("100.00"),
+            actor=self.cashier,
+            transaction_obj=tx,
+            reference=str(ticket.ticket_id),
+            reason=tx.description,
+            metadata={"ticket_id": ticket.ticket_id, "source": "ticket_purchase"},
+        )
+
+        ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry__transaction=tx)
+        self.assertEqual(ledger.user, self.cashier)
+        self.assertEqual(ledger.ticket, ticket)
+        self.assertEqual(ledger.transaction_type, "Ticket Purchase")
+        self.assertEqual(ledger.debit, Decimal("100.00"))
+        self.assertEqual(ledger.credit, Decimal("0.00"))
+        self.assertEqual(ledger.balance_before, Decimal("200.00"))
+        self.assertEqual(ledger.balance_after, Decimal("100.00"))
+
+    def test_backfill_ticket_transactions_is_safe_to_rerun_for_legacy_transactions(self):
+        ticket = self._create_ticket(self.agent)
+        legacy_tx = Transaction.objects.create(
+            user=self.agent,
+            transaction_type="bet_payout",
+            amount=Decimal("250.00"),
+            is_successful=True,
+            status="completed",
+            description=f"Legacy payout for ticket {ticket.ticket_id}",
+            related_bet_ticket=ticket,
+        )
+
+        call_command("backfill_ticket_transactions")
+        self.assertTrue(
+            TicketTransactionLedger.objects.filter(event_key=f"legacy-transaction:{legacy_tx.id}").exists()
+        )
+        count_after_first_run = TicketTransactionLedger.objects.count()
+
+        call_command("backfill_ticket_transactions")
+        self.assertEqual(TicketTransactionLedger.objects.count(), count_after_first_run)
+
+    def test_agent_ticket_transactions_view_is_scoped_to_own_and_mapped_cashiers(self):
+        self.client.force_login(self.agent)
+
+        agent_wallet = Wallet.objects.get(user=self.agent)
+        cashier_wallet = Wallet.objects.get(user=self.cashier)
+        outsider_wallet = Wallet.objects.get(user=self.other_cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("100.00"))
+
+        agent_tx = Transaction.objects.create(
+            user=self.agent,
+            transaction_type="deposit",
+            amount=Decimal("500.00"),
+            is_successful=True,
+            status="completed",
+            description="Agent deposit",
+            payment_gateway="paystack",
+        )
+        cashier_tx = Transaction.objects.create(
+            user=self.cashier,
+            transaction_type="bet_placement",
+            amount=Decimal("50.00"),
+            is_successful=True,
+            status="completed",
+            description="Mapped cashier stake",
+        )
+        outsider_tx = Transaction.objects.create(
+            user=self.other_cashier,
+            transaction_type="deposit",
+            amount=Decimal("700.00"),
+            is_successful=True,
+            status="completed",
+            description="Outside cashier deposit",
+            payment_gateway="monnify",
+        )
+
+        agent_wallet.apply_delta(
+            amount=Decimal("500.00"),
+            actor=self.agent,
+            transaction_obj=agent_tx,
+            reference="PAYSTACK-AGENT-1",
+            reason=agent_tx.description,
+            metadata={"source": "gateway_deposit"},
+        )
+        cashier_wallet.apply_delta(
+            amount=-Decimal("50.00"),
+            actor=self.cashier,
+            transaction_obj=cashier_tx,
+            reference="TICKET-CASHIER-1",
+            reason=cashier_tx.description,
+            metadata={"source": "ticket_purchase"},
+        )
+        outsider_wallet.apply_delta(
+            amount=Decimal("700.00"),
+            actor=self.other_cashier,
+            transaction_obj=outsider_tx,
+            reference="MONNIFY-OUT-1",
+            reason=outsider_tx.description,
+            metadata={"source": "gateway_deposit"},
+        )
+
+        response = self.client.get(reverse("betting:ticket_transactions"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.agent.username)
+        self.assertContains(response, self.cashier.username)
+        self.assertNotContains(response, self.other_cashier.username)
+
+    def test_admin_ticket_transactions_page_is_available_inside_django_admin(self):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse("betting_admin:admin_ticket_transactions"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ticket Transactions")
+
+    def test_admin_ticket_transactions_page_supports_filters(self):
+        self.client.force_login(self.admin_user)
+        ticket = self._create_ticket(self.cashier)
+        wallet = Wallet.objects.get(user=self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("150.00"))
+        tx = Transaction.objects.create(
+            user=self.cashier,
+            transaction_type="bet_placement",
+            amount=Decimal("50.00"),
+            is_successful=True,
+            status="completed",
+            description=f"Filtered stake for {ticket.ticket_id}",
+            related_bet_ticket=ticket,
+        )
+        wallet.refresh_from_db()
+        wallet.apply_delta(
+            amount=-Decimal("50.00"),
+            actor=self.cashier,
+            transaction_obj=tx,
+            reference=str(ticket.ticket_id),
+            reason=tx.description,
+            metadata={"ticket_id": ticket.ticket_id, "source": "ticket_purchase"},
+        )
+
+        response = self.client.get(
+            reverse("betting_admin:admin_ticket_transactions"),
+            {
+                "username": self.cashier.username,
+                "ticket_id": ticket.ticket_id,
+                "reference_id": ticket.ticket_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.cashier.username)
+        self.assertContains(response, ticket.ticket_id)
+        self.assertContains(response, "Apply Filters")
+
+    def test_admin_ticket_transactions_page_supports_role_filter(self):
+        self.client.force_login(self.admin_user)
+
+        agent_wallet = Wallet.objects.get(user=self.agent)
+        cashier_wallet = Wallet.objects.get(user=self.cashier)
+        Wallet.objects.filter(user=self.agent).update(balance=Decimal("200.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("100.00"))
+
+        agent_tx = Transaction.objects.create(
+            user=self.agent,
+            transaction_type="deposit",
+            amount=Decimal("50.00"),
+            is_successful=True,
+            status="completed",
+            description="Agent deposit for role filter",
+            payment_gateway="paystack",
+        )
+        cashier_tx = Transaction.objects.create(
+            user=self.cashier,
+            transaction_type="deposit",
+            amount=Decimal("30.00"),
+            is_successful=True,
+            status="completed",
+            description="Cashier deposit for role filter",
+            payment_gateway="monnify",
+        )
+
+        agent_wallet.refresh_from_db()
+        cashier_wallet.refresh_from_db()
+        agent_wallet.apply_delta(
+            amount=Decimal("50.00"),
+            actor=self.agent,
+            transaction_obj=agent_tx,
+            reference="PAYSTACK-ROLE-AGENT",
+            reason=agent_tx.description,
+            metadata={"source": "gateway_deposit"},
+        )
+        cashier_wallet.apply_delta(
+            amount=Decimal("30.00"),
+            actor=self.cashier,
+            transaction_obj=cashier_tx,
+            reference="MONNIFY-ROLE-CASHIER",
+            reason=cashier_tx.description,
+            metadata={"source": "gateway_deposit"},
+        )
+
+        response = self.client.get(
+            reverse("betting_admin:admin_ticket_transactions"),
+            {"role": "cashier"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Role")
+        self.assertContains(response, self.cashier.username)
+        self.assertNotContains(response, self.agent.username)
+
+    def test_rejected_withdrawal_uses_wallet_ledger_entry_balances(self):
+        wallet = Wallet.objects.get(user=self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("200.00"))
+        withdrawal = UserWithdrawal.objects.create(
+            user=self.cashier,
+            amount=Decimal("50.00"),
+            bank_name="Demo Bank",
+            account_name="Ledger Cashier",
+            account_number="0123456789",
+            balance_before=Decimal("200.00"),
+            balance_after=Decimal("150.00"),
+            status="pending",
+        )
+        tx = Transaction.objects.create(
+            user=self.cashier,
+            transaction_type="withdrawal",
+            amount=Decimal("50.00"),
+            is_successful=True,
+            status="completed",
+            description=f"Withdrawal request {withdrawal.id} created (deducted from wallet).",
+            related_withdrawal_request=withdrawal,
+        )
+
+        wallet.refresh_from_db()
+        wallet.apply_delta(
+            amount=-Decimal("50.00"),
+            actor=self.cashier,
+            transaction_obj=tx,
+            reference=str(withdrawal.id),
+            reason=tx.description,
+            metadata={"withdrawal_id": withdrawal.id, "source": "withdraw_request"},
+        )
+
+        withdrawal.status = "rejected"
+        withdrawal.save()
+        withdrawal.refresh_from_db()
+
+        refund_entry = WalletLedgerEntry.objects.filter(
+            user=self.cashier,
+            reference=str(withdrawal.id),
+            direction="credit",
+        ).latest("created_at")
+
+        self.assertEqual(withdrawal.balance_before, refund_entry.balance_before)
+        self.assertEqual(withdrawal.balance_after, refund_entry.balance_after)
+        refund_ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=refund_entry)
+        self.assertEqual(refund_ledger.transaction_type, "Withdrawal Refund")
+
+    def test_super_agent_dashboard_embeds_ticket_transactions_panel(self):
+        self.client.force_login(self.super_agent)
+
+        response = self.client.get(reverse("betting:super_agent_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Dashboard Ticket Transactions")

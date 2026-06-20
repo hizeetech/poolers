@@ -71,6 +71,8 @@
     </div>
   </div>
 
+  {% include 'betting/includes/ticket_transactions_widget.html' with widget=ticket_transactions_widget widget_title='Retail Manager Ticket Transactions' %}
+
   <ul class="nav nav-tabs rm-tabs mb-3" id="retail-dashboard-tabs">
     <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'hierarchy' %}active{% endif %}" href="?tab=hierarchy&start_date={{ start_date }}&end_date={{ end_date }}">Hierarchy</a></li>

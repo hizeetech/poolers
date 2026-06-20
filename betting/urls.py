@@ -31,6 +31,7 @@ urlpatterns = [
 
     # Wallet & Payments
     path('wallet/', views.wallet_view, name='wallet'),
+    path('ticket-transactions/', views.ticket_transactions, name='ticket_transactions'),
     path('deposit/initiate/', views.initiate_deposit, name='initiate_deposit'),
     path('deposit/status/<str:reference>/', views.deposit_status, name='deposit_status'),
     path('deposit/verify/', views.verify_deposit, name='verify_deposit'),

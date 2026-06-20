@@ -1673,6 +1673,25 @@ class LoanOverrideUnlockForm(forms.Form):
         return reason
 
 
+class LoanOverrideRelockForm(forms.Form):
+    loan_id = forms.IntegerField(widget=forms.HiddenInput())
+    reason = forms.CharField(
+        required=True,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control form-control-sm",
+                "placeholder": "Reason for re-lock",
+            }
+        ),
+    )
+
+    def clean_reason(self):
+        reason = (self.cleaned_data.get("reason") or "").strip()
+        if not reason:
+            raise ValidationError("Re-lock reason is required.")
+        return reason
+
+
 
 # Aliases for compatibility with betting/admin.py
 UserCreationForm = AdminUserCreationForm 

@@ -63,6 +63,8 @@
     </form>
   </div>
 
+  {% include 'betting/includes/ticket_transactions_widget.html' with widget=ticket_transactions_widget widget_title='Finance Ticket Transactions' %}
+
   <ul class="nav nav-tabs fin-tabs mb-3" id="finance-dashboard-tabs">
     <li class="nav-item"><a class="nav-link {% if active_tab == 'overview' %}active{% endif %}" href="?tab=overview&start_date={{ start_date }}&end_date={{ end_date }}">Overview</a></li>
     <li class="nav-item"><a class="nav-link {% if active_tab == 'bets' %}active{% endif %}" href="?tab=bets&start_date={{ start_date }}&end_date={{ end_date }}">Bets</a></li>

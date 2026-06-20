@@ -3,7 +3,7 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.dispatch import receiver
 from django.db import transaction
 from django.utils import timezone
-from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, Loan, LoanPendingCredit
+from .models import ActivityLog, User, BetTicket, Wallet, Transaction, UserWithdrawal, Fixture, BonusRule, GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, Loan, LoanPendingCredit, WalletLedgerEntry
 from .middleware import get_current_user, get_current_request
 from .utils import get_ip_details, get_client_ip, log_debug, clear_bonus_rules_cache, clear_betting_limits_cache
 from notifications.services import create_notification
@@ -200,6 +200,56 @@ def schedule_admin_betticket_refresh(payload=None):
     _run_after_commit_in_background(_broadcast_admin_betticket_refresh, payload or {})
 
 
+def _broadcast_admin_userwithdrawal_refresh(payload=None):
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            "admin_userwithdrawal_changelist",
+            {
+                "type": "admin.userwithdrawal.refresh",
+                "payload": payload or {},
+            },
+        )
+    except Exception:
+        return
+
+
+def schedule_admin_userwithdrawal_refresh(payload=None):
+    _run_after_commit_in_background(_broadcast_admin_userwithdrawal_refresh, payload or {})
+
+
+def _withdrawal_wallet_ledger_entry(instance, *, prefer_direction=None):
+    reference = str(instance.id)
+    entries = (
+        WalletLedgerEntry.objects.select_related("transaction")
+        .filter(user=instance.user, reference=reference)
+        .order_by("-created_at", "-id")
+    )
+    if prefer_direction in {"credit", "debit"}:
+        directional = entries.filter(direction=prefer_direction)
+        preferred = directional.first()
+        if preferred:
+            return preferred
+    entry = entries.filter(transaction__related_withdrawal_request=instance).first()
+    if entry:
+        return entry
+    return entries.first()
+
+
+@receiver(post_save, sender=WalletLedgerEntry)
+def sync_ticket_transaction_ledger(sender, instance, created, raw=False, **kwargs):
+    if raw or not created:
+        return
+    try:
+        from .services.ticket_transaction_ledger import sync_ticket_transaction_ledger_for_wallet_entry
+
+        sync_ticket_transaction_ledger_for_wallet_entry(instance)
+    except Exception:
+        return
+
+
 @receiver(post_save, sender=User)
 def log_user_changes(sender, instance, created, **kwargs):
     user = get_current_user()
@@ -316,6 +366,7 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                         is_successful=True,
                         status='completed',
                         description=f"Refund for rejected withdrawal request {instance.id}",
+                        related_withdrawal_request=instance,
                         timestamp=timezone.now()
                     )
                     wallet.apply_delta(
@@ -341,7 +392,7 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                         transaction_obj=None,
                         reference=str(instance.id),
                         reason=f"Reopen withdrawal request {instance.id} (re-deduct)",
-                        metadata={"withdrawal_id": instance.id, "status_change": "reopened"},
+                        metadata={"withdrawal_id": instance.id, "status_change": "reopened", "source": "withdraw_request"},
                     )
             
             # Update audit fields
@@ -353,18 +404,27 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
                 if not instance.processed_ip and request:
                     instance.processed_ip = get_client_ip(request)
 
-                try:
-                    user_wallet = Wallet.objects.select_for_update().get(user=instance.user)
-                except Wallet.DoesNotExist:
-                    user_wallet = None
+                ledger_entry = None
+                if instance.status in ['approved', 'completed']:
+                    ledger_entry = _withdrawal_wallet_ledger_entry(instance, prefer_direction='debit')
+                elif instance.status == 'rejected':
+                    ledger_entry = _withdrawal_wallet_ledger_entry(instance, prefer_direction='credit')
 
-                if user_wallet and (instance.balance_before is None or instance.balance_after is None):
-                    if instance.status in ['approved', 'completed']:
-                        instance.balance_after = user_wallet.balance
-                        instance.balance_before = user_wallet.balance + instance.amount
-                    elif instance.status == 'rejected':
-                        instance.balance_before = user_wallet.balance
-                        instance.balance_after = user_wallet.balance - instance.amount
+                if ledger_entry:
+                    instance.balance_before = ledger_entry.balance_before
+                    instance.balance_after = ledger_entry.balance_after
+                elif instance.balance_before is None or instance.balance_after is None:
+                    try:
+                        user_wallet = Wallet.objects.select_for_update().get(user=instance.user)
+                    except Wallet.DoesNotExist:
+                        user_wallet = None
+                    if user_wallet:
+                        if instance.status in ['approved', 'completed']:
+                            instance.balance_after = user_wallet.balance
+                            instance.balance_before = user_wallet.balance + instance.amount
+                        elif instance.status == 'rejected':
+                            instance.balance_before = user_wallet.balance
+                            instance.balance_after = user_wallet.balance - instance.amount
 
                 if user and user.is_authenticated and (instance.approver_balance_before is None or instance.approver_balance_after is None):
                     try:
@@ -433,6 +493,14 @@ def log_withdrawal(sender, instance, created, **kwargs):
         def _enqueue_created():
             _enqueue_withdrawal_email(instance.pk, 'requested')
         transaction.on_commit(_enqueue_created)
+
+    schedule_admin_userwithdrawal_refresh(
+        {
+            "withdrawal_id": str(instance.id),
+            "status": instance.status,
+            "created": created,
+        }
+    )
 
 
 @receiver(post_save, sender=Transaction)

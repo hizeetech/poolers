@@ -75,6 +75,7 @@ from .services.loan_overdraft import (
     loan_lock_override_details,
     notify_loan_event,
     override_unlock_loan_without_payment,
+    relock_loan_after_override,
     reject_loan_request,
     remit_overdraft_pending_credit,
     submit_overdraft_request,
@@ -94,7 +95,7 @@ from .models import (
     CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery, CRMOpsAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
-    ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment
+    ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment, TicketTransactionLedger
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -106,7 +107,7 @@ from .forms import (
     FixtureForm, BettingPeriodForm,
     AccountUserSearchForm, AccountUserWalletActionForm, SuperAdminFundAccountUserForm,
     CreditRequestForm, LoanSettlementForm, AdminManualWalletForm, OverdraftRequestForm,
-    LoanCenterDecisionForm, AdminOverdraftWalletFundingForm, LoanOverrideUnlockForm,
+    LoanCenterDecisionForm, AdminOverdraftWalletFundingForm, LoanOverrideUnlockForm, LoanOverrideRelockForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
     RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
@@ -7641,6 +7642,12 @@ def agent_dashboard(request):
         'overdraft_wallet_card': overdraft_wallet_card,
         'pending_overdraft_requests': pending_overdraft_requests,
         'qualified_overdraft_agent_rows': qualified_overdraft_agent_rows,
+        'ticket_transactions_widget': _ticket_transaction_widget_context(
+            user,
+            limit=8,
+            date_from=metrics_start.isoformat() if metrics_start else '',
+            date_to=metrics_end.isoformat() if metrics_end else '',
+        ),
     }
     return render(request, 'betting/agent_dashboard.html', context)
 
@@ -8379,6 +8386,11 @@ def admin_dashboard(request):
         'period_ggr': period_ggr,
         'period_commission_paid': period_commission_paid,
         'period_ngr': period_ngr,
+        'ticket_transactions_widget': _ticket_transaction_widget_context(
+            request.user,
+            limit=12,
+            full_url_name='betting_admin:admin_ticket_transactions',
+        ),
     }
     return render(request, 'betting/admin/dashboard.html', context)
 
@@ -9522,6 +9534,44 @@ def admin_loan_overdraft_center(request):
                 for field_errors in override_unlock_form.errors.values():
                     for error in field_errors:
                         messages.error(request, error)
+        elif "relock_submit" in request.POST:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
+            relock_form = LoanOverrideRelockForm(request.POST)
+            if not request.user.is_superuser:
+                messages.error(request, "Only Super Admin can re-lock overdue overdraft accounts after override unlock.")
+            elif relock_form.is_valid():
+                loan_id = relock_form.cleaned_data["loan_id"]
+                reason = relock_form.cleaned_data["reason"]
+                try:
+                    loan, relocked_targets = relock_loan_after_override(
+                        actor=request.user,
+                        loan_id=loan_id,
+                        reason=reason,
+                        ip_address=get_client_ip(request),
+                    )
+                    relocked_labels = ", ".join(
+                        target.username or target.email or f"user#{target.id}"
+                        for target in relocked_targets
+                    ) or "No targets"
+                    log_admin_activity(
+                        request,
+                        f"Re-locked overdraft loan #{loan_id} after override unlock. "
+                        f"Locked: {relocked_labels}. Reason: {reason}",
+                        action_type="LOAN_OVERRIDE_RELOCK",
+                        affected_object=f"loan:{loan_id}",
+                    )
+                    messages.success(
+                        request,
+                        f"Loan #{loan_id} has been re-locked and the override unlock has been reversed."
+                    )
+                except LoanOverdraftError as exc:
+                    messages.error(request, str(exc))
+            else:
+                for field_errors in relock_form.errors.values():
+                    for error in field_errors:
+                        messages.error(request, error)
         elif "run_due_enforcement" in request.POST:
             decision_form = LoanCenterDecisionForm()
             funding_form = AdminOverdraftWalletFundingForm()
@@ -9650,6 +9700,11 @@ def admin_loan_overdraft_center(request):
                 or getattr(loan.borrower, "is_locked", False)
             )
             and not loan.lock_override_active
+        )
+        loan.can_relock_after_override = bool(
+            request.user.is_superuser
+            and loan.outstanding_balance > Decimal("0.00")
+            and loan.lock_override_active
         )
     tab_counts = {
         "pending": Loan.objects.filter(status="pending").count(),
@@ -10544,6 +10599,507 @@ def api_wallet_transfer(request):
 @csrf_exempt
 def api_user_profile(request):
     return JsonResponse({'status': 'success', 'message': 'API endpoint for user profile (placeholder).'})
+
+
+TICKET_TRANSACTION_FILTER_TYPES = [
+    "Admin Credit",
+    "Admin Debit",
+    "Bonus Credit",
+    "Commission Adjustment",
+    "Commission Credit",
+    "Deposit",
+    "Overdraft Credit",
+    "Overdraft Debit",
+    "Refund Reversal",
+    "Ticket Purchase",
+    "Ticket Voided",
+    "Wallet Adjustment",
+    "Wallet Transfer In",
+    "Wallet Transfer Out",
+    "Winning Reversal",
+    "Winning Settlement",
+    "Withdrawal",
+    "Withdrawal Refund",
+]
+TICKET_TRANSACTION_FILTER_SOURCES = [
+    "Admin Credit",
+    "Admin Debit",
+    "Bonus",
+    "Commission",
+    "Kora",
+    "Monnify",
+    "Overdraft",
+    "Paystack",
+    "Ticket Purchase",
+    "Ticket Settlement",
+    "Ticket Void",
+    "Wallet Transfer",
+    "Withdrawal",
+]
+
+
+def _default_ticket_transaction_filters():
+    return {
+        'date_from': '',
+        'date_to': '',
+        'username': '',
+        'role': '',
+        'cashier_id': '',
+        'agent_id': '',
+        'super_agent_id': '',
+        'master_agent_id': '',
+        'ticket_id': '',
+        'reference_id': '',
+        'transaction_type': '',
+        'source': '',
+        'order': 'desc',
+    }
+
+
+def can_view_ticket_transactions(user):
+    allowed_types = {
+        'cashier',
+        'agent',
+        'super_agent',
+        'master_agent',
+        'retail_manager',
+        'crm',
+        'finance',
+        'account_user',
+        'admin',
+    }
+    return bool(getattr(user, 'is_authenticated', False) and (user.is_superuser or user.user_type in allowed_types))
+
+
+def _ticket_transaction_scope_users_queryset(user):
+    if not getattr(user, 'is_authenticated', False):
+        return User.objects.none()
+    if user.is_superuser or user.user_type in {'admin', 'finance', 'account_user', 'crm'}:
+        return User.objects.all()
+    if user.user_type == 'cashier':
+        return User.objects.filter(id=user.id)
+    if user.user_type == 'agent':
+        return User.objects.filter(Q(id=user.id) | Q(agent=user)).distinct()
+    if user.user_type == 'super_agent':
+        return User.objects.filter(
+            Q(id=user.id) |
+            Q(super_agent=user) |
+            Q(agent__super_agent=user)
+        ).distinct()
+    if user.user_type == 'master_agent':
+        return User.objects.filter(
+            Q(id=user.id) |
+            Q(master_agent=user) |
+            Q(super_agent__master_agent=user) |
+            Q(agent__master_agent=user) |
+            Q(agent__super_agent__master_agent=user)
+        ).distinct()
+    if is_retail_manager(user):
+        return (User.objects.filter(id=user.id) | get_retail_network_users_qs(user)).distinct()
+    return User.objects.none()
+
+
+def _parse_statement_date(raw_value, *, end_of_day=False):
+    raw_value = (raw_value or '').strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = date.fromisoformat(raw_value)
+    except ValueError:
+        return None
+    time_value = datetime.max.time() if end_of_day else datetime.min.time()
+    combined = datetime.combine(parsed, time_value)
+    if timezone.is_naive(combined):
+        return timezone.make_aware(combined, timezone.get_current_timezone())
+    return combined
+
+
+def _ticket_transaction_filtered_users(scope_users, filters):
+    users = scope_users
+    username_q = (filters.get('username') or '').strip()
+    if username_q:
+        users = users.filter(
+            Q(username__icontains=username_q) |
+            Q(email__icontains=username_q) |
+            Q(first_name__icontains=username_q) |
+            Q(last_name__icontains=username_q)
+        )
+
+    role = (filters.get('role') or '').strip()
+    if role in {'cashier', 'agent', 'super_agent', 'master_agent', 'retail_manager'}:
+        users = users.filter(user_type=role)
+
+    cashier_id = (filters.get('cashier_id') or '').strip()
+    if cashier_id.isdigit():
+        users = users.filter(id=int(cashier_id), user_type='cashier')
+
+    agent_id = (filters.get('agent_id') or '').strip()
+    if agent_id.isdigit():
+        agent_int = int(agent_id)
+        users = users.filter(Q(id=agent_int, user_type='agent') | Q(agent_id=agent_int))
+
+    super_agent_id = (filters.get('super_agent_id') or '').strip()
+    if super_agent_id.isdigit():
+        super_agent_int = int(super_agent_id)
+        users = users.filter(
+            Q(id=super_agent_int, user_type='super_agent') |
+            Q(super_agent_id=super_agent_int) |
+            Q(agent__super_agent_id=super_agent_int)
+        )
+
+    master_agent_id = (filters.get('master_agent_id') or '').strip()
+    if master_agent_id.isdigit():
+        master_agent_int = int(master_agent_id)
+        users = users.filter(
+            Q(id=master_agent_int, user_type='master_agent') |
+            Q(master_agent_id=master_agent_int) |
+            Q(super_agent__master_agent_id=master_agent_int) |
+            Q(agent__master_agent_id=master_agent_int) |
+            Q(agent__super_agent__master_agent_id=master_agent_int)
+        )
+    return users.distinct()
+
+
+def _ticket_transaction_filtered_queryset(user, filters):
+    scope_users = _ticket_transaction_scope_users_queryset(user)
+    filtered_users = _ticket_transaction_filtered_users(scope_users, filters)
+    queryset = TicketTransactionLedger.objects.select_related(
+        'user',
+        'ticket',
+        'created_by',
+        'transaction',
+    ).filter(user__in=filtered_users)
+
+    date_from = _parse_statement_date(filters.get('date_from'))
+    date_to = _parse_statement_date(filters.get('date_to'), end_of_day=True)
+    if date_from:
+        queryset = queryset.filter(created_at__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__lte=date_to)
+
+    ticket_id = (filters.get('ticket_id') or '').strip()
+    if ticket_id:
+        queryset = queryset.filter(
+            Q(ticket__ticket_id__icontains=ticket_id) |
+            Q(reference__icontains=ticket_id) |
+            Q(description__icontains=ticket_id)
+        )
+
+    reference_id = (filters.get('reference_id') or '').strip()
+    if reference_id:
+        queryset = queryset.filter(reference__icontains=reference_id)
+
+    transaction_type = (filters.get('transaction_type') or '').strip()
+    if transaction_type:
+        queryset = queryset.filter(transaction_type=transaction_type)
+
+    source = (filters.get('source') or '').strip()
+    if source:
+        queryset = queryset.filter(source=source)
+
+    order = 'asc' if (filters.get('order') or '').strip().lower() == 'asc' else 'desc'
+    ordering = ('created_at', 'id') if order == 'asc' else ('-created_at', '-id')
+    return queryset.order_by(*ordering), filtered_users, date_from, date_to, order
+
+
+def _aggregate_money(queryset, *, field):
+    value = queryset.aggregate(total=Coalesce(Sum(field), Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))))['total']
+    return Decimal(str(value or '0.00')).quantize(Decimal('0.01'))
+
+
+def _sum_user_balances(users_queryset):
+    value = Wallet.objects.filter(user__in=users_queryset).aggregate(
+        total=Coalesce(Sum('balance'), Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2)))
+    )['total']
+    return Decimal(str(value or '0.00')).quantize(Decimal('0.01'))
+
+
+def _opening_balance_for_users(users_queryset, start_dt):
+    if start_dt:
+        latest_before_subquery = TicketTransactionLedger.objects.filter(
+            user_id=OuterRef('pk'),
+            created_at__lt=start_dt,
+        ).order_by('-created_at', '-id').values('balance_after')[:1]
+        aggregated = users_queryset.annotate(
+            opening_balance_amount=Coalesce(
+                Subquery(latest_before_subquery, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2)),
+            )
+        ).aggregate(
+            total=Coalesce(Sum('opening_balance_amount'), Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        )['total']
+        return Decimal(str(aggregated or '0.00')).quantize(Decimal('0.01'))
+
+    first_before_subquery = TicketTransactionLedger.objects.filter(
+        user_id=OuterRef('pk')
+    ).order_by('created_at', 'id').values('balance_before')[:1]
+    aggregated = users_queryset.annotate(
+        opening_balance_amount=Coalesce(
+            Subquery(first_before_subquery, output_field=DecimalField(max_digits=12, decimal_places=2)),
+            Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2)),
+        )
+    ).aggregate(
+        total=Coalesce(Sum('opening_balance_amount'), Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2)))
+    )['total']
+    return Decimal(str(aggregated or '0.00')).quantize(Decimal('0.01'))
+
+
+def _ticket_transaction_summary(queryset, filtered_users, start_dt):
+    total_debits = _aggregate_money(queryset, field='debit')
+    total_credits = _aggregate_money(queryset, field='credit')
+    opening_balance = _opening_balance_for_users(filtered_users, start_dt)
+    net_movement = (total_credits - total_debits).quantize(Decimal('0.01'))
+    closing_balance = (opening_balance + net_movement).quantize(Decimal('0.01'))
+    commission_credits = (
+        _aggregate_money(queryset.filter(transaction_type='Commission Credit'), field='credit') +
+        _aggregate_money(queryset.filter(transaction_type='Commission Adjustment'), field='credit')
+    ).quantize(Decimal('0.01'))
+    return {
+        'opening_balance': opening_balance,
+        'current_balance': _sum_user_balances(filtered_users),
+        'closing_balance': closing_balance,
+        'total_deposits': _aggregate_money(queryset.filter(transaction_type='Deposit'), field='credit'),
+        'total_stakes': _aggregate_money(queryset.filter(transaction_type='Ticket Purchase'), field='debit'),
+        'total_winnings': _aggregate_money(queryset.filter(transaction_type='Winning Settlement'), field='credit'),
+        'total_voids_refunded': _aggregate_money(queryset.filter(transaction_type='Ticket Voided'), field='credit'),
+        'total_withdrawals': _aggregate_money(queryset.filter(transaction_type='Withdrawal'), field='debit'),
+        'commission_credits': commission_credits,
+        'net_movement': net_movement,
+        'total_debits': total_debits,
+        'total_credits': total_credits,
+    }
+
+
+def _ticket_transaction_export_rows(queryset):
+    rows = []
+    for item in queryset:
+        rows.append({
+            'Date/Time': timezone.localtime(item.created_at).strftime('%Y-%m-%d %H:%M:%S') if item.created_at else '',
+            'Username': item.user.username or item.user.email,
+            'Reference ID': item.reference,
+            'Ticket ID': getattr(getattr(item, 'ticket', None), 'ticket_id', '') or '',
+            'Source': item.source,
+            'Transaction Type': item.transaction_type,
+            'Description': item.description,
+            'Debit': f"{item.debit:.2f}",
+            'Credit': f"{item.credit:.2f}",
+            'Balance Before': f"{item.balance_before:.2f}",
+            'Balance After': f"{item.balance_after:.2f}",
+        })
+    return rows
+
+
+def _ticket_transaction_filter_metadata(request, filters, summary):
+    return {
+        'generated_at': timezone.localtime(timezone.now()).strftime('%Y-%m-%d %H:%M:%S'),
+        'username': filters.get('username') or 'All',
+        'date_from': filters.get('date_from') or 'Inception',
+        'date_to': filters.get('date_to') or 'Now',
+        'reference_id': filters.get('reference_id') or 'All',
+        'ticket_id': filters.get('ticket_id') or 'All',
+        'transaction_type': filters.get('transaction_type') or 'All',
+        'source': filters.get('source') or 'All',
+        'opening_balance': f"{summary['opening_balance']:.2f}",
+        'closing_balance': f"{summary['closing_balance']:.2f}",
+        'current_balance': f"{summary['current_balance']:.2f}",
+    }
+
+
+def _ticket_transaction_widget_context(user, *, limit=8, date_from='', date_to='', full_url_name='betting:ticket_transactions'):
+    filters = _default_ticket_transaction_filters()
+    filters['date_from'] = (date_from or '').strip()
+    filters['date_to'] = (date_to or '').strip()
+    queryset, filtered_users, start_dt, _end_dt, _order = _ticket_transaction_filtered_queryset(user, filters)
+    summary = _ticket_transaction_summary(queryset, filtered_users, start_dt)
+    recent_entries = list(queryset[:limit])
+    query_params = {}
+    if filters['date_from']:
+        query_params['date_from'] = filters['date_from']
+    if filters['date_to']:
+        query_params['date_to'] = filters['date_to']
+    open_full_url = reverse(full_url_name)
+    if query_params:
+        open_full_url = f"{open_full_url}?{urlencode(query_params)}"
+    return {
+        'summary': summary,
+        'entries': recent_entries,
+        'entry_count': queryset.count(),
+        'open_full_url': open_full_url,
+        'date_from': filters['date_from'],
+        'date_to': filters['date_to'],
+    }
+
+
+def _ticket_transaction_request_filters(request):
+    filters = _default_ticket_transaction_filters()
+    filters.update({
+        'date_from': (request.GET.get('date_from') or '').strip(),
+        'date_to': (request.GET.get('date_to') or '').strip(),
+        'username': (request.GET.get('username') or '').strip(),
+        'role': (request.GET.get('role') or '').strip(),
+        'cashier_id': (request.GET.get('cashier') or '').strip(),
+        'agent_id': (request.GET.get('agent') or '').strip(),
+        'super_agent_id': (request.GET.get('super_agent') or '').strip(),
+        'master_agent_id': (request.GET.get('master_agent') or '').strip(),
+        'ticket_id': (request.GET.get('ticket_id') or '').strip(),
+        'reference_id': (request.GET.get('reference_id') or '').strip(),
+        'transaction_type': (request.GET.get('transaction_type') or '').strip(),
+        'source': (request.GET.get('source') or '').strip(),
+        'order': (request.GET.get('order') or 'desc').strip(),
+    })
+    return filters
+
+
+def _build_ticket_transactions_page_context(user, filters, *, page_number=1):
+    queryset, filtered_users, start_dt, end_dt, order = _ticket_transaction_filtered_queryset(user, filters)
+    summary = _ticket_transaction_summary(queryset, filtered_users, start_dt)
+    page_obj = Paginator(queryset, 50).get_page(page_number)
+    role_filter_users = _ticket_transaction_filtered_users(
+        _ticket_transaction_scope_users_queryset(user),
+        {
+            'username': filters['username'],
+            'role': filters.get('role', ''),
+            'cashier_id': '',
+            'agent_id': '',
+            'super_agent_id': '',
+            'master_agent_id': '',
+        },
+    )
+    transaction_type_options = sorted(set(TICKET_TRANSACTION_FILTER_TYPES) | set(TicketTransactionLedger.objects.values_list('transaction_type', flat=True)))
+    source_options = sorted(set(TICKET_TRANSACTION_FILTER_SOURCES) | set(TicketTransactionLedger.objects.values_list('source', flat=True)))
+    context = {
+        'page_obj': page_obj,
+        'summary': summary,
+        'filters': filters,
+        'order': order,
+        'date_from_dt': start_dt,
+        'date_to_dt': end_dt,
+        'cashier_options': list(role_filter_users.filter(user_type='cashier').order_by('username', 'email')[:300]),
+        'agent_options': list(role_filter_users.filter(user_type='agent').order_by('username', 'email')[:300]),
+        'super_agent_options': list(role_filter_users.filter(user_type='super_agent').order_by('username', 'email')[:300]),
+        'master_agent_options': list(role_filter_users.filter(user_type='master_agent').order_by('username', 'email')[:300]),
+        'transaction_type_options': [opt for opt in transaction_type_options if opt],
+        'source_options': [opt for opt in source_options if opt],
+        'role_options': [
+            ('cashier', 'Cashier'),
+            ('agent', 'Agent'),
+            ('super_agent', 'Super Agent'),
+            ('master_agent', 'Master Agent'),
+            ('retail_manager', 'Retail Manager'),
+        ],
+        'can_filter_role': user.is_superuser or user.user_type == 'admin',
+        'can_filter_cashier': user.user_type in {'agent', 'super_agent', 'master_agent', 'retail_manager', 'crm', 'finance', 'account_user', 'admin'} or user.is_superuser,
+        'can_filter_agent': user.user_type in {'super_agent', 'master_agent', 'retail_manager', 'crm', 'finance', 'account_user', 'admin'} or user.is_superuser,
+        'can_filter_super_agent': user.user_type in {'master_agent', 'retail_manager', 'crm', 'finance', 'account_user', 'admin'} or user.is_superuser,
+        'can_filter_master_agent': user.user_type in {'retail_manager', 'crm', 'finance', 'account_user', 'admin'} or user.is_superuser,
+    }
+    return context, queryset, summary
+
+
+def _export_ticket_transaction_statement(request, *, queryset, filters, summary, fmt):
+    rows = _ticket_transaction_export_rows(queryset)
+    meta = _ticket_transaction_filter_metadata(request, filters, summary)
+    filename_base = f"ticket_transactions_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if fmt == 'xlsx':
+        import io
+        import pandas as pd
+
+        output = io.BytesIO()
+        summary_rows = [{'Metric': key.replace('_', ' ').title(), 'Value': value} for key, value in meta.items()]
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            pd.DataFrame(summary_rows).to_excel(writer, sheet_name='Summary', index=False)
+            pd.DataFrame(rows).to_excel(writer, sheet_name='Transactions', index=False)
+        output.seek(0)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.xlsx"'
+        return response
+
+    if fmt == 'pdf':
+        from weasyprint import HTML
+
+        html = render_to_string(
+            'betting/ticket_transactions_export_pdf.html',
+            {
+                'rows': rows,
+                'meta': meta,
+                'summary': summary,
+                'title': 'Ticket Transactions Statement',
+            },
+            request=request,
+        )
+        pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename_base}.pdf"'
+        return response
+
+    if fmt == 'print':
+        return render(
+            request,
+            'betting/ticket_transactions_print.html',
+            {
+                'rows': queryset,
+                'summary': summary,
+                'filters': filters,
+                'meta': meta,
+                'title': 'Ticket Transactions Statement',
+            },
+        )
+    return HttpResponseBadRequest('Unsupported format.')
+
+
+@login_required
+@user_passes_test(can_view_ticket_transactions)
+def ticket_transactions(request):
+    filters = _ticket_transaction_request_filters(request)
+    export_format = (request.GET.get('format') or '').strip().lower()
+    context, queryset, summary = _build_ticket_transactions_page_context(
+        request.user,
+        filters,
+        page_number=request.GET.get('page') or 1,
+    )
+
+    if export_format in {'xlsx', 'pdf', 'print'}:
+        return _export_ticket_transaction_statement(
+            request,
+            queryset=queryset,
+            filters=filters,
+            summary=summary,
+            fmt=export_format,
+        )
+
+    return render(request, 'betting/ticket_transactions.html', context)
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_ticket_transactions(request):
+    request.current_app = 'betting_admin'
+    filters = _ticket_transaction_request_filters(request)
+    export_format = (request.GET.get('format') or '').strip().lower()
+    context, queryset, summary = _build_ticket_transactions_page_context(
+        request.user,
+        filters,
+        page_number=request.GET.get('page') or 1,
+    )
+    if export_format in {'xlsx', 'pdf', 'print'}:
+        return _export_ticket_transaction_statement(
+            request,
+            queryset=queryset,
+            filters=filters,
+            summary=summary,
+            fmt=export_format,
+        )
+    return render(
+        request,
+        'betting/admin/ticket_transactions.html',
+        {
+            **context,
+            'standalone_url': reverse('betting:ticket_transactions'),
+            'admin_reset_url': reverse('betting_admin:admin_ticket_transactions'),
+        },
+    )
+
 
 @csrf_exempt
 def api_change_password(request):
@@ -13259,6 +13815,12 @@ def crm_dashboard(request):
         'bulk_channel_choices': BulkMessageCampaign.CHANNEL_CHOICES,
         'bulk_target_group_choices': BulkMessageCampaign.TARGET_GROUP_CHOICES,
         'bulk_recurring_choices': BulkMessageCampaign.RECURRING_CHOICES,
+        'ticket_transactions_widget': _ticket_transaction_widget_context(
+            request.user,
+            limit=12,
+            date_from=start_date_str,
+            date_to=end_date_str,
+        ),
         **overdraft_reporting_context,
     }
     return render(request, 'betting/crm_dashboard.html', context)
@@ -14365,6 +14927,12 @@ def retail_dashboard(request):
         'complaint_type_choices': CustomerComplaint.COMPLAINT_TYPE_CHOICES,
         'complaint_status_choices': CustomerComplaint.STATUS_CHOICES,
         'complaint_priority_choices': CustomerComplaint.PRIORITY_CHOICES,
+        'ticket_transactions_widget': _ticket_transaction_widget_context(
+            request.user,
+            limit=12,
+            date_from=start_date_str,
+            date_to=end_date_str,
+        ),
         **overdraft_reporting_context,
     }
     return render(request, 'betting/retail_dashboard.html', context)
@@ -16363,6 +16931,12 @@ def finance_dashboard(request):
         'can_manage_ledger': finance_can_manage_ledger(request.user),
         'can_view_gateways': finance_can_view_gateways(request.user),
         'can_view_pin_logs': finance_can_view_pin_logs(request.user),
+        'ticket_transactions_widget': _ticket_transaction_widget_context(
+            request.user,
+            limit=12,
+            date_from=start_date_str,
+            date_to=end_date_str,
+        ),
         **overdraft_reporting_context,
     }
     return render(request, 'betting/finance_dashboard.html', context)

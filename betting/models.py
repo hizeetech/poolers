@@ -869,6 +869,40 @@ class Transaction(models.Model):
         return f"{self.transaction_type} - {self.user.email} - {self.amount} ({self.status})"
 
 
+class TicketTransactionLedger(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ticket_transaction_ledgers')
+    ticket = models.ForeignKey('BetTicket', on_delete=models.SET_NULL, null=True, blank=True, related_name='transaction_ledgers')
+    transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='ticket_transaction_ledgers')
+    wallet_ledger_entry = models.OneToOneField('WalletLedgerEntry', on_delete=models.SET_NULL, null=True, blank=True, related_name='ticket_transaction_ledger')
+    event_key = models.CharField(max_length=120, unique=True)
+    reference = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    transaction_type = models.CharField(max_length=80, db_index=True)
+    source = models.CharField(max_length=80, db_index=True)
+    description = models.TextField(blank=True, default='')
+    debit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    credit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ticket_transaction_ledgers_created')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['user', 'created_at'], name='bet_ttl_user_created_idx'),
+            models.Index(fields=['user', 'transaction_type'], name='bet_ttl_user_type_idx'),
+            models.Index(fields=['user', 'source'], name='bet_ttl_user_source_idx'),
+            models.Index(fields=['ticket', 'created_at'], name='bet_ttl_ticket_created_idx'),
+            models.Index(fields=['transaction', 'created_at'], name='bet_ttl_tx_created_idx'),
+        ]
+
+    def __str__(self):
+        return f"TicketTxnLedger({self.user_id}) {self.transaction_type} {self.reference}"
+
+
 class PaymentGatewayDeposit(Transaction):
     class Meta:
         proxy = True
@@ -1621,10 +1655,7 @@ class BetTicket(models.Model):
                     if locked_ticket.payout_processed or locked_ticket.status != 'won':
                         return
                     wallet = Wallet.objects.select_for_update().get(user=self.user)
-                    wallet.balance += locked_ticket.max_winning
-                    wallet.save()
-
-                    Transaction.objects.create(
+                    payout_tx = Transaction.objects.create(
                         user=self.user,
                         initiating_user=None,
                         transaction_type='bet_payout',
@@ -1634,6 +1665,17 @@ class BetTicket(models.Model):
                         description=f"Winnings for ticket {locked_ticket.ticket_id}",
                         related_bet_ticket=locked_ticket,
                         timestamp=timezone.now()
+                    )
+                    wallet.apply_delta(
+                        amount=locked_ticket.max_winning,
+                        actor=None,
+                        transaction_obj=payout_tx,
+                        reference=str(locked_ticket.ticket_id),
+                        reason=payout_tx.description,
+                        metadata={
+                            "ticket_id": locked_ticket.ticket_id,
+                            "source": "ticket_settlement",
+                        },
                     )
 
                     locked_ticket.payout_processed = True
@@ -2733,12 +2775,9 @@ def refund_stake_on_void(sender, instance, **kwargs):
             if old_ticket.status not in ['cancelled', 'deleted'] and instance.status in ['cancelled', 'deleted']:
                 with transaction.atomic():
                     wallet = Wallet.objects.select_for_update().get(user=instance.user)
-                    wallet.balance += instance.stake_amount
-                    wallet.save()
-                    
                     initiating_user = instance.deleted_by if instance.deleted_by else None
-                    
-                    Transaction.objects.create(
+
+                    refund_tx = Transaction.objects.create(
                         user=instance.user,
                         initiating_user=initiating_user,
                         transaction_type='ticket_deletion_refund',
@@ -2748,6 +2787,18 @@ def refund_stake_on_void(sender, instance, **kwargs):
                         description=f"Refund for ticket {instance.ticket_id} (Status: {instance.status})",
                         related_bet_ticket=instance,
                         timestamp=timezone.now()
+                    )
+                    wallet.apply_delta(
+                        amount=instance.stake_amount,
+                        actor=initiating_user if getattr(initiating_user, 'is_authenticated', False) else None,
+                        transaction_obj=refund_tx,
+                        reference=str(instance.ticket_id),
+                        reason=refund_tx.description,
+                        metadata={
+                            "ticket_id": instance.ticket_id,
+                            "source": "ticket_void",
+                            "void_status": instance.status,
+                        },
                     )
         except BetTicket.DoesNotExist:
             pass

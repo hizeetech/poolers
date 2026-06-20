@@ -58,7 +58,20 @@
                 </div>
             </div>
         </div>
+
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-secondary-subtle text-secondary-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Ticket Transactions</h3>
+                    <p class="card-text fs-1 fw-bold text-secondary">{{ ticket_transactions_widget.entry_count }}</p>
+                    <p class="card-text fs-6 text-muted">Ledger entries available across the admin scope</p>
+                    <a href="{% url 'betting_admin:admin_ticket_transactions' %}" class="btn btn-sm btn-outline-secondary mt-2">Open Ledger</a>
+                </div>
+            </div>
+        </div>
     </div>
+
+    {% include 'betting/includes/ticket_transactions_widget.html' with widget=ticket_transactions_widget widget_title='Admin Ticket Transactions Preview' %}
 
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body">

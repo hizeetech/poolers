@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #222; margin: 24px; }
+    h1 { margin-bottom: 8px; }
+    .meta, .summary { margin-bottom: 18px; }
+    .meta table, .summary table, .statement { width: 100%; border-collapse: collapse; }
+    .meta td, .summary th, .summary td, .statement th, .statement td {
+      border: 1px solid #d9dee5;
+      padding: 8px;
+      text-align: left;
+      font-size: 12px;
+    }
+    .summary th, .statement th { background: #f5f7fa; }
+    .statement td { vertical-align: top; }
+    @media print {
+      body { margin: 0; }
+    }
+  </style>
+</head>
+<body onload="window.print()">
+  <h1>{{ title }}</h1>
+
+  <div class="meta">
+    <table>
+      <tbody>
+        {% for key, value in meta.items %}
+        <tr>
+          <td><strong>{{ key|title|cut:"_" }}</strong></td>
+          <td>{{ value }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="summary">
+    <table>
+      <thead>
+        <tr>
+          <th>Opening Balance</th>
+          <th>Current Balance</th>
+          <th>Total Deposits</th>
+          <th>Total Stakes</th>
+          <th>Total Winnings</th>
+          <th>Voids Refunded</th>
+          <th>Total Withdrawals</th>
+          <th>Commission Credits</th>
+          <th>Closing Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>₦{{ summary.opening_balance|floatformat:2 }}</td>
+          <td>₦{{ summary.current_balance|floatformat:2 }}</td>
+          <td>₦{{ summary.total_deposits|floatformat:2 }}</td>
+          <td>₦{{ summary.total_stakes|floatformat:2 }}</td>
+          <td>₦{{ summary.total_winnings|floatformat:2 }}</td>
+          <td>₦{{ summary.total_voids_refunded|floatformat:2 }}</td>
+          <td>₦{{ summary.total_withdrawals|floatformat:2 }}</td>
+          <td>₦{{ summary.commission_credits|floatformat:2 }}</td>
+          <td>₦{{ summary.closing_balance|floatformat:2 }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <table class="statement">
+    <thead>
+      <tr>
+        <th>Date/Time</th>
+        <th>Username</th>
+        <th>Reference ID</th>
+        <th>Ticket ID</th>
+        <th>Source</th>
+        <th>Transaction Type</th>
+        <th>Description</th>
+        <th>Debit</th>
+        <th>Credit</th>
+        <th>Balance Before</th>
+        <th>Balance After</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in rows %}
+      <tr>
+        <td>{{ item.created_at|date:"Y-m-d H:i:s" }}</td>
+        <td>{{ item.user.username|default:item.user.email }}</td>
+        <td>{{ item.reference|default:"-" }}</td>
+        <td>{% if item.ticket %}{{ item.ticket.ticket_id }}{% else %}-{% endif %}</td>
+        <td>{{ item.source }}</td>
+        <td>{{ item.transaction_type }}</td>
+        <td>{{ item.description|default:"-" }}</td>
+        <td>{% if item.debit > 0 %}₦{{ item.debit|floatformat:2 }}{% else %}-{% endif %}</td>
+        <td>{% if item.credit > 0 %}₦{{ item.credit|floatformat:2 }}{% else %}-{% endif %}</td>
+        <td>₦{{ item.balance_before|floatformat:2 }}</td>
+        <td>₦{{ item.balance_after|floatformat:2 }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="11">No data available for the selected filters.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

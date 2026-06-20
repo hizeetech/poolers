@@ -1,0 +1,308 @@
+{% extends "betting/base.html" %}
+
+{% block title %}Ticket Transactions{% endblock %}
+
+{% block extra_css %}
+<style>
+  .ledger-summary-wrap {
+    position: sticky;
+    top: 108px;
+    z-index: 20;
+  }
+  .ledger-card {
+    border: 0;
+    border-radius: 1rem;
+    box-shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+  }
+  .ledger-card .metric-label {
+    font-size: 0.8rem;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ledger-card .metric-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+  }
+  .ledger-filter-card,
+  .ledger-table-card {
+    border: 0;
+    border-radius: 1rem;
+    box-shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+  }
+  .ledger-table-card .table thead th {
+    white-space: nowrap;
+  }
+  .ledger-table-card .table td {
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .ledger-amount-debit {
+    color: #c1121f;
+    font-weight: 600;
+  }
+  .ledger-amount-credit {
+    color: #198754;
+    font-weight: 600;
+  }
+  .ledger-balance {
+    font-weight: 600;
+    color: #0d6efd;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="mb-3">
+    <div>
+      <h2 class="mb-1">Ticket Transactions</h2>
+      <p class="text-muted mb-0">Complete wallet ledger showing debits, credits, and running balances.</p>
+    </div>
+  </div>
+
+  <div class="ledger-summary-wrap mb-4">
+    <div class="row g-3">
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Opening Balance</div>
+            <div class="metric-value">₦{{ summary.opening_balance|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Current Balance</div>
+            <div class="metric-value">₦{{ summary.current_balance|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Total Deposits</div>
+            <div class="metric-value text-success">₦{{ summary.total_deposits|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Total Stakes</div>
+            <div class="metric-value text-danger">₦{{ summary.total_stakes|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Total Winnings</div>
+            <div class="metric-value text-success">₦{{ summary.total_winnings|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Voids Refunded</div>
+            <div class="metric-value text-success">₦{{ summary.total_voids_refunded|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Withdrawals</div>
+            <div class="metric-value text-danger">₦{{ summary.total_withdrawals|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Commission Credits</div>
+            <div class="metric-value text-success">₦{{ summary.commission_credits|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-xl">
+        <div class="card ledger-card h-100">
+          <div class="card-body">
+            <div class="metric-label">Net Movement</div>
+            <div class="metric-value {% if summary.net_movement >= 0 %}text-success{% else %}text-danger{% endif %}">
+              ₦{{ summary.net_movement|floatformat:2 }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card ledger-filter-card mb-4">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">Date From</label>
+          <input type="date" class="form-control" name="date_from" value="{{ filters.date_from }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Date To</label>
+          <input type="date" class="form-control" name="date_to" value="{{ filters.date_to }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Username</label>
+          <input type="text" class="form-control" name="username" value="{{ filters.username }}" placeholder="Search username or email">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Ticket ID</label>
+          <input type="text" class="form-control" name="ticket_id" value="{{ filters.ticket_id }}" placeholder="Ticket ID">
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Reference ID</label>
+          <input type="text" class="form-control" name="reference_id" value="{{ filters.reference_id }}" placeholder="Reference ID">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Transaction Type</label>
+          <select class="form-select" name="transaction_type">
+            <option value="">All Types</option>
+            {% for option in transaction_type_options %}
+            <option value="{{ option }}" {% if filters.transaction_type == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Source</label>
+          <select class="form-select" name="source">
+            <option value="">All Sources</option>
+            {% for option in source_options %}
+            <option value="{{ option }}" {% if filters.source == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Sort Order</label>
+          <select class="form-select" name="order">
+            <option value="desc" {% if order == 'desc' %}selected{% endif %}>Newest First</option>
+            <option value="asc" {% if order == 'asc' %}selected{% endif %}>Oldest First</option>
+          </select>
+        </div>
+
+        {% if can_filter_cashier %}
+        <div class="col-md-3">
+          <label class="form-label">Cashier</label>
+          <select class="form-select" name="cashier">
+            <option value="">All Cashiers</option>
+            {% for option in cashier_options %}
+            <option value="{{ option.id }}" {% if filters.cashier_id == option.id|stringformat:"s" %}selected{% endif %}>{{ option.username|default:option.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        {% if can_filter_agent %}
+        <div class="col-md-3">
+          <label class="form-label">Agent</label>
+          <select class="form-select" name="agent">
+            <option value="">All Agents</option>
+            {% for option in agent_options %}
+            <option value="{{ option.id }}" {% if filters.agent_id == option.id|stringformat:"s" %}selected{% endif %}>{{ option.username|default:option.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        {% if can_filter_super_agent %}
+        <div class="col-md-3">
+          <label class="form-label">Super Agent</label>
+          <select class="form-select" name="super_agent">
+            <option value="">All Super Agents</option>
+            {% for option in super_agent_options %}
+            <option value="{{ option.id }}" {% if filters.super_agent_id == option.id|stringformat:"s" %}selected{% endif %}>{{ option.username|default:option.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        {% if can_filter_master_agent %}
+        <div class="col-md-3">
+          <label class="form-label">Master Agent</label>
+          <select class="form-select" name="master_agent">
+            <option value="">All Master Agents</option>
+            {% for option in master_agent_options %}
+            <option value="{{ option.id }}" {% if filters.master_agent_id == option.id|stringformat:"s" %}selected{% endif %}>{{ option.username|default:option.email }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        <div class="col-12 d-flex flex-wrap gap-2">
+          <button type="submit" class="btn btn-primary">Apply Filters</button>
+          <a href="{% url 'betting:ticket_transactions' %}" class="btn btn-outline-secondary">Reset</a>
+          <button type="submit" class="btn btn-outline-success" name="format" value="xlsx">Export Excel</button>
+          <button type="submit" class="btn btn-outline-danger" name="format" value="pdf">Export PDF</button>
+          <button type="submit" class="btn btn-outline-dark" name="format" value="print" formtarget="_blank">Print Statement</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card ledger-table-card">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Date/Time</th>
+              <th>Username</th>
+              <th>Reference ID</th>
+              <th>Ticket ID</th>
+              <th>Source</th>
+              <th>Transaction Type</th>
+              <th>Description</th>
+              <th>Debit</th>
+              <th>Credit</th>
+              <th>Balance Before</th>
+              <th>Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in page_obj %}
+            <tr>
+              <td>{{ item.created_at|date:"Y-m-d H:i:s" }}</td>
+              <td>{{ item.user.username|default:item.user.email }}</td>
+              <td>{{ item.reference|default:"-" }}</td>
+              <td>{% if item.ticket %}{{ item.ticket.ticket_id }}{% else %}-{% endif %}</td>
+              <td>{{ item.source }}</td>
+              <td>{{ item.transaction_type }}</td>
+              <td class="text-wrap" style="min-width: 260px;">{{ item.description|default:"-" }}</td>
+              <td class="ledger-amount-debit">{% if item.debit > 0 %}₦{{ item.debit|floatformat:2 }}{% else %}-{% endif %}</td>
+              <td class="ledger-amount-credit">{% if item.credit > 0 %}₦{{ item.credit|floatformat:2 }}{% else %}-{% endif %}</td>
+              <td>₦{{ item.balance_before|floatformat:2 }}</td>
+              <td class="ledger-balance">₦{{ item.balance_after|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="11" class="text-center text-muted py-5">No ticket transaction ledger entries found for the selected filters.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.paginator.num_pages > 1 %}
+      <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
+        <div class="text-muted small">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+        <div class="d-flex gap-2">
+          {% if page_obj.has_previous %}
+          <a class="btn btn-sm btn-outline-secondary" href="?date_from={{ filters.date_from }}&date_to={{ filters.date_to }}&username={{ filters.username }}&cashier={{ filters.cashier_id }}&agent={{ filters.agent_id }}&super_agent={{ filters.super_agent_id }}&master_agent={{ filters.master_agent_id }}&ticket_id={{ filters.ticket_id }}&reference_id={{ filters.reference_id }}&transaction_type={{ filters.transaction_type }}&source={{ filters.source }}&order={{ order }}&page={{ page_obj.previous_page_number }}">Prev</a>
+          {% endif %}
+          {% if page_obj.has_next %}
+          <a class="btn btn-sm btn-outline-secondary" href="?date_from={{ filters.date_from }}&date_to={{ filters.date_to }}&username={{ filters.username }}&cashier={{ filters.cashier_id }}&agent={{ filters.agent_id }}&super_agent={{ filters.super_agent_id }}&master_agent={{ filters.master_agent_id }}&ticket_id={{ filters.ticket_id }}&reference_id={{ filters.reference_id }}&transaction_type={{ filters.transaction_type }}&source={{ filters.source }}&order={{ order }}&page={{ page_obj.next_page_number }}">Next</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

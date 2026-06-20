@@ -152,3 +152,56 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertTrue(self.cashier.is_locked)
         self.assertFalse((loan.workflow_snapshot or {}).get("lock_override_active", False))
         self.assertFalse(LoanAuditLog.objects.filter(loan=loan, action="override").exists())
+
+    def test_superadmin_can_relock_after_override_unlock(self):
+        loan = self._create_overdue_locked_loan()
+
+        self.client.force_login(self.superadmin)
+        unlock_response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=locked",
+            {
+                "loan_id": str(loan.id),
+                "reason": "Temporary admin relief pending reconciliation review",
+                "override_unlock_submit": "1",
+            },
+            follow=True,
+        )
+        self.assertEqual(unlock_response.status_code, 200)
+
+        relock_response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=locked",
+            {
+                "loan_id": str(loan.id),
+                "reason": "Unlock was granted in error",
+                "relock_submit": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(relock_response.status_code, 200)
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+
+        self.assertTrue(loan.account_locked_due_to_default)
+        self.assertFalse((loan.workflow_snapshot or {}).get("lock_override_active", False))
+        self.assertEqual((loan.workflow_snapshot or {}).get("lock_relock_reason"), "Unlock was granted in error")
+        self.assertTrue(self.agent.is_locked)
+        self.assertTrue(self.cashier.is_locked)
+        relock_audit = LoanAuditLog.objects.filter(loan=loan, action="override").latest("created_at")
+        self.assertEqual(relock_audit.performed_by, self.superadmin)
+        self.assertEqual(relock_audit.metadata.get("override_type"), "relock_after_override")
+        self.assertTrue(
+            AccountLockAuditLog.objects.filter(
+                locked_user=self.agent,
+                action="locked",
+                locked_by=self.superadmin,
+            ).exists()
+        )
+        self.assertTrue(
+            AccountLockAuditLog.objects.filter(
+                locked_user=self.cashier,
+                action="locked",
+                locked_by=self.superadmin,
+            ).exists()
+        )

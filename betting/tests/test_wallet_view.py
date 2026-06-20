@@ -13,6 +13,7 @@ from betting.services.loan_overdraft import (
     create_manual_overdraft,
     remit_overdraft_pending_credit,
 )
+from betting.tasks import enforce_due_loans_task
 from datetime import timedelta
 from decimal import Decimal
 
@@ -171,6 +172,42 @@ class WalletViewTest(TestCase):
         overdue_loan.refresh_from_db()
         agent.refresh_from_db()
 
+        self.assertEqual(overdue_loan.status, 'overdue')
+        self.assertTrue(overdue_loan.account_locked_due_to_default)
+        self.assertTrue(agent.is_locked)
+        self.assertIn('overdraft/loan obligation', agent.lock_reason.lower())
+
+    def test_enforce_due_loans_task_uses_due_date_locking_flow(self):
+        super_agent = User.objects.create_user(
+            email='taskoverduesuper@example.com',
+            password='testpassword',
+            user_type='super_agent',
+        )
+        agent = User.objects.create_user(
+            email='taskoverdueagent@example.com',
+            password='testpassword',
+            user_type='agent',
+            super_agent=super_agent,
+        )
+        overdue_loan = Loan.objects.create(
+            borrower=agent,
+            lender=super_agent,
+            amount=Decimal('95.00'),
+            requested_amount=Decimal('95.00'),
+            qualified_amount=Decimal('95.00'),
+            outstanding_balance=Decimal('95.00'),
+            status='active',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(minutes=5),
+        )
+
+        processed = enforce_due_loans_task()
+
+        overdue_loan.refresh_from_db()
+        agent.refresh_from_db()
+
+        self.assertEqual(processed, 1)
         self.assertEqual(overdue_loan.status, 'overdue')
         self.assertTrue(overdue_loan.account_locked_due_to_default)
         self.assertTrue(agent.is_locked)

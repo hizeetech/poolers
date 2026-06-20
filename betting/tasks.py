@@ -36,6 +36,7 @@ from .models import (
     FinanceSettlementBatch,
 )
 from .services.ticket_results import recalculate_tickets_for_fixture_sync
+from .services.loan_overdraft import enforce_due_loans
 import logging
 
 logger = logging.getLogger(__name__)
@@ -384,6 +385,15 @@ def recalculate_tickets_for_fixture(fixture_id):
     This prevents timeouts when saving results in the admin.
     """
     recalculate_tickets_for_fixture_sync(fixture_id)
+
+
+@shared_task
+def enforce_due_loans_task():
+    """
+    Sweep for loans whose stored due_date has passed and apply the lock workflow.
+    Running this frequently keeps enforcement aligned with per-loan deadlines.
+    """
+    return enforce_due_loans()
 
 
 def _parse_recipients(raw):

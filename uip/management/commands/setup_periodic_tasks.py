@@ -164,6 +164,17 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Confirmed task: Process Ticket Void Requests'))
 
         PeriodicTask.objects.update_or_create(
+            name='Enforce Due Overdraft Loans',
+            defaults={
+                'crontab': schedule_every_minute,
+                'task': 'betting.tasks.enforce_due_loans_task',
+                'args': json.dumps([]),
+                'enabled': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Confirmed task: Enforce Due Overdraft Loans'))
+
+        PeriodicTask.objects.update_or_create(
             name='Reconcile Pending Deposits',
             defaults={
                 'crontab': schedule_10m,

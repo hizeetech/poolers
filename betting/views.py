@@ -14480,9 +14480,33 @@ def retail_dashboard(request):
         top_agents = list(
             tickets_range_qs.filter(user__agent__isnull=False)
             .values('user__agent_id', 'user__agent__email', 'user__agent__username')
-            .annotate(stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()), bets=Count('id'))
+            .annotate(
+                stake=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()),
+                bets=Count('id'),
+                payouts=Coalesce(
+                    Sum(
+                        Case(
+                            When(status='won', then=F('max_winning')),
+                            default=Value(0),
+                            output_field=DecimalField(),
+                        )
+                    ),
+                    Value(0),
+                    output_field=DecimalField(),
+                ),
+            )
             .order_by('-stake')[:10]
         )
+        for row in top_agents:
+            stake = Decimal(str(row.get('stake') or '0.00'))
+            payouts = Decimal(str(row.get('payouts') or '0.00'))
+            ggr = (stake - payouts).quantize(Decimal('0.01'))
+            row['ggr'] = ggr
+            row['net_margin_pct'] = (
+                ((ggr / stake) * Decimal('100.00')).quantize(Decimal('0.01'))
+                if stake > Decimal('0.00')
+                else Decimal('0.00')
+            )
     except Exception:
         top_agents = []
 

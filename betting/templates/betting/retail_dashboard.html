@@ -183,8 +183,8 @@
       </div>
     </div>
 
-    <div class="col-12 col-lg-8">
-      <div class="card shadow-sm h-100">
+    <div class="col-12">
+      <div class="card shadow-sm">
         <div class="card-header bg-light fw-semibold">Top Performing Agents (by stake)</div>
         <div class="card-body p-0">
           <div class="table-responsive">
@@ -194,6 +194,9 @@
                   <th>Agent</th>
                   <th class="text-end">Bets</th>
                   <th class="text-end">Stake</th>
+                  <th class="text-end">Total Payout</th>
+                  <th class="text-end">Total GGR</th>
+                  <th class="text-end">Net Margin (%)</th>
                 </tr>
               </thead>
               <tbody>
@@ -202,9 +205,20 @@
                   <td class="text-muted small">{{ a.user__agent__username|default:a.user__agent__email|default:"-" }}</td>
                   <td class="text-end">{{ a.bets }}</td>
                   <td class="text-end fw-semibold">₦{{ a.stake|floatformat:2 }}</td>
+                  <td class="text-end">₦{{ a.payouts|floatformat:2 }}</td>
+                  <td class="text-end">
+                    <span class="d-inline-block fw-semibold px-2 py-1 rounded-pill text-nowrap {% if a.ggr > 0 %}bg-success-subtle text-success-emphasis border border-success-subtle{% elif a.ggr < 0 %}bg-danger-subtle text-danger-emphasis border border-danger-subtle{% else %}bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle{% endif %}">
+                      ₦{{ a.ggr|floatformat:2 }}
+                    </span>
+                  </td>
+                  <td class="text-end">
+                    <span class="d-inline-block fw-semibold px-2 py-1 rounded-pill text-nowrap {% if a.net_margin_pct > 0 %}bg-success-subtle text-success-emphasis border border-success-subtle{% elif a.net_margin_pct < 0 %}bg-danger-subtle text-danger-emphasis border border-danger-subtle{% else %}bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle{% endif %}">
+                      {{ a.net_margin_pct|floatformat:2 }}%
+                    </span>
+                  </td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="3" class="text-center text-muted py-4">No data.</td></tr>
+                <tr><td colspan="6" class="text-center text-muted py-4">No data.</td></tr>
                 {% endfor %}
               </tbody>
             </table>

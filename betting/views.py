@@ -16935,6 +16935,7 @@ def crm_user_detail(request, user_id):
 
             sent = []
             errors = {}
+            sms_status = None
             if via_inapp:
                 try:
                     create_notification(
@@ -16997,7 +16998,6 @@ def crm_user_detail(request, user_id):
                     sent.append('email')
                 except Exception as e:
                     errors['email'] = str(e)
-            sms_status = None
             if via_sms:
                 try:
                     from notifications.services import send_sms_ebulksms

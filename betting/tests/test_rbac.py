@@ -28,9 +28,10 @@ class RBACTests(TestCase):
         self.crm_viewer = User.objects.create_user(email='crm_viewer@test.com', password=self.password, user_type='crm', crm_role='viewer')
         self.crm_ops = User.objects.create_user(email='crm_ops@test.com', password=self.password, user_type='crm', crm_role='ops')
         self.crm_compliance = User.objects.create_user(email='crm_compliance@test.com', password=self.password, user_type='crm', crm_role='compliance')
+        self.crm_supervisor = User.objects.create_user(email='crm_supervisor@test.com', password=self.password, user_type='crm', crm_role='supervisor')
         
         # Create wallets for all users
-        for user in [self.player, self.cashier, self.agent, self.super_agent, self.master_agent, self.account_user, self.account_user_two, self.admin, self.plain_admin, self.crm_viewer, self.crm_ops, self.crm_compliance]:
+        for user in [self.player, self.cashier, self.agent, self.super_agent, self.master_agent, self.account_user, self.account_user_two, self.admin, self.plain_admin, self.crm_viewer, self.crm_ops, self.crm_compliance, self.crm_supervisor]:
             Wallet.objects.get_or_create(user=user, defaults={'balance': Decimal('0.00')})
 
     def test_player_access(self):
@@ -104,7 +105,7 @@ class RBACTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'System')
-        self.assertContains(response, self.player.email)
+        self.assertContains(response, self.player.username or self.player.email)
 
     def test_admin_reconciled_credits_dashboard_lists_reconcile_wallet_credits(self):
         tx = Transaction.objects.create(
@@ -1204,7 +1205,7 @@ class RBACTests(TestCase):
 
     @patch('django.core.mail.EmailMultiAlternatives.send', return_value=1)
     def test_crm_email_message_creates_popup_notification(self, _mock_send):
-        self.client.force_login(self.crm_viewer)
+        self.client.force_login(self.crm_supervisor)
         resp = self.client.post(reverse('betting:crm_user_detail', args=[self.player.id]), {
             'send_message': '1',
             'target_user_id': str(self.player.id),

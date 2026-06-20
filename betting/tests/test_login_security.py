@@ -1,7 +1,6 @@
 from django.test import TestCase, Client, RequestFactory
 from django.urls import reverse
 from betting.models import User, LoginAttempt
-from betting.forms import LoginForm
 
 class LoginSecurityTest(TestCase):
     def setUp(self):
@@ -17,7 +16,7 @@ class LoginSecurityTest(TestCase):
 
     def test_failed_login_increments_counter(self):
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': 'wrongpassword'
         })
         self.user.refresh_from_db()
@@ -34,7 +33,7 @@ class LoginSecurityTest(TestCase):
         
         # Login successfully
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': self.password
         })
         
@@ -49,7 +48,7 @@ class LoginSecurityTest(TestCase):
         # 3 Failed attempts
         for i in range(3):
             self.client.post(self.login_url, {
-                'email': self.user.email,
+                'identifier': self.user.username,
                 'password': 'wrongpassword'
             })
             self.user.refresh_from_db()
@@ -57,7 +56,7 @@ class LoginSecurityTest(TestCase):
         
         # 4th Failed attempt -> Lock
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': 'wrongpassword'
         })
         self.user.refresh_from_db()
@@ -73,7 +72,7 @@ class LoginSecurityTest(TestCase):
         self.user.save()
         
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': self.password # Correct password
         })
         
@@ -84,24 +83,24 @@ class LoginSecurityTest(TestCase):
     def test_attempts_remaining_message(self):
         # 1st fail
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': 'wrongpassword'
         })
         self.assertContains(response, "3 attempts remaining")
         
         # 2nd fail
         response = self.client.post(self.login_url, {
-            'email': self.user.email,
+            'identifier': self.user.username,
             'password': 'wrongpassword'
         })
         self.assertContains(response, "2 attempts remaining")
 
     def test_non_existent_user_audit(self):
         response = self.client.post(self.login_url, {
-            'email': 'ghost@example.com',
+            'identifier': 'ghostuser',
             'password': 'any'
         })
-        self.assertTrue(LoginAttempt.objects.filter(username_attempted='ghost@example.com', status='failed').exists())
+        self.assertTrue(LoginAttempt.objects.filter(username_attempted='ghostuser', status='failed').exists())
 
     def test_login_page_is_not_cached_and_sets_csrf_cookie(self):
         response = self.client.get(self.login_url)

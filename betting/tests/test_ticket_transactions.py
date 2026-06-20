@@ -368,3 +368,12 @@ class TicketTransactionLedgerTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Retail Manager Dashboard")
+
+    def test_retail_dashboard_renders_for_retail_manager_with_ticket_transaction_widget(self):
+        self.client.force_login(self.retail_manager)
+
+        response = self.client.get(reverse("betting:retail_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Retail Manager Dashboard")
+        self.assertContains(response, "Retail Manager Ticket Transactions")

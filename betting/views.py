@@ -10695,7 +10695,11 @@ def _ticket_transaction_scope_users_queryset(user):
             Q(agent__super_agent__master_agent=user)
         ).distinct()
     if is_retail_manager(user):
-        return (User.objects.filter(id=user.id) | get_retail_network_users_qs(user)).distinct()
+        network_user_ids = get_retail_network_users_qs(user).values_list('id', flat=True)
+        return User.objects.filter(
+            Q(id=user.id) |
+            Q(id__in=network_user_ids)
+        ).distinct()
     return User.objects.none()
 
 

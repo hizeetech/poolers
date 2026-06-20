@@ -26,6 +26,7 @@ from betting.models import (
     User,
     Wallet,
 )
+from betting.utils import logout_user_from_all_active_sessions
 from notifications.services import create_notification, send_sms_ebulksms
 
 
@@ -894,6 +895,7 @@ def _lock_defaulting_borrower(*, loan: Loan):
         target.locked_at = timezone.now()
         target.lock_reason = LOAN_LOCK_REASON
         target.save(update_fields=["is_locked", "locked_at", "lock_reason"])
+        logout_user_from_all_active_sessions(target)
         AccountLockAuditLog.objects.create(
             locked_user=target,
             action="locked",

@@ -2,6 +2,8 @@ import requests
 import logging
 import os
 from django.conf import settings
+from django.contrib.auth import SESSION_KEY
+from django.contrib.sessions.models import Session
 from django.core.cache import cache
 from django.apps import apps
 from decimal import Decimal
@@ -10,6 +12,18 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def logout_user_from_all_active_sessions(user):
+    user_id = str(getattr(user, "pk", "") or "")
+    if not user_id:
+        return
+    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+        try:
+            if session.get_decoded().get(SESSION_KEY) == user_id:
+                session.delete()
+        except Exception:
+            continue
 
 def log_debug(message):
     try:

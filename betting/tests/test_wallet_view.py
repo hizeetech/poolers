@@ -213,6 +213,57 @@ class WalletViewTest(TestCase):
         self.assertTrue(agent.is_locked)
         self.assertIn('overdraft/loan obligation', agent.lock_reason.lower())
 
+    def test_due_loan_lock_logs_out_active_agent_and_cashier_sessions(self):
+        super_agent = User.objects.create_user(
+            email='sessionlocksuper@example.com',
+            password='testpassword',
+            user_type='super_agent',
+        )
+        agent = User.objects.create_user(
+            email='sessionlockagent@example.com',
+            password='testpassword',
+            user_type='agent',
+            super_agent=super_agent,
+        )
+        cashier = User.objects.create_user(
+            email='sessionlockcashier@example.com',
+            password='testpassword',
+            user_type='cashier',
+            agent=agent,
+        )
+        agent_client = Client()
+        cashier_client = Client()
+        self.assertTrue(agent_client.login(username=agent.username, password='testpassword'))
+        self.assertTrue(cashier_client.login(username=cashier.username, password='testpassword'))
+
+        overdue_loan = Loan.objects.create(
+            borrower=agent,
+            lender=super_agent,
+            amount=Decimal('125.00'),
+            requested_amount=Decimal('125.00'),
+            qualified_amount=Decimal('125.00'),
+            outstanding_balance=Decimal('125.00'),
+            status='active',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+            due_date=timezone.now() - timedelta(minutes=5),
+        )
+
+        processed = enforce_due_loans_task()
+
+        overdue_loan.refresh_from_db()
+        agent.refresh_from_db()
+        cashier.refresh_from_db()
+
+        self.assertEqual(processed, 1)
+        self.assertTrue(overdue_loan.account_locked_due_to_default)
+        self.assertTrue(agent.is_locked)
+        self.assertTrue(cashier.is_locked)
+        self.assertEqual(agent_client.get(reverse('betting:profile')).status_code, 302)
+        self.assertIn(reverse('betting:login'), agent_client.get(reverse('betting:profile')).url)
+        self.assertEqual(cashier_client.get(reverse('betting:profile')).status_code, 302)
+        self.assertIn(reverse('betting:login'), cashier_client.get(reverse('betting:profile')).url)
+
     def test_repayment_auto_unlocks_loan_locked_account_after_settlement(self):
         super_agent = User.objects.create_user(
             email='unlocksuper@example.com',

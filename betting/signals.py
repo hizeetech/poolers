@@ -12,6 +12,7 @@ from django.core.cache import cache
 import threading
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from decimal import Decimal
 
 
 def _run_in_background(target, *args, **kwargs):
@@ -347,6 +348,9 @@ def handle_withdrawal_status_change(sender, instance, **kwargs):
         except UserWithdrawal.DoesNotExist:
             return
 
+        instance._previous_status = old_instance.status
+        instance._previous_amount = old_instance.amount
+
         skip_refund = bool(getattr(instance, '_skip_signal_refund', False))
 
         if old_instance.status != instance.status:
@@ -474,7 +478,11 @@ def log_withdrawal(sender, instance, created, **kwargs):
                 "label": "Withdrawal request",
                 "amount": str(instance.amount),
                 "status": instance.status,
-                "kpi_deltas": {"withdrawals_today": float(instance.amount), "pending_withdrawals": 1},
+                "kpi_deltas": {
+                    "withdrawals_today": float(instance.amount),
+                    "pending_withdrawals": 1,
+                    "pending_withdrawals_total": float(instance.amount),
+                },
             },
         )
         _run_after_commit_in_background(
@@ -486,13 +494,54 @@ def log_withdrawal(sender, instance, created, **kwargs):
                 "label": "Withdrawal request",
                 "amount": str(instance.amount),
                 "status": instance.status,
-                "kpi_deltas": {"withdrawals_today": float(instance.amount), "pending_withdrawals": 1},
+                "kpi_deltas": {
+                    "withdrawals_today": float(instance.amount),
+                    "pending_withdrawals": 1,
+                    "pending_withdrawals_total": float(instance.amount),
+                },
             }
         )
 
         def _enqueue_created():
             _enqueue_withdrawal_email(instance.pk, 'requested')
         transaction.on_commit(_enqueue_created)
+    elif instance.user:
+        previous_status = getattr(instance, '_previous_status', None)
+        previous_amount = Decimal(str(getattr(instance, '_previous_amount', instance.amount or 0)))
+        current_amount = Decimal(str(instance.amount or 0))
+        was_pending = previous_status == 'pending'
+        is_pending = instance.status == 'pending'
+        pending_count_delta = 0
+        pending_total_delta = Decimal('0.00')
+
+        if was_pending and not is_pending:
+            pending_count_delta = -1
+            pending_total_delta = -previous_amount
+        elif not was_pending and is_pending:
+            pending_count_delta = 1
+            pending_total_delta = current_amount
+        elif was_pending and is_pending and previous_amount != current_amount:
+            pending_total_delta = current_amount - previous_amount
+
+        if pending_count_delta or pending_total_delta:
+            delta_payload = {
+                "ts": (instance.approved_rejected_time or instance.request_time or timezone.now()).isoformat(),
+                "event_type": "withdrawal_status",
+                "user": (instance.user.email or instance.user.username or "-"),
+                "label": "Withdrawal status updated",
+                "amount": str(instance.amount),
+                "status": instance.status,
+                "kpi_deltas": {
+                    "pending_withdrawals": pending_count_delta,
+                    "pending_withdrawals_total": float(pending_total_delta),
+                },
+            }
+            _run_after_commit_in_background(
+                _broadcast_retail_event_for_user,
+                user=instance.user,
+                payload=delta_payload,
+            )
+            _run_after_commit_in_background(_broadcast_finance_event, delta_payload)
 
     schedule_admin_userwithdrawal_refresh(
         {

@@ -160,7 +160,7 @@
     </div>
     <div class="col-6 col-lg-3">
       <div class="kpi-card p-3 h-100">
-        <div class="kpi-label">Pending Withdrawals</div>
+        <div class="kpi-label">Pending Withdrawal Requests</div>
         <div class="kpi-value" id="kpiPendingWithdrawals">{{ kpis.pending_withdrawals_count }}</div>
       </div>
     </div>
@@ -180,6 +180,18 @@
       <div class="kpi-card p-3 h-100">
         <div class="kpi-label">Pending Appeals</div>
         <div class="kpi-value">{{ locked_accounts_summary.pending_appeals }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Average Net Margin (%)</div>
+        <div class="kpi-value">{{ kpis.average_net_margin_pct|floatformat:2 }}%</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="kpi-card p-3 h-100">
+        <div class="kpi-label">Total Pending Withdrawals</div>
+        <div class="kpi-value" id="kpiPendingWithdrawalsTotal">₦{{ kpis.pending_withdrawals_total_amount|floatformat:2 }}</div>
       </div>
     </div>
 
@@ -1301,6 +1313,10 @@
       if (typeof deltas.pending_withdrawals === 'number') {
         const el = document.getElementById('kpiPendingWithdrawals');
         setInt(el, parseNumber(el && el.textContent) + deltas.pending_withdrawals);
+      }
+      if (typeof deltas.pending_withdrawals_total === 'number') {
+        const el = document.getElementById('kpiPendingWithdrawalsTotal');
+        setCurrency(el, parseNumber(el && el.textContent) + deltas.pending_withdrawals_total);
       }
     };
 

@@ -14368,7 +14368,11 @@ def retail_dashboard(request):
         UserWithdrawal.objects.filter(user__in=network_users, request_time__date=today)
         .aggregate(s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField()))['s']
     )
-    pending_withdrawals_count = UserWithdrawal.objects.filter(user__in=network_users, status='pending').count()
+    pending_withdrawals_pending_qs = UserWithdrawal.objects.filter(user__in=network_users, status='pending')
+    pending_withdrawals_count = pending_withdrawals_pending_qs.count()
+    pending_withdrawals_total_amount = pending_withdrawals_pending_qs.aggregate(
+        s=Coalesce(Sum('amount'), Value(0), output_field=DecimalField())
+    )['s']
     active_betting_shops = agents.filter(is_active=True).exclude(shop_address__isnull=True).exclude(shop_address__exact='').count()
 
     pending_withdrawals_tab_qs = (
@@ -14414,6 +14418,11 @@ def retail_dashboard(request):
     total_stake_amount = tickets_range_qs.aggregate(s=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['s']
     total_winning_payouts = tickets_range_qs.filter(status='won').aggregate(s=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['s']
     total_revenue_generated = (total_stake_amount or Decimal('0.00')) - (total_winning_payouts or Decimal('0.00'))
+    average_net_margin_pct = (
+        ((total_revenue_generated / total_stake_amount) * Decimal('100.00')).quantize(Decimal('0.01'))
+        if total_stake_amount and total_stake_amount > Decimal('0.00')
+        else Decimal('0.00')
+    )
 
     commission_earned = (
         Transaction.objects.filter(user__in=agents, transaction_type='commission_payout', status='completed', is_successful=True, timestamp__gte=metrics_start_dt, timestamp__lte=metrics_end_dt)
@@ -14895,6 +14904,8 @@ def retail_dashboard(request):
             'deposits_today': deposits_today,
             'withdrawals_today': withdrawals_today,
             'pending_withdrawals_count': pending_withdrawals_count,
+            'pending_withdrawals_total_amount': pending_withdrawals_total_amount,
+            'average_net_margin_pct': average_net_margin_pct,
             'active_betting_shops': active_betting_shops,
         },
         'charts_data': charts_data,

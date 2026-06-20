@@ -2,6 +2,9 @@ import itertools
 import math
 import os
 import re
+import sys
+import time
+import threading
 import traceback
 import secrets
 import smtplib
@@ -381,6 +384,17 @@ def user_passes_test_403(test_func):
         return _wrapped_view
 
     return decorator
+
+
+def run_after_commit_in_background(callback):
+    def _start():
+        worker = threading.Thread(target=callback, daemon=True)
+        worker.start()
+
+    try:
+        db_transaction.on_commit(_start)
+    except Exception:
+        _start()
 
 def crm_can_approve_withdrawals(user):
     if not is_crm_user(user):
@@ -4320,24 +4334,33 @@ def place_bet(request):
                             projected_fixture_liability=projected_fixture_liability,
                         )
                         if decision.suspended:
-                            for admin_user in User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"])).only("id")[:200]:
-                                try:
-                                    create_notification(
-                                        recipient=admin_user,
-                                        notification_type="EVENT_SUSPENDED",
-                                        title="Risk Auto-Suspension Triggered",
-                                        message=f"Auto-suspended {decision.level} due to exposure. Fixture #{s['fixture'].id}.",
-                                        data={
-                                            "fixture_id": s["fixture"].id,
-                                            "market_key": s["market_key"],
-                                            "selection_key": s["selection_key"],
-                                            "projected_selection_liability": str(projected_selection_liability),
-                                            "projected_market_liability": str(projected_market_liability),
-                                            "projected_fixture_liability": str(projected_fixture_liability),
-                                        },
-                                    )
-                                except Exception:
-                                    continue
+                            admin_user_ids = list(
+                                User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"]))
+                                .values_list("id", flat=True)[:200]
+                            )
+                            alert_payload = {
+                                "fixture_id": s["fixture"].id,
+                                "market_key": s["market_key"],
+                                "selection_key": s["selection_key"],
+                                "projected_selection_liability": str(projected_selection_liability),
+                                "projected_market_liability": str(projected_market_liability),
+                                "projected_fixture_liability": str(projected_fixture_liability),
+                            }
+
+                            def _dispatch_suspension_notifications():
+                                for admin_user in User.objects.filter(id__in=admin_user_ids).only("id"):
+                                    try:
+                                        create_notification(
+                                            recipient=admin_user,
+                                            notification_type="EVENT_SUSPENDED",
+                                            title="Risk Auto-Suspension Triggered",
+                                            message=f"Auto-suspended {decision.level} due to exposure. Fixture #{s['fixture'].id}.",
+                                            data=alert_payload,
+                                        )
+                                    except Exception:
+                                        continue
+
+                            run_after_commit_in_background(_dispatch_suspension_notifications)
                             return fail_response('This event/market is temporarily suspended due to high exposure.')
 
                     duplicate_signature = compute_duplicate_ticket_signature(
@@ -4498,35 +4521,121 @@ def place_bet(request):
                             stake_amount=total_stake,
                         )
                         if risk_score >= 70:
-                            for admin_user in User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"])).only("id")[:200]:
-                                try:
-                                    create_notification(
-                                        recipient=admin_user,
-                                        notification_type="RISK_ALERT",
-                                        title="Risk Alert: Suspicious Betting",
-                                        message=f"User {request.user.email} triggered a risk score of {risk_score} on ticket {bet_ticket.ticket_id}.",
-                                        data={"user_id": request.user.id, "ticket_id": bet_ticket.ticket_id, "risk_score": risk_score},
-                                    )
-                                except Exception:
-                                    continue
+                            admin_user_ids = list(
+                                User.objects.filter(Q(is_superuser=True) | Q(user_type__in=["admin", "account_user"]))
+                                .values_list("id", flat=True)[:200]
+                            )
+                            risk_alert_data = {
+                                "user_id": request.user.id,
+                                "ticket_id": bet_ticket.ticket_id,
+                                "risk_score": risk_score,
+                            }
+                            risk_alert_message = (
+                                f"User {request.user.email} triggered a risk score of {risk_score} on ticket {bet_ticket.ticket_id}."
+                            )
+
+                            def _dispatch_risk_alert_notifications():
+                                for admin_user in User.objects.filter(id__in=admin_user_ids).only("id"):
+                                    try:
+                                        create_notification(
+                                            recipient=admin_user,
+                                            notification_type="RISK_ALERT",
+                                            title="Risk Alert: Suspicious Betting",
+                                            message=risk_alert_message,
+                                            data=risk_alert_data,
+                                        )
+                                    except Exception:
+                                        continue
+
+                            run_after_commit_in_background(_dispatch_risk_alert_notifications)
                     except Exception:
                         pass
 
-                    try:
-                        from risk.tasks import (
-                            refresh_fixture_liability,
-                            refresh_agent_exposure,
-                            refresh_user_exposure,
-                            refresh_betting_period_liability,
-                        )
+                    fixture_ids_for_refresh = {s["fixture"].id for s in valid_selections}
+                    agent_id_for_refresh = getattr(agent_obj, "id", None)
+                    period_id_for_refresh = None
+                    if valid_selections and valid_selections[0].get("fixture"):
+                        period_id_for_refresh = getattr(valid_selections[0]["fixture"], "betting_period_id", None)
+                    user_id_for_refresh = request.user.id
 
-                        for fid in {s["fixture"].id for s in valid_selections}:
-                            refresh_fixture_liability.delay(fid)
-                        if agent_obj:
-                            refresh_agent_exposure.delay(agent_obj.id)
-                        refresh_user_exposure.delay(request.user.id)
-                        if valid_selections and valid_selections[0].get("fixture") and getattr(valid_selections[0]["fixture"], "betting_period_id", None):
-                            refresh_betting_period_liability.delay(valid_selections[0]["fixture"].betting_period_id)
+                    def _risk_refresh_sync():
+                        try:
+                            from risk.services import (
+                                update_agent_exposure_snapshot,
+                                update_betting_period_liability_snapshot,
+                                update_liability_snapshots_for_fixture,
+                                update_user_exposure_snapshot,
+                            )
+
+                            for fid in fixture_ids_for_refresh:
+                                try:
+                                    update_liability_snapshots_for_fixture(fid)
+                                except Exception:
+                                    continue
+                            if agent_id_for_refresh:
+                                try:
+                                    update_agent_exposure_snapshot(agent_id_for_refresh)
+                                except Exception:
+                                    pass
+                            try:
+                                update_user_exposure_snapshot(user_id_for_refresh)
+                            except Exception:
+                                pass
+                            if period_id_for_refresh:
+                                try:
+                                    update_betting_period_liability_snapshot(period_id_for_refresh)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            return
+
+                    def _risk_workers_available():
+                        cache_key = "risk:celery_workers_available"
+                        cached = cache.get(cache_key)
+                        if cached is not None:
+                            return bool(cached)
+                        ok = False
+                        try:
+                            from celery import current_app
+                            insp = current_app.control.inspect(timeout=0.5)
+                            res = insp.ping() if insp else None
+                            ok = bool(res)
+                        except Exception:
+                            ok = False
+                        cache.set(cache_key, ok, timeout=15)
+                        return ok
+
+                    def _schedule_risk_refresh():
+                        is_test_run = any(arg in ("test", "pytest") for arg in (sys.argv or []))
+                        if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
+                            _risk_refresh_sync()
+                            return
+
+                        if _risk_workers_available():
+                            try:
+                                from risk.tasks import (
+                                    refresh_agent_exposure,
+                                    refresh_betting_period_liability,
+                                    refresh_fixture_liability,
+                                    refresh_user_exposure,
+                                )
+
+                                for fid in fixture_ids_for_refresh:
+                                    refresh_fixture_liability.delay(fid)
+                                if agent_id_for_refresh:
+                                    refresh_agent_exposure.delay(agent_id_for_refresh)
+                                refresh_user_exposure.delay(user_id_for_refresh)
+                                if period_id_for_refresh:
+                                    refresh_betting_period_liability.delay(period_id_for_refresh)
+                                return
+                            except Exception:
+                                pass
+
+                        worker = threading.Thread(target=_risk_refresh_sync, daemon=True)
+                        worker.start()
+
+                    try:
+                        db_transaction.on_commit(_schedule_risk_refresh)
                     except Exception:
                         pass
 
@@ -8783,8 +8892,8 @@ def declare_result(request, fixture_id):
             messages.success(request, f"Result declared for {fixture.home_team} vs {fixture.away_team} as '{fixture.get_result_display()}'. All associated tickets processed.")
             log_admin_activity(request, f"Declared result for fixture {fixture.id} ({fixture.home_team} vs {fixture.away_team}) as {fixture.result}.")
             if affected_ticket_ids:
-                from commission.tasks import refresh_weekly_commissions_for_ticket_ids_task
-                transaction.on_commit(lambda: refresh_weekly_commissions_for_ticket_ids_task.delay(affected_ticket_ids))
+                from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+                enqueue_refresh_weekly_commissions_for_ticket_ids(affected_ticket_ids)
             return redirect('betting_admin:manage_fixtures')
         else:
             for field, errors in form.errors.items():

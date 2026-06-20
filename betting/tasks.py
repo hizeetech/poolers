@@ -35,6 +35,7 @@ from .models import (
     WithdrawalPinVerificationLog,
     FinanceSettlementBatch,
 )
+from .services.ticket_results import recalculate_tickets_for_fixture_sync
 import logging
 
 logger = logging.getLogger(__name__)
@@ -382,63 +383,7 @@ def recalculate_tickets_for_fixture(fixture_id):
     Background task to recalculate all tickets associated with a changed fixture.
     This prevents timeouts when saving results in the admin.
     """
-    from .models import BetTicket, Selection  # Local import to avoid circular dependency
-    try:
-        # Get fixture - if it doesn't exist anymore, just return
-        try:
-            fixture = Fixture.objects.get(id=fixture_id)
-        except Fixture.DoesNotExist:
-            logger.warning(f"Fixture {fixture_id} not found during ticket recalculation task.")
-            return
-
-        try:
-            serial = str(getattr(fixture, "serial_number", "") or "").strip()
-            period_id = getattr(fixture, "betting_period_id", None)
-            relink_q = Q(bet_ticket__status="pending")
-            if period_id:
-                relink_q &= (Q(betting_period_id=period_id) | Q(betting_period__isnull=True))
-            if serial:
-                relink_q &= Q(fixture_serial_number__iexact=serial)
-            else:
-                relink_q &= Q(
-                    fixture_home_team__iexact=fixture.home_team,
-                    fixture_away_team__iexact=fixture.away_team,
-                    fixture_match_date=fixture.match_date,
-                    fixture_match_time=fixture.match_time,
-                )
-
-            Selection.objects.filter(relink_q).exclude(fixture_id=fixture.id).update(
-                fixture=fixture,
-                fixture_serial_number=serial or "",
-                fixture_home_team=fixture.home_team,
-                fixture_away_team=fixture.away_team,
-                fixture_match_date=fixture.match_date,
-                fixture_match_time=fixture.match_time,
-            )
-        except Exception:
-            pass
-
-        tickets = BetTicket.objects.filter(status="pending", selections__fixture=fixture).distinct()
-        count = tickets.count()
-        affected_ticket_ids = [str(ticket.id) for ticket in tickets]
-        logger.info(f"Starting recalculation for {count} tickets for fixture {fixture}")
-
-        for ticket in tickets:
-            try:
-                # First, recalculate odds and potential winnings to handle void events
-                ticket.recalculate_ticket()
-                # Then, check if the ticket status should change (Won/Lost)
-                ticket.check_and_update_status()
-            except Exception as e:
-                logger.error(f"Error updating ticket {ticket.id}: {e}")
-        
-        logger.info(f"Completed recalculation for {count} tickets for fixture {fixture}")
-        if affected_ticket_ids:
-            from commission.tasks import refresh_weekly_commissions_for_ticket_ids
-            refresh_weekly_commissions_for_ticket_ids(affected_ticket_ids)
-        
-    except Exception as e:
-        logger.error(f"Critical error in recalculate_tickets_for_fixture: {e}")
+    recalculate_tickets_for_fixture_sync(fixture_id)
 
 
 def _parse_recipients(raw):

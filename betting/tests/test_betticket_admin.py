@@ -109,3 +109,15 @@ class BetTicketAdminTests(TestCase):
             [system_ticket],
             transform=lambda obj: obj,
         )
+
+    def test_betticket_changelist_includes_websocket_live_refresh_script(self):
+        self._create_ticket()
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse("betting_admin:betting_betticket_changelist"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "betting/admin/betticket_change_list.html")
+        self.assertContains(response, "refreshBetTicketList")
+        self.assertContains(response, "/ws/admin/betticket/")
+        self.assertContains(response, "connectSocket")

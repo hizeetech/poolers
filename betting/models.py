@@ -750,13 +750,13 @@ class Wallet(models.Model):
             loan.save(update_fields=["workflow_snapshot", "updated_at"])
             remaining_reduction = (remaining_reduction - consume_amount).quantize(Decimal("0.01"))
 
-    def apply_delta(self, *, amount, actor=None, transaction_obj=None, reference="", reason="", metadata=None):
+    def apply_delta(self, *, amount, actor=None, transaction_obj=None, reference="", reason="", metadata=None, allow_negative=False):
         amount_q = Decimal(str(amount)).quantize(Decimal("0.01"))
         with transaction.atomic():
             locked = Wallet.objects.select_for_update().select_related("user").get(pk=self.pk)
             before = Decimal(str(locked.balance or Decimal("0.00"))).quantize(Decimal("0.01"))
             after = (before + amount_q).quantize(Decimal("0.01"))
-            if after < Decimal("0.00"):
+            if after < Decimal("0.00") and not allow_negative:
                 raise ValueError("Wallet balance cannot be negative.")
             locked.balance = after
             locked.save(update_fields=["balance", "last_updated"])
@@ -1159,6 +1159,12 @@ class BetTicket(models.Model):
     def __str__(self):
         return f"Ticket {self.id} by {self.user.email} - Stake: {self.stake_amount} - Status: {self.status}"
 
+    RESULT_REFUND_TRANSACTION_TYPES = (
+        'ticket_deletion_refund',
+        'ticket_cancellation_refund',
+        'fixture_deletion_refund',
+    )
+
     def save(self, *args, **kwargs):
         if not self.ticket_id:
             while True:
@@ -1270,7 +1276,11 @@ class BetTicket(models.Model):
                 self.potential_winning = self.stake_amount 
                 self.max_winning = self.stake_amount
                 self.total_odd = Decimal('1.00')
-                self.save(update_fields=['status', 'potential_winning', 'max_winning', 'total_odd'])
+                self.bonus_base_amount = Decimal('0.00')
+                self.bonus_amount = Decimal('0.00')
+                self.bonus_is_final = True
+                self.bonus_applied_at = None
+                self.save(update_fields=['status', 'potential_winning', 'max_winning', 'total_odd', 'bonus_base_amount', 'bonus_amount', 'bonus_is_final', 'bonus_applied_at'])
                 
                 # Log cancellation
                 ActivityLog.objects.create(
@@ -1628,6 +1638,106 @@ class BetTicket(models.Model):
 
                     locked_ticket.payout_processed = True
                     locked_ticket.save(update_fields=['payout_processed'])
+
+    def _get_active_result_side_effect_transactions(self):
+        return list(
+            self.transactions.filter(
+                status='completed',
+                is_successful=True,
+                transaction_type__in=('bet_payout',) + self.RESULT_REFUND_TRANSACTION_TYPES,
+            ).order_by('timestamp', 'id')
+        )
+
+    def reverse_result_side_effects(self, *, actor=None, reason=''):
+        active_transactions = self._get_active_result_side_effect_transactions()
+        if not active_transactions:
+            return {'reversed_total': Decimal('0.00'), 'transactions': []}
+
+        total_reversal = sum((tx.amount for tx in active_transactions), Decimal('0.00')).quantize(Decimal('0.01'))
+        wallet = Wallet.objects.select_for_update().get(user=self.user)
+
+        reversed_ids = []
+        for tx in active_transactions:
+            reversal_type = 'bet_payout_reversal' if tx.transaction_type == 'bet_payout' else 'ticket_refund_reversal'
+            reversal_tx = Transaction.objects.create(
+                user=self.user,
+                initiating_user=actor if getattr(actor, 'is_authenticated', False) else None,
+                target_user=self.user,
+                transaction_type=reversal_type,
+                amount=tx.amount,
+                is_successful=True,
+                status='completed',
+                description=f"Result correction reversal of {tx.transaction_type} for ticket {self.ticket_id}. {reason}".strip(),
+                related_bet_ticket=self,
+                timestamp=timezone.now()
+            )
+            wallet.apply_delta(
+                amount=-tx.amount,
+                actor=actor if getattr(actor, 'is_authenticated', False) else None,
+                transaction_obj=reversal_tx,
+                reference=str(self.ticket_id),
+                reason=reversal_tx.description,
+                metadata={
+                    'ticket_id': self.ticket_id,
+                    'reversed_tx_id': str(tx.id),
+                    'source': 'result_backfill',
+                },
+                allow_negative=True,
+            )
+            tx.status = 'reversed'
+            tx.is_successful = False
+            tx.save(update_fields=['status', 'is_successful'])
+            reversed_ids.append(str(tx.id))
+
+        return {'reversed_total': total_reversal, 'transactions': reversed_ids}
+
+    def backfill_after_result_correction(self, *, actor=None, reason=''):
+        if self.status in ['deleted', 'cashed_out']:
+            return False
+
+        old_status = self.status
+        old_max_winning = Decimal(str(self.max_winning or Decimal('0.00'))).quantize(Decimal('0.01'))
+        old_payout_processed = bool(self.payout_processed)
+
+        with transaction.atomic():
+            locked_ticket = BetTicket.objects.select_for_update().get(pk=self.pk)
+            reversal_info = locked_ticket.reverse_result_side_effects(actor=actor, reason=reason)
+            locked_ticket.status = 'pending'
+            locked_ticket.payout_processed = False
+            locked_ticket.bonus_base_amount = Decimal('0.00')
+            locked_ticket.bonus_amount = Decimal('0.00')
+            locked_ticket.bonus_is_final = False
+            locked_ticket.bonus_applied_at = None
+            locked_ticket.save(
+                update_fields=[
+                    'status',
+                    'payout_processed',
+                    'bonus_base_amount',
+                    'bonus_amount',
+                    'bonus_is_final',
+                    'bonus_applied_at',
+                    'last_updated',
+                ]
+            )
+
+        self.refresh_from_db()
+        self.recalculate_ticket()
+        self.check_and_update_status()
+        self.refresh_from_db()
+
+        ActivityLog.objects.create(
+            user=self.user,
+            action_type='RESULT_BACKFILL',
+            action=(
+                f"Ticket {self.ticket_id} backfilled after result correction. "
+                f"Status: {old_status} -> {self.status}. "
+                f"Max winning: {old_max_winning} -> {self.max_winning}. "
+                f"Prior payout processed: {old_payout_processed}. "
+                f"Reversed total: {reversal_info['reversed_total']}."
+            ),
+            affected_object=f"BetTicket: {self.ticket_id}"
+        )
+        return True
 
 class Result(Fixture):
     class Meta:
@@ -2763,7 +2873,7 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
 
     if should_recalculate:
         try:
-            from .tasks import recalculate_tickets_for_fixture
+            from .services.ticket_results import recalculate_tickets_for_fixture_sync
             ticket_count = BetTicket.objects.filter(selections__fixture=instance).distinct().count()
             is_test_run = any(arg in ('test', 'pytest') for arg in getattr(sys, 'argv', []) or [])
 
@@ -2785,17 +2895,18 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
 
             def _run_in_background():
                 try:
-                    recalculate_tickets_for_fixture.run(instance.id)
+                    recalculate_tickets_for_fixture_sync(instance.id)
                 except Exception:
                     return
 
             if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
-                recalculate_tickets_for_fixture.run(instance.id)
+                recalculate_tickets_for_fixture_sync(instance.id)
                 return
 
             use_celery = _celery_workers_available()
             if use_celery:
                 try:
+                    from .tasks import recalculate_tickets_for_fixture
                     recalculate_tickets_for_fixture.delay(instance.id)
                     return
                 except Exception:
@@ -2806,7 +2917,7 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
             t.start()
         except Exception:
             try:
-                recalculate_tickets_for_fixture.run(instance.id)
+                recalculate_tickets_for_fixture_sync(instance.id)
             except Exception:
                 pass
 

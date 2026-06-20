@@ -1,0 +1,136 @@
+{% extends "admin/change_list.html" %}
+
+{% block extrahead %}
+{{ block.super }}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const body = document.body;
+    const changelist = document.getElementById('changelist');
+    if (!changelist) {
+        return;
+    }
+
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    let socket = null;
+    let reconnectTimer = null;
+
+    function hasActiveSelection() {
+        return document.querySelector('#changelist-form input.action-select:checked') !== null;
+    }
+
+    function replaceFromSnapshot(snapshotDoc, selector) {
+        const currentNode = document.querySelector(selector);
+        const nextNode = snapshotDoc.querySelector(selector);
+        if (currentNode && nextNode) {
+            currentNode.replaceWith(nextNode);
+        }
+    }
+
+    async function refreshBetTicketList() {
+        if (refreshInFlight) {
+            refreshQueued = true;
+            return;
+        }
+
+        if (document.hidden || hasActiveSelection()) {
+            refreshQueued = true;
+            return;
+        }
+
+        refreshInFlight = true;
+        refreshQueued = false;
+        body.dataset.liveRefreshState = 'loading';
+
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('_live_refresh', String(Date.now()));
+            const response = await fetch(url.toString(), {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'text/html'
+                },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            });
+
+            if (!response.ok) {
+                throw new Error('Unable to refresh admin bet tickets.');
+            }
+
+            const html = await response.text();
+            const snapshotDoc = new DOMParser().parseFromString(html, 'text/html');
+            replaceFromSnapshot(snapshotDoc, '#result_list');
+            replaceFromSnapshot(snapshotDoc, '#toolbar');
+            replaceFromSnapshot(snapshotDoc, '.paginator');
+            replaceFromSnapshot(snapshotDoc, '.actions');
+            body.dataset.liveRefreshState = 'idle';
+        } catch (error) {
+            body.dataset.liveRefreshState = 'error';
+        } finally {
+            refreshInFlight = false;
+            if (refreshQueued) {
+                window.setTimeout(refreshBetTicketList, 250);
+            }
+        }
+    }
+
+    function scheduleRefresh() {
+        if (refreshQueued || refreshInFlight) {
+            refreshQueued = true;
+            return;
+        }
+        refreshQueued = true;
+        window.setTimeout(refreshBetTicketList, 250);
+    }
+
+    function connectSocket() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        socket = new WebSocket(protocol + window.location.host + '/ws/admin/betticket/');
+
+        socket.addEventListener('open', function () {
+            body.dataset.liveRefreshTransport = 'websocket';
+            if (reconnectTimer) {
+                window.clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        });
+
+        socket.addEventListener('message', function (event) {
+            try {
+                const data = JSON.parse(event.data || '{}');
+                if (data.type === 'admin_betticket_refresh') {
+                    scheduleRefresh();
+                }
+            } catch (error) {
+                body.dataset.liveRefreshState = 'error';
+            }
+        });
+
+        socket.addEventListener('close', function () {
+            body.dataset.liveRefreshTransport = 'disconnected';
+            reconnectTimer = window.setTimeout(connectSocket, 3000);
+        });
+
+        socket.addEventListener('error', function () {
+            body.dataset.liveRefreshTransport = 'error';
+            if (socket) {
+                socket.close();
+            }
+        });
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden && refreshQueued) {
+            refreshBetTicketList();
+        }
+    });
+
+    connectSocket();
+});
+</script>
+{% endblock %}

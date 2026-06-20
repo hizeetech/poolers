@@ -1,0 +1,27 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block object-tools-items %}
+    {{ block.super }}
+    {% if change and original and reprocess_url %}
+    <li>
+        <form method="post" action="{{ reprocess_url }}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="button" style="margin:0; padding:6px 12px; border:0; border-radius:4px; cursor:pointer;">
+                {% trans "Reprocess Affected Tickets" %}
+            </button>
+        </form>
+    </li>
+    {% endif %}
+{% endblock %}
+
+{% block after_field_sets %}
+    {{ block.super }}
+    {% if change and original %}
+    <div class="help" style="margin-top:12px;">
+        {% blocktrans with ticket_count=affected_ticket_count %}
+        Reprocessing will re-evaluate {{ ticket_count }} affected ticket(s) linked to this result and update payouts or reversals accordingly.
+        {% endblocktrans %}
+    </div>
+    {% endif %}
+{% endblock %}

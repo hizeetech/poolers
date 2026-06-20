@@ -6,83 +6,79 @@ from betting.models import BetTicket, Transaction
 from django.db import transaction
 from django.core.cache import cache
 from .services import DashboardService
-import json
+import threading
 
 LARGE_BET_THRESHOLD = 50000
 HIGH_EXPOSURE_THRESHOLD = 100000
+
+
+def _run_in_background(target, *args, **kwargs):
+    try:
+        thread = threading.Thread(target=target, args=args, kwargs=kwargs)
+        thread.daemon = True
+        thread.start()
+    except Exception:
+        return
+
 
 @receiver(post_save, sender=BetTicket)
 def broadcast_bet_activity(sender, instance, created, **kwargs):
     channel_layer = get_channel_layer()
     
     try:
+        if not channel_layer:
+            return
+
+        dashboard_messages = []
         if created:
-            message = {
-                'type': 'bet_placed',
-                'ticket_id': instance.ticket_id,
-                'amount': str(instance.stake_amount),
-                'user': instance.user.email,
-                'timestamp': str(instance.placed_at),
-            }
-            async_to_sync(channel_layer.group_send)(
-                'uip_dashboard',
+            dashboard_messages.append(
                 {
-                    'type': 'dashboard_update',
-                    'data': message
+                    'type': 'bet_placed',
+                    'ticket_id': instance.ticket_id,
+                    'amount': str(instance.stake_amount),
+                    'user': instance.user.email,
+                    'timestamp': str(instance.placed_at),
                 }
             )
-            
-            # 2. Large Bet Alert
+
             if instance.stake_amount >= LARGE_BET_THRESHOLD:
-                alert_msg = {
+                dashboard_messages.append(
+                    {
+                        'type': 'alert',
+                        'level': 'warning',
+                        'title': 'Large Bet Detected',
+                        'message': f"User {instance.user.email} placed a bet of {instance.stake_amount}"
+                    }
+                )
+
+        if instance.potential_winning >= HIGH_EXPOSURE_THRESHOLD:
+            dashboard_messages.append(
+                {
                     'type': 'alert',
-                    'level': 'warning',
-                    'title': 'Large Bet Detected',
-                    'message': f"User {instance.user.email} placed a bet of {instance.stake_amount}"
+                    'level': 'critical',
+                    'title': 'High Exposure Alert',
+                    'message': f"Ticket {instance.ticket_id} has potential winning of {instance.potential_winning}"
                 }
+            )
+
+        def _send_dashboard_messages():
+            for message in dashboard_messages:
                 async_to_sync(channel_layer.group_send)(
                     'uip_dashboard',
                     {
                         'type': 'dashboard_update',
-                        'data': alert_msg
+                        'data': message
                     }
                 )
 
-        # 3. Frequency Update logic moved to on_commit handler to ensure data consistency
-
-
-        # 4. High Exposure Alert
-        if instance.potential_winning >= HIGH_EXPOSURE_THRESHOLD:
-            alert_msg = {
-                'type': 'alert',
-                'level': 'critical',
-                'title': 'High Exposure Alert',
-                'message': f"Ticket {instance.ticket_id} has potential winning of {instance.potential_winning}"
-            }
-            async_to_sync(channel_layer.group_send)(
-                'uip_dashboard',
-                {
-                    'type': 'dashboard_update',
-                    'data': alert_msg
-                }
-            )
-
-        # 4. Serial Number Frequency Update (Real-time)
-        # This runs for both created (new bets) and updated (status change like void/cancel)
         def send_frequency_update():
             try:
-                # Invalidate cache globally via shared Redis version
                 DashboardService.invalidate_data_version()
-                
-                # Invalidate Leaderboard and Metrics Caches
                 cache.delete('uip_agent_leaderboard')
                 cache.delete('uip_live_metrics')
                 cache.delete('uip_financial_metrics')
                 cache.delete('uip_analytics_metrics')
-                
-                # Fetch fresh data (will use new version)
                 data = DashboardService.get_serial_number_frequency()
-                
                 async_to_sync(channel_layer.group_send)(
                     'uip_dashboard',
                     {
@@ -94,10 +90,17 @@ def broadcast_bet_activity(sender, instance, created, **kwargs):
                     }
                 )
             except Exception:
-                pass # Fail silently if Redis is down
-        
-        # Use on_commit to ensure Selections are saved (for created=True)
-        transaction.on_commit(send_frequency_update)
+                pass
+
+        def _after_commit_work():
+            try:
+                if dashboard_messages:
+                    _send_dashboard_messages()
+                send_frequency_update()
+            except Exception:
+                pass
+
+        transaction.on_commit(lambda: _run_in_background(_after_commit_work))
         
     except Exception:
         pass # Fail silently if Redis is down
@@ -107,6 +110,8 @@ def broadcast_transaction(sender, instance, created, **kwargs):
     if created:
         try:
             channel_layer = get_channel_layer()
+            if not channel_layer:
+                return
             # 4. Cashflow Movement
             message = {
                 'type': 'transaction',
@@ -115,12 +120,15 @@ def broadcast_transaction(sender, instance, created, **kwargs):
                 'user': instance.user.email,
                 'timestamp': str(instance.timestamp)
             }
-            async_to_sync(channel_layer.group_send)(
-                'uip_dashboard',
-                {
-                    'type': 'dashboard_update',
-                    'data': message
-                }
+            transaction.on_commit(
+                lambda: _run_in_background(
+                    async_to_sync(channel_layer.group_send),
+                    'uip_dashboard',
+                    {
+                        'type': 'dashboard_update',
+                        'data': message
+                    }
+                )
             )
         except Exception:
             pass # Fail silently if Redis is down

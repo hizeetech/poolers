@@ -14,6 +14,22 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
 
+def _run_in_background(target, *args, **kwargs):
+    try:
+        thread = threading.Thread(target=target, args=args, kwargs=kwargs)
+        thread.daemon = True
+        thread.start()
+    except Exception:
+        return
+
+
+def _run_after_commit_in_background(target, *args, **kwargs):
+    try:
+        transaction.on_commit(lambda: _run_in_background(target, *args, **kwargs))
+    except Exception:
+        _run_in_background(target, *args, **kwargs)
+
+
 def _enqueue_withdrawal_email(withdrawal_id, event):
     try:
         from .tasks import send_withdrawal_notification_emails
@@ -161,7 +177,28 @@ def _broadcast_wallet_event_for_user(user):
 def _schedule_wallet_event_for_user(user):
     if not user:
         return
-    transaction.on_commit(lambda: _broadcast_wallet_event_for_user(user))
+    _run_after_commit_in_background(_broadcast_wallet_event_for_user, user)
+
+
+def _broadcast_admin_betticket_refresh(payload=None):
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            "admin_betticket_changelist",
+            {
+                "type": "admin.betticket.refresh",
+                "payload": payload or {},
+            },
+        )
+    except Exception:
+        return
+
+
+def schedule_admin_betticket_refresh(payload=None):
+    _run_after_commit_in_background(_broadcast_admin_betticket_refresh, payload or {})
+
 
 @receiver(post_save, sender=User)
 def log_user_changes(sender, instance, created, **kwargs):
@@ -219,7 +256,8 @@ def log_bet_ticket(sender, instance, created, **kwargs):
     )
 
     if created and instance.user:
-        _broadcast_retail_event_for_user(
+        _run_after_commit_in_background(
+            _broadcast_retail_event_for_user,
             user=instance.user,
             payload={
                 "ts": instance.placed_at.isoformat() if instance.placed_at else "",
@@ -231,7 +269,8 @@ def log_bet_ticket(sender, instance, created, **kwargs):
                 "kpi_deltas": {"bets_today": 1, "stake_today": float(instance.stake_amount)},
             },
         )
-        _broadcast_finance_event(
+        _run_after_commit_in_background(
+            _broadcast_finance_event,
             {
                 "ts": instance.placed_at.isoformat() if instance.placed_at else "",
                 "event_type": "bet",
@@ -241,6 +280,14 @@ def log_bet_ticket(sender, instance, created, **kwargs):
                 "status": instance.status,
             }
         )
+
+    schedule_admin_betticket_refresh(
+        {
+            "ticket_id": instance.ticket_id,
+            "status": instance.status,
+            "created": created,
+        }
+    )
 
 @receiver(pre_save, sender=UserWithdrawal)
 def handle_withdrawal_status_change(sender, instance, **kwargs):
@@ -357,7 +404,8 @@ def log_withdrawal(sender, instance, created, **kwargs):
     )
 
     if created and instance.user:
-        _broadcast_retail_event_for_user(
+        _run_after_commit_in_background(
+            _broadcast_retail_event_for_user,
             user=instance.user,
             payload={
                 "ts": instance.request_time.isoformat() if getattr(instance, 'request_time', None) else "",
@@ -369,7 +417,8 @@ def log_withdrawal(sender, instance, created, **kwargs):
                 "kpi_deltas": {"withdrawals_today": float(instance.amount), "pending_withdrawals": 1},
             },
         )
-        _broadcast_finance_event(
+        _run_after_commit_in_background(
+            _broadcast_finance_event,
             {
                 "ts": instance.request_time.isoformat() if getattr(instance, 'request_time', None) else "",
                 "event_type": "withdrawal",
@@ -402,7 +451,8 @@ def retail_tx_broadcast(sender, instance, created, **kwargs):
         kpi = {"withdrawals_today": float(instance.amount)}
     elif t == 'commission_payout':
         kpi = {"commission": float(instance.amount)}
-    _broadcast_retail_event_for_user(
+    _run_after_commit_in_background(
+        _broadcast_retail_event_for_user,
         user=instance.user,
         payload={
             "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
@@ -414,7 +464,8 @@ def retail_tx_broadcast(sender, instance, created, **kwargs):
             "kpi_deltas": kpi,
         },
     )
-    _broadcast_finance_event(
+    _run_after_commit_in_background(
+        _broadcast_finance_event,
         {
             "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
             "event_type": "transaction",

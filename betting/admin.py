@@ -69,6 +69,7 @@ from .models import (
     OverdraftWallet, OverdraftWalletLedgerEntry, LoanRepayment, LoanAuditLog,
 )
 from . import signals
+from .services.ticket_results import recalculate_tickets_for_fixture_sync
 
 
 # --- Custom Admin Site Definition ---
@@ -748,6 +749,7 @@ class TicketSelectionCountFilter(admin.SimpleListFilter):
 
 
 class BetTicketAdmin(admin.ModelAdmin):
+    change_list_template = "betting/admin/betticket_change_list.html"
     list_display = (
         'ticket_id', 'user', 'selection_count', 'stake_amount', 'total_odd', 'potential_winning',
         'min_winning', 'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
@@ -826,30 +828,74 @@ class BetTicketAdmin(admin.ModelAdmin):
         tickets_voided = 0
         tickets_failed = 0
         changed_ticket_ids = []
-        
-        with db_transaction.atomic():
-            for ticket in queryset:
-                if ticket.status in ['won', 'lost', 'cashed_out', 'deleted', 'cancelled']: 
-                    messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be voided/deleted.")
-                    tickets_failed += 1
-                    continue
-                
-                try:
-                    ticket.status = 'deleted'
-                    ticket.deleted_by = request.user
-                    ticket.deleted_at = timezone.now()
-                    ticket.save() # Signal handles refund
+        audit_ticket_codes = []
+        locked_ticket_ids = list(queryset.values_list("id", flat=True))
+
+        for ticket_id in locked_ticket_ids:
+            try:
+                with db_transaction.atomic():
+                    ticket = BetTicket.objects.select_for_update().select_related("user").get(pk=ticket_id)
+                    if ticket.status in ['won', 'lost', 'cashed_out', 'deleted', 'cancelled']:
+                        messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be voided/deleted.")
+                        tickets_failed += 1
+                        continue
+
+                    deleted_at = timezone.now()
+                    refund_tx = Transaction.objects.create(
+                        user=ticket.user,
+                        initiating_user=request.user if getattr(request.user, "is_authenticated", False) else None,
+                        target_user=ticket.user,
+                        transaction_type='ticket_deletion_refund',
+                        amount=ticket.stake_amount,
+                        is_successful=True,
+                        status='completed',
+                        description=f"Admin bulk void: Stake refunded for ticket {ticket.ticket_id}",
+                        related_bet_ticket=ticket,
+                        timestamp=deleted_at,
+                    )
+
+                    user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                    user_wallet.apply_delta(
+                        amount=ticket.stake_amount,
+                        actor=request.user if getattr(request.user, "is_authenticated", False) else None,
+                        transaction_obj=refund_tx,
+                        reference=str(ticket.ticket_id),
+                        reason=refund_tx.description,
+                        metadata={"ticket_id": ticket.ticket_id, "source": "admin_bulk_void"},
+                    )
+
+                    BetTicket.objects.filter(pk=ticket.pk).update(
+                        status='deleted',
+                        deleted_by=request.user,
+                        deleted_at=deleted_at,
+                        last_updated=deleted_at,
+                    )
+
                     changed_ticket_ids.append(str(ticket.id))
-
+                    audit_ticket_codes.append(ticket.ticket_id)
                     tickets_voided += 1
-                    views.log_admin_activity(request, f"Voided/Deleted bet ticket {ticket.ticket_id} and refunded stake.") 
-                except Exception as e:
-                    messages.error(request, f"Failed to void ticket {ticket.ticket_id}: {e}")
-                    tickets_failed += 1
+            except Exception as e:
+                messages.error(request, f"Failed to void ticket #{ticket_id}: {e}")
+                tickets_failed += 1
 
-            if changed_ticket_ids:
-                from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
-                enqueue_refresh_weekly_commissions_for_ticket_ids(changed_ticket_ids)
+        if changed_ticket_ids:
+            from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+            from betting.signals import schedule_admin_betticket_refresh
+            enqueue_refresh_weekly_commissions_for_ticket_ids(changed_ticket_ids)
+            preview_codes = ", ".join(audit_ticket_codes[:10])
+            suffix = " ..." if len(audit_ticket_codes) > 10 else ""
+            views.log_admin_activity(
+                request,
+                f"Bulk voided/deleted {tickets_voided} bet ticket(s): {preview_codes}{suffix}",
+                affected_object="BetTicket bulk void",
+            )
+            schedule_admin_betticket_refresh(
+                {
+                    "ticket_ids": audit_ticket_codes,
+                    "action": "bulk_void",
+                    "count": tickets_voided,
+                }
+            )
 
         if tickets_voided > 0:
             messages.success(request, f"Successfully voided/deleted {tickets_voided} bet tickets.")
@@ -1227,7 +1273,19 @@ class FixtureAdmin(admin.ModelAdmin):
 
 # --- Result Admin ---
 class ResultAdmin(admin.ModelAdmin):
-    list_display = ('serial_number_display', 'home_team', 'away_team', 'match_date', 'match_time', 'home_score', 'away_score', 'status')
+    change_form_template = "betting/admin/result_change_form.html"
+    list_display = (
+        'serial_number_display',
+        'home_team',
+        'away_team',
+        'match_date',
+        'match_time',
+        'home_score',
+        'away_score',
+        'status',
+        'affected_tickets_count',
+        'open_reprocess_page',
+    )
     list_editable = ('home_score', 'away_score', 'status')
     list_filter = ('status', 'match_date', 'betting_period')
     search_fields = ('home_team', 'away_team', 'serial_number')
@@ -1241,10 +1299,81 @@ class ResultAdmin(admin.ModelAdmin):
         qs = qs.filter(betting_period__is_active=True)
         return qs.order_by('serial_number')
 
+    def get_urls(self):
+        urls = super().get_urls()
+        opts = self.model._meta
+        custom_urls = [
+            path(
+                '<path:object_id>/reprocess/',
+                self.admin_site.admin_view(self.reprocess_affected_tickets_view),
+                name=f'{opts.app_label}_{opts.model_name}_reprocess',
+            ),
+        ]
+        return custom_urls + urls
+
     def save_model(self, request, obj, form, change):
         if obj.home_score is not None and obj.away_score is not None and obj.status in ('scheduled', 'live'):
             obj.status = 'finished'
         super().save_model(request, obj, form, change)
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        extra_context = extra_context or {}
+        obj = self.get_object(request, object_id)
+        if obj:
+            opts = self.model._meta
+            extra_context.update({
+                'reprocess_url': reverse(
+                    f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_reprocess',
+                    args=[obj.pk],
+                ),
+                'affected_ticket_count': self._affected_tickets_queryset(obj).count(),
+            })
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _affected_tickets_queryset(self, obj):
+        return BetTicket.objects.filter(selections__fixture=obj).exclude(status__in=['deleted', 'cashed_out']).distinct()
+
+    def affected_tickets_count(self, obj):
+        return self._affected_tickets_queryset(obj).count()
+    affected_tickets_count.short_description = 'Affected Tickets'
+
+    def open_reprocess_page(self, obj):
+        change_url = reverse(f'{self.admin_site.name}:{self.model._meta.app_label}_{self.model._meta.model_name}_change', args=[obj.pk])
+        return format_html(
+            '<a class="button" href="{}" style="padding:4px 8px; border-radius:4px; text-decoration:none;">Open / Reprocess</a>',
+            change_url,
+        )
+    open_reprocess_page.short_description = 'Actions'
+
+    @db_transaction.atomic
+    def reprocess_affected_tickets_view(self, request, object_id):
+        obj = get_object_or_404(Result, pk=object_id)
+        change_url = reverse(
+            f'{self.admin_site.name}:{self.model._meta.app_label}_{self.model._meta.model_name}_change',
+            args=[obj.pk],
+        )
+        if request.method != 'POST':
+            messages.warning(request, 'Use the Reprocess Affected Tickets button to continue.')
+            return redirect(change_url)
+
+        affected_count = self._affected_tickets_queryset(obj).count()
+        result = recalculate_tickets_for_fixture_sync(obj.pk)
+        if result and result.get("error"):
+            self.message_user(
+                request,
+                (
+                    "Unable to reprocess affected tickets because the correction would require reversing "
+                    f"more settled winnings/refunds than the current wallet balance allows. Details: {result['error']}"
+                ),
+                level=messages.ERROR,
+            )
+            return redirect(change_url)
+        self.message_user(
+            request,
+            f"Reprocessed {affected_count} affected ticket(s) for result {obj.serial_number}.",
+            level=messages.SUCCESS,
+        )
+        return redirect(change_url)
 
     def serial_number_display(self, obj):
         return obj.serial_number

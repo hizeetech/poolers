@@ -2,6 +2,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import RequestFactory, TestCase
+from django.db import transaction
 from django.urls import reverse
 
 from betting.admin import BetTicketAdmin, betting_admin_site
@@ -100,8 +101,10 @@ class TicketVoidCommissionRefreshTests(TestCase):
 
         ticket_one.refresh_from_db()
         ticket_two.refresh_from_db()
+        self.cashier.wallet.refresh_from_db()
         self.assertEqual(ticket_one.status, "deleted")
         self.assertEqual(ticket_two.status, "deleted")
+        self.assertEqual(self.cashier.wallet.balance, Decimal("200.00"))
         mock_enqueue.assert_called_once()
         self.assertEqual(
             set(mock_enqueue.call_args.args[0]),
@@ -126,3 +129,33 @@ class TicketVoidCommissionRefreshTests(TestCase):
         self.assertEqual(ticket.status, "deleted")
         mock_enqueue.assert_called_once_with([str(ticket.id)])
 
+    @patch("commission.tasks.refresh_weekly_commissions_for_ticket_ids_task.delay")
+    @patch("commission.tasks.refresh_weekly_commissions_for_ticket_ids_sync")
+    def test_commission_refresh_enqueue_falls_back_when_workers_unavailable(
+        self,
+        mock_refresh_sync,
+        mock_delay,
+    ):
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                if self.target:
+                    self.target(*self.args)
+
+        ticket = self._make_ticket()
+
+        with patch("commission.tasks.sys.argv", ["manage.py", "runserver"]):
+            with patch("commission.tasks._commission_workers_available", return_value=False):
+                with patch("commission.tasks.threading.Thread", ImmediateThread):
+                    with self.captureOnCommitCallbacks(execute=True):
+                        with transaction.atomic():
+                            from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+
+                            enqueue_refresh_weekly_commissions_for_ticket_ids([str(ticket.id)])
+
+        mock_delay.assert_not_called()
+        mock_refresh_sync.assert_called_once_with([str(ticket.id)])

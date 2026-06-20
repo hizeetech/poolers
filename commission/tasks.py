@@ -1,5 +1,9 @@
 from celery import shared_task
+import sys
+import threading
 from django.apps import apps
+from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
 from commission.models import CommissionPeriod
@@ -8,6 +12,7 @@ from commission.services import (
     CommissionPayoutService,
     calculate_weekly_agent_commission,
 )
+from commission.sync_utils import refresh_weekly_commissions_for_ticket_ids_sync
 import logging
 
 logger = logging.getLogger(__name__)
@@ -85,52 +90,52 @@ def ensure_weekly_commission_period(self):
 
 
 def refresh_weekly_commissions_for_ticket_ids(ticket_ids):
-    if not ticket_ids:
-        return {"period_ids": [], "agent_ids": [], "updated": 0}
+    return refresh_weekly_commissions_for_ticket_ids_sync(ticket_ids)
 
-    BetTicket = apps.get_model('betting', 'BetTicket')
-    tickets = list(
-        BetTicket.objects.filter(id__in=ticket_ids)
-        .select_related('user__agent')
-        .only('id', 'placed_at', 'user_id', 'user__agent_id')
+
+def _commission_workers_available():
+    cache_key = "commission:celery_workers_available"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return bool(cached)
+
+    ok = False
+    try:
+        from celery import current_app
+
+        insp = current_app.control.inspect(timeout=0.5)
+        res = insp.ping() if insp else None
+        ok = bool(res)
+    except Exception:
+        ok = False
+
+    cache.set(cache_key, ok, timeout=15)
+    return ok
+
+
+def _dispatch_weekly_commission_refresh(ticket_ids):
+    normalized_ticket_ids = list(ticket_ids or [])
+    if not normalized_ticket_ids:
+        return
+
+    is_test_run = any(arg in ("test", "pytest") for arg in (sys.argv or []))
+    if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
+        refresh_weekly_commissions_for_ticket_ids_sync(normalized_ticket_ids)
+        return
+
+    if _commission_workers_available():
+        try:
+            refresh_weekly_commissions_for_ticket_ids_task.delay(normalized_ticket_ids)
+            return
+        except Exception:
+            pass
+
+    worker = threading.Thread(
+        target=refresh_weekly_commissions_for_ticket_ids_sync,
+        args=(normalized_ticket_ids,),
+        daemon=True,
     )
-    if not tickets:
-        return {"period_ids": [], "agent_ids": [], "updated": 0}
-
-    period_cache = {}
-    affected_pairs = set()
-
-    for ticket in tickets:
-        agent_id = getattr(getattr(ticket, 'user', None), 'agent_id', None)
-        placed_at = getattr(ticket, 'placed_at', None)
-        placed_date = placed_at.date() if placed_at else None
-        if not agent_id or not placed_date:
-            continue
-
-        if placed_date not in period_cache:
-            weekly_period, _ = ensure_weekly_commission_period_for_date(reference_date=placed_date)
-            period_cache[placed_date] = weekly_period.id
-        affected_pairs.add((period_cache[placed_date], agent_id))
-
-    if not affected_pairs:
-        return {"period_ids": [], "agent_ids": [], "updated": 0}
-
-    User = apps.get_model('betting', 'User')
-    period_ids = sorted({period_id for period_id, _ in affected_pairs})
-    agent_ids = sorted({agent_id for _, agent_id in affected_pairs})
-    period_map = CommissionPeriod.objects.in_bulk(period_ids)
-    agent_map = User.objects.in_bulk(agent_ids)
-
-    updated = 0
-    for period_id, agent_id in sorted(affected_pairs):
-        period = period_map.get(period_id)
-        agent = agent_map.get(agent_id)
-        if not period or not agent:
-            continue
-        calculate_weekly_agent_commission(agent, period)
-        updated += 1
-
-    return {"period_ids": period_ids, "agent_ids": agent_ids, "updated": updated}
+    worker.start()
 
 
 def enqueue_refresh_weekly_commissions_for_ticket_ids(ticket_ids):
@@ -149,7 +154,7 @@ def enqueue_refresh_weekly_commissions_for_ticket_ids(ticket_ids):
     from django.db import transaction
 
     transaction.on_commit(
-        lambda: refresh_weekly_commissions_for_ticket_ids_task.delay(normalized_ticket_ids)
+        lambda: _dispatch_weekly_commission_refresh(normalized_ticket_ids)
     )
     return normalized_ticket_ids
 

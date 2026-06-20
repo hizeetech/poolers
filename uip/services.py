@@ -25,7 +25,15 @@ class DashboardService:
     @staticmethod
     def get_redis_client():
         try:
-            return redis.Redis(host='127.0.0.1', port=6379, db=0, socket_connect_timeout=1)
+            return redis.Redis(
+                host='127.0.0.1',
+                port=6379,
+                db=0,
+                socket_connect_timeout=0.2,
+                socket_timeout=0.2,
+                retry_on_timeout=False,
+                health_check_interval=0,
+            )
         except Exception:
             return None
 

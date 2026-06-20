@@ -10909,9 +10909,6 @@ def _ticket_transaction_widget_context(user, *, limit=8, date_from='', date_to='
     filters = _default_ticket_transaction_filters()
     filters['date_from'] = (date_from or '').strip()
     filters['date_to'] = (date_to or '').strip()
-    queryset, filtered_users, start_dt, _end_dt, _order = _ticket_transaction_filtered_queryset(user, filters)
-    summary = _ticket_transaction_summary(queryset, filtered_users, start_dt)
-    recent_entries = list(queryset[:limit])
     query_params = {}
     if filters['date_from']:
         query_params['date_from'] = filters['date_from']
@@ -10920,10 +10917,32 @@ def _ticket_transaction_widget_context(user, *, limit=8, date_from='', date_to='
     open_full_url = reverse(full_url_name)
     if query_params:
         open_full_url = f"{open_full_url}?{urlencode(query_params)}"
+    try:
+        queryset, filtered_users, start_dt, _end_dt, _order = _ticket_transaction_filtered_queryset(user, filters)
+        summary = _ticket_transaction_summary(queryset, filtered_users, start_dt)
+        recent_entries = list(queryset[:limit])
+        entry_count = queryset.count()
+    except (ProgrammingError, OperationalError):
+        summary = {
+            'opening_balance': Decimal('0.00'),
+            'current_balance': Decimal('0.00'),
+            'closing_balance': Decimal('0.00'),
+            'total_deposits': Decimal('0.00'),
+            'total_stakes': Decimal('0.00'),
+            'total_winnings': Decimal('0.00'),
+            'total_voids_refunded': Decimal('0.00'),
+            'total_withdrawals': Decimal('0.00'),
+            'commission_credits': Decimal('0.00'),
+            'net_movement': Decimal('0.00'),
+            'total_debits': Decimal('0.00'),
+            'total_credits': Decimal('0.00'),
+        }
+        recent_entries = []
+        entry_count = 0
     return {
         'summary': summary,
         'entries': recent_entries,
-        'entry_count': queryset.count(),
+        'entry_count': entry_count,
         'open_full_url': open_full_url,
         'date_from': filters['date_from'],
         'date_to': filters['date_to'],

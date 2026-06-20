@@ -1,8 +1,10 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
+from django.db.utils import ProgrammingError
 
 from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
 
@@ -35,6 +37,12 @@ class TicketTransactionLedgerTests(TestCase):
             user_type="super_agent",
             username="ledger_super_agent",
         )
+        self.retail_manager = User.objects.create_user(
+            email="ledger-retail@test.com",
+            password=self.password,
+            user_type="retail_manager",
+            username="ledger_retail_manager",
+        )
         self.admin_user = User.objects.create_user(
             email="ledger-admin@test.com",
             password=self.password,
@@ -50,7 +58,7 @@ class TicketTransactionLedgerTests(TestCase):
             username="ledger_other_cashier",
             agent=self.other_agent,
         )
-        for user in [self.agent, self.cashier, self.other_agent, self.super_agent, self.admin_user, self.other_cashier]:
+        for user in [self.agent, self.cashier, self.other_agent, self.super_agent, self.retail_manager, self.admin_user, self.other_cashier]:
             Wallet.objects.create(user=user, balance=Decimal("0.00"))
 
     def _create_ticket(self, user):
@@ -342,3 +350,21 @@ class TicketTransactionLedgerTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Dashboard Ticket Transactions")
+
+    @patch("betting.views._ticket_transaction_filtered_queryset", side_effect=ProgrammingError("relation missing"))
+    def test_admin_dashboard_handles_missing_ticket_transaction_table(self, _mock_queryset):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse("betting:admin_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Admin Dashboard Overview")
+
+    @patch("betting.views._ticket_transaction_filtered_queryset", side_effect=ProgrammingError("relation missing"))
+    def test_retail_dashboard_handles_missing_ticket_transaction_table(self, _mock_queryset):
+        self.client.force_login(self.retail_manager)
+
+        response = self.client.get(reverse("betting:retail_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Retail Manager Dashboard")

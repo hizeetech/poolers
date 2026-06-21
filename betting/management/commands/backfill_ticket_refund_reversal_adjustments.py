@@ -30,5 +30,6 @@ class Command(BaseCommand):
             f"eligible={summary['eligible']}, "
             f"adjusted={summary['adjusted']}, "
             f"already_adjusted={summary['already_adjusted']}, "
-            f"skipped={summary['skipped']}"
+            f"skipped={summary['skipped']}, "
+            f"failed={summary['failed']}"
         )

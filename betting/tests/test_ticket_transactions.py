@@ -420,7 +420,7 @@ class TicketTransactionLedgerTests(TestCase):
         refund_ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=refund_entry)
         self.assertEqual(refund_ledger.transaction_type, "Withdrawal Refund")
 
-    def test_backfill_ticket_refund_reversal_adjustments_restores_wrongly_debited_void_refund(self):
+    def test_backfill_ticket_refund_reversal_adjustments_restores_wrongly_debited_void_refund_even_if_wallet_stays_negative(self):
         ticket = self._create_ticket(self.cashier)
         wallet = Wallet.objects.get(user=self.cashier)
         Wallet.objects.filter(user=self.cashier).update(balance=Decimal("0.00"))
@@ -464,11 +464,12 @@ class TicketTransactionLedgerTests(TestCase):
 
         wallet.refresh_from_db()
         self.assertEqual(wallet.balance, Decimal("0.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("-250.00"))
 
         call_command("backfill_ticket_refund_reversal_adjustments")
         wallet.refresh_from_db()
 
-        self.assertEqual(wallet.balance, Decimal("100.00"))
+        self.assertEqual(wallet.balance, Decimal("-150.00"))
         adjustment_entry = WalletLedgerEntry.objects.get(
             metadata__refund_reversal_adjustment_for=str(reversal_tx.id)
         )
@@ -479,7 +480,7 @@ class TicketTransactionLedgerTests(TestCase):
 
         call_command("backfill_ticket_refund_reversal_adjustments")
         wallet.refresh_from_db()
-        self.assertEqual(wallet.balance, Decimal("100.00"))
+        self.assertEqual(wallet.balance, Decimal("-150.00"))
         self.assertEqual(
             WalletLedgerEntry.objects.filter(
                 metadata__refund_reversal_adjustment_for=str(reversal_tx.id)

@@ -93,6 +93,7 @@ def apply_refund_reversal_adjustment(refund_reversal_tx, *, actor=None):
             "refund_reversal_adjustment_for": str(refund_reversal_tx.id),
             "original_reversed_tx_id": str(reversed_tx.id) if reversed_tx else "",
         },
+        allow_negative=True,
     )
     return adjustment_tx
 
@@ -104,6 +105,7 @@ def backfill_incorrect_refund_reversal_adjustments(*, actor=None, dry_run=False)
         "adjusted": 0,
         "already_adjusted": 0,
         "skipped": 0,
+        "failed": 0,
     }
     queryset = (
         Transaction.objects.select_related("user", "related_bet_ticket")
@@ -132,7 +134,10 @@ def backfill_incorrect_refund_reversal_adjustments(*, actor=None, dry_run=False)
             summary["adjusted"] += 1
             continue
 
-        if apply_refund_reversal_adjustment(refund_reversal_tx, actor=actor):
-            summary["adjusted"] += 1
+        try:
+            if apply_refund_reversal_adjustment(refund_reversal_tx, actor=actor):
+                summary["adjusted"] += 1
+        except Exception:
+            summary["failed"] += 1
 
     return summary

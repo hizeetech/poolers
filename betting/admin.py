@@ -42,7 +42,8 @@ from .forms import (
     WithdrawalActionForm, 
     DeclareResultForm,
     FixtureForm,
-    FixtureUploadForm
+    FixtureUploadForm,
+    BettingPeriodForm,
 )
 from .services.email_policy import normalize_email_value
 from django.core.files.storage import FileSystemStorage
@@ -961,10 +962,28 @@ class BetTicketAdmin(admin.ModelAdmin):
 
 # --- BettingPeriod Admin ---
 class BettingPeriodAdmin(admin.ModelAdmin):
-    list_display = ('name', 'start_date', 'end_date', 'is_active')
+    form = BettingPeriodForm
+    list_display = ('name', 'fixture_theme_preview', 'start_date', 'end_date', 'is_active')
     list_editable = ('is_active',)
     search_fields = ('name',)
     ordering = ('-start_date',)
+    fields = ('name', 'start_date', 'end_date', 'fixture_theme_color', 'fixture_theme_preview', 'is_active')
+    readonly_fields = ('fixture_theme_preview',)
+
+    def fixture_theme_preview(self, obj):
+        color = getattr(obj, 'resolved_fixture_theme_color', BettingPeriod.DEFAULT_FIXTURE_THEME_COLOR)
+        text_color = getattr(obj, 'fixture_theme_text_color', '#ffffff')
+        return format_html(
+            '<span style="display:inline-flex;align-items:center;gap:0.5rem;">'
+            '<span style="width:1rem;height:1rem;border-radius:999px;border:1px solid #d1d5db;display:inline-block;background:{};"></span>'
+            '<code style="background:{};color:{};padding:0.15rem 0.45rem;border-radius:999px;">{}</code>'
+            '</span>',
+            color,
+            color,
+            text_color,
+            color,
+        )
+    fixture_theme_preview.short_description = 'Fixture Color'
 
 class PopularPickAdmin(admin.ModelAdmin):
     list_display = ('fixture', 'get_period', 'bet_type', 'get_odd', 'is_active', 'sort_order', 'created_at')

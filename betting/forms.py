@@ -541,11 +541,12 @@ class WithdrawFundsForm(forms.Form):
 class BettingPeriodForm(forms.ModelForm):
     class Meta:
         model = BettingPeriod
-        fields = ['name', 'start_date', 'end_date', 'is_active']
+        fields = ['name', 'start_date', 'end_date', 'fixture_theme_color', 'is_active']
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Week 1'}),
             'start_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
             'end_date': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            'fixture_theme_color': forms.TextInput(attrs={'type': 'color', 'class': 'form-control form-control-color', 'title': 'Choose fixture header color'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
 

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 import uuid
 from decimal import Decimal
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, RegexValidator
 import secrets
 import string
 import re
@@ -960,16 +960,46 @@ class ApprovedNewCashier(CashierRegistrationRequest):
         verbose_name_plural = "Approved New Cashier"
 
 class BettingPeriod(models.Model):
+    DEFAULT_FIXTURE_THEME_COLOR = "#0b4f3a"
+
     name = models.CharField(max_length=255, unique=True)
     start_date = models.DateField()
     end_date = models.DateField()
     is_active = models.BooleanField(default=True)
+    fixture_theme_color = models.CharField(
+        max_length=7,
+        default=DEFAULT_FIXTURE_THEME_COLOR,
+        validators=[
+            RegexValidator(
+                regex=r"^#[0-9A-Fa-f]{6}$",
+                message="Enter a valid hex color in the format #RRGGBB.",
+            )
+        ],
+        help_text="Hex color used for fixture page section headers for this betting period.",
+    )
 
     class Meta:
         ordering = ['-start_date']
 
     def __str__(self):
         return self.name
+
+    @property
+    def resolved_fixture_theme_color(self):
+        return self.fixture_theme_color or self.DEFAULT_FIXTURE_THEME_COLOR
+
+    @property
+    def fixture_theme_text_color(self):
+        color = (self.resolved_fixture_theme_color or self.DEFAULT_FIXTURE_THEME_COLOR).lstrip("#")
+        try:
+            red = int(color[0:2], 16)
+            green = int(color[2:4], 16)
+            blue = int(color[4:6], 16)
+        except (TypeError, ValueError):
+            return "#ffffff"
+
+        brightness = ((red * 299) + (green * 587) + (blue * 114)) / 1000
+        return "#111827" if brightness >= 186 else "#ffffff"
 
 class Fixture(models.Model):
     ODDS_UPDATE_DIRECTION_CHOICES = (

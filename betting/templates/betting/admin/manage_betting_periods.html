@@ -15,6 +15,7 @@
                 <tr>
                     <th scope="col" class="py-3 px-4">ID</th>
                     <th scope="col" class="py-3 px-4">Name</th>
+                    <th scope="col" class="py-3 px-4">Fixture Color</th>
                     <th scope="col" class="py-3 px-4">Start Date</th>
                     <th scope="col" class="py-3 px-4">End Date</th>
                     <th scope="col" class="py-3 px-4">Is Active</th>
@@ -26,6 +27,12 @@
                 <tr>
                     <td class="py-3 px-4">{{ period.id|truncatechars:8 }}</td>
                     <td class="py-3 px-4">{{ period.name }}</td>
+                    <td class="py-3 px-4">
+                        <span class="d-inline-flex align-items-center gap-2">
+                            <span style="width: 1rem; height: 1rem; border-radius: 999px; display: inline-block; border: 1px solid #d1d5db; background: {{ period.resolved_fixture_theme_color }};"></span>
+                            <code>{{ period.resolved_fixture_theme_color }}</code>
+                        </span>
+                    </td>
                     <td class="py-3 px-4">{{ period.start_date|date:"Y-m-d" }}</td>
                     <td class="py-3 px-4">{{ period.end_date|date:"Y-m-d" }}</td>
                     <td class="py-3 px-4">

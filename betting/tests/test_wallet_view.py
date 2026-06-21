@@ -6,7 +6,7 @@ from django.db import models
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
-from betting.models import Loan, LoanPendingCredit, Transaction, User, Wallet
+from betting.models import Loan, LoanPendingCredit, SiteConfiguration, Transaction, User, Wallet
 from betting.services.loan_overdraft import (
     apply_repayment_and_credit_wallet,
     build_qualification_snapshot,
@@ -14,7 +14,7 @@ from betting.services.loan_overdraft import (
     remit_overdraft_pending_credit,
 )
 from betting.tasks import enforce_due_loans_task
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 class WalletViewTest(TestCase):
@@ -644,6 +644,43 @@ class WalletViewTest(TestCase):
         self.assertEqual(payload['recent_transactions'][0]['details_url'], reverse('betting:deposit_status', args=['recent-tx-ref']))
         self.assertEqual(payload['recent_transactions'][0]['balance_before'], '5000.00')
         self.assertEqual(payload['recent_transactions'][0]['balance_after'], '10000.00')
+
+    def test_manual_overdraft_created_after_repayment_cutoff_keeps_same_day_due_time(self):
+        config = SiteConfiguration.load()
+        config.loan_repayment_day = 'sunday'
+        config.loan_repayment_time = datetime.strptime('18:45:00', '%H:%M:%S').time()
+        config.save(update_fields=['loan_repayment_day', 'loan_repayment_time'])
+
+        admin_user = User.objects.create_user(
+            email='same-day-due-admin@example.com',
+            password='testpassword',
+            user_type='admin',
+        )
+        super_agent = User.objects.create_user(
+            email='same-day-due-super@example.com',
+            password='testpassword',
+            user_type='super_agent',
+        )
+        agent = User.objects.create_user(
+            email='same-day-due-agent@example.com',
+            password='testpassword',
+            user_type='agent',
+            super_agent=super_agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+
+        frozen_now = timezone.make_aware(datetime(2026, 6, 21, 19, 0, 0), timezone.get_current_timezone())
+        expected_due = timezone.make_aware(datetime(2026, 6, 21, 18, 45, 0), timezone.get_current_timezone())
+
+        with patch('betting.services.loan_overdraft.timezone.now', return_value=frozen_now):
+            loan = create_manual_overdraft(
+                actor=admin_user,
+                borrower=agent,
+                amount=Decimal('1000.00'),
+                reason='Past-cutoff same-day due test',
+            )
+
+        self.assertEqual(loan.due_date, expected_due)
 
     def test_qualification_snapshot_counts_only_gateway_excess_after_remittance(self):
         super_agent = User.objects.create_user(

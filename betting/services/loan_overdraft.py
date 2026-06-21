@@ -101,9 +101,6 @@ def _this_weeks_named_day(named_day: str, at_time: time, *, reference_dt=None):
 def _next_due_datetime(reference_dt=None):
     settings_map = get_loan_settings()
     due_at = _this_weeks_named_day(settings_map["repayment_day"], settings_map["repayment_time"], reference_dt=reference_dt)
-    local_now = timezone.localtime(reference_dt or timezone.now())
-    if due_at <= local_now:
-        due_at = due_at + timedelta(days=7)
     return due_at
 
 

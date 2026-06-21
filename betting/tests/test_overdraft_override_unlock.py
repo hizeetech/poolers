@@ -220,6 +220,19 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertContains(response, "Clear Overdraft")
         self.assertContains(response, "₦200.00")
 
+    def test_outstanding_tab_shows_offset_ready_highlight_for_overdue_loan(self):
+        loan = self._create_overdue_locked_loan()
+        Wallet.objects.filter(user=self.agent).update(balance=Decimal("500.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("400.00"))
+
+        self.client.force_login(self.superadmin)
+        response = self.client.get(reverse("betting_admin:admin_loan_overdraft_center"), {"tab": "outstanding"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "overdraft-balance-ready")
+        self.assertContains(response, "overdraft-ready-star")
+        self.assertContains(response, "₦900.00")
+
     def test_recall_overdraft_fully_settles_and_unlocks_agent_and_cashier(self):
         loan = self._create_overdue_locked_loan()
         loan.outstanding_balance = Decimal("150.00")

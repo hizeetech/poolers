@@ -4,6 +4,33 @@
 {% block title %}Loan / Overdraft Center{% endblock %}
 
 {% block content %}
+<style>
+    @keyframes overdraft-balance-ready-pulse {
+        0%, 100% {
+            opacity: 1;
+            transform: scale(1);
+            text-shadow: 0 0 0 rgba(212, 175, 55, 0);
+        }
+        50% {
+            opacity: 0.45;
+            transform: scale(1.08);
+            text-shadow: 0 0 10px rgba(212, 175, 55, 0.9);
+        }
+    }
+
+    .overdraft-balance-ready {
+        color: #b8860b;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .overdraft-balance-ready .overdraft-ready-star {
+        color: #d4af37;
+        display: inline-block;
+        margin-right: 0.3rem;
+        animation: overdraft-balance-ready-pulse 1s ease-in-out infinite;
+    }
+    </style>
 <div class="container py-4">
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
         <div>
@@ -291,7 +318,15 @@
                             <td>₦{{ loan.requested_amount|floatformat:2 }}</td>
                             <td>₦{{ loan.amount|floatformat:2 }}</td>
                             <td>₦{{ loan.outstanding_balance|floatformat:2 }}</td>
-                            <td>₦{{ loan.network_wallet_balance|floatformat:2 }}</td>
+                            <td>
+                                {% if loan.outstanding_balance > 0 and loan.due_date and loan.due_date < now and loan.network_wallet_balance >= loan.outstanding_balance %}
+                                <span class="overdraft-balance-ready">
+                                    <span class="overdraft-ready-star" aria-hidden="true">&#9733;</span>₦{{ loan.network_wallet_balance|floatformat:2 }}
+                                </span>
+                                {% else %}
+                                ₦{{ loan.network_wallet_balance|floatformat:2 }}
+                                {% endif %}
+                            </td>
                             <td>{{ loan.due_date|date:"Y-m-d H:i"|default:"-" }}</td>
                             <td>
                                 <div>{{ loan.get_status_display }}</div>

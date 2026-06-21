@@ -115,6 +115,10 @@ from .forms import (
     BulkMessageCampaignForm, CRMThresholdSettingsForm
 )
 from .services.email_policy import duplicate_email_details, normalize_email_value, resolve_user_from_identifier
+from .services.ticket_refund_reversal_adjustments import (
+    backfill_incorrect_refund_reversal_adjustments,
+)
+from .services.ticket_transaction_ledger import backfill_ticket_transaction_ledgers
 
 # Setup logger for this app
 logger = logging.getLogger('betting') # Use the 'betting' logger defined in settings.py
@@ -11120,8 +11124,46 @@ def admin_ticket_transactions(request):
             **context,
             'standalone_url': reverse('betting:ticket_transactions'),
             'admin_reset_url': reverse('betting_admin:admin_ticket_transactions'),
+            'admin_backfill_url': reverse('betting_admin:admin_backfill_ticket_transactions'),
+            'admin_refund_reversal_adjustments_url': reverse('betting_admin:admin_backfill_ticket_refund_reversal_adjustments'),
         },
     )
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@require_POST
+def admin_backfill_ticket_transactions(request):
+    request.current_app = 'betting_admin'
+    try:
+        processed_events = backfill_ticket_transaction_ledgers()
+    except Exception as exc:
+        messages.error(request, f"Ticket transaction backfill failed: {exc}")
+    else:
+        messages.success(
+            request,
+            f"Ticket transaction ledger backfill completed. Processed {processed_events} historical event(s).",
+        )
+    return redirect('betting_admin:admin_ticket_transactions')
+
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+@require_POST
+def admin_backfill_ticket_refund_reversal_adjustments(request):
+    request.current_app = 'betting_admin'
+    try:
+        summary = backfill_incorrect_refund_reversal_adjustments(actor=request.user)
+    except Exception as exc:
+        messages.error(request, f"Refund reversal adjustment backfill failed: {exc}")
+    else:
+        messages.success(
+            request,
+            "Refund reversal adjustment backfill completed. "
+            f"Adjusted {summary['adjusted']} affected reversal(s); "
+            f"{summary['already_adjusted']} already had adjustments.",
+        )
+    return redirect('betting_admin:admin_ticket_transactions')
 
 
 @csrf_exempt

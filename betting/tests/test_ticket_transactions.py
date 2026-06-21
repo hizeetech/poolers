@@ -7,6 +7,8 @@ from django.urls import reverse
 from django.db.utils import ProgrammingError
 
 from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
+from void_requests.models import TicketVoidRequest
+from void_requests.services import approve_and_void_request
 
 
 class TicketTransactionLedgerTests(TestCase):
@@ -105,6 +107,54 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(ledger.balance_before, Decimal("200.00"))
         self.assertEqual(ledger.balance_after, Decimal("100.00"))
 
+    def test_voided_ticket_refund_is_projected_to_ticket_transactions(self):
+        ticket = self._create_ticket(self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("0.00"))
+
+        ticket.status = "deleted"
+        ticket.deleted_by = self.admin_user
+        ticket.save()
+
+        refund_entry = WalletLedgerEntry.objects.filter(
+            user=self.cashier,
+            direction="credit",
+            reference=str(ticket.ticket_id),
+        ).latest("created_at")
+        ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=refund_entry)
+
+        self.assertEqual(ledger.ticket, ticket)
+        self.assertEqual(ledger.transaction_type, "Ticket Voided")
+        self.assertEqual(ledger.source, "Ticket Void")
+        self.assertEqual(ledger.credit, Decimal("100.00"))
+        self.assertEqual(ledger.balance_before, Decimal("0.00"))
+        self.assertEqual(ledger.balance_after, Decimal("100.00"))
+        self.assertIn(ticket.ticket_id, ledger.description)
+
+    def test_void_request_approval_refund_is_projected_to_ticket_transactions(self):
+        ticket = self._create_ticket(self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("0.00"))
+        void_request = TicketVoidRequest.objects.create(
+            ticket=ticket,
+            cashier=self.cashier,
+            agent=self.agent,
+            status=TicketVoidRequest.STATUS_PENDING,
+            is_processed=False,
+        )
+
+        approve_and_void_request(void_request_id=void_request.id, approved_by=self.admin_user, is_auto=False)
+
+        refund_entry = WalletLedgerEntry.objects.filter(
+            user=self.cashier,
+            direction="credit",
+            reference=str(ticket.ticket_id),
+        ).latest("created_at")
+        ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=refund_entry)
+
+        self.assertEqual(ledger.ticket, ticket)
+        self.assertEqual(ledger.transaction_type, "Ticket Voided")
+        self.assertEqual(ledger.source, "Ticket Void")
+        self.assertEqual(ledger.credit, Decimal("100.00"))
+
     def test_backfill_ticket_transactions_is_safe_to_rerun_for_legacy_transactions(self):
         ticket = self._create_ticket(self.agent)
         legacy_tx = Transaction.objects.create(
@@ -200,6 +250,33 @@ class TicketTransactionLedgerTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Ticket Transactions")
+        self.assertContains(response, "Backfill Ticket Transactions")
+        self.assertContains(response, "Backfill Refund Reversal Adjustments")
+
+    @patch("betting.views.backfill_ticket_transaction_ledgers", return_value=7)
+    def test_admin_backfill_ticket_transactions_route_runs_backfill(self, mocked_backfill):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(reverse("betting_admin:admin_backfill_ticket_transactions"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("betting_admin:admin_ticket_transactions"))
+        mocked_backfill.assert_called_once_with()
+
+    @patch(
+        "betting.views.backfill_incorrect_refund_reversal_adjustments",
+        return_value={"adjusted": 2, "already_adjusted": 1, "eligible": 3, "scanned": 3, "skipped": 0},
+    )
+    def test_admin_backfill_refund_reversal_adjustments_route_runs_backfill(self, mocked_backfill):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(
+            reverse("betting_admin:admin_backfill_ticket_refund_reversal_adjustments")
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("betting_admin:admin_ticket_transactions"))
+        mocked_backfill.assert_called_once_with(actor=self.admin_user)
 
     def test_admin_ticket_transactions_page_supports_filters(self):
         self.client.force_login(self.admin_user)
@@ -342,6 +419,73 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(withdrawal.balance_after, refund_entry.balance_after)
         refund_ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=refund_entry)
         self.assertEqual(refund_ledger.transaction_type, "Withdrawal Refund")
+
+    def test_backfill_ticket_refund_reversal_adjustments_restores_wrongly_debited_void_refund(self):
+        ticket = self._create_ticket(self.cashier)
+        wallet = Wallet.objects.get(user=self.cashier)
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("0.00"))
+
+        ticket.status = "deleted"
+        ticket.deleted_by = self.admin_user
+        ticket.save()
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("100.00"))
+
+        original_refund_tx = Transaction.objects.filter(
+            related_bet_ticket=ticket,
+            transaction_type="ticket_deletion_refund",
+            status="completed",
+        ).latest("timestamp")
+        reversal_tx = Transaction.objects.create(
+            user=self.cashier,
+            initiating_user=self.admin_user,
+            transaction_type="ticket_refund_reversal",
+            amount=Decimal("100.00"),
+            is_successful=True,
+            status="completed",
+            description=(
+                f"Result correction reversal of ticket_deletion_refund for ticket {ticket.ticket_id}. "
+                "Fixture 922 result corrected"
+            ),
+            related_bet_ticket=ticket,
+        )
+        wallet.apply_delta(
+            amount=-Decimal("100.00"),
+            actor=self.admin_user,
+            transaction_obj=reversal_tx,
+            reference=str(ticket.ticket_id),
+            reason=reversal_tx.description,
+            metadata={
+                "ticket_id": ticket.ticket_id,
+                "source": "result_backfill",
+                "reversed_tx_id": str(original_refund_tx.id),
+            },
+        )
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("0.00"))
+
+        call_command("backfill_ticket_refund_reversal_adjustments")
+        wallet.refresh_from_db()
+
+        self.assertEqual(wallet.balance, Decimal("100.00"))
+        adjustment_entry = WalletLedgerEntry.objects.get(
+            metadata__refund_reversal_adjustment_for=str(reversal_tx.id)
+        )
+        adjustment_ledger = TicketTransactionLedger.objects.get(wallet_ledger_entry=adjustment_entry)
+        self.assertEqual(adjustment_entry.direction, "credit")
+        self.assertEqual(adjustment_entry.amount, Decimal("100.00"))
+        self.assertEqual(adjustment_ledger.transaction_type, "Ticket Voided")
+
+        call_command("backfill_ticket_refund_reversal_adjustments")
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("100.00"))
+        self.assertEqual(
+            WalletLedgerEntry.objects.filter(
+                metadata__refund_reversal_adjustment_for=str(reversal_tx.id)
+            ).count(),
+            1,
+        )
 
     def test_super_agent_dashboard_embeds_ticket_transactions_panel(self):
         self.client.force_login(self.super_agent)

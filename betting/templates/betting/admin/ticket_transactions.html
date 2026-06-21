@@ -9,7 +9,17 @@
       <h2 class="h3 mb-1 text-dark fw-semibold">Ticket Transactions</h2>
       <div class="text-muted small">Admin ledger view for wallet movements across the platform.</div>
     </div>
-    <a href="{{ standalone_url }}" class="btn btn-sm btn-outline-primary">Open Standalone Ledger</a>
+    <div class="d-flex flex-wrap gap-2">
+      <form method="post" action="{{ admin_backfill_url }}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-secondary">Backfill Ticket Transactions</button>
+      </form>
+      <form method="post" action="{{ admin_refund_reversal_adjustments_url }}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-warning">Backfill Refund Reversal Adjustments</button>
+      </form>
+      <a href="{{ standalone_url }}" class="btn btn-sm btn-outline-primary">Open Standalone Ledger</a>
+    </div>
   </div>
 
   <div class="row g-3 mb-4">

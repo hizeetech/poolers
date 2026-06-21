@@ -162,6 +162,12 @@ class BettingAdminSite(admin.AdminSite):
             path('ops/reconciled-credits/', self.admin_view(views.admin_reconciled_credits_dashboard), name='admin_reconciled_credits_dashboard'),
             path('ops/loan-overdraft-center/', self.admin_view(views.admin_loan_overdraft_center), name='admin_loan_overdraft_center'),
             path('ops/ticket-transactions/', self.admin_view(views.admin_ticket_transactions), name='admin_ticket_transactions'),
+            path('ops/ticket-transactions/backfill/', self.admin_view(views.admin_backfill_ticket_transactions), name='admin_backfill_ticket_transactions'),
+            path(
+                'ops/ticket-transactions/backfill-refund-reversal-adjustments/',
+                self.admin_view(views.admin_backfill_ticket_refund_reversal_adjustments),
+                name='admin_backfill_ticket_refund_reversal_adjustments',
+            ),
             path('ops/celery-health/', self.admin_view(views.admin_celery_health), name='admin_celery_health'),
             path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
 

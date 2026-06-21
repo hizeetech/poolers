@@ -59,13 +59,16 @@ from notifications.services import create_notification
 from .services.loan_overdraft import (
     LoanOverdraftError,
     apply_repayment_and_credit_wallet,
+    build_recent_wallet_transactions_payload,
     build_qualification_snapshot,
     can_user_transfer_from_wallet,
+    clear_overdraft_from_admin,
     create_manual_overdraft,
     build_wallet_overdraft_payload,
     enforce_due_loans,
     finance_overdue_rows,
     fund_overdraft_wallet,
+    get_borrower_network_wallet_balance,
     get_loan_settings,
     get_or_create_overdraft_wallet,
     get_user_outstanding_loans,
@@ -75,6 +78,7 @@ from .services.loan_overdraft import (
     loan_lock_override_details,
     notify_loan_event,
     override_unlock_loan_without_payment,
+    recall_overdraft_from_wallets,
     relock_loan_after_override,
     reject_loan_request,
     remit_overdraft_pending_credit,
@@ -5135,7 +5139,7 @@ def wallet_view(request):
     wallet, created = Wallet.objects.get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
     if created:
         logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
-    transactions = Transaction.objects.filter(user=request.user).order_by('-timestamp')[:20] # Last 20 transactions
+    recent_transactions = build_recent_wallet_transactions_payload(request.user, limit=20)
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
 
     if request.user.maybe_auto_unlock_withdrawal():
@@ -5184,7 +5188,7 @@ def wallet_view(request):
 
     context = {
         'wallet': wallet,
-        'transactions': transactions,
+        'recent_transactions': recent_transactions,
         'initiate_deposit_form': InitiateDepositForm(),
         'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
         'wallet_transfer_form': wallet_transfer_form,
@@ -9576,6 +9580,65 @@ def admin_loan_overdraft_center(request):
                 for field_errors in relock_form.errors.values():
                     for error in field_errors:
                         messages.error(request, error)
+        elif "clear_overdraft_submit" in request.POST:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
+            loan_id = (request.POST.get("loan_id") or "").strip()
+            try:
+                loan, amount_cleared = clear_overdraft_from_admin(
+                    actor=request.user,
+                    loan_id=int(loan_id),
+                    ip_address=get_client_ip(request),
+                )
+                log_admin_activity(
+                    request,
+                    f"Cleared overdraft loan #{loan.id} for {loan.borrower.username or loan.borrower.email}. "
+                    f"Outstanding balance reset by ₦{amount_cleared}.",
+                    action_type="LOAN_CLEARED",
+                    affected_object=f"loan:{loan.id}",
+                )
+                messages.success(
+                    request,
+                    f"Loan #{loan.id} overdraft cleared successfully. Outstanding balance is now ₦0.00.",
+                )
+            except (LoanOverdraftError, ValueError) as exc:
+                messages.error(request, str(exc))
+        elif "recall_overdraft_submit" in request.POST:
+            decision_form = LoanCenterDecisionForm()
+            funding_form = AdminOverdraftWalletFundingForm()
+            override_unlock_form = LoanOverrideUnlockForm()
+            loan_id = (request.POST.get("loan_id") or "").strip()
+            try:
+                loan, recall_result = recall_overdraft_from_wallets(
+                    actor=request.user,
+                    loan_id=int(loan_id),
+                    ip_address=get_client_ip(request),
+                )
+                recalled_labels = ", ".join(
+                    f"{entry['label']} (₦{entry['amount']})"
+                    for entry in recall_result["recalled_from_users"]
+                ) or "No wallets"
+                log_admin_activity(
+                    request,
+                    f"Recalled ₦{recall_result['recalled_amount']} against overdraft loan #{loan.id}. "
+                    f"Remaining outstanding: ₦{recall_result['remaining_outstanding']}. Sources: {recalled_labels}.",
+                    action_type="LOAN_REPAYMENT_RECALLED",
+                    affected_object=f"loan:{loan.id}",
+                )
+                if recall_result["fully_settled"]:
+                    messages.success(
+                        request,
+                        f"Loan #{loan.id} fully recalled and cleared. Borrower and downline have been unlocked.",
+                    )
+                else:
+                    messages.warning(
+                        request,
+                        f"Loan #{loan.id} partially recalled by ₦{recall_result['recalled_amount']}. "
+                        f"Remaining outstanding balance: ₦{recall_result['remaining_outstanding']}.",
+                    )
+            except (LoanOverdraftError, ValueError) as exc:
+                messages.error(request, str(exc))
         elif "run_due_enforcement" in request.POST:
             decision_form = LoanCenterDecisionForm()
             funding_form = AdminOverdraftWalletFundingForm()
@@ -9680,6 +9743,7 @@ def admin_loan_overdraft_center(request):
                     "requested_amount": loan.requested_amount,
                     "approved_amount": loan.amount,
                     "outstanding_balance": loan.outstanding_balance,
+                    "network_wallet_balance": get_borrower_network_wallet_balance(loan.borrower),
                     "due_date": timezone.localtime(loan.due_date).strftime("%Y-%m-%d %H:%M:%S") if loan.due_date else "",
                     "status": loan.get_status_display(),
                     "withdrawal_disabled": "Yes" if loan.outstanding_balance > 0 else "No",
@@ -9692,6 +9756,7 @@ def admin_loan_overdraft_center(request):
     loans_page = Paginator(loans, 50).get_page(request.GET.get("page") or 1)
     for loan in loans_page.object_list:
         override_meta = loan_lock_override_details(loan)
+        loan.network_wallet_balance = get_borrower_network_wallet_balance(loan.borrower)
         loan.lock_override_active = override_meta["active"]
         loan.lock_override_reason = override_meta["reason"]
         loan.lock_override_by_label = override_meta["performed_by_label"]
@@ -9710,6 +9775,8 @@ def admin_loan_overdraft_center(request):
             and loan.outstanding_balance > Decimal("0.00")
             and loan.lock_override_active
         )
+        loan.can_clear_overdraft = bool(loan.outstanding_balance > Decimal("0.00"))
+        loan.can_recall_overdraft = bool(loan.outstanding_balance > Decimal("0.00") and loan.network_wallet_balance > Decimal("0.00"))
     tab_counts = {
         "pending": Loan.objects.filter(status="pending").count(),
         "approved": Loan.objects.filter(approved_at__isnull=False).exclude(status="rejected").count(),

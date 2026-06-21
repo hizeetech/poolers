@@ -615,7 +615,7 @@ class WalletViewTest(TestCase):
         wallet.balance = Decimal('5000.00')
         wallet.save(update_fields=['balance'])
 
-        Transaction.objects.create(
+        tx = Transaction.objects.create(
             user=self.user,
             transaction_type='deposit',
             amount=Decimal('5000.00'),
@@ -624,6 +624,14 @@ class WalletViewTest(TestCase):
             payment_gateway='paystack',
             external_reference='recent-tx-ref',
             description='Recent wallet funding',
+        )
+        wallet.apply_delta(
+            amount=Decimal('5000.00'),
+            actor=self.user,
+            transaction_obj=tx,
+            reference='recent-tx-ref',
+            reason='Recent wallet funding',
+            metadata={'source': 'gateway_deposit'},
         )
 
         response = self.client.get(reverse('betting:api_wallet_overdraft_status'))
@@ -634,6 +642,8 @@ class WalletViewTest(TestCase):
         self.assertEqual(len(payload['recent_transactions']), 1)
         self.assertEqual(payload['recent_transactions'][0]['description'], 'Recent wallet funding')
         self.assertEqual(payload['recent_transactions'][0]['details_url'], reverse('betting:deposit_status', args=['recent-tx-ref']))
+        self.assertEqual(payload['recent_transactions'][0]['balance_before'], '5000.00')
+        self.assertEqual(payload['recent_transactions'][0]['balance_after'], '10000.00')
 
     def test_qualification_snapshot_counts_only_gateway_excess_after_remittance(self):
         super_agent = User.objects.create_user(

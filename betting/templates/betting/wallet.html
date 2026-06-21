@@ -583,35 +583,39 @@
     <div class="card wallet-card wallet-section-card border-0 mt-4">
         <div class="card-body">
             <div class="wallet-section-title text-secondary">Recent Transactions</div>
-            <div class="table-responsive {% if not transactions %}d-none{% endif %}" id="recentTransactionsTableWrap">
+            <div class="table-responsive {% if not recent_transactions %}d-none{% endif %}" id="recentTransactionsTableWrap">
                 <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm" style="color: black;">
                     <thead class="bg-light">
                         <tr>
                             <th scope="col">Date</th>
                             <th scope="col">Type</th>
                             <th scope="col">Amount</th>
+                            <th scope="col">Balance Before</th>
+                            <th scope="col">Balance After</th>
                             <th scope="col">Status</th>
                             <th scope="col">Description</th>
                             <th scope="col">Details</th>
                         </tr>
                     </thead>
                     <tbody id="recentTransactionsTableBody">
-                        {% for transaction in transactions %}
+                        {% for transaction in recent_transactions %}
                         <tr>
-                            <td>{{ transaction.timestamp|date:"M d, Y H:i" }}</td>
-                            <td><span class="badge bg-{{ transaction.get_transaction_type_display|lower|cut:' ' }}" style="color: black !important;">
-                                        {{ transaction.get_transaction_type_display }}
+                            <td>{{ transaction.timestamp_display }}</td>
+                            <td><span class="badge bg-secondary" style="color: black !important;">
+                                        {{ transaction.transaction_type_display }}
                                     </span></td>
-                            <td>₦{{ transaction.amount|floatformat:2 }}</td>
+                            <td>₦{{ transaction.amount }}</td>
+                            <td>{% if transaction.balance_before %}₦{{ transaction.balance_before }}{% else %}-{% endif %}</td>
+                            <td>{% if transaction.balance_after %}₦{{ transaction.balance_after }}{% else %}-{% endif %}</td>
                             <td>
                                 <span class="badge bg-{{ transaction.status|lower }}" style="color: black !important;">
-                                            {{ transaction.get_status_display }}
+                                            {{ transaction.status_display }}
                                         </span>
                             </td>
                             <td>{{ transaction.description }}</td>
                             <td class="text-nowrap">
-                                {% if transaction.transaction_type == 'deposit' and transaction.external_reference %}
-                                    <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:deposit_status' transaction.external_reference %}">View</a>
+                                {% if transaction.details_url %}
+                                    <a class="btn btn-sm btn-outline-primary" href="{{ transaction.details_url }}">View</a>
                                 {% else %}
                                     <span class="text-muted small">-</span>
                                 {% endif %}
@@ -621,7 +625,7 @@
                     </tbody>
                 </table>
             </div>
-            <p class="text-center text-muted mb-0 {% if transactions %}d-none{% endif %}" id="recentTransactionsEmptyState">No recent transactions.</p>
+            <p class="text-center text-muted mb-0 {% if recent_transactions %}d-none{% endif %}" id="recentTransactionsEmptyState">No recent transactions.</p>
         </div>
     </div>
 </div>
@@ -1128,6 +1132,13 @@
             }).format(numeric);
         };
 
+        const formatBalanceValue = (value) => {
+            if (value === null || typeof value === 'undefined' || value === '') {
+                return '-';
+            }
+            return formatNaira(value);
+        };
+
         const setRemitLoading = (isLoading) => {
             if (remitBtnSpinner) remitBtnSpinner.classList.toggle('d-none', !isLoading);
             if (remitBtnText) remitBtnText.textContent = isLoading ? 'Remitting...' : 'Remit Overdraft';
@@ -1219,6 +1230,8 @@
                         <td>${escapeHtml(transaction.timestamp_display || '-')}</td>
                         <td><span class="badge ${getTxTypeBadgeClass(transaction.transaction_type)}" style="color: black !important;">${escapeHtml(transaction.transaction_type_display || '-') }</span></td>
                         <td>${formatNaira(transaction.amount || 0)}</td>
+                        <td>${formatBalanceValue(transaction.balance_before)}</td>
+                        <td>${formatBalanceValue(transaction.balance_after)}</td>
                         <td><span class="badge ${getTxStatusBadgeClass(transaction.status)}" style="color: black !important;">${escapeHtml(transaction.status_display || '-')}</span></td>
                         <td>${escapeHtml(transaction.description || '')}</td>
                         <td class="text-nowrap">${detailsHtml}</td>

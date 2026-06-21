@@ -255,6 +255,7 @@
                             <th>Requested Amount</th>
                             <th>Approved Amount</th>
                             <th>Outstanding Balance</th>
+                            <th>Total Balance (Agent + Downline)</th>
                             <th>Due Date</th>
                             <th>Status</th>
                             <th>Action</th>
@@ -290,6 +291,7 @@
                             <td>₦{{ loan.requested_amount|floatformat:2 }}</td>
                             <td>₦{{ loan.amount|floatformat:2 }}</td>
                             <td>₦{{ loan.outstanding_balance|floatformat:2 }}</td>
+                            <td>₦{{ loan.network_wallet_balance|floatformat:2 }}</td>
                             <td>{{ loan.due_date|date:"Y-m-d H:i"|default:"-" }}</td>
                             <td>
                                 <div>{{ loan.get_status_display }}</div>
@@ -333,14 +335,63 @@
                                     <button type="submit" name="relock_submit" class="btn btn-sm btn-outline-danger">Re-lock</button>
                                 </form>
                                 {% elif loan.lock_override_active %}
-                                <span class="badge bg-info text-dark">Override Unlock Active</span>
+                                <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    {% if loan.can_recall_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="recall_overdraft_submit" class="btn btn-sm btn-outline-primary">Recall Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                    {% if loan.can_clear_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="clear_overdraft_submit" class="btn btn-sm btn-outline-success">Clear Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                    <span class="badge bg-info text-dark">Override Unlock Active</span>
+                                </div>
                                 {% elif loan.can_override_unlock %}
-                                <form method="post" class="d-flex flex-column gap-2" style="min-width: 220px;">
-                                    {% csrf_token %}
-                                    <input type="hidden" name="loan_id" value="{{ loan.id }}">
-                                    <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for override unlock" required>
-                                    <button type="submit" name="override_unlock_submit" class="btn btn-sm btn-outline-dark">Override Unlock</button>
-                                </form>
+                                <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    {% if loan.can_recall_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="recall_overdraft_submit" class="btn btn-sm btn-outline-primary">Recall Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                    {% if loan.can_clear_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="clear_overdraft_submit" class="btn btn-sm btn-outline-success">Clear Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for override unlock" required>
+                                        <button type="submit" name="override_unlock_submit" class="btn btn-sm btn-outline-dark">Override Unlock</button>
+                                    </form>
+                                </div>
+                                {% elif loan.can_clear_overdraft or loan.can_recall_overdraft %}
+                                <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    {% if loan.can_recall_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="recall_overdraft_submit" class="btn btn-sm btn-outline-primary">Recall Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                    {% if loan.can_clear_overdraft %}
+                                    <form method="post" class="d-flex flex-column gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <button type="submit" name="clear_overdraft_submit" class="btn btn-sm btn-outline-success">Clear Overdraft</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
                                 {% else %}
                                 <span class="text-muted small">No action</span>
                                 {% endif %}
@@ -359,7 +410,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="{% if tab == 'overdue' %}15{% else %}12{% endif %}" class="text-center text-muted py-4">
+                            <td colspan="{% if tab == 'overdue' %}16{% else %}13{% endif %}" class="text-center text-muted py-4">
                                 No loan records found for this tab.
                             </td>
                         </tr>

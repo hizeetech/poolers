@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from betting.models import AccountLockAuditLog, Loan, LoanAuditLog, User, Wallet
+from betting.models import AccountLockAuditLog, Loan, LoanAuditLog, LoanRepayment, Transaction, User, Wallet
 from betting.services.loan_overdraft import enforce_due_loans
 
 
@@ -203,5 +203,155 @@ class OverdraftOverrideUnlockTests(TestCase):
                 locked_user=self.cashier,
                 action="locked",
                 locked_by=self.superadmin,
+            ).exists()
+        )
+
+    def test_overdue_center_shows_total_balance_and_new_action_buttons(self):
+        loan = self._create_overdue_locked_loan()
+        Wallet.objects.filter(user=self.agent).update(balance=Decimal("120.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("80.00"))
+
+        self.client.force_login(self.superadmin)
+        response = self.client.get(reverse("betting_admin:admin_loan_overdraft_center"), {"tab": "overdue"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Total Balance (Agent + Downline)")
+        self.assertContains(response, "Recall Overdraft")
+        self.assertContains(response, "Clear Overdraft")
+        self.assertContains(response, "₦200.00")
+
+    def test_recall_overdraft_fully_settles_and_unlocks_agent_and_cashier(self):
+        loan = self._create_overdue_locked_loan()
+        loan.outstanding_balance = Decimal("150.00")
+        loan.amount = Decimal("150.00")
+        loan.requested_amount = Decimal("150.00")
+        loan.save(update_fields=["outstanding_balance", "amount", "requested_amount", "updated_at"])
+        Wallet.objects.filter(user=self.agent).update(balance=Decimal("100.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("80.00"))
+
+        self.client.force_login(self.superadmin)
+        response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=overdue",
+            {
+                "loan_id": str(loan.id),
+                "recall_overdraft_submit": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        self.cashier.wallet.refresh_from_db()
+
+        self.assertEqual(loan.outstanding_balance, Decimal("0.00"))
+        self.assertEqual(loan.status, "settled")
+        self.assertFalse(self.agent.is_locked)
+        self.assertFalse(self.cashier.is_locked)
+        self.assertEqual(self.agent.wallet.balance, Decimal("0.00"))
+        self.assertEqual(self.cashier.wallet.balance, Decimal("30.00"))
+        self.assertTrue(
+            Transaction.objects.filter(
+                user=self.agent,
+                transaction_type="account_user_debit",
+                description__icontains=f"loan #{loan.id}",
+            ).exists()
+        )
+        self.assertTrue(
+            Transaction.objects.filter(
+                user=self.cashier,
+                transaction_type="account_user_debit",
+                description__icontains=f"loan #{loan.id}",
+            ).exists()
+        )
+        self.assertTrue(
+            LoanRepayment.objects.filter(
+                loan=loan,
+                amount=Decimal("150.00"),
+                source="manual_settlement",
+            ).exists()
+        )
+        self.assertTrue(
+            LoanAuditLog.objects.filter(
+                loan=loan,
+                action="loan_cleared",
+            ).exists()
+        )
+
+    def test_recall_overdraft_partially_settles_and_keeps_overdue_lock(self):
+        loan = self._create_overdue_locked_loan()
+        loan.outstanding_balance = Decimal("150.00")
+        loan.amount = Decimal("150.00")
+        loan.requested_amount = Decimal("150.00")
+        loan.save(update_fields=["outstanding_balance", "amount", "requested_amount", "updated_at"])
+        Wallet.objects.filter(user=self.agent).update(balance=Decimal("30.00"))
+        Wallet.objects.filter(user=self.cashier).update(balance=Decimal("20.00"))
+
+        self.client.force_login(self.superadmin)
+        response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=overdue",
+            {
+                "loan_id": str(loan.id),
+                "recall_overdraft_submit": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        self.cashier.wallet.refresh_from_db()
+
+        self.assertEqual(loan.outstanding_balance, Decimal("100.00"))
+        self.assertEqual(loan.status, "overdue")
+        self.assertTrue(self.agent.is_locked)
+        self.assertTrue(self.cashier.is_locked)
+        self.assertEqual(self.agent.wallet.balance, Decimal("0.00"))
+        self.assertEqual(self.cashier.wallet.balance, Decimal("0.00"))
+        self.assertTrue(
+            LoanRepayment.objects.filter(
+                loan=loan,
+                amount=Decimal("50.00"),
+                source="manual_settlement",
+            ).exists()
+        )
+
+    def test_clear_overdraft_resets_balance_to_zero_and_unlocks(self):
+        loan = self._create_overdue_locked_loan()
+        loan.outstanding_balance = Decimal("220.00")
+        loan.amount = Decimal("220.00")
+        loan.requested_amount = Decimal("220.00")
+        loan.save(update_fields=["outstanding_balance", "amount", "requested_amount", "updated_at"])
+
+        self.client.force_login(self.superadmin)
+        response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=overdue",
+            {
+                "loan_id": str(loan.id),
+                "clear_overdraft_submit": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+
+        self.assertEqual(loan.outstanding_balance, Decimal("0.00"))
+        self.assertEqual(loan.status, "settled")
+        self.assertFalse(self.agent.is_locked)
+        self.assertFalse(self.cashier.is_locked)
+        clear_audit = LoanAuditLog.objects.filter(loan=loan, action="loan_cleared").latest("created_at")
+        self.assertEqual(clear_audit.metadata.get("clear_method"), "admin_clear")
+        self.assertFalse(
+            Transaction.objects.filter(
+                user=self.agent,
+                transaction_type="account_user_debit",
+                description__icontains=f"loan #{loan.id}",
             ).exists()
         )

@@ -227,7 +227,11 @@ def can_user_transfer_from_wallet(user: User) -> bool:
 
 def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):
     rows = []
-    transactions = Transaction.objects.filter(user=user).order_by("-timestamp")[:limit]
+    transactions = (
+        Transaction.objects.filter(user=user)
+        .prefetch_related("wallet_ledger_entries")
+        .order_by("-timestamp")[:limit]
+    )
     for tx in transactions:
         details_url = ""
         if tx.transaction_type == "deposit" and tx.external_reference:
@@ -235,6 +239,7 @@ def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):
                 details_url = reverse("betting:deposit_status", args=[tx.external_reference])
             except Exception:
                 details_url = ""
+        wallet_entry = next(iter(sorted(tx.wallet_ledger_entries.all(), key=lambda entry: (entry.created_at, entry.id))), None)
         rows.append(
             {
                 "id": tx.id,
@@ -250,6 +255,14 @@ def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):
                 "status_display": tx.get_status_display(),
                 "description": tx.description or "",
                 "details_url": details_url,
+                "balance_before": (
+                    f"{quantize_money(wallet_entry.balance_before):.2f}"
+                    if wallet_entry else ""
+                ),
+                "balance_after": (
+                    f"{quantize_money(wallet_entry.balance_after):.2f}"
+                    if wallet_entry else ""
+                ),
             }
         )
     return rows
@@ -713,6 +726,15 @@ def _loan_lock_targets(borrower: User):
     return targets
 
 
+def get_borrower_network_wallet_balance(borrower: User) -> Decimal:
+    target_ids = [target.id for target in _loan_lock_targets(borrower)]
+    total = (
+        Wallet.objects.filter(user_id__in=target_ids).aggregate(total=Sum("balance"))["total"]
+        or Decimal("0.00")
+    )
+    return quantize_money(total)
+
+
 def loan_has_active_lock_override(loan: Loan) -> bool:
     snapshot = getattr(loan, "workflow_snapshot", {}) or {}
     return bool(snapshot.get("lock_override_active"))
@@ -727,6 +749,26 @@ def loan_lock_override_details(loan: Loan) -> dict:
         "performed_by_id": snapshot.get("lock_override_by_id"),
         "performed_by_label": snapshot.get("lock_override_by_label") or "",
     }
+
+
+def _clear_loan_lock_override_state(loan: Loan, *, actor: User | None = None, reason: str = ""):
+    snapshot = dict(getattr(loan, "workflow_snapshot", {}) or {})
+    if not snapshot.get("lock_override_active"):
+        return
+    snapshot.update(
+        {
+            "lock_override_active": False,
+            "lock_override_cleared_at": timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M:%S"),
+            "lock_override_cleared_by_id": getattr(actor, "id", None),
+            "lock_override_cleared_by_label": (
+                (getattr(actor, "username", "") or getattr(actor, "email", "") or "").strip()
+                or (f"user#{actor.id}" if getattr(actor, "id", None) else "")
+            ),
+            "lock_override_cleared_reason": (reason or "").strip(),
+        }
+    )
+    loan.workflow_snapshot = snapshot
+    loan.save(update_fields=["workflow_snapshot", "updated_at"])
 
 
 @transaction.atomic
@@ -881,6 +923,17 @@ def _auto_unlock_loan_targets(borrower: User):
             notification_type="LOAN_ACCOUNT_UNLOCKED",
             data={"borrower_id": borrower.id, "settled_loan_ids": [loan.id for loan in settled_loans]},
         )
+
+
+def _reassess_borrower_overdraft_lock_state(borrower: User):
+    if not user_has_outstanding_loan(borrower):
+        _auto_unlock_loan_targets(borrower)
+        return
+    overdue_loans = get_user_outstanding_loans(borrower).filter(due_date__lt=timezone.now())
+    for overdue_loan in overdue_loans:
+        overdue_loan.status = "overdue"
+        overdue_loan.save(update_fields=["status", "updated_at"])
+        _lock_defaulting_borrower(loan=overdue_loan)
 
 
 def _lock_defaulting_borrower(*, loan: Loan, actor: User | None = None, ip_address=None, remarks_override: str = ""):
@@ -1062,6 +1115,88 @@ def _apply_amount_to_outstanding_loans(*, user: User, amount, source: str, actor
     }
 
 
+def _apply_amount_to_single_loan(*, loan: Loan, amount, source: str, actor=None, transaction_obj=None, reference="", reason="", metadata=None):
+    amount = quantize_money(amount)
+    metadata = metadata or {}
+    if amount <= Decimal("0.00"):
+        return {
+            "repaid_amount": Decimal("0.00"),
+            "remaining_amount": Decimal("0.00"),
+            "repaid_loans": [],
+        }
+
+    pay_amount = min(amount, quantize_money(loan.outstanding_balance))
+    if pay_amount <= Decimal("0.00"):
+        return {
+            "repaid_amount": Decimal("0.00"),
+            "remaining_amount": amount,
+            "repaid_loans": [],
+        }
+
+    loan.outstanding_balance = quantize_money(loan.outstanding_balance - pay_amount)
+    loan.repaid_amount = quantize_money((loan.repaid_amount or Decimal("0.00")) + pay_amount)
+    if loan.outstanding_balance <= Decimal("0.00"):
+        loan.outstanding_balance = Decimal("0.00")
+        loan.status = "settled"
+        loan.settled_at = timezone.now()
+    elif loan.due_date and loan.due_date < timezone.now():
+        loan.status = "overdue"
+    loan.save(update_fields=["outstanding_balance", "repaid_amount", "status", "settled_at", "updated_at"])
+
+    LoanRepayment.objects.create(
+        loan=loan,
+        borrower=loan.borrower,
+        amount=pay_amount,
+        source=source,
+        source_transaction=transaction_obj,
+        recorded_by=actor if getattr(actor, "is_authenticated", False) else None,
+        note=reason or "",
+        metadata={**metadata, "reference": reference},
+    )
+    create_loan_audit(
+        loan=loan,
+        action="repayment_received",
+        performed_by=actor if getattr(actor, "is_authenticated", False) else None,
+        amount=pay_amount,
+        reason=reason or f"Overdraft remittance from {source}",
+        metadata={**metadata, "source": source, "reference": reference},
+    )
+    if loan.overdraft_wallet_id:
+        overdraft_wallet = OverdraftWallet.objects.select_for_update().get(pk=loan.overdraft_wallet_id)
+        overdraft_wallet.apply_delta(
+            amount=pay_amount,
+            actor=actor if getattr(actor, "is_authenticated", False) else None,
+            loan=loan,
+            reference=reference or str(transaction_obj.id if transaction_obj else loan.id),
+            reason=f"Repayment recovered for loan #{loan.id}",
+            metadata={"source": source},
+        )
+
+    repaid_loans = [{"loan_id": loan.id, "amount": str(pay_amount), "settled": loan.status == "settled"}]
+    if loan.status == "settled":
+        create_loan_audit(
+            loan=loan,
+            action="loan_cleared",
+            performed_by=actor if getattr(actor, "is_authenticated", False) else None,
+            amount=pay_amount,
+            reason="Loan fully settled.",
+            metadata={**metadata, "source": source, "reference": reference},
+        )
+        notify_loan_event(
+            user=loan.borrower,
+            title="Loan Cleared",
+            message="Your overdraft has been fully settled.",
+            notification_type="LOAN_CLEARED",
+            data={"loan_id": loan.id},
+        )
+
+    return {
+        "repaid_amount": pay_amount,
+        "remaining_amount": quantize_money(amount - pay_amount),
+        "repaid_loans": repaid_loans,
+    }
+
+
 def apply_repayment_and_credit_wallet(*, user: User, amount, source: str, actor=None, transaction_obj=None, reference="", reason="", metadata=None):
     amount = quantize_money(amount)
     if amount <= 0:
@@ -1187,18 +1322,139 @@ def remit_overdraft_pending_credit(*, user: User, actor=None, ip_address=None):
             data={"borrower_id": user.id, "repaid_amount": str(repaid_total), "loans": result["repaid_loans"]},
         )
 
-    if not user_has_outstanding_loan(user):
-        _auto_unlock_loan_targets(user)
-    elif get_user_outstanding_loans(user).filter(due_date__lt=timezone.now()).exists():
-        for overdue_loan in get_user_outstanding_loans(user).filter(due_date__lt=timezone.now()):
-            overdue_loan.status = "overdue"
-            overdue_loan.save(update_fields=["status", "updated_at"])
-            _lock_defaulting_borrower(loan=overdue_loan)
+    _reassess_borrower_overdraft_lock_state(user)
 
     return {
         "repaid_amount": repaid_total,
         "wallet_credit_amount": wallet_credit_amount,
         "pending_credit_amount": Decimal("0.00"),
+    }
+
+
+@transaction.atomic
+def clear_overdraft_from_admin(*, actor: User, loan_id: int, ip_address=None):
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("borrower", "lender")
+        .get(id=loan_id)
+    )
+    if loan.outstanding_balance <= Decimal("0.00"):
+        raise LoanOverdraftError("This overdraft is already cleared.")
+
+    amount_cleared = quantize_money(loan.outstanding_balance)
+    _clear_loan_lock_override_state(
+        loan,
+        actor=actor,
+        reason=f"Cleared manually from loan center for loan #{loan.id}.",
+    )
+    loan.outstanding_balance = Decimal("0.00")
+    loan.status = "settled"
+    loan.settled_at = timezone.now()
+    loan.save(update_fields=["outstanding_balance", "status", "settled_at", "updated_at"])
+    create_loan_audit(
+        loan=loan,
+        action="loan_cleared",
+        performed_by=actor if getattr(actor, "is_authenticated", False) else None,
+        amount=amount_cleared,
+        reason="Overdraft cleared manually from loan center.",
+        ip_address=ip_address,
+        metadata={"clear_method": "admin_clear", "loan_id": loan.id},
+    )
+    notify_loan_event(
+        user=loan.borrower,
+        title="Overdraft Cleared",
+        message="Your overdraft has been cleared administratively and your outstanding balance is now zero.",
+        notification_type="LOAN_CLEARED",
+        data={"loan_id": loan.id, "clear_method": "admin_clear"},
+    )
+    _reassess_borrower_overdraft_lock_state(loan.borrower)
+    return loan, amount_cleared
+
+
+@transaction.atomic
+def recall_overdraft_from_wallets(*, actor: User, loan_id: int, ip_address=None):
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("borrower", "lender")
+        .get(id=loan_id)
+    )
+    if loan.outstanding_balance <= Decimal("0.00"):
+        raise LoanOverdraftError("This overdraft is already cleared.")
+
+    borrower = loan.borrower
+    recall_reference = f"loan-recall:{loan.id}"
+    target_users = _loan_lock_targets(borrower)
+    recalled_total = Decimal("0.00")
+    recalled_from_users = []
+
+    for target in target_users:
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=target, defaults={"balance": Decimal("0.00")})
+        available = quantize_money(max(Decimal("0.00"), wallet.balance or Decimal("0.00")))
+        remaining_needed = quantize_money(loan.outstanding_balance - recalled_total)
+        if available <= Decimal("0.00") or remaining_needed <= Decimal("0.00"):
+            continue
+        debit_amount = quantize_money(min(available, remaining_needed))
+        if debit_amount <= Decimal("0.00"):
+            continue
+
+        description = (
+            f"Overdraft recall for loan #{loan.id} belonging to "
+            f"{borrower.username or borrower.email}"
+        )
+        tx = Transaction.objects.create(
+            user=target,
+            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+            target_user=borrower,
+            transaction_type="account_user_debit",
+            amount=debit_amount,
+            is_successful=True,
+            status="completed",
+            description=description,
+        )
+        wallet.apply_delta(
+            amount=-debit_amount,
+            actor=actor if getattr(actor, "is_authenticated", False) else None,
+            transaction_obj=tx,
+            reference=recall_reference,
+            reason=description,
+            metadata={
+                "source": "loan_manual_recall",
+                "loan_id": loan.id,
+                "borrower_id": borrower.id,
+            },
+        )
+        recalled_total = quantize_money(recalled_total + debit_amount)
+        recalled_from_users.append(
+            {
+                "user_id": target.id,
+                "label": target.username or target.email or f"user#{target.id}",
+                "amount": str(debit_amount),
+            }
+        )
+
+    if recalled_total <= Decimal("0.00"):
+        raise LoanOverdraftError("There is no available wallet balance to recall against this overdraft.")
+
+    _clear_loan_lock_override_state(
+        loan,
+        actor=actor,
+        reason=f"Recall overdraft executed from loan center for loan #{loan.id}.",
+    )
+    result = _apply_amount_to_single_loan(
+        loan=loan,
+        amount=recalled_total,
+        source="manual_settlement",
+        actor=actor,
+        reference=recall_reference,
+        reason="Overdraft recalled from borrower/downline wallet balances.",
+        metadata={"recalled_from_users": recalled_from_users, "admin_recall": True},
+    )
+    _reassess_borrower_overdraft_lock_state(borrower)
+    return loan, {
+        "recalled_amount": quantize_money(result["repaid_amount"]),
+        "remaining_outstanding": quantize_money(loan.outstanding_balance),
+        "fully_settled": loan.outstanding_balance <= Decimal("0.00"),
+        "recalled_from_users": recalled_from_users,
     }
 
 

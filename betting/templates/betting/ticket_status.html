@@ -1,11 +1,11 @@
-{% extends 'betting/base.html' %} {% load static %} {% block title %}Ticket Status - Pool Betting{% endblock %} {% block content %}
+{% extends 'betting/base.html' %} {% load static %} {% load betting_extras %} {% block title %}Ticket Status - Pool Betting{% endblock %} {% block content %}
 <div class="row justify-content-center">
     <div class="col-md-8">
         <div class="card shadow-lg p-4 mt-5">
             <h2 class="text-center mb-4">Ticket Status</h2>
             {% if bet_ticket %}
             <p><strong>Ticket ID:</strong> {{ bet_ticket.ticket_id }}</p>
-            <p><strong>Status:</strong> <span class="badge {% if bet_ticket.status == 'won' %}bg-success{% elif bet_ticket.status == 'lost' %}bg-danger{% elif bet_ticket.status == 'voided' %}bg-warning text-dark{% else %}bg-info text-dark{% endif %}">{{ bet_ticket.status|upper }}</span></p>
+            <p><strong>Status:</strong> <span class="badge {% if bet_ticket.status == 'won' %}bg-success{% elif bet_ticket.status == 'lost' %}bg-danger{% elif bet_ticket.status == 'cancelled' or bet_ticket.status == 'deleted' %}bg-secondary{% else %}bg-info text-dark{% endif %}">{{ bet_ticket|ticket_status_label|upper }}</span></p>
             <p><strong>Stake Amount:</strong> {{ bet_ticket.stake_amount }} NGN</p>
             <p><strong>Total Odd:</strong> {{ bet_ticket.total_odd }}</p>
             <p><strong>Potential Winning:</strong> {{ bet_ticket.potential_winning }} NGN</p>
@@ -54,7 +54,7 @@
                             </tr>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 700;">STATUS</td>
-                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">{{ bet_ticket.status|upper }}</td>
+                                <td style="border: 1px solid #000;" class="text-end ticket-num fw-bold">{{ bet_ticket|ticket_status_label|upper }}</td>
                             </tr>
                             <tr>
                                 <td style="border: 1px solid #000; font-weight: 700;">DATE</td>

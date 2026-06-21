@@ -1142,6 +1142,7 @@ class BetTicket(models.Model):
         ('deleted', 'Deleted'),
         ('cancelled', 'Cancelled'),
     )
+    VOIDED_STATUSES = ('deleted', 'cancelled')
 
     BET_TYPE_CHOICES = (
         ('single', 'Single'),
@@ -1192,6 +1193,18 @@ class BetTicket(models.Model):
 
     def __str__(self):
         return f"Ticket {self.id} by {self.user.email} - Stake: {self.stake_amount} - Status: {self.status}"
+
+    @classmethod
+    def is_voided_status_value(cls, status):
+        return (status or '').strip().lower() in cls.VOIDED_STATUSES
+
+    @property
+    def is_voided(self):
+        return self.is_voided_status_value(self.status)
+
+    @property
+    def display_status_label(self):
+        return 'Voided' if self.is_voided else self.get_status_display()
 
     RESULT_REFUND_TRANSACTION_TYPES = (
         'ticket_deletion_refund',
@@ -1320,7 +1333,7 @@ class BetTicket(models.Model):
                 ActivityLog.objects.create(
                     user=self.user,
                     action_type='UPDATE',
-                    action=f"Ticket {self.ticket_id} cancelled (All events void)",
+                    action=f"Ticket {self.ticket_id} voided (All events void)",
                     affected_object=f"BetTicket: {self.ticket_id}"
                 )
             return
@@ -1734,7 +1747,7 @@ class BetTicket(models.Model):
         return {'reversed_total': total_reversal, 'transactions': reversed_ids}
 
     def backfill_after_result_correction(self, *, actor=None, reason=''):
-        if self.status in ['deleted', 'cashed_out']:
+        if self.is_voided_status_value(self.status) or self.status == 'cashed_out':
             return False
 
         old_status = self.status
@@ -2772,7 +2785,10 @@ def refund_stake_on_void(sender, instance, **kwargs):
     if instance.pk:
         try:
             old_ticket = BetTicket.objects.get(pk=instance.pk)
-            if old_ticket.status not in ['cancelled', 'deleted'] and instance.status in ['cancelled', 'deleted']:
+            if (
+                not BetTicket.is_voided_status_value(old_ticket.status)
+                and BetTicket.is_voided_status_value(instance.status)
+            ):
                 with transaction.atomic():
                     wallet = Wallet.objects.select_for_update().get(user=instance.user)
                     initiating_user = instance.deleted_by if instance.deleted_by else None
@@ -2784,7 +2800,7 @@ def refund_stake_on_void(sender, instance, **kwargs):
                         amount=instance.stake_amount,
                         is_successful=True,
                         status='completed',
-                        description=f"Refund for ticket {instance.ticket_id} (Status: {instance.status})",
+                        description=f"Refund for voided ticket {instance.ticket_id}",
                         related_bet_ticket=instance,
                         timestamp=timezone.now()
                     )

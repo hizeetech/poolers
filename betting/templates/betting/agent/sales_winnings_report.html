@@ -1,4 +1,4 @@
-{% extends 'betting/base.html' %} {% load static %} {% block title %}Sales & Winnings Report{% endblock %} {% block content %}
+{% extends 'betting/base.html' %} {% load static %} {% load betting_extras %} {% block title %}Sales & Winnings Report{% endblock %} {% block content %}
 <div class="container mt-5">
     <div class="row mb-4">
         <div class="col-12">
@@ -127,7 +127,7 @@
                                     </td>
                                     <td>
                                         <span class="badge {% if ticket.status == 'won' %}bg-success{% elif ticket.status == 'lost' %}bg-danger{% elif ticket.status == 'pending' %}bg-warning{% elif ticket.status == 'cancelled' or ticket.status == 'deleted' %}bg-secondary{% else %}bg-info{% endif %}">
-                                                {{ ticket.status|title }}
+                                                {{ ticket|ticket_status_label }}
                                             </span>
                                     </td>
                                     <td>{{ ticket.placed_at|date:"Y-m-d H:i" }}</td>

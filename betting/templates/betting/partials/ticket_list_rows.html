@@ -9,9 +9,9 @@
             {% if t.status == 'pending' %}bg-warning text-dark
             {% elif t.status == 'won' %}bg-success
             {% elif t.status == 'lost' %}bg-danger
-            {% elif t.status == 'cancelled' %}bg-secondary
+            {% elif t.status == 'cancelled' or t.status == 'deleted' %}bg-secondary
             {% else %}bg-dark{% endif %}">
-            {{ t.get_status_display }}
+            {{ t|ticket_status_label }}
         </span>
     </td>
     <td data-label="Stake">₦{{ t.stake_amount|floatformat:2 }}</td>

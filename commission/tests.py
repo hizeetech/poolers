@@ -1,14 +1,20 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 from unittest.mock import patch
 
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from betting.models import BetTicket, User, Wallet
-from commission.models import AgentCommissionProfile, CommissionPeriod, CommissionPlan
-from commission.services import calculate_weekly_agent_commission, calculate_weekly_agent_commission_data
+from commission.models import AgentCommissionProfile, CommissionPeriod, CommissionPlan, NetworkCommissionSettings
+from commission.services import (
+    calculate_monthly_network_commission_data,
+    calculate_weekly_agent_commission,
+    calculate_weekly_agent_commission_data,
+)
 from commission.tasks import (
     ensure_last_completed_weekly_commission_period_for_date,
     ensure_weekly_commission_period_for_date,
@@ -120,6 +126,58 @@ class WeeklyCommissionPeriodTests(TestCase):
         self.assertFalse(data['is_live_period'])
         self.assertEqual(data['total_stake'], Decimal('0.00'))
         self.assertEqual(data['commission_total_amount'], Decimal('0.00'))
+
+    def test_live_weekly_period_excludes_cancelled_and_deleted_tickets(self):
+        agent = User.objects.create_user(email='void-live-agent@example.com', password='password123', user_type='agent')
+        cashier = User.objects.create_user(
+            email='void-live-cashier@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=cashier)
+        plan = CommissionPlan.objects.create(name='Void Weekly Plan', ggr_percent=Decimal('10.00'))
+        AgentCommissionProfile.objects.create(user=agent, plan=plan, is_active=True)
+
+        today = timezone.localdate()
+        current_period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=today,
+            end_date=today + timedelta(days=6),
+        )
+
+        included_ticket = BetTicket.objects.create(
+            user=cashier,
+            stake_amount=Decimal('200.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('400.00'),
+            max_winning=Decimal('0.00'),
+            status='lost',
+            bet_type='single',
+            original_selections_count=1,
+        )
+        included_ticket.placed_at = timezone.now()
+        included_ticket.save(update_fields=['placed_at'])
+
+        for idx, status in enumerate(['cancelled', 'deleted'], start=1):
+            ticket = BetTicket.objects.create(
+                user=cashier,
+                stake_amount=Decimal('150.00'),
+                total_odd=Decimal('2.00'),
+                potential_winning=Decimal('300.00'),
+                max_winning=Decimal('0.00'),
+                status=status,
+                bet_type='single',
+                original_selections_count=1,
+            )
+            ticket.placed_at = timezone.now() + timedelta(seconds=idx)
+            ticket.save(update_fields=['placed_at'])
+
+        data = calculate_weekly_agent_commission_data(agent, current_period)
+        self.assertIsNotNone(data)
+        self.assertEqual(data['total_stake'], Decimal('200.00'))
+        self.assertEqual(data['ggr'], Decimal('200.00'))
+        self.assertEqual(data['commission_total_amount'], Decimal('20.00'))
 
     def test_admin_live_fragment_returns_updated_html_for_active_period(self):
         admin_user = User.objects.create_user(
@@ -304,3 +362,202 @@ class WeeklyCommissionPeriodTests(TestCase):
         self.assertEqual(result['period_id'], period.id)
         self.assertEqual(record.total_stake, Decimal('100.00'))
         self.assertEqual(record.commission_total_amount, Decimal('10.00'))
+
+    def test_monthly_network_commission_excludes_cancelled_and_deleted_tickets(self):
+        master_agent = User.objects.create_user(
+            email='master-commission@example.com',
+            password='password123',
+            user_type='master_agent',
+        )
+        super_agent = User.objects.create_user(
+            email='super-commission@example.com',
+            password='password123',
+            user_type='super_agent',
+            master_agent=master_agent,
+        )
+        agent = User.objects.create_user(
+            email='agent-commission@example.com',
+            password='password123',
+            user_type='agent',
+            super_agent=super_agent,
+            master_agent=master_agent,
+        )
+        cashier = User.objects.create_user(
+            email='cashier-commission@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+            super_agent=super_agent,
+            master_agent=master_agent,
+        )
+        Wallet.objects.get_or_create(user=cashier)
+        NetworkCommissionSettings.objects.create(role='super_agent', commission_percent=Decimal('10.00'))
+
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 30),
+        )
+
+        included_ticket = BetTicket.objects.create(
+            user=cashier,
+            stake_amount=Decimal('120.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('240.00'),
+            max_winning=Decimal('0.00'),
+            status='lost',
+            bet_type='single',
+            original_selections_count=1,
+        )
+        included_ticket.placed_at = timezone.make_aware(datetime(2026, 6, 5, 9, 0, 0))
+        included_ticket.save(update_fields=['placed_at'])
+
+        for idx, status in enumerate(['cancelled', 'deleted'], start=1):
+            ticket = BetTicket.objects.create(
+                user=cashier,
+                stake_amount=Decimal('80.00'),
+                total_odd=Decimal('2.00'),
+                potential_winning=Decimal('160.00'),
+                max_winning=Decimal('0.00'),
+                status=status,
+                bet_type='single',
+                original_selections_count=1,
+            )
+            ticket.placed_at = timezone.make_aware(datetime(2026, 6, 5, 9, idx, 0))
+            ticket.save(update_fields=['placed_at'])
+
+        data = calculate_monthly_network_commission_data(super_agent, period)
+        self.assertIsNotNone(data)
+        self.assertEqual(data['downline_stake'], Decimal('120.00'))
+        self.assertEqual(data['downline_winnings'], Decimal('0.00'))
+        self.assertEqual(data['ngr'], Decimal('120.00'))
+        self.assertEqual(data['commission_amount'], Decimal('12.00'))
+
+    def test_recompute_historical_commissions_updates_saved_weekly_records(self):
+        agent = User.objects.create_user(email='recompute-weekly-agent@example.com', password='password123', user_type='agent')
+        cashier = User.objects.create_user(
+            email='recompute-weekly-cashier@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=cashier)
+        plan = CommissionPlan.objects.create(name='Recompute Weekly Plan', ggr_percent=Decimal('10.00'))
+        AgentCommissionProfile.objects.create(user=agent, plan=plan, is_active=True)
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+        )
+        ticket = BetTicket.objects.create(
+            user=cashier,
+            stake_amount=Decimal('150.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('300.00'),
+            max_winning=Decimal('0.00'),
+            status='lost',
+            bet_type='single',
+            original_selections_count=1,
+        )
+        ticket.placed_at = timezone.now() - timedelta(days=10)
+        ticket.save(update_fields=['placed_at'])
+
+        record = calculate_weekly_agent_commission(agent, period)
+        self.assertEqual(record.total_stake, Decimal('150.00'))
+        self.assertEqual(record.commission_total_amount, Decimal('15.00'))
+
+        ticket.status = 'cancelled'
+        ticket.save(update_fields=['status', 'last_updated'])
+
+        out = StringIO()
+        call_command(
+            'recompute_historical_commissions',
+            '--weekly',
+            '--start-date',
+            period.start_date.isoformat(),
+            '--end-date',
+            period.end_date.isoformat(),
+            stdout=out,
+        )
+
+        record.refresh_from_db()
+        self.assertEqual(record.total_stake, Decimal('0.00'))
+        self.assertEqual(record.ggr, Decimal('0.00'))
+        self.assertEqual(record.commission_total_amount, Decimal('0.00'))
+        self.assertIn('Weekly summary: total=1, changed=1', out.getvalue())
+
+    def test_recompute_historical_commissions_updates_saved_monthly_records(self):
+        master_agent = User.objects.create_user(
+            email='recompute-master@example.com',
+            password='password123',
+            user_type='master_agent',
+        )
+        super_agent = User.objects.create_user(
+            email='recompute-super@example.com',
+            password='password123',
+            user_type='super_agent',
+            master_agent=master_agent,
+        )
+        agent = User.objects.create_user(
+            email='recompute-agent@example.com',
+            password='password123',
+            user_type='agent',
+            super_agent=super_agent,
+            master_agent=master_agent,
+        )
+        cashier = User.objects.create_user(
+            email='recompute-monthly-cashier@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+            super_agent=super_agent,
+            master_agent=master_agent,
+        )
+        Wallet.objects.get_or_create(user=cashier)
+        NetworkCommissionSettings.objects.create(role='super_agent', commission_percent=Decimal('10.00'))
+
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 30),
+        )
+        ticket = BetTicket.objects.create(
+            user=cashier,
+            stake_amount=Decimal('120.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('240.00'),
+            max_winning=Decimal('0.00'),
+            status='lost',
+            bet_type='single',
+            original_selections_count=1,
+        )
+        ticket.placed_at = timezone.make_aware(datetime(2026, 6, 5, 9, 0, 0))
+        ticket.save(update_fields=['placed_at'])
+
+        data = calculate_monthly_network_commission_data(super_agent, period)
+        self.assertIsNotNone(data)
+        record = super_agent.monthly_commissions.create(period=period, **data)
+        self.assertEqual(record.downline_stake, Decimal('120.00'))
+        self.assertEqual(record.commission_amount, Decimal('12.00'))
+
+        ticket.status = 'deleted'
+        ticket.save(update_fields=['status', 'last_updated'])
+
+        out = StringIO()
+        call_command(
+            'recompute_historical_commissions',
+            '--monthly',
+            '--start-date',
+            period.start_date.isoformat(),
+            '--end-date',
+            period.end_date.isoformat(),
+            stdout=out,
+        )
+
+        record.refresh_from_db()
+        self.assertEqual(record.downline_stake, Decimal('0.00'))
+        self.assertEqual(record.ngr, Decimal('0.00'))
+        self.assertEqual(record.commission_amount, Decimal('0.00'))
+        self.assertIn('Monthly summary: total=1, changed=1', out.getvalue())

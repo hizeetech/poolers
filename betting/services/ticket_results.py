@@ -47,7 +47,7 @@ def recalculate_tickets_for_fixture_sync(fixture_id):
 
         tickets = list(
             BetTicket.objects.filter(selections__fixture=fixture)
-            .exclude(status__in=["deleted", "cashed_out"])
+            .exclude(status__in=[*BetTicket.VOIDED_STATUSES, "cashed_out"])
             .distinct()
         )
         count = len(tickets)

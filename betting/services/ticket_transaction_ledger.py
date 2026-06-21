@@ -7,7 +7,7 @@ from betting.models import TicketTransactionLedger, Transaction, WalletLedgerEnt
 
 
 ZERO = Decimal("0.00")
-LEGACY_DIRECT_TRANSACTION_TYPES = {"bet_payout", "ticket_deletion_refund"}
+LEGACY_DIRECT_TRANSACTION_TYPES = {"bet_payout", "ticket_deletion_refund", "ticket_cancellation_refund"}
 
 
 def _quantize(value):
@@ -54,7 +54,7 @@ def classify_ticket_transaction(*, tx=None, metadata=None):
 
     if raw_type == "bet_placement":
         return "Ticket Purchase", "Ticket Purchase"
-    if raw_type in {"ticket_deletion_refund", "fixture_deletion_refund"}:
+    if raw_type in {"ticket_deletion_refund", "fixture_deletion_refund", "ticket_cancellation_refund"}:
         return "Ticket Voided", "Ticket Void"
     if raw_type == "bet_payout":
         return "Winning Settlement", "Ticket Settlement"
@@ -151,7 +151,7 @@ def _ledger_payload_for_wallet_entry(wallet_entry, *, balance_before=None, balan
 
 
 def _signed_amount_for_legacy_transaction(tx):
-    if tx.transaction_type in {"bet_payout", "ticket_deletion_refund"}:
+    if tx.transaction_type in {"bet_payout", "ticket_deletion_refund", "ticket_cancellation_refund"}:
         return _quantize(tx.amount)
     return ZERO
 

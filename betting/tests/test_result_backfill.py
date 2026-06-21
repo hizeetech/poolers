@@ -211,3 +211,53 @@ class ResultBackfillTests(TestCase):
             ).count(),
             3,
         )
+
+    def test_result_correction_does_not_reopen_cancelled_ticket(self):
+        self.ticket.status = 'cancelled'
+        self.ticket.save(update_fields=['status', 'last_updated'])
+
+        self.ticket.refresh_from_db()
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.ticket.status, 'cancelled')
+        self.assertEqual(self.wallet.balance, Decimal('100.00'))
+
+        self.fixture.home_score = 2
+        self.fixture.away_score = 0
+        self.fixture.status = 'finished'
+        self.fixture.save()
+
+        self.ticket.refresh_from_db()
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.ticket.status, 'cancelled')
+        self.assertEqual(self.wallet.balance, Decimal('100.00'))
+        self.assertFalse(
+            Transaction.objects.filter(
+                related_bet_ticket=self.ticket,
+                transaction_type='ticket_refund_reversal',
+            ).exists()
+        )
+
+    def test_result_correction_does_not_reopen_deleted_ticket(self):
+        self.ticket.status = 'deleted'
+        self.ticket.save(update_fields=['status', 'last_updated'])
+
+        self.ticket.refresh_from_db()
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.ticket.status, 'deleted')
+        self.assertEqual(self.wallet.balance, Decimal('100.00'))
+
+        self.fixture.home_score = 2
+        self.fixture.away_score = 0
+        self.fixture.status = 'finished'
+        self.fixture.save()
+
+        self.ticket.refresh_from_db()
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.ticket.status, 'deleted')
+        self.assertEqual(self.wallet.balance, Decimal('100.00'))
+        self.assertFalse(
+            Transaction.objects.filter(
+                related_bet_ticket=self.ticket,
+                transaction_type='ticket_refund_reversal',
+            ).exists()
+        )

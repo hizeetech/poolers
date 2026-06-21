@@ -824,7 +824,7 @@ class BetTicketAdmin(admin.ModelAdmin):
         if failed:
             messages.warning(request, f"Failed to recalculate {failed} ticket(s).")
 
-    @admin.action(description='Void/Delete selected bet tickets and refund stake')
+    @admin.action(description='Void selected bet tickets and refund stake')
     def void_selected_tickets(self, request, queryset):
         tickets_voided = 0
         tickets_failed = 0
@@ -836,8 +836,8 @@ class BetTicketAdmin(admin.ModelAdmin):
             try:
                 with db_transaction.atomic():
                     ticket = BetTicket.objects.select_for_update().select_related("user").get(pk=ticket_id)
-                    if ticket.status in ['won', 'lost', 'cashed_out', 'deleted', 'cancelled']:
-                        messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be voided/deleted.")
+                    if ticket.status in ['won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES]:
+                        messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.display_status_label}' and cannot be voided.")
                         tickets_failed += 1
                         continue
 
@@ -887,7 +887,7 @@ class BetTicketAdmin(admin.ModelAdmin):
             suffix = " ..." if len(audit_ticket_codes) > 10 else ""
             views.log_admin_activity(
                 request,
-                f"Bulk voided/deleted {tickets_voided} bet ticket(s): {preview_codes}{suffix}",
+                f"Bulk voided {tickets_voided} bet ticket(s): {preview_codes}{suffix}",
                 affected_object="BetTicket bulk void",
             )
             schedule_admin_betticket_refresh(
@@ -899,9 +899,9 @@ class BetTicketAdmin(admin.ModelAdmin):
             )
 
         if tickets_voided > 0:
-            messages.success(request, f"Successfully voided/deleted {tickets_voided} bet tickets.")
+            messages.success(request, f"Successfully voided {tickets_voided} bet tickets.")
         if tickets_failed > 0:
-            messages.warning(request, f"Failed to void/delete {tickets_failed} bet tickets.")
+            messages.warning(request, f"Failed to void {tickets_failed} bet tickets.")
 
     @admin.action(description='Settle selected bet tickets as WON and payout winnings')
     def settle_won_selected_tickets(self, request, queryset):

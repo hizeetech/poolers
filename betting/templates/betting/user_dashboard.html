@@ -1,6 +1,7 @@
 {% extends 'betting/base.html' %}
 {% load static %}
 {% load humanize %}
+{% load betting_extras %}
 
 {% block title %}User Dashboard - Pool Betting{% endblock %}
 
@@ -126,8 +127,8 @@
                                             <span class="badge bg-warning text-dark">Pending</span>
                                         {% elif ticket.status == 'cashed_out' %}
                                             <span class="badge bg-info">Cashed Out</span>
-                                        {% elif ticket.status == 'cancelled' %}
-                                            <span class="badge bg-secondary">Cancelled</span>
+                                        {% elif ticket.status == 'cancelled' or ticket.status == 'deleted' %}
+                                            <span class="badge bg-secondary">{{ ticket|ticket_status_label }}</span>
                                         {% elif ticket.status == 'void' %}
                                             <span class="badge bg-dark">Void</span>
                                         {% else %}

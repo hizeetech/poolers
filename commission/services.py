@@ -24,6 +24,20 @@ from notifications.services import create_notification
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
+
+def _commission_voided_statuses():
+    voided_statuses = list(getattr(BetTicket, 'VOIDED_STATUSES', ()) or ())
+    if 'voided' not in voided_statuses:
+        voided_statuses.append('voided')
+    return tuple(voided_statuses)
+
+
+def _commission_excluded_ticket_statuses(*, is_live_period):
+    excluded = list(_commission_voided_statuses())
+    if not is_live_period and 'pending' not in excluded:
+        excluded.append('pending')
+    return excluded
+
 def pay_weekly_commission(commission_record, actor=None):
     if commission_record.status == 'paid':
         return False, "Already paid"
@@ -717,7 +731,7 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
     is_live_period = period.start_date <= today <= period.end_date
 
     # For the active weekly period, include newly placed/open tickets so the admin view updates live.
-    excluded_statuses = ['cancelled', 'deleted'] if is_live_period else ['pending', 'cancelled', 'deleted']
+    excluded_statuses = _commission_excluded_ticket_statuses(is_live_period=is_live_period)
 
     # Find tickets: Cashiers under this agent
     tickets = BetTicket.objects.filter(
@@ -886,7 +900,7 @@ def calculate_monthly_network_commission_data(user, period):
 
     # 1. Total Stake & Winnings (Downlines)
     # Tickets placed in this month
-    excluded_statuses = ['pending', 'cancelled', 'deleted']
+    excluded_statuses = _commission_excluded_ticket_statuses(is_live_period=False)
     if user.user_type == 'super_agent':
         tickets = BetTicket.objects.filter(
             Q(user=user) |
@@ -969,6 +983,73 @@ def calculate_monthly_network_commission(user, period):
         defaults=data
     )
     return record
+
+
+def _apply_recomputed_payment_status(record, *, total_amount_field):
+    amount_paid = (getattr(record, 'amount_paid', None) or Decimal('0.00')).quantize(Decimal('0.01'))
+    total_amount = (getattr(record, total_amount_field, None) or Decimal('0.00')).quantize(Decimal('0.01'))
+    overpaid = amount_paid > total_amount
+
+    if amount_paid <= Decimal('0.00'):
+        return overpaid, False
+
+    next_status = 'paid' if amount_paid >= total_amount else 'partially_paid'
+    if record.status == next_status:
+        return overpaid, False
+
+    record.status = next_status
+    return overpaid, True
+
+
+@transaction.atomic
+def recompute_saved_weekly_commission_record(record, *, persist=True):
+    data = calculate_weekly_agent_commission_data(record.agent, record.period)
+    if not data:
+        return {'updated': False, 'overpaid': False}
+
+    data.pop('is_live_period', None)
+    dirty_fields = []
+    for field, value in data.items():
+        if getattr(record, field) != value:
+            setattr(record, field, value)
+            dirty_fields.append(field)
+
+    overpaid, status_changed = _apply_recomputed_payment_status(
+        record,
+        total_amount_field='commission_total_amount',
+    )
+    if status_changed:
+        dirty_fields.append('status')
+
+    if dirty_fields and persist:
+        record.save(update_fields=dirty_fields)
+
+    return {'updated': bool(dirty_fields), 'overpaid': overpaid}
+
+
+@transaction.atomic
+def recompute_saved_monthly_commission_record(record, *, persist=True):
+    data = calculate_monthly_network_commission_data(record.user, record.period)
+    if not data:
+        return {'updated': False, 'overpaid': False}
+
+    dirty_fields = []
+    for field, value in data.items():
+        if getattr(record, field) != value:
+            setattr(record, field, value)
+            dirty_fields.append(field)
+
+    overpaid, status_changed = _apply_recomputed_payment_status(
+        record,
+        total_amount_field='commission_amount',
+    )
+    if status_changed:
+        dirty_fields.append('status')
+
+    if dirty_fields and persist:
+        record.save(update_fields=dirty_fields)
+
+    return {'updated': bool(dirty_fields), 'overpaid': overpaid}
 
 
 class CommissionCalculationService:

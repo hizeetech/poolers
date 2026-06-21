@@ -8003,7 +8003,7 @@ def agent_sales_winnings_report(request):
             user=u,
             placed_at__date__gte=start_date,
             placed_at__date__lt=end_date + timedelta(days=1) # Include full end date
-        ).exclude(status='deleted')
+        ).exclude(status__in=BetTicket.VOIDED_STATUSES)
 
         total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
         total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
@@ -8809,34 +8809,34 @@ def declare_result(request, fixture_id):
                     # This logic should ideally be in a BetTicket method
                     all_selections_evaluated = True
                     ticket_still_winning = True
-                    ticket_is_cancelled = False
+                    ticket_is_voided = False
 
                     for sel in ticket.selections.all():
                         if sel.is_winning_selection is None: # Found a voided selection
-                            ticket_is_cancelled = True
+                            ticket_is_voided = True
                             break
                         if sel.is_winning_selection == False: # Found a losing selection
                             ticket_still_winning = False
                         
-                        # Check if fixture related to this selection is settled/cancelled
+                        # Check if fixture related to this selection is settled/voided
                         if sel.fixture.status not in ['settled', 'cancelled']:
                             all_selections_evaluated = False
                             break # Not all fixtures on the ticket are settled yet
 
                     if all_selections_evaluated:
-                        if ticket_is_cancelled:
+                        if ticket_is_voided:
                             ticket.status = 'cancelled'
-                            # Refund stake for cancelled tickets
+                            # Refund stake for voided tickets
                             user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
                             refund_tx = Transaction.objects.create(
                                 user=ticket.user,
                                 initiating_user=request.user, 
                                 target_user=ticket.user,
-                                transaction_type='ticket_cancellation_refund',
+                                transaction_type='ticket_deletion_refund',
                                 amount=ticket.stake_amount,
                                 is_successful=True,
                                 status='completed',
-                                description=f"Refund for cancelled bet ticket {ticket.id} (due to voided selection in fixture {fixture.home_team} vs {fixture.away_team})",
+                                description=f"Refund for voided bet ticket {ticket.id} (due to voided selection in fixture {fixture.home_team} vs {fixture.away_team})",
                                 related_bet_ticket=ticket,
                                 timestamp=timezone.now()
                             )
@@ -8846,10 +8846,10 @@ def declare_result(request, fixture_id):
                                 transaction_obj=refund_tx,
                                 reference=str(ticket.ticket_id),
                                 reason=refund_tx.description,
-                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_cancelled"},
+                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_void", "void_status": ticket.status},
                             )
-                            messages.info(request, f"Ticket {ticket.id} is CANCELLED (stake refunded) due to fixture {fixture.home_team} vs {fixture.away_team} resulting in a void.")
-                            log_admin_activity(request, f"Ticket {ticket.id} CANCELLED and refunded due to fixture {fixture.id} void result.")
+                            messages.info(request, f"Ticket {ticket.id} is VOIDED (stake refunded) due to fixture {fixture.home_team} vs {fixture.away_team} resulting in a void.")
+                            log_admin_activity(request, f"Ticket {ticket.id} VOIDED and refunded due to fixture {fixture.id} void result.")
                         elif ticket_still_winning:
                             ticket.status = 'won'
                             ticket.save()
@@ -8885,8 +8885,8 @@ def declare_result(request, fixture_id):
                     
                     ticket.save() # Save the ticket status update
 
-                elif ticket.status == 'deleted':
-                    messages.info(request, f"Ticket {ticket.id} was previously deleted and will not be processed for result.")
+                elif ticket.status in BetTicket.VOIDED_STATUSES:
+                    messages.info(request, f"Ticket {ticket.id} was previously voided and will not be processed for result.")
                 # No need for else (already processed) as per previous code, as it would be handled by the update logic above.
 
 
@@ -9953,8 +9953,8 @@ def admin_void_ticket_single(request, ticket_id):
     ticket = get_object_or_404(BetTicket, id=ticket_id)
 
     if request.method == 'POST':
-        if ticket.status in ['won', 'lost', 'cashed_out', 'deleted', 'cancelled']:
-            messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be voided/deleted.")
+        if ticket.status in ['won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES]:
+            messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.display_status_label}' and cannot be voided.")
             return redirect('betting_admin:admin_ticket_report') 
         
         try:
@@ -9986,8 +9986,8 @@ def admin_void_ticket_single(request, ticket_id):
                 reason=refund_tx.description,
                 metadata={"ticket_id": ticket.ticket_id, "source": "admin_void"},
             )
-            messages.success(request, f"Bet ticket {ticket.ticket_id} successfully voided/deleted and stake refunded to {ticket.user.email}.")
-            log_admin_activity(request, f"Voided/Deleted bet ticket {ticket.ticket_id} and refunded stake.")
+            messages.success(request, f"Bet ticket {ticket.ticket_id} successfully voided and stake refunded to {ticket.user.email}.")
+            log_admin_activity(request, f"Voided bet ticket {ticket.ticket_id} and refunded stake.")
         except Exception as e:
             messages.error(request, f"Failed to void ticket {ticket.ticket_id}: {e}")
             log_admin_activity(request, f"Failed to void ticket {ticket.ticket_id}. Error: {e}")
@@ -10103,7 +10103,7 @@ def admin_sales_winnings_report(request):
             user=u,
             placed_at__date__gte=start_date,
             placed_at__date__lt=end_date + timedelta(days=1) 
-        ).exclude(status='deleted')
+        ).exclude(status__in=BetTicket.VOIDED_STATUSES)
 
         total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
         total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
@@ -12253,7 +12253,7 @@ def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
 
 def build_dashboard_bets_page(base_qs, bet_q='', bet_status='', bet_agent_id='', page_number=1):
     bets_qs = (
-        base_qs.exclude(status__in=['deleted'])
+        base_qs.exclude(status__in=BetTicket.VOIDED_STATUSES)
         .select_related('user', 'user__agent', 'user__super_agent', 'user__master_agent')
         .order_by('-placed_at')
     )

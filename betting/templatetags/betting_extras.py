@@ -27,11 +27,19 @@ def status_color_class(status):
         return 'text-warning'
     elif status == 'cashed_out':
         return 'text-primary'
-    elif status == 'cancelled':
-        return 'text-secondary'
-    elif status == 'deleted':
+    elif status in {'cancelled', 'deleted', 'voided'}:
         return 'text-dark'
     return 'text-body'
+
+@register.filter
+def ticket_status_label(value):
+    status = getattr(value, 'status', value)
+    status = str(status or '').strip().lower()
+    if status in {'cancelled', 'deleted', 'voided'}:
+        return 'Voided'
+    if not status:
+        return ''
+    return status.replace('_', ' ').title()
 
 @register.filter
 def sub(value, arg):

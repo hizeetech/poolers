@@ -1,5 +1,6 @@
 {% extends 'betting/admin/base.html' %}
 {% load static %}
+{% load betting_extras %}
 
 {% block title %}Tickets By Event - Admin{% endblock %}
 
@@ -63,11 +64,11 @@
                                 {% if ticket.status == 'pending' %}bg-secondary
                                 {% elif ticket.status == 'won' %}bg-success
                                 {% elif ticket.status == 'lost' %}bg-danger
-                                {% elif ticket.status == 'deleted' %}bg-warning text-dark
+                                {% elif ticket.status == 'deleted' %}bg-secondary
                                 {% elif ticket.status == 'cashed_out' %}bg-info
-                                {% elif ticket.status == 'cancelled' %}bg-dark
+                                {% elif ticket.status == 'cancelled' %}bg-secondary
                                 {% endif %}">
-                                {{ ticket.get_status_display }}
+                                {{ ticket|ticket_status_label }}
                             </span>
                         </td>
                     </tr>
@@ -99,4 +100,3 @@
     })();
 </script>
 {% endblock %}
-

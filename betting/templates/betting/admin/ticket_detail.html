@@ -1,4 +1,4 @@
-{% extends 'betting/admin/base.html' %} {% load static %} {% block title %}Bet Ticket Details - {{ bet_ticket.ticket_id }}{% endblock %} {% block content %}
+{% extends 'betting/admin/base.html' %} {% load static %} {% load betting_extras %} {% block title %}Bet Ticket Details - {{ bet_ticket.ticket_id }}{% endblock %} {% block content %}
 <div class="container py-4">
     <h2 class="h3 mb-4 text-dark fw-semibold">Bet Ticket Details</h2>
 
@@ -40,7 +40,7 @@
                 {% elif bet_ticket.status == 'lost' %}text-danger fw-bold
                 {% elif bet_ticket.status == 'deleted' or bet_ticket.status == 'cancelled' %}text-muted
                 {% else %}text-warning fw-bold{% endif %}">
-                {{ bet_ticket.get_status_display }}
+                {{ bet_ticket|ticket_status_label }}
             </p>
         </div>
         <div class="col">
@@ -49,11 +49,11 @@
         </div>
         {% if bet_ticket.deleted_by %}
         <div class="col">
-            <p class="text-muted mb-0">Deleted By:</p>
+            <p class="text-muted mb-0">Voided By:</p>
             <p class="fs-5 text-dark">{{ bet_ticket.deleted_by.email }}</p>
         </div>
         <div class="col">
-            <p class="text-muted mb-0">Deleted At:</p>
+            <p class="text-muted mb-0">Voided At:</p>
             <p class="fs-5 text-dark">{{ bet_ticket.deleted_at|date:"Y-m-d H:i" }}</p>
         </div>
         {% endif %}
@@ -115,10 +115,10 @@
 
     <div class="mt-4 d-flex justify-content-end gap-2">
         {% if bet_ticket.status == 'pending' %}
-        <form method="post" action="{% url 'betting_admin:admin_void_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to VOID/DELETE this ticket and refund stake? This action cannot be undone.');">
+        <form method="post" action="{% url 'betting_admin:admin_void_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to VOID this ticket and refund stake? This action cannot be undone.');">
             {% csrf_token %}
             <button type="submit" class="btn btn-danger rounded-pill shadow-sm">
-                    Void/Delete Ticket
+                    Void Ticket
                 </button>
         </form>
         <form method="post" action="{% url 'betting_admin:admin_settle_won_ticket_single' ticket_id=bet_ticket.id %}" onsubmit="return confirm('Are you sure you want to SETTLE this ticket as WON and payout winnings? This action cannot be undone.');">
@@ -128,7 +128,7 @@
                 </button>
         </form>
         {% else %}
-        <p class="text-muted">This ticket is {{ bet_ticket.get_status_display|lower }}. No further actions.</p>
+        <p class="text-muted">This ticket is {{ bet_ticket|ticket_status_label|lower }}. No further actions.</p>
         {% endif %}
         <a href="{% url 'betting_admin:admin_ticket_report' %}" class="btn btn-outline-secondary rounded-pill shadow-sm">Back to Report</a>
     </div>

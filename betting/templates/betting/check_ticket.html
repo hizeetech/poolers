@@ -198,10 +198,9 @@
                                             {% elif ticket.status == 'won' %}bg-success
                                             {% elif ticket.status == 'lost' %}bg-danger
                                             {% elif ticket.status == 'cashed_out' %}bg-info text-dark
-                                            {% elif ticket.status == 'cancelled' %}bg-secondary
-                                            {% elif ticket.status == 'deleted' %}bg-dark
+                                            {% elif ticket.status == 'cancelled' or ticket.status == 'deleted' %}bg-secondary
                                             {% endif %}">
-                                            {{ ticket.get_status_display }}
+                                            {{ ticket|ticket_status_label }}
                                         </span>
                                     </td>
                                 </tr>

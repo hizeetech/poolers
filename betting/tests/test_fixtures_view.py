@@ -37,3 +37,6 @@ class FixturesViewThemeTests(TestCase):
         self.assertContains(response, "--fixture-period-bg: #d11a2a;")
         self.assertContains(response, "fixture-period-accent text-center rounded-top-3")
         self.assertContains(response, "fixture-period-accent-badge")
+        self.assertContains(response, 'id="place-bet-btn" class="btn fixture-period-accent-button')
+        self.assertContains(response, "fixture-period-odd-button")
+        self.assertContains(response, "smart-pick-number.is-selected[data-tt-type=")

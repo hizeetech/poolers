@@ -160,16 +160,17 @@
             font-size: 13px;
             cursor: pointer;
             user-select: none;
-            transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+            transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
         }
         .smart-pick-number[data-tt-type="circle"]:hover {
-            border-color: rgba(13, 110, 253, 0.65);
+            border-color: var(--fixture-period-bg);
+            box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--fixture-period-bg) 22%, transparent);
             transform: translateY(-1px);
         }
         .smart-pick-number.is-selected[data-tt-type="circle"] {
-            background: #0d6efd;
-            border-color: #0d6efd;
-            color: #ffffff;
+            background: var(--fixture-period-bg);
+            border-color: var(--fixture-period-bg);
+            color: var(--fixture-period-text);
         }
         .smart-pick-number.is-disabled[data-tt-type="circle"] {
             background: rgba(148, 163, 184, 0.35);
@@ -193,6 +194,42 @@
             background: var(--fixture-period-bg) !important;
             color: var(--fixture-period-text) !important;
             border: 1px solid var(--fixture-period-bg) !important;
+        }
+        .fixture-period-odd-button {
+            border-color: var(--fixture-period-bg) !important;
+            color: var(--fixture-period-bg) !important;
+            background: #ffffff !important;
+            box-shadow: none;
+            transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+        }
+        .fixture-period-odd-button:hover,
+        .fixture-period-odd-button:focus {
+            background: var(--fixture-period-bg) !important;
+            border-color: var(--fixture-period-bg) !important;
+            color: var(--fixture-period-text) !important;
+            box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--fixture-period-bg) 22%, transparent);
+            transform: translateY(-1px);
+        }
+        .fixture-period-odd-button.is-selected,
+        .fixture-period-odd-button.is-selected:hover,
+        .fixture-period-odd-button.is-selected:focus {
+            background: var(--fixture-period-bg) !important;
+            border-color: var(--fixture-period-bg) !important;
+            color: var(--fixture-period-text) !important;
+            box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--fixture-period-bg) 22%, transparent);
+        }
+        .fixture-period-accent-button {
+            background: var(--fixture-period-bg) !important;
+            border-color: var(--fixture-period-bg) !important;
+            color: var(--fixture-period-text) !important;
+        }
+        .fixture-period-accent-button:hover,
+        .fixture-period-accent-button:focus,
+        .fixture-period-accent-button:active {
+            background: var(--fixture-period-bg) !important;
+            border-color: var(--fixture-period-bg) !important;
+            color: var(--fixture-period-text) !important;
+            filter: brightness(0.94);
         }
         @media (max-width: 420px) {
             .smart-pick-grid {
@@ -298,7 +335,7 @@
                         <span class="fw-bold">Maximum Winning:</span>
                         <span id="max-winning" class="fw-bold text-success">₦0.00</span>
                     </div>
-                    <button id="place-bet-btn" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm">Place Bet</button>
+                    <button id="place-bet-btn" class="btn fixture-period-accent-button w-100 rounded-pill py-2 shadow-sm">Place Bet</button>
                     <div id="response-message" class="mt-3 text-center d-none"></div>
                 </div>
             </div>
@@ -314,8 +351,7 @@
                                     {% with f=pick.fixture %}
                                         {% if pick.odd_value %}
                                             <button type="button"
-                                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn
-                                                    {% if pick.bet_type == 'home_win' or pick.bet_type == 'draw' or pick.bet_type == 'away_win' %}btn-outline-primary{% elif pick.bet_type == 'home_dnb' or pick.bet_type == 'away_dnb' %}btn-outline-info{% elif pick.bet_type|slice:':5' == 'over_' or pick.bet_type|slice:':6' == 'under_' %}btn-outline-secondary{% elif pick.bet_type == 'btts_yes' %}btn-outline-success{% elif pick.bet_type == 'btts_no' %}btn-outline-danger{% else %}btn-outline-light{% endif %}"
+                                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button"
                                                     data-fixture-id="{{ f.id }}"
                                                     data-bet-type="{{ pick.bet_type }}"
                                                     data-odd="{{ pick.odd_value|floatformat:2 }}"
@@ -1064,24 +1100,7 @@
             // Check if this button's selection is in the selectedBets array
             const isSelected = selectedBets.some(bet => String(bet.fixture_id) === String(fixtureId) && String(bet.bet_type) === String(betType));
 
-            if (isSelected) {
-                button.classList.add('btn-success'); // Highlight in green for selected
-                button.classList.remove('btn-outline-primary', 'btn-outline-info', 'btn-outline-secondary', 'btn-outline-danger'); // Remove outlines
-            } else {
-                // Determine original color based on bet-type prefix
-                if (betType.startsWith('home_win') || betType.startsWith('draw') || betType.startsWith('away_win')) {
-                    button.classList.add('btn-outline-primary');
-                } else if (betType.startsWith('home_dnb') || betType.startsWith('away_dnb')) {
-                    button.classList.add('btn-outline-info');
-                } else if (betType.startsWith('over') || betType.startsWith('under')) {
-                    button.classList.add('btn-outline-secondary');
-                } else if (betType.startsWith('btts_yes')) {
-                    button.classList.add('btn-outline-success'); // Specific for BTTS Yes
-                } else if (betType.startsWith('btts_no')) {
-                    button.classList.add('btn-outline-danger'); // Specific for BTTS No
-                }
-                button.classList.remove('btn-success'); // Remove highlight
-            }
+            button.classList.toggle('is-selected', isSelected);
         });
         updateSmartPickHighlights();
     }
@@ -1174,16 +1193,6 @@
             "'": '&#39;',
         }[c]));
 
-        const getPopularPickOutlineClass = (betType) => {
-            const bt = String(betType || '');
-            if (bt === 'home_win' || bt === 'draw' || bt === 'away_win') return 'btn-outline-primary';
-            if (bt === 'home_dnb' || bt === 'away_dnb') return 'btn-outline-info';
-            if (bt.startsWith('over_') || bt.startsWith('under_') || bt.startsWith('over') || bt.startsWith('under')) return 'btn-outline-secondary';
-            if (bt === 'btts_yes') return 'btn-outline-success';
-            if (bt === 'btts_no') return 'btn-outline-danger';
-            return 'btn-outline-light';
-        };
-
         const renderPopularPicks = (picks) => {
             const container = document.getElementById('popularPicksList');
             if (!container) return;
@@ -1206,12 +1215,11 @@
                         const periodName = escapeHtml(p.period_name || '');
                         const matchDate = escapeHtml(p.match_date || '');
                         const matchTime = escapeHtml(p.match_time || '');
-                        const outlineClass = getPopularPickOutlineClass(betType);
                         const selectionText = escapeHtml(`${market} ${selection} (${oddText})`);
                         const fixtureId = escapeHtml(p.fixture_id || '');
                         return `
                             <button type="button"
-                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn ${outlineClass}"
+                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button"
                                     data-fixture-id="${fixtureId}"
                                     data-bet-type="${escapeHtml(betType)}"
                                     data-odd="${escapeHtml(oddText)}"

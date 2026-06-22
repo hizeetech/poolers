@@ -7389,6 +7389,10 @@ def agent_dashboard(request):
     pending_commission = Decimal('0.00')
     pending_commission_single = Decimal('0.00')
     pending_commission_multiple = Decimal('0.00')
+    monthly_commission_amount = Decimal('0.00')
+    monthly_commission_percent = Decimal('0.00')
+    monthly_commission_period_start = start_of_month
+    monthly_commission_period_end = last_day_last_month
 
     if user.user_type == 'agent':
         weekly_comms = WeeklyAgentCommission.objects.filter(agent=user).select_related('period')
@@ -7457,6 +7461,52 @@ def agent_dashboard(request):
         pending_total = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_amount'))['commission_amount__sum'] or Decimal('0.00')
         pending_paid = monthly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
         pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
+
+        if user.user_type == 'super_agent':
+            try:
+                from commission.models import CommissionPeriod as MonthlyCommissionPeriodModel
+            except Exception:
+                MonthlyCommissionPeriodModel = None
+
+            monthly_period = (
+                MonthlyCommissionPeriodModel.objects.filter(
+                    period_type='monthly',
+                    start_date=start_of_month,
+                    end_date=last_day_last_month,
+                )
+                .order_by('-start_date')
+                .first()
+                if MonthlyCommissionPeriodModel is not None
+                else None
+            )
+            if monthly_period is not None:
+                monthly_commission_period_start = monthly_period.start_date
+                monthly_commission_period_end = monthly_period.end_date
+
+            monthly_record = (
+                MonthlyNetworkCommission.objects.filter(user=user, period=monthly_period).first()
+                if monthly_period is not None
+                else None
+            )
+            if monthly_record is not None:
+                monthly_commission_amount = monthly_record.commission_amount or Decimal('0.00')
+                monthly_commission_percent = monthly_record.commission_percent or Decimal('0.00')
+            else:
+                try:
+                    from commission.services import calculate_monthly_network_commission_data
+                except Exception:
+                    calculate_monthly_network_commission_data = None
+
+                if calculate_monthly_network_commission_data is not None:
+                    if monthly_period is None:
+                        class CommissionPeriodStub:
+                            pass
+                        monthly_period = CommissionPeriodStub()
+                        monthly_period.start_date = start_of_month
+                        monthly_period.end_date = last_day_last_month
+                    calc = calculate_monthly_network_commission_data(user, monthly_period) or {}
+                    monthly_commission_amount = calc.get('commission_amount') or Decimal('0.00')
+                    monthly_commission_percent = calc.get('commission_percent') or Decimal('0.00')
 
     # Top performing users/agents (example: based on GGR)
     # CORRECTED: Changed 'betticket__' to 'bet_tickets__'
@@ -7642,6 +7692,10 @@ def agent_dashboard(request):
         'pending_commission': pending_commission,
         'pending_commission_single': pending_commission_single,
         'pending_commission_multiple': pending_commission_multiple,
+        'monthly_commission_amount': monthly_commission_amount,
+        'monthly_commission_percent': monthly_commission_percent,
+        'monthly_commission_period_start': monthly_commission_period_start,
+        'monthly_commission_period_end': monthly_commission_period_end,
         'top_performers': top_performers,
         'recent_downline_transactions': recent_downline_transactions,
         'show_reports': True,

@@ -171,7 +171,7 @@
     {% endif %}
 
     <div class="row mb-4">
-        <div class="col-md-6 mb-3">
+        <div class="{% if user.user_type == 'super_agent' %}col-md-4{% else %}col-md-6{% endif %} mb-3">
             <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Pending Commission</h5>
@@ -182,7 +182,21 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-6 mb-3">
+        {% if user.user_type == 'super_agent' %}
+        <div class="col-md-4 mb-3">
+            <div class="card app-glass-card shadow-sm h-100 rounded-3">
+                <div class="card-body">
+                    <h5 class="card-title text-muted">Monthly Commission</h5>
+                    <p class="card-text fs-3 fw-bold text-primary">₦{{ monthly_commission_amount|floatformat:2 }}</p>
+                    <div class="text-muted small">
+                        Potential for {{ monthly_commission_period_start|date:"M d, Y" }} - {{ monthly_commission_period_end|date:"M d, Y" }}
+                    </div>
+                    <div class="text-muted small">{{ monthly_commission_percent|floatformat:2 }}% network commission</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        <div class="{% if user.user_type == 'super_agent' %}col-md-4{% else %}col-md-6{% endif %} mb-3">
             <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start">

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -5,8 +6,10 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.db.utils import ProgrammingError
+from django.utils import timezone
 
 from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
+from commission.models import CommissionPeriod, NetworkCommissionSettings
 from void_requests.models import TicketVoidRequest
 from void_requests.services import approve_and_void_request
 
@@ -495,6 +498,60 @@ class TicketTransactionLedgerTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Dashboard Ticket Transactions")
+
+    def test_super_agent_dashboard_shows_potential_monthly_commission_card(self):
+        direct_agent = User.objects.create_user(
+            email="dashboard-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="dashboard_agent",
+            super_agent=self.super_agent,
+        )
+        direct_cashier = User.objects.create_user(
+            email="dashboard-cashier@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="dashboard_cashier",
+            agent=direct_agent,
+            super_agent=self.super_agent,
+        )
+        Wallet.objects.create(user=direct_agent, balance=Decimal("0.00"))
+        Wallet.objects.create(user=direct_cashier, balance=Decimal("0.00"))
+
+        today = timezone.localdate()
+        first_day_this_month = today.replace(day=1)
+        last_day_last_month = first_day_this_month - timedelta(days=1)
+        start_of_last_month = last_day_last_month.replace(day=1)
+        period = CommissionPeriod.objects.create(
+            period_type="monthly",
+            start_date=start_of_last_month,
+            end_date=last_day_last_month,
+        )
+        NetworkCommissionSettings.objects.create(role="super_agent", commission_percent=Decimal("10.00"))
+
+        ticket = BetTicket.objects.create(
+            user=direct_cashier,
+            stake_amount=Decimal("1000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("2000.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("0.00"),
+            status="lost",
+            bet_type="single",
+        )
+        ticket.placed_at = timezone.make_aware(
+            datetime.combine(start_of_last_month, datetime.min.time())
+        )
+        ticket.save(update_fields=["placed_at"])
+
+        self.client.force_login(self.super_agent)
+        response = self.client.get(reverse("betting:super_agent_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Monthly Commission")
+        self.assertEqual(response.context["monthly_commission_amount"], Decimal("100.00"))
+        self.assertEqual(response.context["monthly_commission_period_start"], period.start_date)
+        self.assertEqual(response.context["monthly_commission_period_end"], period.end_date)
 
     @patch("betting.views._ticket_transaction_filtered_queryset", side_effect=ProgrammingError("relation missing"))
     def test_admin_dashboard_handles_missing_ticket_transaction_table(self, _mock_queryset):

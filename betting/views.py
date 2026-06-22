@@ -7468,17 +7468,23 @@ def agent_dashboard(request):
             except Exception:
                 MonthlyCommissionPeriodModel = None
 
-            monthly_period = (
-                MonthlyCommissionPeriodModel.objects.filter(
-                    period_type='monthly',
-                    start_date=start_of_month,
-                    end_date=last_day_last_month,
+            monthly_period = None
+            if MonthlyCommissionPeriodModel is not None:
+                monthly_period = (
+                    MonthlyCommissionPeriodModel.objects.filter(
+                        period_type='monthly',
+                        start_date__lte=today,
+                        end_date__gte=today,
+                    )
+                    .order_by('-end_date', '-start_date')
+                    .first()
                 )
-                .order_by('-start_date')
-                .first()
-                if MonthlyCommissionPeriodModel is not None
-                else None
-            )
+                if monthly_period is None:
+                    monthly_period = (
+                        MonthlyCommissionPeriodModel.objects.filter(period_type='monthly')
+                        .order_by('-end_date', '-start_date')
+                        .first()
+                    )
             if monthly_period is not None:
                 monthly_commission_period_start = monthly_period.start_date
                 monthly_commission_period_end = monthly_period.end_date

@@ -499,7 +499,7 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Dashboard Ticket Transactions")
 
-    def test_super_agent_dashboard_shows_potential_monthly_commission_card(self):
+    def test_super_agent_dashboard_uses_custom_monthly_commission_period_for_card(self):
         direct_agent = User.objects.create_user(
             email="dashboard-agent@test.com",
             password=self.password,
@@ -519,13 +519,10 @@ class TicketTransactionLedgerTests(TestCase):
         Wallet.objects.create(user=direct_cashier, balance=Decimal("0.00"))
 
         today = timezone.localdate()
-        first_day_this_month = today.replace(day=1)
-        last_day_last_month = first_day_this_month - timedelta(days=1)
-        start_of_last_month = last_day_last_month.replace(day=1)
         period = CommissionPeriod.objects.create(
             period_type="monthly",
-            start_date=start_of_last_month,
-            end_date=last_day_last_month,
+            start_date=today - timedelta(days=2),
+            end_date=today + timedelta(days=2),
         )
         NetworkCommissionSettings.objects.create(role="super_agent", commission_percent=Decimal("10.00"))
 
@@ -540,7 +537,7 @@ class TicketTransactionLedgerTests(TestCase):
             bet_type="single",
         )
         ticket.placed_at = timezone.make_aware(
-            datetime.combine(start_of_last_month, datetime.min.time())
+            datetime.combine(today, datetime.min.time())
         )
         ticket.save(update_fields=["placed_at"])
 

@@ -1581,6 +1581,16 @@ def _loan_reporting_days_overdue(loan, *, now=None):
     return max(0, (timezone.localtime(now).date() - timezone.localtime(loan.due_date).date()).days)
 
 
+def _loan_reporting_effective_withdrawal_locked(loan):
+    return bool((loan.outstanding_balance or Decimal('0.00')) > Decimal('0.00'))
+
+
+def _loan_reporting_effective_account_locked(loan):
+    if (loan.outstanding_balance or Decimal('0.00')) <= Decimal('0.00') or loan.status == 'settled':
+        return False
+    return bool(getattr(loan.borrower, 'is_locked', False) or loan.account_locked_due_to_default)
+
+
 def _loan_reporting_parse_date_range(start_date_str, end_date_str):
     start_dt = None
     end_dt = None
@@ -1695,14 +1705,24 @@ def _apply_loan_reporting_filters(loans, *, filters, viewer):
         loans = loans.filter(Q(account_locked_due_to_default=True) | Q(borrower__is_locked=True))
 
     if filters.get('withdrawal_locked') == 'yes':
-        loans = loans.filter(Q(outstanding_balance__gt=Decimal('0.00')) | Q(borrower__withdrawal_locked=True))
+        loans = loans.filter(outstanding_balance__gt=Decimal('0.00'))
     elif filters.get('withdrawal_locked') == 'no':
-        loans = loans.filter(outstanding_balance__lte=Decimal('0.00'), borrower__withdrawal_locked=False)
+        loans = loans.filter(outstanding_balance__lte=Decimal('0.00'))
 
     if filters.get('account_locked') == 'yes':
-        loans = loans.filter(Q(account_locked_due_to_default=True) | Q(borrower__is_locked=True))
+        loans = loans.filter(
+            outstanding_balance__gt=Decimal('0.00')
+        ).filter(
+            Q(account_locked_due_to_default=True) | Q(borrower__is_locked=True)
+        )
     elif filters.get('account_locked') == 'no':
-        loans = loans.filter(account_locked_due_to_default=False, borrower__is_locked=False)
+        loans = loans.exclude(
+            outstanding_balance__gt=Decimal('0.00'),
+            borrower__is_locked=True,
+        ).exclude(
+            outstanding_balance__gt=Decimal('0.00'),
+            account_locked_due_to_default=True,
+        )
 
     issued_by = filters.get('issued_by') or ''
     if issued_by:
@@ -1766,8 +1786,8 @@ def _loan_reporting_row_dict(loan, *, retail_manager_obj=None, include_retail_ma
     super_agent = getattr(borrower, 'super_agent', None)
     master_agent = getattr(borrower, 'master_agent', None)
     issued_by_user = loan.approved_by or loan.lender
-    withdrawal_locked = bool(loan.outstanding_balance > Decimal('0.00') or getattr(borrower, 'withdrawal_locked', False))
-    account_locked = bool(getattr(borrower, 'is_locked', False) or loan.account_locked_due_to_default)
+    withdrawal_locked = _loan_reporting_effective_withdrawal_locked(loan)
+    account_locked = _loan_reporting_effective_account_locked(loan)
     issued_dt = timezone.localtime(loan.created_at) if loan.created_at else None
     due_dt = timezone.localtime(loan.due_date) if loan.due_date else None
 
@@ -1831,16 +1851,8 @@ def _build_loan_reporting_dataset(user, *, filters=None, include_retail_manager=
         ).aggregate(total=Coalesce(Sum('outstanding_balance'), Decimal('0.00')))['total']
         or Decimal('0.00')
     )
-    borrower_ids = list(summary_base.values_list('borrower_id', flat=True))
-    summary['total_locked_accounts'] = User.objects.filter(id__in=borrower_ids, is_locked=True).count()
-    summary['total_withdrawal_locked'] = (
-        User.objects.filter(id__in=borrower_ids, withdrawal_locked=True).count()
-        + summary_base.filter(outstanding_balance__gt=Decimal('0.00'))
-        .exclude(borrower__withdrawal_locked=True)
-        .values('borrower_id')
-        .distinct()
-        .count()
-    )
+    summary['total_locked_accounts'] = sum(1 for row in rows if row['account_locked'] == 'Yes')
+    summary['total_withdrawal_locked'] = sum(1 for row in rows if row['withdrawal_locked'] == 'Yes')
     summary['total_records'] = len(rows)
 
     if is_retail_manager(user):

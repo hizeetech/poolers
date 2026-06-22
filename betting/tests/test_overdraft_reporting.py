@@ -197,3 +197,41 @@ class OverdraftReportingTests(TestCase):
         self.assertEqual(export_response.status_code, 200)
         self.assertIn("mapped_agent", export_response.content.decode())
         self.assertIn("outsider_agent", export_response.content.decode())
+
+    def test_fully_settled_loan_renders_no_lock_columns_even_if_borrower_flags_are_stale(self):
+        self.agent_mapped.is_locked = True
+        self.agent_mapped.withdrawal_locked = True
+        self.agent_mapped.save(update_fields=["is_locked", "withdrawal_locked"])
+        self.mapped_loan.status = "settled"
+        self.mapped_loan.outstanding_balance = Decimal("0.00")
+        self.mapped_loan.save(update_fields=["status", "outstanding_balance", "updated_at"])
+
+        self.client.force_login(self.account_user)
+        response = self.client.get(reverse("betting:account_user_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        mapped_row = next(
+            row for row in response.context["overdraft_reporting_page"].object_list
+            if row["agent_username"] == "mapped_agent"
+        )
+        self.assertEqual(mapped_row["status"], "Fully Settled")
+        self.assertEqual(mapped_row["withdrawal_locked"], "No")
+        self.assertEqual(mapped_row["account_locked"], "No")
+
+    def test_account_locked_no_filter_includes_fully_settled_loan_with_stale_borrower_lock_flags(self):
+        self.agent_mapped.is_locked = True
+        self.agent_mapped.withdrawal_locked = True
+        self.agent_mapped.save(update_fields=["is_locked", "withdrawal_locked"])
+        self.mapped_loan.status = "settled"
+        self.mapped_loan.outstanding_balance = Decimal("0.00")
+        self.mapped_loan.save(update_fields=["status", "outstanding_balance", "updated_at"])
+
+        self.client.force_login(self.crm_user)
+        response = self.client.get(
+            reverse("betting:crm_dashboard"),
+            {"tab": "overdraft_center", "loan_account_locked": "no"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        usernames = {row["agent_username"] for row in response.context["overdraft_reporting_page"].object_list}
+        self.assertIn("mapped_agent", usernames)

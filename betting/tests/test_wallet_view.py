@@ -609,6 +609,61 @@ class WalletViewTest(TestCase):
         self.assertTrue(status_after_payload['can_transfer_from_wallet'])
         self.assertTrue(status_after_payload['can_withdraw_from_wallet'])
 
+    def test_agent_wallet_transfer_is_blocked_until_overdraft_is_cleared(self):
+        admin_user = User.objects.create_user(
+            email='agenttransferadmin@example.com',
+            password='testpassword',
+            user_type='admin',
+        )
+        super_agent = User.objects.create_user(
+            email='agenttransfer-super@example.com',
+            password='testpassword',
+            user_type='super_agent',
+        )
+        agent = User.objects.create_user(
+            email='wallettransfer-agent@example.com',
+            password='testpassword',
+            user_type='agent',
+            super_agent=super_agent,
+        )
+        wallet, _ = Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('10000.00')})
+        if wallet.balance != Decimal('10000.00'):
+            wallet.balance = Decimal('10000.00')
+            wallet.save(update_fields=['balance'])
+
+        create_manual_overdraft(
+            actor=admin_user,
+            borrower=agent,
+            amount=Decimal('60000.00'),
+            reason='Agent transfer gating test',
+        )
+        apply_repayment_and_credit_wallet(
+            user=agent,
+            amount=Decimal('80000.00'),
+            source='gateway_deposit',
+            reason='Reserved funding before remittance',
+        )
+
+        self.client.force_login(agent)
+        page_response = self.client.get(reverse('betting:wallet'))
+        self.assertEqual(page_response.status_code, 200)
+        self.assertContains(page_response, 'Wallet Transfer Disabled')
+
+        status_before = self.client.get(reverse('betting:api_wallet_overdraft_status'))
+        self.assertEqual(status_before.status_code, 200)
+        status_before_payload = status_before.json()
+        self.assertFalse(status_before_payload['can_transfer_from_wallet'])
+        self.assertFalse(status_before_payload['can_withdraw_from_wallet'])
+
+        remit_response = self.client.post(reverse('betting:remit_overdraft_pending_credit'))
+        self.assertEqual(remit_response.status_code, 200)
+
+        status_after = self.client.get(reverse('betting:api_wallet_overdraft_status'))
+        self.assertEqual(status_after.status_code, 200)
+        status_after_payload = status_after.json()
+        self.assertTrue(status_after_payload['can_transfer_from_wallet'])
+        self.assertTrue(status_after_payload['can_withdraw_from_wallet'])
+
     def test_wallet_overdraft_status_api_includes_recent_transactions(self):
         self.client.force_login(self.user)
         wallet = Wallet.objects.get_or_create(user=self.user, defaults={'balance': Decimal('0.00')})[0]

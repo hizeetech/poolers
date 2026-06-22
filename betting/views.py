@@ -61,6 +61,7 @@ from .services.loan_overdraft import (
     apply_repayment_and_credit_wallet,
     build_recent_wallet_transactions_payload,
     build_qualification_snapshot,
+    can_user_place_bet,
     can_user_transfer_from_wallet,
     clear_overdraft_from_admin,
     create_manual_overdraft,
@@ -99,7 +100,8 @@ from .models import (
     CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery, CRMOpsAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
-    ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment, TicketTransactionLedger
+    ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment, TicketTransactionLedger,
+    DashboardTask,
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -114,7 +116,7 @@ from .forms import (
     LoanCenterDecisionForm, AdminOverdraftWalletFundingForm, LoanOverrideUnlockForm, LoanOverrideRelockForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
-    RetailManagerDashboardNoteForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
+    RetailManagerDashboardNoteForm, DashboardTaskReportForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
     CustomerComplaintForm, CustomerComplaintActionForm, CustomerComplaintNoteForm, BulkMessageTemplateForm,
     BulkMessageCampaignForm, CRMThresholdSettingsForm
 )
@@ -2051,6 +2053,24 @@ def _ops_targetable_users_queryset(user):
     return _ops_scope_users_queryset(user).exclude(user_type__in=CRM_OPS_EXCLUDED_USER_TYPES)
 
 
+def _dashboard_tasks_queryset_for_user(user):
+    return (
+        DashboardTask.objects.filter(assigned_to=user)
+        .select_related('assigned_to', 'created_by')
+        .order_by('status', 'due_at', '-created_at')
+    )
+
+
+def _dashboard_task_redirect_url(url_name, *, tab, start_date='', end_date=''):
+    qd = QueryDict(mutable=True)
+    qd['tab'] = tab
+    if start_date:
+        qd['start_date'] = start_date
+    if end_date:
+        qd['end_date'] = end_date
+    return f"{reverse(url_name)}?{qd.urlencode()}"
+
+
 def _retail_manager_scoped_user_ids(retail_manager_id):
     try:
         retail_user = User.objects.get(id=int(retail_manager_id), user_type='retail_manager')
@@ -3554,7 +3574,7 @@ def fixtures_view(request, period_id=None):
         'active_periods': active_periods,
         'popular_picks': popular_picks,
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
-        'can_place_bet': is_cashier(request.user),
+        'can_place_bet': can_user_place_bet(request.user),
         'bonus_rules_json': json.dumps(bonus_rules_data),
     }
     return render(request, 'betting/fixtures.html', context)
@@ -4063,7 +4083,7 @@ def place_bet(request):
             # Debug logging
             logger.info(f"Place Bet Request Keys: {list(request.POST.keys())}")
 
-            if not is_cashier(request.user):
+            if not can_user_place_bet(request.user):
                 if request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.META.get('HTTP_ACCEPT', ''):
                     return JsonResponse({'success': False, 'message': 'You are not authorized to place a bet'})
                 messages.error(request, 'You are not authorized to place a bet')
@@ -6484,7 +6504,7 @@ def wallet_transfer(request):
         messages.error(request, "You do not have permission to credit or debit downline wallets. Please contact the administrator.")
         return redirect('betting:wallet')
 
-    if request.user.user_type == 'super_agent' and user_has_outstanding_loan(request.user):
+    if not can_user_transfer_from_wallet(request.user):
         CreditLog.objects.create(
             actor=request.user,
             action_type='wallet_transfer_denied',
@@ -9757,10 +9777,24 @@ def admin_loan_overdraft_center(request):
     for loan in loans_page.object_list:
         override_meta = loan_lock_override_details(loan)
         loan.network_wallet_balance = get_borrower_network_wallet_balance(loan.borrower)
+        loan.is_past_due = bool(
+            loan.outstanding_balance > Decimal("0.00")
+            and getattr(loan, "due_date", None)
+            and loan.due_date < now
+        )
         loan.lock_override_active = override_meta["active"]
         loan.lock_override_reason = override_meta["reason"]
         loan.lock_override_by_label = override_meta["performed_by_label"]
         loan.lock_override_at = override_meta["performed_at"]
+        loan.is_currently_locked_for_overdraft = bool(
+            loan.account_locked_due_to_default
+            and getattr(loan.borrower, "is_locked", False)
+        )
+        loan.effective_status_display = (
+            "Overdue"
+            if loan.is_past_due and loan.outstanding_balance > Decimal("0.00")
+            else loan.get_status_display()
+        )
         loan.can_override_unlock = bool(
             request.user.is_superuser
             and loan.outstanding_balance > Decimal("0.00")
@@ -9773,7 +9807,11 @@ def admin_loan_overdraft_center(request):
         loan.can_relock_after_override = bool(
             request.user.is_superuser
             and loan.outstanding_balance > Decimal("0.00")
-            and loan.lock_override_active
+            and loan.is_past_due
+            and (
+                loan.lock_override_active
+                or not loan.is_currently_locked_for_overdraft
+            )
         )
         loan.can_clear_overdraft = bool(loan.outstanding_balance > Decimal("0.00"))
         loan.can_recall_overdraft = bool(loan.outstanding_balance > Decimal("0.00") and loan.network_wallet_balance > Decimal("0.00"))
@@ -13094,6 +13132,26 @@ def crm_dashboard(request):
         .only('id', 'email', 'username')
         .order_by('email')[:100]
     )
+    dashboard_tasks_qs = _dashboard_tasks_queryset_for_user(request.user)
+    task_report_form = DashboardTaskReportForm(task_queryset=dashboard_tasks_qs)
+    task_report_target_id = None
+
+    if request.method == 'POST' and active_tab == 'tasks' and request.POST.get('submit_task_report') == '1':
+        tasks_redirect = _dashboard_task_redirect_url(
+            'betting:crm_dashboard',
+            tab='tasks',
+            start_date=start_date_str,
+            end_date=end_date_str,
+        )
+        task_report_form = DashboardTaskReportForm(request.POST, task_queryset=dashboard_tasks_qs)
+        task_report_target_id = request.POST.get('task_id')
+        if task_report_form.is_valid():
+            task = task_report_form.cleaned_data['task']
+            task.mark_completed(report=task_report_form.cleaned_data['completion_report'])
+            task.save(update_fields=['completion_report', 'status', 'completed_at', 'updated_at'])
+            messages.success(request, 'Task report submitted successfully.')
+            return redirect(tasks_redirect)
+        messages.error(request, 'Unable to submit task report.')
 
     if request.method == 'POST' and active_tab == 'communications':
         if not crm_can_message(request.user):
@@ -13944,6 +14002,11 @@ def crm_dashboard(request):
         'complaint_status_choices': CustomerComplaint.STATUS_CHOICES,
         'complaint_priority_choices': CustomerComplaint.PRIORITY_CHOICES,
         'crm_assignable_users': crm_assignable_users,
+        'dashboard_tasks_open': dashboard_tasks_qs.exclude(status=DashboardTask.STATUS.COMPLETED),
+        'dashboard_tasks_completed': dashboard_tasks_qs.filter(status=DashboardTask.STATUS.COMPLETED),
+        'dashboard_tasks_open_count': dashboard_tasks_qs.exclude(status=DashboardTask.STATUS.COMPLETED).count(),
+        'task_report_form': task_report_form,
+        'task_report_target_id': int(task_report_target_id) if str(task_report_target_id or '').isdigit() else None,
         'bulk_channel_choices': BulkMessageCampaign.CHANNEL_CHOICES,
         'bulk_target_group_choices': BulkMessageCampaign.TARGET_GROUP_CHOICES,
         'bulk_recurring_choices': BulkMessageCampaign.RECURRING_CHOICES,
@@ -14370,6 +14433,9 @@ def retail_dashboard(request):
     complaint_note_form = CustomerComplaintNoteForm()
     complaint_action_target_id = None
     complaint_note_target_id = None
+    dashboard_tasks_qs = _dashboard_tasks_queryset_for_user(request.user)
+    task_report_form = DashboardTaskReportForm(task_queryset=dashboard_tasks_qs)
+    task_report_target_id = None
 
     if request.method == 'POST' and active_tab == 'note' and request.POST.get('save_note') == '1':
         note_form = RetailManagerDashboardNoteForm(request.POST, instance=note_entry)
@@ -14386,6 +14452,23 @@ def retail_dashboard(request):
                 qd['end_date'] = end_date_str
             return redirect(f"{reverse('betting:retail_dashboard')}?{qd.urlencode()}")
         messages.error(request, 'Unable to save note. Please review the editor content and try again.')
+
+    if request.method == 'POST' and active_tab == 'tasks' and request.POST.get('submit_task_report') == '1':
+        tasks_redirect = _dashboard_task_redirect_url(
+            'betting:retail_dashboard',
+            tab='tasks',
+            start_date=start_date_str,
+            end_date=end_date_str,
+        )
+        task_report_form = DashboardTaskReportForm(request.POST, task_queryset=dashboard_tasks_qs)
+        task_report_target_id = request.POST.get('task_id')
+        if task_report_form.is_valid():
+            task = task_report_form.cleaned_data['task']
+            task.mark_completed(report=task_report_form.cleaned_data['completion_report'])
+            task.save(update_fields=['completion_report', 'status', 'completed_at', 'updated_at'])
+            messages.success(request, 'Task report submitted successfully.')
+            return redirect(tasks_redirect)
+        messages.error(request, 'Unable to submit task report.')
 
     if request.method == 'POST' and active_tab == 'complaints':
         retail_complaint_redirect = f"{reverse('betting:retail_dashboard')}?tab=complaints"
@@ -15049,6 +15132,11 @@ def retail_dashboard(request):
         'mapped_super_agents': list(super_agents.only('id', 'email', 'username').order_by('email')[:200]),
         'note_form': note_form,
         'note_entry': note_entry,
+        'dashboard_tasks_open': dashboard_tasks_qs.exclude(status=DashboardTask.STATUS.COMPLETED),
+        'dashboard_tasks_completed': dashboard_tasks_qs.filter(status=DashboardTask.STATUS.COMPLETED),
+        'dashboard_tasks_open_count': dashboard_tasks_qs.exclude(status=DashboardTask.STATUS.COMPLETED).count(),
+        'task_report_form': task_report_form,
+        'task_report_target_id': int(task_report_target_id) if str(task_report_target_id or '').isdigit() else None,
         'locked_accounts_summary': locked_accounts_summary,
         'locked_accounts_page': locked_accounts_page,
         'locked_accounts_rows': locked_accounts_rows,

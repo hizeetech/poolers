@@ -335,7 +335,7 @@
                         <span class="fw-bold">Maximum Winning:</span>
                         <span id="max-winning" class="fw-bold text-success">₦0.00</span>
                     </div>
-                    <button id="place-bet-btn" class="btn fixture-period-accent-button w-100 rounded-pill py-2 shadow-sm">Place Bet</button>
+                    <button id="place-bet-btn" class="btn fixture-period-accent-button w-100 rounded-pill py-2 shadow-sm" {% if not can_place_bet %}disabled{% endif %}>Place Bet</button>
                     <div id="response-message" class="mt-3 text-center d-none"></div>
                 </div>
             </div>

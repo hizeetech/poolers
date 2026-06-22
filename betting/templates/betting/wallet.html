@@ -516,7 +516,7 @@
                         id="transferBlockedByOverdraft"
                     >
                         <div class="fw-bold mb-1">Wallet Transfer Disabled</div>
-                        <div>Outstanding overdraft must be cleared before wallet transfers are permitted for a super agent.</div>
+                        <div>Outstanding overdraft must be cleared before wallet transfers are permitted.</div>
                     </div>
                     <div id="transferEnabledSection" class="{% if not can_transfer_from_wallet %}d-none{% endif %}">
                         <form action="{% url 'betting:wallet_transfer' %}" method="post" class="mb-0" id="walletTransferForm">

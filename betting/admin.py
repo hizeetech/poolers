@@ -64,7 +64,7 @@ from .models import (
     AgentTransferLog,
     AccountUnlockAppeal, AccountLockAuditLog,
     FinanceAuditLog, CRMActionLog, WithdrawalReport,
-    CustomerComplaint, CustomerComplaintNote,
+    CustomerComplaint, CustomerComplaintNote, DashboardTask,
     BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery,
     CRMOpsAuditLog,
     OverdraftWallet, OverdraftWalletLedgerEntry, LoanRepayment, LoanAuditLog,
@@ -2177,6 +2177,29 @@ class BulkMessageDeliveryAdmin(admin.ModelAdmin):
     date_hierarchy = 'created_at'
 
 
+class DashboardTaskAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'title', 'assigned_to', 'audience_label', 'status', 'due_at', 'completed_at', 'created_by')
+    list_filter = ('status', 'assigned_to__user_type', 'created_at', 'due_at', 'completed_at')
+    search_fields = ('title', 'description', 'completion_report', 'assigned_to__email', 'assigned_to__username')
+    autocomplete_fields = ('assigned_to', 'created_by')
+    list_select_related = ('assigned_to', 'created_by')
+    date_hierarchy = 'created_at'
+    readonly_fields = ('created_at', 'updated_at', 'completed_at')
+
+    def audience_label(self, obj):
+        return obj.audience_label
+    audience_label.short_description = 'Dashboard'
+
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by_id:
+            obj.created_by = request.user
+        if obj.status != DashboardTask.STATUS.COMPLETED:
+            obj.completed_at = None
+        elif obj.status == DashboardTask.STATUS.COMPLETED and not obj.completed_at:
+            obj.completed_at = timezone.now()
+        super().save_model(request, obj, form, change)
+
+
 class CRMOpsAuditLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'module', 'action', 'actor', 'target_user', 'complaint', 'campaign', 'transaction', 'ip_address')
     list_filter = ('module', 'action', 'created_at')
@@ -2292,6 +2315,7 @@ betting_admin_site.register(FinanceAuditLog, FinanceAuditLogAdmin)
 betting_admin_site.register(CRMActionLog, CRMActionLogAdmin)
 betting_admin_site.register(CustomerComplaint, CustomerComplaintAdmin)
 betting_admin_site.register(CustomerComplaintNote, CustomerComplaintNoteAdmin)
+betting_admin_site.register(DashboardTask, DashboardTaskAdmin)
 betting_admin_site.register(BulkMessageTemplate, BulkMessageTemplateAdmin)
 betting_admin_site.register(BulkMessageCampaign, BulkMessageCampaignAdmin)
 betting_admin_site.register(BulkMessageDelivery, BulkMessageDeliveryAdmin)

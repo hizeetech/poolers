@@ -2182,6 +2182,57 @@ class RetailManagerDashboardNote(models.Model):
         return f"Retail Note - {identifier}"
 
 
+class DashboardTask(models.Model):
+    class STATUS(models.TextChoices):
+        ASSIGNED = "assigned", "Assigned"
+        IN_PROGRESS = "in_progress", "In Progress"
+        COMPLETED = "completed", "Completed"
+
+    title = models.CharField(max_length=180)
+    description = models.TextField()
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="dashboard_tasks",
+        limit_choices_to=Q(user_type="crm") | Q(user_type="retail_manager"),
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_dashboard_tasks",
+    )
+    due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS.choices, default=STATUS.ASSIGNED, db_index=True)
+    completion_report = models.TextField(blank=True, default="")
+    completed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ["status", "due_at", "-created_at"]
+        verbose_name = "Dashboard Task"
+        verbose_name_plural = "Dashboard Tasks"
+
+    def __str__(self):
+        assignee = self.assigned_to.username or self.assigned_to.email or f"user#{self.assigned_to_id}"
+        return f"{self.title} -> {assignee}"
+
+    @property
+    def audience_label(self):
+        if getattr(self.assigned_to, "user_type", "") == "crm":
+            return "CRM"
+        if getattr(self.assigned_to, "user_type", "") == "retail_manager":
+            return "Retail Manager"
+        return "Dashboard"
+
+    def mark_completed(self, *, report: str):
+        self.completion_report = (report or "").strip()
+        self.status = self.STATUS.COMPLETED
+        self.completed_at = timezone.now()
+
+
 class AgentTransferLog(models.Model):
     agent = models.ForeignKey(
         User,

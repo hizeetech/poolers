@@ -329,7 +329,7 @@
                             </td>
                             <td>{{ loan.due_date|date:"Y-m-d H:i"|default:"-" }}</td>
                             <td>
-                                <div>{{ loan.get_status_display }}</div>
+                                <div>{{ loan.effective_status_display|default:loan.get_status_display }}</div>
                                 {% if loan.lock_override_active %}
                                 <div class="small mt-1">
                                     <span class="badge bg-info text-dark">Override Unlock Active</span>
@@ -362,7 +362,7 @@
                                 </div>
                                 {% elif loan.status == 'pending' and loan.approval_level == 'super_agent' %}
                                 <span class="badge bg-warning text-dark">Awaiting Super Agent</span>
-                                {% elif loan.lock_override_active and loan.can_relock_after_override %}
+                                {% elif loan.can_relock_after_override %}
                                 <form method="post" class="d-flex flex-column gap-2" style="min-width: 220px;">
                                     {% csrf_token %}
                                     <input type="hidden" name="loan_id" value="{{ loan.id }}">

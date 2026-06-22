@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.mail import send_mail, get_connection
 from django.contrib.auth.hashers import make_password
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, DashboardTask, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration
 from .services.usernames import create_agent_and_cashiers
 from .services.email_policy import (
     duplicate_email_details,
@@ -1966,6 +1966,41 @@ class RetailManagerDashboardNoteForm(forms.ModelForm):
                 config_name='default',
             ),
         }
+
+
+class DashboardTaskReportForm(forms.Form):
+    task_id = forms.IntegerField(widget=forms.HiddenInput())
+    completion_report = forms.CharField(
+        label='Completion Report',
+        max_length=5000,
+        widget=forms.Textarea(
+            attrs={
+                'class': 'form-control',
+                'rows': 4,
+                'placeholder': 'Enter the task completion report for admin review.',
+            }
+        ),
+    )
+
+    def __init__(self, *args, task_queryset=None, **kwargs):
+        self.task_queryset = task_queryset
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        task_id = cleaned_data.get('task_id')
+        report = (cleaned_data.get('completion_report') or '').strip()
+        queryset = self.task_queryset if self.task_queryset is not None else DashboardTask.objects.all()
+        task = queryset.filter(id=task_id).first()
+        if task is None:
+            raise ValidationError('The selected task is no longer available.')
+        if task.status == DashboardTask.STATUS.COMPLETED:
+            raise ValidationError('This task has already been completed.')
+        if not report:
+            raise ValidationError('A completion report is required.')
+        cleaned_data['task'] = task
+        cleaned_data['completion_report'] = report
+        return cleaned_data
 
 
 class AccountUnlockAppealForm(forms.ModelForm):

@@ -208,6 +208,21 @@ def user_has_outstanding_loan(user: User) -> bool:
     return get_user_outstanding_loans(user).exists()
 
 
+def get_overdraft_restriction_borrower(user: User) -> User | None:
+    if not getattr(user, "is_authenticated", False):
+        return None
+    if getattr(user, "user_type", "") in {"agent", "super_agent"}:
+        return user
+    if getattr(user, "user_type", "") == "cashier":
+        return getattr(user, "agent", None) or getattr(user, "super_agent", None)
+    return None
+
+
+def user_has_overdraft_access_restriction(user: User) -> bool:
+    borrower = get_overdraft_restriction_borrower(user)
+    return bool(borrower and user_has_outstanding_loan(borrower))
+
+
 def get_user_pending_credit_amount(user: User) -> Decimal:
     total = (
         LoanPendingCredit.objects.filter(borrower=user, remaining_amount__gt=Decimal("0.00")).aggregate(
@@ -219,7 +234,11 @@ def get_user_pending_credit_amount(user: User) -> Decimal:
 
 
 def can_user_transfer_from_wallet(user: User) -> bool:
-    return not (getattr(user, "user_type", "") == "super_agent" and user_has_outstanding_loan(user))
+    return not user_has_overdraft_access_restriction(user)
+
+
+def can_user_place_bet(user: User) -> bool:
+    return getattr(user, "is_authenticated", False) and getattr(user, "user_type", "") == "cashier" and not user_has_overdraft_access_restriction(user)
 
 
 def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):
@@ -987,8 +1006,17 @@ def relock_loan_after_override(*, actor: User, loan_id: int, reason: str, ip_add
         raise LoanOverdraftError("Re-lock reason is required.")
     if loan.outstanding_balance <= Decimal("0.00"):
         raise LoanOverdraftError("This loan has no outstanding balance.")
-    if not loan_has_active_lock_override(loan):
-        raise LoanOverdraftError("This loan does not have an active override unlock to reverse.")
+    is_past_due = bool(loan.due_date and loan.due_date < timezone.now())
+    override_active = loan_has_active_lock_override(loan)
+    targets = list(_loan_lock_targets(loan.borrower))
+    is_currently_locked = bool(
+        loan.account_locked_due_to_default
+        and all(getattr(target, "is_locked", False) for target in targets)
+    )
+    if not is_past_due:
+        raise LoanOverdraftError("Re-lock is available only for overdue overdrafts.")
+    if not override_active and is_currently_locked:
+        raise LoanOverdraftError("This overdue loan is already locked.")
 
     relock_remark = f"Re-locked after override unlock for loan #{loan.id}. Reason: {reason}"
     snapshot = dict(getattr(loan, "workflow_snapshot", {}) or {})
@@ -1003,7 +1031,9 @@ def relock_loan_after_override(*, actor: User, loan_id: int, reason: str, ip_add
         }
     )
     loan.workflow_snapshot = snapshot
-    loan.save(update_fields=["workflow_snapshot", "updated_at"])
+    loan.account_locked_due_to_default = False
+    loan.status = "overdue"
+    loan.save(update_fields=["workflow_snapshot", "account_locked_due_to_default", "status", "updated_at"])
 
     _lock_defaulting_borrower(
         loan=loan,

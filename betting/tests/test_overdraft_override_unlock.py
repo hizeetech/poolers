@@ -233,6 +233,48 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertContains(response, "overdraft-ready-star")
         self.assertContains(response, "₦900.00")
 
+    def test_overdue_center_shows_relock_for_unlocked_past_due_loan_and_relocks(self):
+        loan = self._create_overdue_locked_loan()
+        loan.status = "active"
+        loan.account_locked_due_to_default = False
+        loan.workflow_snapshot = {}
+        loan.save(update_fields=["status", "account_locked_due_to_default", "workflow_snapshot", "updated_at"])
+        self.agent.is_locked = False
+        self.agent.lock_reason = ""
+        self.agent.locked_at = None
+        self.agent.save(update_fields=["is_locked", "lock_reason", "locked_at"])
+        self.cashier.is_locked = False
+        self.cashier.lock_reason = ""
+        self.cashier.locked_at = None
+        self.cashier.save(update_fields=["is_locked", "lock_reason", "locked_at"])
+
+        self.client.force_login(self.superadmin)
+        response = self.client.get(reverse("betting_admin:admin_loan_overdraft_center"), {"tab": "overdue"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Re-lock")
+        self.assertContains(response, "Overdue")
+
+        relock_response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=overdue",
+            {
+                "loan_id": str(loan.id),
+                "reason": "Past due borrower must be locked again",
+                "relock_submit": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(relock_response.status_code, 200)
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+
+        self.assertEqual(loan.status, "overdue")
+        self.assertTrue(loan.account_locked_due_to_default)
+        self.assertTrue(self.agent.is_locked)
+        self.assertTrue(self.cashier.is_locked)
+
     def test_recall_overdraft_fully_settles_and_unlocks_agent_and_cashier(self):
         loan = self._create_overdue_locked_loan()
         loan.outstanding_balance = Decimal("150.00")

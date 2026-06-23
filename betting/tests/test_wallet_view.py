@@ -559,7 +559,7 @@ class WalletViewTest(TestCase):
         self.assertEqual(status_after_payload['qualification_deposit_total'], '20000.00')
         self.assertEqual(status_after_payload['qualification_qualified_amount'], '10000.00')
 
-    def test_super_agent_wallet_transfer_is_blocked_until_overdraft_is_cleared(self):
+    def test_super_agent_wallet_transfer_is_blocked_only_when_overdraft_is_overdue(self):
         admin_user = User.objects.create_user(
             email='superagenttransferadmin@example.com',
             password='testpassword',
@@ -576,7 +576,7 @@ class WalletViewTest(TestCase):
             wallet.balance = Decimal('10000.00')
             wallet.save(update_fields=['balance'])
 
-        create_manual_overdraft(
+        loan = create_manual_overdraft(
             actor=admin_user,
             borrower=super_agent,
             amount=Decimal('100000.00'),
@@ -592,13 +592,24 @@ class WalletViewTest(TestCase):
         self.client.force_login(super_agent)
         page_response = self.client.get(reverse('betting:wallet'))
         self.assertEqual(page_response.status_code, 200)
-        self.assertContains(page_response, 'Wallet Transfer Disabled')
+        self.assertTrue(page_response.context['can_transfer_from_wallet'])
 
         status_before = self.client.get(reverse('betting:api_wallet_overdraft_status'))
         self.assertEqual(status_before.status_code, 200)
         status_before_payload = status_before.json()
-        self.assertFalse(status_before_payload['can_transfer_from_wallet'])
+        self.assertTrue(status_before_payload['can_transfer_from_wallet'])
         self.assertFalse(status_before_payload['can_withdraw_from_wallet'])
+
+        Loan.objects.filter(pk=loan.pk).update(status='overdue', due_date=timezone.now() - timedelta(days=1))
+
+        overdue_page_response = self.client.get(reverse('betting:wallet'))
+        self.assertEqual(overdue_page_response.status_code, 200)
+        self.assertFalse(overdue_page_response.context['can_transfer_from_wallet'])
+
+        status_overdue = self.client.get(reverse('betting:api_wallet_overdraft_status'))
+        self.assertEqual(status_overdue.status_code, 200)
+        status_overdue_payload = status_overdue.json()
+        self.assertFalse(status_overdue_payload['can_transfer_from_wallet'])
 
         remit_response = self.client.post(reverse('betting:remit_overdraft_pending_credit'))
         self.assertEqual(remit_response.status_code, 200)
@@ -609,7 +620,7 @@ class WalletViewTest(TestCase):
         self.assertTrue(status_after_payload['can_transfer_from_wallet'])
         self.assertTrue(status_after_payload['can_withdraw_from_wallet'])
 
-    def test_agent_wallet_transfer_is_blocked_until_overdraft_is_cleared(self):
+    def test_agent_wallet_transfer_is_blocked_only_when_overdraft_is_overdue(self):
         admin_user = User.objects.create_user(
             email='agenttransferadmin@example.com',
             password='testpassword',
@@ -631,7 +642,7 @@ class WalletViewTest(TestCase):
             wallet.balance = Decimal('10000.00')
             wallet.save(update_fields=['balance'])
 
-        create_manual_overdraft(
+        loan = create_manual_overdraft(
             actor=admin_user,
             borrower=agent,
             amount=Decimal('60000.00'),
@@ -647,13 +658,24 @@ class WalletViewTest(TestCase):
         self.client.force_login(agent)
         page_response = self.client.get(reverse('betting:wallet'))
         self.assertEqual(page_response.status_code, 200)
-        self.assertContains(page_response, 'Wallet Transfer Disabled')
+        self.assertTrue(page_response.context['can_transfer_from_wallet'])
 
         status_before = self.client.get(reverse('betting:api_wallet_overdraft_status'))
         self.assertEqual(status_before.status_code, 200)
         status_before_payload = status_before.json()
-        self.assertFalse(status_before_payload['can_transfer_from_wallet'])
+        self.assertTrue(status_before_payload['can_transfer_from_wallet'])
         self.assertFalse(status_before_payload['can_withdraw_from_wallet'])
+
+        Loan.objects.filter(pk=loan.pk).update(status='overdue', due_date=timezone.now() - timedelta(days=1))
+
+        overdue_page_response = self.client.get(reverse('betting:wallet'))
+        self.assertEqual(overdue_page_response.status_code, 200)
+        self.assertFalse(overdue_page_response.context['can_transfer_from_wallet'])
+
+        status_overdue = self.client.get(reverse('betting:api_wallet_overdraft_status'))
+        self.assertEqual(status_overdue.status_code, 200)
+        status_overdue_payload = status_overdue.json()
+        self.assertFalse(status_overdue_payload['can_transfer_from_wallet'])
 
         remit_response = self.client.post(reverse('betting:remit_overdraft_pending_credit'))
         self.assertEqual(remit_response.status_code, 200)

@@ -6522,7 +6522,7 @@ def wallet_transfer(request):
             action_type='wallet_transfer_denied',
             amount=Decimal('0.00')
         )
-        messages.error(request, "Outstanding overdraft must be cleared before wallet transfers are permitted.")
+        messages.error(request, "Overdue overdraft must be cleared before wallet transfers are permitted.")
         return redirect('betting:wallet')
 
     if request.method == 'POST':

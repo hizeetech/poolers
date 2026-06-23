@@ -223,6 +223,18 @@ def user_has_overdraft_access_restriction(user: User) -> bool:
     return bool(borrower and user_has_outstanding_loan(borrower))
 
 
+def user_has_overdraft_wallet_transfer_restriction(user: User) -> bool:
+    borrower = get_overdraft_restriction_borrower(user)
+    if not borrower:
+        return False
+    now = timezone.now()
+    return (
+        get_user_outstanding_loans(borrower)
+        .filter(Q(status__in=["overdue", "defaulted"]) | Q(due_date__lt=now))
+        .exists()
+    )
+
+
 def get_user_pending_credit_amount(user: User) -> Decimal:
     total = (
         LoanPendingCredit.objects.filter(borrower=user, remaining_amount__gt=Decimal("0.00")).aggregate(
@@ -234,7 +246,7 @@ def get_user_pending_credit_amount(user: User) -> Decimal:
 
 
 def can_user_transfer_from_wallet(user: User) -> bool:
-    return not user_has_overdraft_access_restriction(user)
+    return not user_has_overdraft_wallet_transfer_restriction(user)
 
 
 def can_user_place_bet(user: User) -> bool:

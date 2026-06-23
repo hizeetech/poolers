@@ -273,18 +273,25 @@ class LoginForm(AuthenticationForm):
         
         # 1. Check if Account is Locked
         if user and user.is_locked:
-            lock_message = (
-                (user.lock_reason or "").strip()
-                or "Your account has been locked due to multiple failed login attempts. Please contact support or administrator."
-            )
-            LoginAttempt.objects.create(
-                user=user,
-                username_attempted=identifier,
-                ip_address=ip,
-                user_agent=user_agent,
-                status='locked'
-            )
-            raise forms.ValidationError(lock_message)
+            reason = (user.lock_reason or "").strip()
+            if "overdraft/loan obligation" in reason.lower():
+                from betting.services.loan_overdraft import reassess_borrower_overdraft_lock_state
+
+                reassess_borrower_overdraft_lock_state(user)
+                user.refresh_from_db()
+            if user.is_locked:
+                lock_message = (
+                    (user.lock_reason or "").strip()
+                    or "Your account has been locked due to multiple failed login attempts. Please contact support or administrator."
+                )
+                LoginAttempt.objects.create(
+                    user=user,
+                    username_attempted=identifier,
+                    ip_address=ip,
+                    user_agent=user_agent,
+                    status='locked'
+                )
+                raise forms.ValidationError(lock_message)
 
         # 2. Attempt Authentication
         try:

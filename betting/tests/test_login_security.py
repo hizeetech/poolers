@@ -1,6 +1,10 @@
 from django.test import TestCase, Client, RequestFactory
 from django.urls import reverse
-from betting.models import User, LoginAttempt
+from django.utils import timezone
+from betting.models import Loan, User, LoginAttempt
+from betting.services.loan_overdraft import LOAN_LOCK_REASON
+from datetime import timedelta
+from decimal import Decimal
 
 class LoginSecurityTest(TestCase):
     def setUp(self):
@@ -79,6 +83,44 @@ class LoginSecurityTest(TestCase):
         # Should fail with lock message
         self.assertContains(response, "Your account has been locked")
         self.assertFalse(response.wsgi_request.user.is_authenticated)
+
+    def test_overdraft_locked_account_can_login_when_overdraft_is_not_overdue(self):
+        super_agent = User.objects.create_user(
+            email="login-unlock-super@example.com",
+            password="password123",
+            user_type="super_agent",
+        )
+        agent = User.objects.create_user(
+            email="login-unlock-agent@example.com",
+            password=self.password,
+            user_type="agent",
+            super_agent=super_agent,
+            is_locked=True,
+            lock_reason=LOAN_LOCK_REASON,
+        )
+        Loan.objects.create(
+            borrower=agent,
+            lender=super_agent,
+            amount=Decimal("70000.00"),
+            requested_amount=Decimal("70000.00"),
+            qualified_amount=Decimal("70000.00"),
+            outstanding_balance=Decimal("70000.00"),
+            status="active",
+            loan_type="agent_overdraft",
+            approval_level="super_agent",
+            due_date=timezone.now() + timedelta(days=5),
+        )
+
+        response = self.client.post(
+            self.login_url,
+            {
+                "identifier": agent.username,
+                "password": self.password,
+            },
+        )
+        agent.refresh_from_db()
+        self.assertFalse(agent.is_locked)
+        self.assertEqual(response.status_code, 302)
 
     def test_attempts_remaining_message(self):
         # 1st fail

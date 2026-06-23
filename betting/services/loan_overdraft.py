@@ -954,14 +954,52 @@ def _auto_unlock_loan_targets(borrower: User):
 
 
 def _reassess_borrower_overdraft_lock_state(borrower: User):
-    if not user_has_outstanding_loan(borrower):
+    outstanding_loans = get_user_outstanding_loans(borrower)
+    if not outstanding_loans.exists():
         _auto_unlock_loan_targets(borrower)
         return
-    overdue_loans = get_user_outstanding_loans(borrower).filter(due_date__lt=timezone.now())
-    for overdue_loan in overdue_loans:
-        overdue_loan.status = "overdue"
-        overdue_loan.save(update_fields=["status", "updated_at"])
-        _lock_defaulting_borrower(loan=overdue_loan)
+
+    now = timezone.now()
+    overdue_loans = outstanding_loans.filter(Q(status__in=["overdue", "defaulted"]) | Q(due_date__lt=now))
+    if overdue_loans.exists():
+        for overdue_loan in overdue_loans:
+            if overdue_loan.status != "overdue":
+                overdue_loan.status = "overdue"
+                overdue_loan.save(update_fields=["status", "updated_at"])
+            _lock_defaulting_borrower(loan=overdue_loan)
+        return
+
+    unlocked_any = False
+    for target in _loan_lock_targets(borrower):
+        if not getattr(target, "is_locked", False):
+            continue
+        reason = (getattr(target, "lock_reason", "") or "").strip()
+        if "overdraft/loan obligation" not in reason.lower():
+            continue
+        target.is_locked = False
+        target.locked_at = None
+        target.lock_reason = ""
+        target.failed_login_attempts = 0
+        target.last_failed_login = None
+        target.save(update_fields=["is_locked", "locked_at", "lock_reason", "failed_login_attempts", "last_failed_login"])
+        unlocked_any = True
+        AccountLockAuditLog.objects.create(
+            locked_user=target,
+            reviewed_by=borrower if getattr(borrower, "is_authenticated", False) else None,
+            action="unlocked",
+            remarks="Overdraft is not overdue; account unlocked.",
+        )
+
+    if unlocked_any:
+        Loan.objects.filter(
+            borrower=borrower,
+            status__in=["active", "overdue"],
+            outstanding_balance__gt=Decimal("0.00"),
+        ).update(account_locked_due_to_default=False, updated_at=timezone.now())
+
+
+def reassess_borrower_overdraft_lock_state(borrower: User):
+    _reassess_borrower_overdraft_lock_state(borrower)
 
 
 def _lock_defaulting_borrower(*, loan: Loan, actor: User | None = None, ip_address=None, remarks_override: str = ""):

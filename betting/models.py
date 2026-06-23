@@ -132,8 +132,26 @@ class SiteConfiguration(models.Model):
     )
     
     def save(self, *args, **kwargs):
+        previous_values = None
+        if self.pk:
+            previous_values = (
+                SiteConfiguration.objects.filter(pk=self.pk)
+                .values("loan_repayment_day", "loan_repayment_time")
+                .first()
+            )
         self.pk = 1
         super(SiteConfiguration, self).save(*args, **kwargs)
+        repayment_settings_changed = bool(
+            previous_values
+            and (
+                previous_values.get("loan_repayment_day") != self.loan_repayment_day
+                or previous_values.get("loan_repayment_time") != self.loan_repayment_time
+            )
+        )
+        if repayment_settings_changed:
+            from betting.services.loan_overdraft import sync_active_loan_due_dates_with_site_configuration
+
+            transaction.on_commit(sync_active_loan_due_dates_with_site_configuration)
 
     def _safe_media_file_url(self, field_file):
         try:

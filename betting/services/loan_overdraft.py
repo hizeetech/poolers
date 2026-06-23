@@ -104,6 +104,35 @@ def _next_due_datetime(reference_dt=None):
     return due_at
 
 
+def sync_active_loan_due_dates_with_site_configuration() -> int:
+    active_loans = list(
+        Loan.objects.filter(
+            status="active",
+            outstanding_balance__gt=Decimal("0.00"),
+        ).select_related("borrower")
+    )
+    if not active_loans:
+        return 0
+
+    updated_loans = []
+    for loan in active_loans:
+        reference_dt = loan.approved_at or loan.created_at or timezone.now()
+        recalculated_due_date = _next_due_datetime(reference_dt=reference_dt)
+        if loan.due_date == recalculated_due_date:
+            continue
+        loan.due_date = recalculated_due_date
+        loan.save(update_fields=["due_date", "updated_at"])
+        updated_loans.append(loan)
+
+    for borrower in {
+        loan.borrower for loan in updated_loans
+        if getattr(loan, "borrower", None) is not None
+    }:
+        _reassess_borrower_overdraft_lock_state(borrower)
+
+    return len(updated_loans)
+
+
 def _application_open_datetime(reference_dt=None):
     settings_map = get_loan_settings()
     return _this_weeks_named_day(settings_map["application_day"], settings_map["application_time"], reference_dt=reference_dt)

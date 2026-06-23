@@ -759,6 +759,57 @@ class WalletViewTest(TestCase):
 
         self.assertEqual(loan.due_date, expected_due)
 
+    def test_site_configuration_repayment_change_updates_active_loan_due_date(self):
+        config = SiteConfiguration.load()
+        config.loan_repayment_day = 'saturday'
+        config.loan_repayment_time = datetime.strptime('15:00:00', '%H:%M:%S').time()
+        config.save(update_fields=['loan_repayment_day', 'loan_repayment_time'])
+
+        admin_user = User.objects.create_user(
+            email='config-due-admin@example.com',
+            password='testpassword',
+            user_type='admin',
+        )
+        super_agent = User.objects.create_user(
+            email='config-due-super@example.com',
+            password='testpassword',
+            user_type='super_agent',
+        )
+        agent = User.objects.create_user(
+            email='config-due-agent@example.com',
+            password='testpassword',
+            user_type='agent',
+            super_agent=super_agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+
+        issued_at = timezone.make_aware(datetime(2026, 6, 23, 10, 0, 0), timezone.get_current_timezone())
+        expected_initial_due = timezone.make_aware(datetime(2026, 6, 27, 15, 0, 0), timezone.get_current_timezone())
+        expected_updated_due = timezone.make_aware(datetime(2026, 6, 28, 17, 0, 0), timezone.get_current_timezone())
+
+        with patch('betting.services.loan_overdraft.timezone.now', return_value=issued_at):
+            loan = create_manual_overdraft(
+                actor=admin_user,
+                borrower=agent,
+                amount=Decimal('1000.00'),
+                reason='Sync active overdraft due date with site configuration test',
+            )
+
+        self.assertEqual(loan.due_date, expected_initial_due)
+
+        config.loan_repayment_day = 'sunday'
+        config.loan_repayment_time = datetime.strptime('17:00:00', '%H:%M:%S').time()
+        with self.captureOnCommitCallbacks(execute=True):
+            config.save(update_fields=['loan_repayment_day', 'loan_repayment_time'])
+
+        loan.refresh_from_db()
+        self.assertEqual(loan.due_date, expected_updated_due)
+
+        self.client.force_login(agent)
+        status_response = self.client.get(reverse('betting:api_wallet_overdraft_status'))
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()['due_date_display'], 'Sunday 05:00 PM WAT')
+
     def test_qualification_snapshot_counts_only_gateway_excess_after_remittance(self):
         super_agent = User.objects.create_user(
             email='qualificationsuper@example.com',

@@ -1353,9 +1353,16 @@
             });
         });
 
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') {
+                fetchDashboardLoanState();
+            }
+        });
+        window.addEventListener('focus', fetchDashboardLoanState);
+
         fetchDashboardLoanState();
         connectDashboardLoanSocket();
-        window.setInterval(fetchDashboardLoanState, 30000);
+        window.setInterval(fetchDashboardLoanState, 5000);
     });
 </script>
 {% endblock %}

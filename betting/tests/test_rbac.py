@@ -81,6 +81,9 @@ class RBACTests(TestCase):
         self.assertContains(response, 'dashboardLoanStatusBadge')
         self.assertContains(response, reverse('betting:api_wallet_overdraft_status'))
         self.assertContains(response, '/ws/notifications/')
+        self.assertContains(response, "window.setInterval(fetchDashboardLoanState, 5000)")
+        self.assertContains(response, "window.addEventListener('focus', fetchDashboardLoanState)")
+        self.assertContains(response, "document.addEventListener('visibilitychange'")
 
     def test_admin_access(self):
         self.client.force_login(self.admin)

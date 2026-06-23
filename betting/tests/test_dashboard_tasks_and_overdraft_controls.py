@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from betting.models import BettingPeriod, DashboardTask, Fixture, User
+from betting.models import BettingPeriod, DashboardTask, Fixture, Loan, User
 from betting.services.loan_overdraft import create_manual_overdraft
 
 
@@ -95,7 +95,7 @@ class DashboardTasksAndOverdraftControlsTests(TestCase):
         self.assertEqual(task.status, DashboardTask.STATUS.COMPLETED)
         self.assertIn("Visited all outlets", task.completion_report)
 
-    def test_cashier_place_bet_is_blocked_when_uplink_has_outstanding_overdraft(self):
+    def test_cashier_place_bet_is_blocked_only_when_uplink_overdraft_is_overdue(self):
         super_agent = User.objects.create_user(
             email="cashierblock-super@example.com",
             password="testpassword",
@@ -114,11 +114,11 @@ class DashboardTasksAndOverdraftControlsTests(TestCase):
             agent=agent,
             super_agent=super_agent,
         )
-        create_manual_overdraft(
+        loan = create_manual_overdraft(
             actor=self.admin_user,
             borrower=agent,
             amount=Decimal("5000.00"),
-            reason="Agent overdraft keeps cashier bet access disabled.",
+            reason="Agent overdraft due-state controls cashier bet access.",
         )
 
         today = timezone.localdate()
@@ -143,10 +143,13 @@ class DashboardTasksAndOverdraftControlsTests(TestCase):
         self.client.force_login(cashier)
         page_response = self.client.get(reverse("betting:fixtures_with_period", args=[period.id]))
         self.assertEqual(page_response.status_code, 200)
-        self.assertContains(
-            page_response,
-            'id="place-bet-btn" class="btn fixture-period-accent-button w-100 rounded-pill py-2 shadow-sm" disabled',
-        )
+        self.assertTrue(page_response.context["can_place_bet"])
+
+        Loan.objects.filter(pk=loan.pk).update(status="overdue", due_date=timezone.now() - timedelta(days=1))
+
+        overdue_page_response = self.client.get(reverse("betting:fixtures_with_period", args=[period.id]))
+        self.assertEqual(overdue_page_response.status_code, 200)
+        self.assertFalse(overdue_page_response.context["can_place_bet"])
 
         bet_response = self.client.post(
             reverse("betting:place_bet"),

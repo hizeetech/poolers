@@ -252,7 +252,7 @@ def user_has_overdraft_access_restriction(user: User) -> bool:
     return bool(borrower and user_has_outstanding_loan(borrower))
 
 
-def user_has_overdraft_wallet_transfer_restriction(user: User) -> bool:
+def user_has_overdraft_due_restriction(user: User) -> bool:
     borrower = get_overdraft_restriction_borrower(user)
     if not borrower:
         return False
@@ -275,11 +275,11 @@ def get_user_pending_credit_amount(user: User) -> Decimal:
 
 
 def can_user_transfer_from_wallet(user: User) -> bool:
-    return not user_has_overdraft_wallet_transfer_restriction(user)
+    return not user_has_overdraft_due_restriction(user)
 
 
 def can_user_place_bet(user: User) -> bool:
-    return getattr(user, "is_authenticated", False) and getattr(user, "user_type", "") == "cashier" and not user_has_overdraft_access_restriction(user)
+    return getattr(user, "is_authenticated", False) and getattr(user, "user_type", "") == "cashier" and not user_has_overdraft_due_restriction(user)
 
 
 def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):

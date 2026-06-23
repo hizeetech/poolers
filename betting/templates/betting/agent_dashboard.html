@@ -128,9 +128,9 @@
                 <div class="card-body">
                     <h5 class="card-title text-muted">Loan / Overdraft</h5>
                     <div class="small text-muted">Current Outstanding Overdraft</div>
-                    <div class="fs-3 fw-bold text-danger">₦{{ outstanding_overdraft_amount|floatformat:2 }}</div>
+                    <div class="fs-3 fw-bold text-danger" id="dashboardLoanOutstandingAmount">₦{{ outstanding_overdraft_amount|floatformat:2 }}</div>
                     <div class="small text-muted mt-3">Repayment Due Date</div>
-                    <div class="fw-semibold">
+                    <div class="fw-semibold" id="dashboardLoanDueDate">
                         {% if dashboard_loan and dashboard_loan.due_date %}
                             {{ dashboard_loan.due_date|date:"l g:i A T" }}
                         {% else %}
@@ -141,12 +141,12 @@
                     <div>
                         {% if dashboard_loan %}
                             {% if dashboard_loan.status == 'overdue' or dashboard_loan.status == 'defaulted' %}
-                            <span class="badge bg-danger">Overdue</span>
+                            <span class="badge bg-danger" id="dashboardLoanStatusBadge">Overdue</span>
                             {% else %}
-                            <span class="badge bg-warning text-dark">Outstanding</span>
+                            <span class="badge bg-warning text-dark" id="dashboardLoanStatusBadge">Outstanding</span>
                             {% endif %}
                         {% else %}
-                        <span class="badge bg-success">Cleared</span>
+                        <span class="badge bg-success" id="dashboardLoanStatusBadge">Cleared</span>
                         {% endif %}
                     </div>
                 </div>
@@ -1200,10 +1200,115 @@
         const searchInput = document.getElementById('ticketSearchInput');
         const statusFilter = document.getElementById('ticketStatusFilter');
         const tableBody = document.getElementById('downlineTicketsBody');
+        const dashboardLoanOutstandingAmount = document.getElementById('dashboardLoanOutstandingAmount');
+        const dashboardLoanDueDate = document.getElementById('dashboardLoanDueDate');
+        const dashboardLoanStatusBadge = document.getElementById('dashboardLoanStatusBadge');
+
+        const formatNaira = (value) => {
+            const numeric = Number(value || 0);
+            return `₦${new Intl.NumberFormat('en-NG', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(Number.isFinite(numeric) ? numeric : 0)}`;
+        };
+
+        const syncDashboardLoanCard = (payload) => {
+            if (!payload) return;
+            if (dashboardLoanOutstandingAmount && typeof payload.outstanding_overdraft_amount !== 'undefined') {
+                dashboardLoanOutstandingAmount.textContent = formatNaira(payload.outstanding_overdraft_amount);
+            }
+            if (dashboardLoanDueDate && typeof payload.due_date_display !== 'undefined') {
+                dashboardLoanDueDate.textContent = payload.due_date_display || '-';
+            }
+            if (dashboardLoanStatusBadge && typeof payload.repayment_status !== 'undefined') {
+                dashboardLoanStatusBadge.textContent = payload.repayment_status;
+                dashboardLoanStatusBadge.className = 'badge';
+                if (payload.repayment_badge === 'danger') {
+                    dashboardLoanStatusBadge.classList.add('bg-danger');
+                } else if (payload.repayment_badge === 'warning') {
+                    dashboardLoanStatusBadge.classList.add('bg-warning', 'text-dark');
+                } else if (payload.repayment_badge === 'info') {
+                    dashboardLoanStatusBadge.classList.add('bg-info', 'text-dark');
+                } else {
+                    dashboardLoanStatusBadge.classList.add('bg-success');
+                }
+            }
+        };
+
+        const fetchDashboardLoanState = async () => {
+            if (!dashboardLoanOutstandingAmount && !dashboardLoanDueDate && !dashboardLoanStatusBadge) {
+                return;
+            }
+            try {
+                const response = await fetch('{% url "betting:api_wallet_overdraft_status" %}', {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.status === 'success') {
+                    syncDashboardLoanCard(data);
+                }
+            } catch (error) {
+                console.debug('Dashboard overdraft status refresh failed:', error);
+            }
+        };
+
+        const connectDashboardLoanSocket = () => {
+            if (!dashboardLoanOutstandingAmount && !dashboardLoanDueDate && !dashboardLoanStatusBadge) {
+                return;
+            }
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
+            let socket = null;
+            let reconnectTimer = null;
+
+            const scheduleReconnect = () => {
+                if (reconnectTimer) return;
+                reconnectTimer = window.setTimeout(() => {
+                    reconnectTimer = null;
+                    connect();
+                }, 3000);
+            };
+
+            const connect = () => {
+                try {
+                    socket = new WebSocket(wsUrl);
+                } catch (error) {
+                    scheduleReconnect();
+                    return;
+                }
+
+                socket.onopen = function () {
+                    fetchDashboardLoanState();
+                };
+
+                socket.onmessage = function (event) {
+                    try {
+                        const data = JSON.parse(event.data || '{}');
+                        if (data.type === 'wallet_event' && data.payload) {
+                            syncDashboardLoanCard(data.payload);
+                        }
+                    } catch (error) {
+                        console.debug('Dashboard overdraft socket parse failed:', error);
+                    }
+                };
+
+                socket.onclose = function () {
+                    scheduleReconnect();
+                };
+
+                socket.onerror = function () {
+                    try {
+                        socket.close();
+                    } catch (error) {
+                        scheduleReconnect();
+                    }
+                };
+            };
+
+            connect();
+        };
         
-        if (!tableBody) return; // Exit if no tickets table
-        
-        const tableRows = tableBody.querySelectorAll('.ticket-row');
+        const tableRows = tableBody ? tableBody.querySelectorAll('.ticket-row') : [];
 
         function filterTickets() {
             const searchTerm = searchInput.value.toLowerCase();
@@ -1247,6 +1352,10 @@
                 }
             });
         });
+
+        fetchDashboardLoanState();
+        connectDashboardLoanSocket();
+        window.setInterval(fetchDashboardLoanState, 30000);
     });
 </script>
 {% endblock %}

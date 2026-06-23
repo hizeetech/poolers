@@ -71,6 +71,17 @@ class RBACTests(TestCase):
             # If URL doesn't exist, we skip this check but it's good to know
             pass
 
+    def test_agent_dashboard_includes_live_overdraft_refresh_hooks(self):
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse('betting:agent_dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'dashboardLoanOutstandingAmount')
+        self.assertContains(response, 'dashboardLoanDueDate')
+        self.assertContains(response, 'dashboardLoanStatusBadge')
+        self.assertContains(response, reverse('betting:api_wallet_overdraft_status'))
+        self.assertContains(response, '/ws/notifications/')
+
     def test_admin_access(self):
         self.client.force_login(self.admin)
         

@@ -5171,6 +5171,43 @@ def wallet_view(request):
     wallet, created = Wallet.objects.get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
     if created:
         logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
+    # #region debug-point A:wallet-entry
+    def _dbg_wallet_500(hypothesis_id, message, data=None):
+        import urllib.request
+        _p = '.dbg/wallet-page-500.env'
+        _u, _s = 'http://127.0.0.1:7777/event', 'wallet-page-500'
+        try:
+            with open(_p, 'r', encoding='utf-8') as _f:
+                _c = _f.read()
+            _u = next((l.split('=', 1)[1] for l in _c.splitlines() if l.startswith('DEBUG_SERVER_URL=')), _u)
+            _s = next((l.split('=', 1)[1] for l in _c.splitlines() if l.startswith('DEBUG_SESSION_ID=')), _s)
+        except Exception:
+            pass
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    _u,
+                    data=json.dumps({
+                        "sessionId": _s,
+                        "runId": "pre-fix",
+                        "hypothesisId": hypothesis_id,
+                        "location": "betting/views.py:wallet_view",
+                        "msg": f"[DEBUG] {message}",
+                        "data": data or {},
+                        "ts": int(time.time() * 1000),
+                    }).encode(),
+                    headers={"Content-Type": "application/json"},
+                ),
+                timeout=1,
+            ).read()
+        except Exception:
+            pass
+    _dbg_wallet_500("A", "wallet_view entered", {
+        "user_id": getattr(request.user, "id", None),
+        "username": getattr(request.user, "username", ""),
+        "query_string": request.META.get("QUERY_STRING", ""),
+    })
+    # #endregion
     tx_page_number = request.GET.get("tx_page") or "1"
     tx_page_size_raw = request.GET.get("tx_page_size") or "50"
     tx_start_date_str = (request.GET.get("tx_start_date") or "").strip()
@@ -5241,6 +5278,15 @@ def wallet_view(request):
                 for pk in MonthlyNetworkCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
             ]
             commission_refs = weekly_refs + monthly_refs
+            # #region debug-point B:commission-filter
+            _dbg_wallet_500("B", "wallet commission period filter prepared", {
+                "period_id": period_id,
+                "period_display": commission_period_display,
+                "weekly_ref_count": len(weekly_refs),
+                "monthly_ref_count": len(monthly_refs),
+                "combined_ref_count": len(commission_refs),
+            })
+            # #endregion
             ledger_qs = ledger_qs.filter(
                 (
                     Q(reference__in=commission_refs)
@@ -5255,12 +5301,20 @@ def wallet_view(request):
             )
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
+    # #region debug-point C:paginator
+    _dbg_wallet_500("C", "wallet paginator resolved", {
+        "page_number": tx_page.number,
+        "page_size": tx_page_size,
+        "page_len": len(tx_page.object_list),
+    })
+    # #endregion
     commission_period_by_ref = {}
     page_refs = [str(ref).strip() for ref in tx_page.object_list.values_list("reference", flat=True) if str(ref).strip()]
-    if page_refs:
-        for rec in WeeklyAgentCommission.objects.filter(id__in=page_refs).select_related("period"):
+    numeric_page_refs = [ref for ref in page_refs if ref.isdigit()]
+    if numeric_page_refs:
+        for rec in WeeklyAgentCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
             commission_period_by_ref[str(rec.id)] = str(rec.period)
-        for rec in MonthlyNetworkCommission.objects.filter(id__in=page_refs).select_related("period"):
+        for rec in MonthlyNetworkCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
             commission_period_by_ref[str(rec.id)] = str(rec.period)
     recent_transactions = []
     for entry in tx_page.object_list:
@@ -5296,19 +5350,33 @@ def wallet_view(request):
             except Exception:
                 details_url = ""
 
-        commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
-        if not commission_period_label:
-            text_sources = " ".join(
-                [
-                    getattr(tx, "description", "") or "",
-                    entry.reason or "",
-                ]
-            )
-            for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
-                period_text = str(period_obj)
-                if period_text and period_text in text_sources:
-                    commission_period_label = period_text
-                    break
+        try:
+            commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
+            if not commission_period_label:
+                text_sources = " ".join(
+                    [
+                        getattr(tx, "description", "") or "",
+                        entry.reason or "",
+                    ]
+                )
+                for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
+                    period_text = str(period_obj)
+                    if period_text and period_text in text_sources:
+                        commission_period_label = period_text
+                        break
+        except Exception as exc:
+            # #region debug-point D:label-resolution-error
+            _dbg_wallet_500("D", "wallet commission period label resolution failed", {
+                "entry_id": getattr(entry, "id", None),
+                "reference": getattr(entry, "reference", ""),
+                "tx_id": getattr(tx, "id", None) if tx else None,
+                "tx_description": getattr(tx, "description", None) if tx else None,
+                "reason": getattr(entry, "reason", None),
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            })
+            # #endregion
+            raise
         recent_transactions.append(
             {
                 "id": str(getattr(tx, "id", "")) if tx else str(entry.id),
@@ -8293,11 +8361,12 @@ def agent_wallet_report(request):
 
     if export_format in {"csv", "xlsx"}:
         export_refs = [str(ref).strip() for ref in ledger_qs.values_list("reference", flat=True) if str(ref).strip()]
+        numeric_export_refs = [ref for ref in export_refs if ref.isdigit()]
         commission_period_by_ref = {}
-        if export_refs:
-            for rec in WeeklyAgentCommission.objects.filter(id__in=export_refs).select_related("period"):
+        if numeric_export_refs:
+            for rec in WeeklyAgentCommission.objects.filter(id__in=numeric_export_refs).select_related("period"):
                 commission_period_by_ref[str(rec.id)] = str(rec.period)
-            for rec in MonthlyNetworkCommission.objects.filter(id__in=export_refs).select_related("period"):
+            for rec in MonthlyNetworkCommission.objects.filter(id__in=numeric_export_refs).select_related("period"):
                 commission_period_by_ref[str(rec.id)] = str(rec.period)
         rows = []
         for entry in ledger_qs:
@@ -8371,11 +8440,12 @@ def agent_wallet_report(request):
     paginator = Paginator(ledger_qs, 50)
     entries_page = paginator.get_page(page_number)
     page_refs = [str(ref).strip() for ref in entries_page.object_list.values_list("reference", flat=True) if str(ref).strip()]
+    numeric_page_refs = [ref for ref in page_refs if ref.isdigit()]
     commission_period_by_ref = {}
-    if page_refs:
-        for rec in WeeklyAgentCommission.objects.filter(id__in=page_refs).select_related("period"):
+    if numeric_page_refs:
+        for rec in WeeklyAgentCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
             commission_period_by_ref[str(rec.id)] = str(rec.period)
-        for rec in MonthlyNetworkCommission.objects.filter(id__in=page_refs).select_related("period"):
+        for rec in MonthlyNetworkCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
             commission_period_by_ref[str(rec.id)] = str(rec.period)
     for entry in entries_page.object_list:
         commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")

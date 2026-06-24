@@ -17,7 +17,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch, CharField
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -5179,6 +5179,7 @@ def wallet_view(request):
     tx_direction = (request.GET.get("tx_direction") or "all").strip()
     tx_status = (request.GET.get("tx_status") or "all").strip()
     tx_q = (request.GET.get("tx_q") or "").strip()
+    tx_commission_period = (request.GET.get("tx_commission_period") or "all").strip()
     try:
         tx_page_size = max(10, min(200, int(tx_page_size_raw)))
     except Exception:
@@ -5218,6 +5219,35 @@ def wallet_view(request):
             | Q(reason__icontains=tx_q)
             | Q(transaction__description__icontains=tx_q)
         )
+    if tx_commission_period and tx_commission_period != "all":
+        try:
+            period_id = int(tx_commission_period)
+        except Exception:
+            period_id = None
+        if period_id:
+            from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
+            from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
+
+            weekly_refs = (
+                WeeklyAgentCommissionModel.objects.filter(period_id=period_id)
+                .annotate(ref=Cast("id", output_field=CharField()))
+                .values("ref")
+            )
+            monthly_refs = (
+                MonthlyNetworkCommissionModel.objects.filter(period_id=period_id)
+                .annotate(ref=Cast("id", output_field=CharField()))
+                .values("ref")
+            )
+            ledger_qs = ledger_qs.filter(
+                Q(
+                    metadata__type__in=["weekly_commission", "weekly_commission_adjusted"],
+                    reference__in=Subquery(weekly_refs),
+                )
+                | Q(
+                    metadata__type__in=["monthly_network_commission", "monthly_network_commission_adjusted"],
+                    reference__in=Subquery(monthly_refs),
+                )
+            )
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
     recent_transactions = []
@@ -5322,12 +5352,14 @@ def wallet_view(request):
         'recent_transactions_page_size': tx_page_size,
         'transaction_types': Transaction.TRANSACTION_TYPES,
         'transaction_statuses': Transaction.STATUS_CHOICES,
+        'commission_period_options': CommissionPeriod.objects.order_by('-start_date')[:60],
         'tx_start_date_filter': tx_start_date_str,
         'tx_end_date_filter': tx_end_date_str,
         'tx_type_filter': tx_type,
         'tx_direction_filter': tx_direction,
         'tx_status_filter': tx_status,
         'tx_q_filter': tx_q,
+        'tx_commission_period_filter': tx_commission_period,
         'initiate_deposit_form': InitiateDepositForm(),
         'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
         'wallet_transfer_form': wallet_transfer_form,
@@ -8128,6 +8160,7 @@ def agent_wallet_report(request):
     start_date_str = (request.GET.get("start_date") or "").strip()
     end_date_str = (request.GET.get("end_date") or "").strip()
     q = (request.GET.get("q") or "").strip()
+    commission_period_filter = (request.GET.get("commission_period") or "all").strip()
     export_format = (request.GET.get("format") or "").strip().lower()
     page_number = request.GET.get("page") or "1"
 
@@ -8194,6 +8227,36 @@ def agent_wallet_report(request):
             | Q(user__username__icontains=q)
         )
 
+    if commission_period_filter and commission_period_filter != "all":
+        try:
+            period_id = int(commission_period_filter)
+        except Exception:
+            period_id = None
+        if period_id:
+            from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
+            from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
+
+            weekly_refs = (
+                WeeklyAgentCommissionModel.objects.filter(period_id=period_id)
+                .annotate(ref=Cast("id", output_field=CharField()))
+                .values("ref")
+            )
+            monthly_refs = (
+                MonthlyNetworkCommissionModel.objects.filter(period_id=period_id)
+                .annotate(ref=Cast("id", output_field=CharField()))
+                .values("ref")
+            )
+            ledger_qs = ledger_qs.filter(
+                Q(
+                    metadata__type__in=["weekly_commission", "weekly_commission_adjusted"],
+                    reference__in=Subquery(weekly_refs),
+                )
+                | Q(
+                    metadata__type__in=["monthly_network_commission", "monthly_network_commission_adjusted"],
+                    reference__in=Subquery(monthly_refs),
+                )
+            )
+
     if export_format in {"csv", "xlsx"}:
         rows = []
         for entry in ledger_qs:
@@ -8257,6 +8320,7 @@ def agent_wallet_report(request):
         "entries_page": entries_page,
         "transaction_types": Transaction.TRANSACTION_TYPES,
         "transaction_statuses": Transaction.STATUS_CHOICES,
+        "commission_period_options": CommissionPeriod.objects.order_by("-start_date")[:120],
         "all_users": report_users_qs.order_by("email"),
         "current_user_filter": user_filter,
         "current_type_filter": type_filter,
@@ -8265,6 +8329,7 @@ def agent_wallet_report(request):
         "start_date_filter": start_date_str,
         "end_date_filter": end_date_str,
         "q_filter": q,
+        "current_commission_period_filter": commission_period_filter,
     }
     return render(request, "betting/agent/wallet_report.html", context)
 

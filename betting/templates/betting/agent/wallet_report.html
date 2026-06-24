@@ -41,6 +41,15 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label small text-muted mb-1">Commission Period</label>
+                <select class="form-select form-select-sm" name="commission_period">
+                    <option value="all" {% if current_commission_period_filter == 'all' %}selected{% endif %}>All</option>
+                    {% for p in commission_period_options %}
+                        <option value="{{ p.id }}" {% if current_commission_period_filter == p.id|stringformat:"s" %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="col-12 col-md-2">
                 <label class="form-label small text-muted mb-1">Direction</label>
                 <select class="form-select form-select-sm" name="direction">
@@ -78,8 +87,8 @@
             </div>
         </form>
         <div class="d-flex flex-wrap justify-content-end gap-2 mt-3">
-            <a class="btn btn-sm btn-outline-success" href="?format=csv&user={{ current_user_filter }}&type={{ current_type_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Export CSV</a>
-            <a class="btn btn-sm btn-outline-primary" href="?format=xlsx&user={{ current_user_filter }}&type={{ current_type_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Export XLSX</a>
+            <a class="btn btn-sm btn-outline-success" href="?format=csv&user={{ current_user_filter }}&type={{ current_type_filter }}&commission_period={{ current_commission_period_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Export CSV</a>
+            <a class="btn btn-sm btn-outline-primary" href="?format=xlsx&user={{ current_user_filter }}&type={{ current_type_filter }}&commission_period={{ current_commission_period_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Export XLSX</a>
         </div>
     </div>
 </div>
@@ -156,12 +165,12 @@
                         </div>
                         <div class="btn-group" role="group" aria-label="Pagination">
                             {% if entries_page.has_previous %}
-                            <a class="btn btn-sm btn-outline-secondary" href="?page={{ entries_page.previous_page_number }}&user={{ current_user_filter }}&type={{ current_type_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Previous</a>
+                            <a class="btn btn-sm btn-outline-secondary" href="?page={{ entries_page.previous_page_number }}&user={{ current_user_filter }}&type={{ current_type_filter }}&commission_period={{ current_commission_period_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Previous</a>
                             {% else %}
                             <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
                             {% endif %}
                             {% if entries_page.has_next %}
-                            <a class="btn btn-sm btn-outline-secondary" href="?page={{ entries_page.next_page_number }}&user={{ current_user_filter }}&type={{ current_type_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Next</a>
+                            <a class="btn btn-sm btn-outline-secondary" href="?page={{ entries_page.next_page_number }}&user={{ current_user_filter }}&type={{ current_type_filter }}&commission_period={{ current_commission_period_filter }}&direction={{ current_direction_filter }}&status={{ current_status_filter }}&start_date={{ start_date_filter }}&end_date={{ end_date_filter }}&q={{ q_filter|urlencode }}">Next</a>
                             {% else %}
                             <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>
                             {% endif %}

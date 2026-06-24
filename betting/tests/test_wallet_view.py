@@ -13,6 +13,8 @@ from betting.services.loan_overdraft import (
     create_manual_overdraft,
     remit_overdraft_pending_credit,
 )
+from commission.models import CommissionPeriod, WeeklyAgentCommission
+from commission.services import pay_weekly_commission
 from betting.tasks import enforce_due_loans_task
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -152,6 +154,45 @@ class WalletViewTest(TestCase):
         self.assertEqual(response["Content-Type"], "text/csv")
         self.assertIn("attachment;", response.get("Content-Disposition", ""))
         self.assertIn("wr-cashier@test.com", response.content.decode("utf-8"))
+
+    def test_wallet_recent_transactions_can_filter_by_commission_period(self):
+        agent = User.objects.create_user(
+            email="cp-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+            username="cp_agent",
+        )
+        admin_user = User.objects.create_user(
+            email="cp-admin@test.com",
+            password="testpassword",
+            user_type="admin",
+            username="cp_admin",
+            is_staff=True,
+            is_superuser=True,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+        Wallet.objects.get_or_create(user=admin_user, defaults={"balance": Decimal("1000.00")})
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+        )
+        comm = WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period,
+            commission_total_amount=Decimal("50.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+        ok, _msg = pay_weekly_commission(comm, actor=admin_user)
+        self.assertTrue(ok)
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:wallet"), {"tx_commission_period": str(period.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Weekly Commission")
 
     def test_apply_repayment_reserves_new_credit_when_outstanding_loan_exists(self):
         super_agent = User.objects.create_user(

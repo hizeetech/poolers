@@ -11,6 +11,7 @@ from django.utils import timezone
 from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
 from commission.models import CommissionPeriod, NetworkCommissionSettings, WeeklyAgentCommission
 from commission.services import calculate_weekly_agent_commission, pay_weekly_commission_amount
+from commission.tasks import get_current_weekly_period_bounds
 from void_requests.models import TicketVoidRequest
 from void_requests.services import approve_and_void_request
 
@@ -610,7 +611,7 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(recalc.status, "paid")
         self.assertEqual(recalc.amount_paid, Decimal("100.00"))
 
-    def test_agent_dashboard_pending_commission_is_only_latest_weekly_period(self):
+    def test_agent_dashboard_pending_commission_is_only_current_weekly_period(self):
         today = timezone.localdate()
         older = CommissionPeriod.objects.create(
             period_type="weekly",
@@ -621,6 +622,12 @@ class TicketTransactionLedgerTests(TestCase):
             period_type="weekly",
             start_date=today - timedelta(days=14),
             end_date=today - timedelta(days=8),
+        )
+        current_start, current_end = get_current_weekly_period_bounds(reference_date=today)
+        current = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=current_start,
+            end_date=current_end,
         )
         WeeklyAgentCommission.objects.create(
             agent=self.agent,
@@ -640,8 +647,18 @@ class TicketTransactionLedgerTests(TestCase):
             status="pending",
             amount_paid=Decimal("0.00"),
         )
+        WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=current,
+            commission_total_amount=Decimal("30.00"),
+            commission_single_amount=Decimal("10.00"),
+            commission_multiple_amount=Decimal("20.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
 
         self.client.force_login(self.agent)
         response = self.client.get(reverse("betting:agent_dashboard"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["pending_commission"], Decimal("20.00"))
+        self.assertEqual(response.context["pending_commission"], Decimal("30.00"))
+        self.assertEqual(response.context["pending_commission_period_label"], str(current))

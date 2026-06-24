@@ -149,6 +149,7 @@ urlpatterns = [
     path('api/log-ticket-reprint/', views.log_ticket_reprint, name='log_ticket_reprint'),
     path('api/user-wallet/', views.api_user_wallet, name='api_user_wallet'),
     path('api/wallet-overdraft-status/', views.api_wallet_overdraft_status, name='api_wallet_overdraft_status'),
+    path('api/pending-commission-card/', views.api_pending_commission_card, name='api_pending_commission_card'),
     path('api/betting-limits/', views.api_betting_limits, name='api_betting_limits'),
     path('api/downline-wallet-balance/', views.api_downline_wallet_balance, name='api_downline_wallet_balance'),
     path('api/deposit/initiate/', views.api_initiate_deposit, name='api_initiate_deposit'),

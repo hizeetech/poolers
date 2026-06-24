@@ -175,9 +175,10 @@
             <div class="card app-glass-card shadow-sm h-100 rounded-3">
                 <div class="card-body">
                     <h5 class="card-title text-muted">Pending Commission</h5>
-                    <p class="card-text fs-3 fw-bold text-warning">₦{{ pending_commission|floatformat:2 }}</p>
+                    <p class="card-text fs-3 fw-bold text-warning" id="dashboardPendingCommissionAmount">₦{{ pending_commission|floatformat:2 }}</p>
+                    <div class="text-muted small" id="dashboardPendingCommissionPeriod">{{ pending_commission_period_label|default:"" }}</div>
                     {% if user.user_type == 'agent' %}
-                    <div class="text-muted small">Single: ₦{{ pending_commission_single|floatformat:2 }} • Multiple: ₦{{ pending_commission_multiple|floatformat:2 }}</div>
+                    <div class="text-muted small" id="dashboardPendingCommissionBreakdown">Single: ₦{{ pending_commission_single|floatformat:2 }} • Multiple: ₦{{ pending_commission_multiple|floatformat:2 }}</div>
                     {% endif %}
                 </div>
             </div>
@@ -1203,6 +1204,9 @@
         const dashboardLoanOutstandingAmount = document.getElementById('dashboardLoanOutstandingAmount');
         const dashboardLoanDueDate = document.getElementById('dashboardLoanDueDate');
         const dashboardLoanStatusBadge = document.getElementById('dashboardLoanStatusBadge');
+        const dashboardPendingCommissionAmount = document.getElementById('dashboardPendingCommissionAmount');
+        const dashboardPendingCommissionBreakdown = document.getElementById('dashboardPendingCommissionBreakdown');
+        const dashboardPendingCommissionPeriod = document.getElementById('dashboardPendingCommissionPeriod');
 
         const formatNaira = (value) => {
             const numeric = Number(value || 0);
@@ -1249,6 +1253,42 @@
                 }
             } catch (error) {
                 console.debug('Dashboard overdraft status refresh failed:', error);
+            }
+        };
+
+        const syncDashboardPendingCommissionCard = (payload) => {
+            if (!payload) return;
+            if (dashboardPendingCommissionAmount && typeof payload.pending_commission !== 'undefined') {
+                dashboardPendingCommissionAmount.textContent = formatNaira(payload.pending_commission);
+            }
+            if (dashboardPendingCommissionBreakdown && typeof payload.pending_commission_single !== 'undefined' && typeof payload.pending_commission_multiple !== 'undefined') {
+                dashboardPendingCommissionBreakdown.textContent = `Single: ${formatNaira(payload.pending_commission_single)} • Multiple: ${formatNaira(payload.pending_commission_multiple)}`;
+            }
+            if (dashboardPendingCommissionPeriod && typeof payload.period_label !== 'undefined') {
+                dashboardPendingCommissionPeriod.textContent = payload.period_label || '';
+            }
+        };
+
+        const fetchDashboardPendingCommissionState = async () => {
+            if (!dashboardPendingCommissionAmount && !dashboardPendingCommissionBreakdown && !dashboardPendingCommissionPeriod) {
+                return;
+            }
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                const url = new URL('{% url "betting:api_pending_commission_card" %}', window.location.origin);
+                const endDate = params.get('end_date');
+                if (endDate) {
+                    url.searchParams.set('end_date', endDate);
+                }
+                const response = await fetch(url.toString(), {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.status === 'success') {
+                    syncDashboardPendingCommissionCard(data);
+                }
+            } catch (error) {
+                console.debug('Dashboard pending commission refresh failed:', error);
             }
         };
 
@@ -1356,13 +1396,22 @@
         document.addEventListener('visibilitychange', function () {
             if (document.visibilityState === 'visible') {
                 fetchDashboardLoanState();
+                fetchDashboardPendingCommissionState();
             }
         });
-        window.addEventListener('focus', fetchDashboardLoanState);
+        window.addEventListener('focus', function () {
+            fetchDashboardLoanState();
+            fetchDashboardPendingCommissionState();
+        });
 
-        fetchDashboardLoanState();
+        const refreshDashboardCards = () => {
+            fetchDashboardLoanState();
+            fetchDashboardPendingCommissionState();
+        };
+
+        refreshDashboardCards();
         connectDashboardLoanSocket();
-        window.setInterval(fetchDashboardLoanState, 5000);
+        window.setInterval(refreshDashboardCards, 5000);
     });
 </script>
 {% endblock %}

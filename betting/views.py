@@ -5582,6 +5582,83 @@ def api_wallet_overdraft_status(request):
 
 
 @login_required
+def api_pending_commission_card(request):
+    user = request.user
+    if user.user_type != 'agent':
+        return JsonResponse({'detail': 'forbidden'}, status=403)
+
+    end_date_str = (request.GET.get('end_date') or '').strip()
+    ref_date = timezone.localdate()
+    if end_date_str:
+        try:
+            ref_date = date.fromisoformat(end_date_str)
+        except Exception:
+            ref_date = timezone.localdate()
+
+    pending_period = None
+    try:
+        from commission.tasks import ensure_weekly_commission_period_for_date
+    except Exception:
+        ensure_weekly_commission_period_for_date = None
+    if ensure_weekly_commission_period_for_date is not None:
+        pending_period, _created = ensure_weekly_commission_period_for_date(reference_date=ref_date)
+    if pending_period is None:
+        pending_period = (
+            CommissionPeriod.objects.filter(period_type='weekly', start_date__lte=ref_date, end_date__gte=ref_date)
+            .order_by('-start_date', '-end_date')
+            .first()
+        )
+
+    try:
+        from commission.services import calculate_weekly_agent_commission_data
+    except Exception:
+        calculate_weekly_agent_commission_data = None
+    calc = {}
+    if calculate_weekly_agent_commission_data is not None and pending_period is not None:
+        calc = calculate_weekly_agent_commission_data(user, pending_period, include_breakdown=True) or {}
+
+    pending_record = WeeklyAgentCommission.objects.filter(agent=user, period=pending_period).first() if pending_period is not None else None
+    record_paid_amt = (pending_record.amount_paid or Decimal('0.00')) if pending_record is not None else Decimal('0.00')
+    record_status = (pending_record.status or '').strip() if pending_record is not None else ''
+
+    calc_total = (calc.get('commission_total_amount') if calc else None)
+    calc_single = (calc.get('commission_single_amount') if calc else None)
+    calc_multiple = (calc.get('commission_multiple_amount') if calc else None)
+    total_amt = (calc_total if calc_total is not None else (pending_record.commission_total_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+    single_amt = (calc_single if calc_single is not None else (pending_record.commission_single_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+    multiple_amt = (calc_multiple if calc_multiple is not None else (pending_record.commission_multiple_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+
+    if record_status == 'paid':
+        pending_total = Decimal('0.00')
+        pending_single = Decimal('0.00')
+        pending_multiple = Decimal('0.00')
+    else:
+        pending_total = max(Decimal('0.00'), total_amt - record_paid_amt)
+        denom = total_amt or (single_amt + multiple_amt) or Decimal('0.00')
+        if denom > 0 and record_paid_amt > 0:
+            single_paid_share = (record_paid_amt * (single_amt / denom))
+            multiple_paid_share = (record_paid_amt * (multiple_amt / denom))
+        else:
+            single_paid_share = Decimal('0.00')
+            multiple_paid_share = Decimal('0.00')
+        pending_single = max(Decimal('0.00'), single_amt - single_paid_share)
+        pending_multiple = max(Decimal('0.00'), multiple_amt - multiple_paid_share)
+
+    is_live = bool(calc.get('is_live_period')) if calc else bool(pending_period and pending_period.start_date <= timezone.localdate() <= pending_period.end_date)
+
+    return JsonResponse(
+        {
+            'status': 'success',
+            'period_label': str(pending_period) if pending_period is not None else '',
+            'is_live_period': is_live,
+            'pending_commission': float(pending_total),
+            'pending_commission_single': float(pending_single),
+            'pending_commission_multiple': float(pending_multiple),
+        }
+    )
+
+
+@login_required
 @require_POST
 def remit_overdraft_pending_credit_view(request):
     if request.user.user_type not in ['agent', 'super_agent']:
@@ -7733,6 +7810,8 @@ def agent_dashboard(request):
     pending_commission = Decimal('0.00')
     pending_commission_single = Decimal('0.00')
     pending_commission_multiple = Decimal('0.00')
+    pending_commission_period_label = ''
+    pending_commission_is_live_period = False
     monthly_commission_amount = Decimal('0.00')
     monthly_commission_percent = Decimal('0.00')
     monthly_commission_period_start = start_of_month
@@ -7743,58 +7822,56 @@ def agent_dashboard(request):
         if metrics_start and metrics_end:
             weekly_comms = weekly_comms.filter(period__end_date__gte=metrics_start, period__start_date__lte=metrics_end)
         total_commission_paid = weekly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
-        latest_weekly_period = (
-            CommissionPeriod.objects.filter(period_type='weekly', end_date__lte=today, is_active=True)
-            .order_by('-end_date', '-start_date')
-            .first()
-        )
-        if latest_weekly_period:
-            latest_comm = WeeklyAgentCommission.objects.filter(agent=user, period=latest_weekly_period).first()
-            if latest_comm and latest_comm.status in ['pending', 'approved']:
-                pending_total = latest_comm.commission_total_amount or Decimal('0.00')
-                pending_paid = latest_comm.amount_paid or Decimal('0.00')
-                pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
+        pending_ref_date = metrics_end or today
+        pending_period = None
+        try:
+            from commission.tasks import ensure_weekly_commission_period_for_date
+        except Exception:
+            ensure_weekly_commission_period_for_date = None
+        if ensure_weekly_commission_period_for_date is not None:
+            pending_period, _created = ensure_weekly_commission_period_for_date(reference_date=pending_ref_date)
+        if pending_period is None:
+            pending_period = (
+                CommissionPeriod.objects.filter(period_type='weekly', start_date__lte=pending_ref_date, end_date__gte=pending_ref_date)
+                .order_by('-start_date', '-end_date')
+                .first()
+            )
+        if pending_period is not None:
+            pending_commission_period_label = str(pending_period)
+        try:
+            from commission.services import calculate_weekly_agent_commission_data
+        except Exception:
+            calculate_weekly_agent_commission_data = None
+        calc = {}
+        if calculate_weekly_agent_commission_data is not None and pending_period is not None:
+            calc = calculate_weekly_agent_commission_data(user, pending_period, include_breakdown=True) or {}
+        pending_commission_is_live_period = bool(calc.get('is_live_period')) if calc else bool(pending_period and pending_period.start_date <= timezone.localdate() <= pending_period.end_date)
 
-                single_amt = latest_comm.commission_single_amount or Decimal('0.00')
-                multiple_amt = latest_comm.commission_multiple_amount or Decimal('0.00')
-                total_amt = pending_total or (single_amt + multiple_amt) or Decimal('0.00')
-                paid_amt = pending_paid
-                if total_amt > 0 and paid_amt > 0:
-                    single_paid_share = (paid_amt * (single_amt / total_amt))
-                    multiple_paid_share = (paid_amt * (multiple_amt / total_amt))
-                else:
-                    single_paid_share = Decimal('0.00')
-                    multiple_paid_share = Decimal('0.00')
-                pending_commission_single = max(Decimal('0.00'), single_amt - single_paid_share)
-                pending_commission_multiple = max(Decimal('0.00'), multiple_amt - multiple_paid_share)
-        if metrics_start and metrics_end and not weekly_comms.exists():
-            try:
-                from commission.services import calculate_weekly_agent_commission_data
-            except Exception:
-                calculate_weekly_agent_commission_data = None
-            if calculate_weekly_agent_commission_data is not None:
-                try:
-                    from commission.models import CommissionPeriod as CommissionPeriodModel
-                except Exception:
-                    CommissionPeriodModel = None
+        pending_record = WeeklyAgentCommission.objects.filter(agent=user, period=pending_period).first() if pending_period is not None else None
+        record_paid_amt = (pending_record.amount_paid or Decimal('0.00')) if pending_record is not None else Decimal('0.00')
+        record_status = (pending_record.status or '').strip() if pending_record is not None else ''
 
-                period_for_calc = None
-                if CommissionPeriodModel is not None:
-                    period_for_calc = CommissionPeriodModel.objects.filter(
-                        period_type='weekly',
-                        start_date=metrics_start,
-                        end_date=metrics_end,
-                    ).first()
-                if period_for_calc is None:
-                    class CommissionPeriodStub:
-                        pass
-                    period_for_calc = CommissionPeriodStub()
-                    period_for_calc.start_date = metrics_start
-                    period_for_calc.end_date = metrics_end
-                calc = calculate_weekly_agent_commission_data(user, period_for_calc, include_breakdown=True) or {}
-                pending_commission = (calc.get("commission_total_amount") or Decimal("0.00"))
-                pending_commission_single = (calc.get("commission_single_amount") or Decimal("0.00"))
-                pending_commission_multiple = (calc.get("commission_multiple_amount") or Decimal("0.00"))
+        calc_total = (calc.get('commission_total_amount') if calc else None)
+        calc_single = (calc.get('commission_single_amount') if calc else None)
+        calc_multiple = (calc.get('commission_multiple_amount') if calc else None)
+        total_amt = (calc_total if calc_total is not None else (pending_record.commission_total_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+        single_amt = (calc_single if calc_single is not None else (pending_record.commission_single_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+        multiple_amt = (calc_multiple if calc_multiple is not None else (pending_record.commission_multiple_amount if pending_record is not None else Decimal('0.00'))) or Decimal('0.00')
+        if record_status == 'paid':
+            pending_commission = Decimal('0.00')
+            pending_commission_single = Decimal('0.00')
+            pending_commission_multiple = Decimal('0.00')
+        else:
+            pending_commission = max(Decimal('0.00'), total_amt - record_paid_amt)
+            denom = total_amt or (single_amt + multiple_amt) or Decimal('0.00')
+            if denom > 0 and record_paid_amt > 0:
+                single_paid_share = (record_paid_amt * (single_amt / denom))
+                multiple_paid_share = (record_paid_amt * (multiple_amt / denom))
+            else:
+                single_paid_share = Decimal('0.00')
+                multiple_paid_share = Decimal('0.00')
+            pending_commission_single = max(Decimal('0.00'), single_amt - single_paid_share)
+            pending_commission_multiple = max(Decimal('0.00'), multiple_amt - multiple_paid_share)
     elif user.user_type in ['super_agent', 'master_agent']:
         monthly_comms = MonthlyNetworkCommission.objects.filter(user=user).select_related('period')
         if metrics_start and metrics_end:
@@ -8041,6 +8118,8 @@ def agent_dashboard(request):
         'pending_commission': pending_commission,
         'pending_commission_single': pending_commission_single,
         'pending_commission_multiple': pending_commission_multiple,
+        'pending_commission_period_label': pending_commission_period_label,
+        'pending_commission_is_live_period': pending_commission_is_live_period,
         'monthly_commission_amount': monthly_commission_amount,
         'monthly_commission_percent': monthly_commission_percent,
         'monthly_commission_period_start': monthly_commission_period_start,

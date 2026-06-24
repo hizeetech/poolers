@@ -38,6 +38,60 @@ def _commission_excluded_ticket_statuses(*, is_live_period):
         excluded.append('pending')
     return excluded
 
+
+def restore_historical_weekly_paid_commission_record(agent, period, *, calc_data=None):
+    period_text = str(period)
+    historical_tx = (
+        Transaction.objects.filter(
+            user=agent,
+            transaction_type='commission_payout',
+            status='completed',
+            is_successful=True,
+            amount__gt=Decimal('0.00'),
+        )
+        .filter(
+            Q(description__icontains='weekly commission')
+            & (
+                Q(description__icontains=period_text)
+                | (
+                    Q(description__icontains=str(period.start_date))
+                    & Q(description__icontains=str(period.end_date))
+                )
+            )
+        )
+        .order_by('-timestamp')
+        .first()
+    )
+    if not historical_tx:
+        return None
+
+    data = dict(calc_data or {})
+    data.pop('is_live_period', None)
+    existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
+    total_amount = data.get('commission_total_amount')
+    if total_amount is None and existing:
+        total_amount = existing.commission_total_amount
+    if total_amount is None:
+        total_amount = historical_tx.amount or Decimal('0.00')
+
+    defaults = {
+        **data,
+        'status': 'paid',
+        'amount_paid': total_amount,
+        'paid_at': historical_tx.timestamp,
+        'paid_by': historical_tx.initiating_user,
+        'paid_from_user': historical_tx.initiating_user,
+    }
+    if historical_tx.initiating_user:
+        defaults['paid_source'] = 'account_wallet'
+
+    record, _created = WeeklyAgentCommission.objects.update_or_create(
+        agent=agent,
+        period=period,
+        defaults=defaults,
+    )
+    return record
+
 def pay_weekly_commission(commission_record, actor=None):
     if commission_record.status == 'paid':
         return False, "Already paid"
@@ -871,6 +925,9 @@ def calculate_weekly_agent_commission(agent, period):
         return existing
 
     data = calculate_weekly_agent_commission_data(agent, period)
+    historical_record = restore_historical_weekly_paid_commission_record(agent, period, calc_data=data)
+    if historical_record:
+        return historical_record
     if not data:
         return existing
 

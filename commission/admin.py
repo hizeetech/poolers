@@ -381,7 +381,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
 
     def _build_agent_data(self, *, period, search_q=''):
         from .models import AgentCommissionProfile
-        from .services import calculate_weekly_agent_commission_data
+        from .services import calculate_weekly_agent_commission_data, restore_historical_weekly_paid_commission_record
 
         today = timezone.localdate()
         is_live_period = period.start_date <= today <= period.end_date
@@ -400,6 +400,10 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
             existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
             calc = calculate_weekly_agent_commission_data(agent, period, include_breakdown=True) or {}
             calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
+            if not existing or existing.status != 'paid':
+                restored_record = restore_historical_weekly_paid_commission_record(agent, period, calc_data=calc)
+                if restored_record:
+                    existing = restored_record
 
             if existing:
                 if (existing.amount_paid or Decimal('0.00')) > 0 and existing.status != 'paid':

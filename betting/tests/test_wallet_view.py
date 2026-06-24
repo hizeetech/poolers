@@ -64,6 +64,95 @@ class WalletViewTest(TestCase):
             'value="monnify" class="btn btn-dark rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center" disabled'
         )
 
+    def test_wallet_recent_transactions_can_filter_by_direction_and_type(self):
+        Wallet.objects.get_or_create(user=self.user, defaults={"balance": Decimal("0.00")})
+        wallet = Wallet.objects.get(user=self.user)
+
+        deposit_tx = Transaction.objects.create(
+            user=self.user,
+            transaction_type="deposit",
+            amount=Decimal("100.00"),
+            is_successful=True,
+            status="completed",
+            description="Deposit 100",
+        )
+        wallet.apply_delta(
+            amount=Decimal("100.00"),
+            actor=self.user,
+            transaction_obj=deposit_tx,
+            reference="dep-1",
+            reason="Deposit 100",
+            metadata={},
+        )
+
+        transfer_tx = Transaction.objects.create(
+            user=self.user,
+            transaction_type="wallet_transfer_out",
+            amount=Decimal("40.00"),
+            is_successful=True,
+            status="completed",
+            description="Transfer out 40",
+        )
+        wallet.apply_delta(
+            amount=-Decimal("40.00"),
+            actor=self.user,
+            transaction_obj=transfer_tx,
+            reference="tr-1",
+            reason="Transfer out 40",
+            metadata={},
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("betting:wallet"), {"tx_direction": "credit"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Deposit 100")
+        self.assertNotContains(response, "Transfer out 40")
+
+        response = self.client.get(reverse("betting:wallet"), {"tx_type": "wallet_transfer_out"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Transfer out 40")
+        self.assertNotContains(response, "Deposit 100")
+
+    def test_agent_wallet_report_can_export_csv(self):
+        agent = User.objects.create_user(
+            email="wr-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+        )
+        cashier = User.objects.create_user(
+            email="wr-cashier@test.com",
+            password="testpassword",
+            user_type="cashier",
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+        Wallet.objects.get_or_create(user=cashier, defaults={"balance": Decimal("0.00")})
+        wallet = Wallet.objects.get(user=cashier)
+
+        tx = Transaction.objects.create(
+            user=cashier,
+            transaction_type="deposit",
+            amount=Decimal("25.00"),
+            is_successful=True,
+            status="completed",
+            description="Downline deposit",
+        )
+        wallet.apply_delta(
+            amount=Decimal("25.00"),
+            actor=cashier,
+            transaction_obj=tx,
+            reference="dl-dep",
+            reason="Downline deposit",
+            metadata={},
+        )
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:agent_wallet_report"), {"format": "csv"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        self.assertIn("attachment;", response.get("Content-Disposition", ""))
+        self.assertIn("wr-cashier@test.com", response.content.decode("utf-8"))
+
     def test_apply_repayment_reserves_new_credit_when_outstanding_loan_exists(self):
         super_agent = User.objects.create_user(
             email='superagent@example.com',

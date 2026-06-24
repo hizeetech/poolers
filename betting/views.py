@@ -5173,16 +5173,51 @@ def wallet_view(request):
         logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
     tx_page_number = request.GET.get("tx_page") or "1"
     tx_page_size_raw = request.GET.get("tx_page_size") or "50"
+    tx_start_date_str = (request.GET.get("tx_start_date") or "").strip()
+    tx_end_date_str = (request.GET.get("tx_end_date") or "").strip()
+    tx_type = (request.GET.get("tx_type") or "all").strip()
+    tx_direction = (request.GET.get("tx_direction") or "all").strip()
+    tx_status = (request.GET.get("tx_status") or "all").strip()
+    tx_q = (request.GET.get("tx_q") or "").strip()
     try:
         tx_page_size = max(10, min(200, int(tx_page_size_raw)))
     except Exception:
         tx_page_size = 50
+
+    tx_start_date = None
+    tx_end_date = None
+    if tx_start_date_str:
+        try:
+            tx_start_date = date.fromisoformat(tx_start_date_str)
+        except Exception:
+            tx_start_date = None
+    if tx_end_date_str:
+        try:
+            tx_end_date = date.fromisoformat(tx_end_date_str)
+        except Exception:
+            tx_end_date = None
 
     ledger_qs = (
         WalletLedgerEntry.objects.filter(user=request.user)
         .select_related("transaction")
         .order_by("-created_at", "-id")
     )
+    if tx_start_date:
+        ledger_qs = ledger_qs.filter(created_at__date__gte=tx_start_date)
+    if tx_end_date:
+        ledger_qs = ledger_qs.filter(created_at__date__lte=tx_end_date)
+    if tx_direction in {"credit", "debit"}:
+        ledger_qs = ledger_qs.filter(direction=tx_direction)
+    if tx_type and tx_type != "all":
+        ledger_qs = ledger_qs.filter(transaction__transaction_type=tx_type)
+    if tx_status and tx_status != "all":
+        ledger_qs = ledger_qs.filter(transaction__status=tx_status)
+    if tx_q:
+        ledger_qs = ledger_qs.filter(
+            Q(reference__icontains=tx_q)
+            | Q(reason__icontains=tx_q)
+            | Q(transaction__description__icontains=tx_q)
+        )
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
     recent_transactions = []
@@ -5285,6 +5320,14 @@ def wallet_view(request):
         'recent_transactions': recent_transactions,
         'recent_transactions_page': tx_page,
         'recent_transactions_page_size': tx_page_size,
+        'transaction_types': Transaction.TRANSACTION_TYPES,
+        'transaction_statuses': Transaction.STATUS_CHOICES,
+        'tx_start_date_filter': tx_start_date_str,
+        'tx_end_date_filter': tx_end_date_str,
+        'tx_type_filter': tx_type,
+        'tx_direction_filter': tx_direction,
+        'tx_status_filter': tx_status,
+        'tx_q_filter': tx_q,
         'initiate_deposit_form': InitiateDepositForm(),
         'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
         'wallet_transfer_form': wallet_transfer_form,
@@ -8078,45 +8121,152 @@ def downline_bets(request):
 @user_passes_test(lambda u: u.user_type in ['agent', 'super_agent', 'master_agent', 'admin'])
 def agent_wallet_report(request):
     user = request.user
-    user_filter = request.GET.get('user', 'all')
+    user_filter = (request.GET.get("user") or "all").strip()
+    type_filter = (request.GET.get("type") or "all").strip()
+    direction_filter = (request.GET.get("direction") or "all").strip()
+    status_filter = (request.GET.get("status") or "all").strip()
+    start_date_str = (request.GET.get("start_date") or "").strip()
+    end_date_str = (request.GET.get("end_date") or "").strip()
+    q = (request.GET.get("q") or "").strip()
+    export_format = (request.GET.get("format") or "").strip().lower()
+    page_number = request.GET.get("page") or "1"
 
-    # Determine downline users whose wallets to report on
     if user.user_type == 'admin' or user.is_superuser:
-        report_users_qs = User.objects.all() # Admins can see all
+        report_users_qs = User.objects.all()
     elif user.user_type == 'master_agent':
         report_users_qs = User.objects.filter(
-            Q(master_agent=user) |
-            Q(super_agent__master_agent=user) |
-            Q(agent__super_agent__master_agent=user)
-        )
+            Q(id=user.id)
+            | Q(master_agent=user)
+            | Q(super_agent__master_agent=user)
+            | Q(agent__super_agent__master_agent=user)
+        ).distinct()
     elif user.user_type == 'super_agent':
         report_users_qs = User.objects.filter(
-            Q(super_agent=user) |
-            Q(agent__super_agent=user)
-        )
+            Q(id=user.id)
+            | Q(super_agent=user)
+            | Q(agent__super_agent=user)
+        ).distinct()
     elif user.user_type == 'agent':
-        report_users_qs = User.objects.filter(agent=user)
+        report_users_qs = User.objects.filter(Q(id=user.id) | Q(agent=user)).distinct()
     else:
         report_users_qs = User.objects.none()
 
-    # Filter wallets by the determined users
-    wallets = Wallet.objects.filter(user__in=report_users_qs)
+    ledger_qs = (
+        WalletLedgerEntry.objects.filter(user__in=report_users_qs)
+        .select_related("user", "transaction", "actor", "transaction__initiating_user", "transaction__target_user")
+        .order_by("-created_at", "-id")
+    )
 
-    # Apply specific user filter if provided in GET params
-    if user_filter != 'all':
+    if user_filter != "all":
         try:
             filter_user_id = int(user_filter)
-            wallets = wallets.filter(user__id=filter_user_id)
-        except (ValueError, TypeError):
-            pass # Invalid user ID, ignore filter
+            ledger_qs = ledger_qs.filter(user_id=filter_user_id)
+        except Exception:
+            pass
 
+    start_date = None
+    end_date = None
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(start_date_str)
+            ledger_qs = ledger_qs.filter(created_at__date__gte=start_date)
+        except Exception:
+            messages.error(request, "Invalid start date format.")
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(end_date_str)
+            ledger_qs = ledger_qs.filter(created_at__date__lte=end_date)
+        except Exception:
+            messages.error(request, "Invalid end date format.")
+
+    if direction_filter in {"credit", "debit"}:
+        ledger_qs = ledger_qs.filter(direction=direction_filter)
+    if type_filter and type_filter != "all":
+        ledger_qs = ledger_qs.filter(transaction__transaction_type=type_filter)
+    if status_filter and status_filter != "all":
+        ledger_qs = ledger_qs.filter(transaction__status=status_filter)
+    if q:
+        ledger_qs = ledger_qs.filter(
+            Q(reference__icontains=q)
+            | Q(reason__icontains=q)
+            | Q(transaction__description__icontains=q)
+            | Q(user__email__icontains=q)
+            | Q(user__username__icontains=q)
+        )
+
+    if export_format in {"csv", "xlsx"}:
+        rows = []
+        for entry in ledger_qs:
+            tx = entry.transaction
+            tx_type = getattr(tx, "transaction_type", "") if tx else ""
+            tx_type_display = ""
+            if tx:
+                try:
+                    tx_type_display = tx.get_transaction_type_display()
+                except Exception:
+                    tx_type_display = ""
+            if not tx_type_display:
+                tx_type_display = (tx_type or entry.direction or "").replace("_", " ").strip().title()
+
+            status = getattr(tx, "status", "") if tx else "completed"
+            status_display = ""
+            if tx:
+                try:
+                    status_display = tx.get_status_display()
+                except Exception:
+                    status_display = ""
+            if not status_display:
+                status_display = (status or "").replace("_", " ").strip().title() or "Completed"
+
+            initiated_by = ""
+            if tx and getattr(tx, "initiating_user", None):
+                initiated_by = tx.initiating_user.email
+            elif entry.actor:
+                initiated_by = entry.actor.email
+            else:
+                initiated_by = "System"
+
+            target_user_email = ""
+            if tx and getattr(tx, "target_user", None):
+                target_user_email = tx.target_user.email
+
+            rows.append(
+                {
+                    "Timestamp": timezone.localtime(entry.created_at).strftime("%Y-%m-%d %H:%M:%S"),
+                    "User": getattr(entry.user, "email", ""),
+                    "User Type": getattr(entry.user, "user_type", ""),
+                    "Direction": entry.direction,
+                    "Type": tx_type_display,
+                    "Amount": f"{(_quantize_amount(entry.amount) or Decimal('0.00')):.2f}",
+                    "Balance Before": f"{(_quantize_amount(entry.balance_before) or Decimal('0.00')):.2f}",
+                    "Balance After": f"{(_quantize_amount(entry.balance_after) or Decimal('0.00')):.2f}",
+                    "Status": status_display,
+                    "Initiated By": initiated_by,
+                    "Target User": target_user_email,
+                    "Reference": entry.reference,
+                    "Description": (getattr(tx, "description", None) or entry.reason or "").strip(),
+                }
+            )
+        filename_base = "wallet_transactions_report"
+        return _export_simple_rows(rows=rows, title=filename_base, fmt=export_format)
+
+    paginator = Paginator(ledger_qs, 50)
+    entries_page = paginator.get_page(page_number)
     context = {
-        'report_title': 'Agent/Admin Wallet Report',
-        'wallets': wallets.order_by('user__email'),
-        'all_users': report_users_qs.order_by('email'), # For the filter dropdown
-        'current_user_filter': user_filter,
+        "report_title": "Wallet Transaction Report",
+        "entries_page": entries_page,
+        "transaction_types": Transaction.TRANSACTION_TYPES,
+        "transaction_statuses": Transaction.STATUS_CHOICES,
+        "all_users": report_users_qs.order_by("email"),
+        "current_user_filter": user_filter,
+        "current_type_filter": type_filter,
+        "current_direction_filter": direction_filter,
+        "current_status_filter": status_filter,
+        "start_date_filter": start_date_str,
+        "end_date_filter": end_date_str,
+        "q_filter": q,
     }
-    return render(request, 'betting/reports/wallet_report.html', context)
+    return render(request, "betting/agent/wallet_report.html", context)
 
 
 @login_required

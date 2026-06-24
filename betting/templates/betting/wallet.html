@@ -583,6 +583,53 @@
     <div class="card wallet-card wallet-section-card border-0 mt-4">
         <div class="card-body">
             <div class="wallet-section-title text-secondary">Recent Transactions</div>
+            <form method="get" class="row g-2 align-items-end mb-3">
+                <div class="col-12 col-md-2">
+                    <label class="form-label small text-muted mb-1">Start Date</label>
+                    <input type="date" class="form-control form-control-sm" name="tx_start_date" value="{{ tx_start_date_filter }}">
+                </div>
+                <div class="col-12 col-md-2">
+                    <label class="form-label small text-muted mb-1">End Date</label>
+                    <input type="date" class="form-control form-control-sm" name="tx_end_date" value="{{ tx_end_date_filter }}">
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label small text-muted mb-1">Type</label>
+                    <select class="form-select form-select-sm" name="tx_type">
+                        <option value="all" {% if tx_type_filter == 'all' %}selected{% endif %}>All</option>
+                        {% for choice_value, choice_label in transaction_types %}
+                        <option value="{{ choice_value }}" {% if tx_type_filter == choice_value %}selected{% endif %}>{{ choice_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-md-2">
+                    <label class="form-label small text-muted mb-1">Direction</label>
+                    <select class="form-select form-select-sm" name="tx_direction">
+                        <option value="all" {% if tx_direction_filter == 'all' %}selected{% endif %}>All</option>
+                        <option value="credit" {% if tx_direction_filter == 'credit' %}selected{% endif %}>Credit</option>
+                        <option value="debit" {% if tx_direction_filter == 'debit' %}selected{% endif %}>Debit</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label small text-muted mb-1">Status</label>
+                    <select class="form-select form-select-sm" name="tx_status">
+                        <option value="all" {% if tx_status_filter == 'all' %}selected{% endif %}>All</option>
+                        {% for choice_value, choice_label in transaction_statuses %}
+                        <option value="{{ choice_value }}" {% if tx_status_filter == choice_value %}selected{% endif %}>{{ choice_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label small text-muted mb-1">Search</label>
+                    <input type="text" class="form-control form-control-sm" name="tx_q" value="{{ tx_q_filter }}" placeholder="Reference, description...">
+                </div>
+                <div class="col-12 col-md-3">
+                    <input type="hidden" name="tx_page_size" value="{{ recent_transactions_page_size }}">
+                    <button type="submit" class="btn btn-sm btn-outline-primary w-100">Apply Filters</button>
+                </div>
+                <div class="col-12 col-md-3">
+                    <a class="btn btn-sm btn-outline-secondary w-100" href="{% url 'betting:wallet' %}">Reset</a>
+                </div>
+            </form>
             <div class="table-responsive {% if not recent_transactions %}d-none{% endif %}" id="recentTransactionsTableWrap">
                 <table class="table table-hover table-striped rounded-3 overflow-hidden shadow-sm" style="color: black;">
                     <thead class="bg-light">
@@ -635,7 +682,7 @@
                     {% if recent_transactions_page.has_previous %}
                     <a
                         class="btn btn-sm btn-outline-secondary"
-                        href="?tx_page={{ recent_transactions_page.previous_page_number }}&tx_page_size={{ recent_transactions_page_size }}"
+                        href="?tx_page={{ recent_transactions_page.previous_page_number }}&tx_page_size={{ recent_transactions_page_size }}&tx_start_date={{ tx_start_date_filter }}&tx_end_date={{ tx_end_date_filter }}&tx_type={{ tx_type_filter }}&tx_direction={{ tx_direction_filter }}&tx_status={{ tx_status_filter }}&tx_q={{ tx_q_filter|urlencode }}"
                     >Previous</a>
                     {% else %}
                     <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
@@ -643,7 +690,7 @@
                     {% if recent_transactions_page.has_next %}
                     <a
                         class="btn btn-sm btn-outline-secondary"
-                        href="?tx_page={{ recent_transactions_page.next_page_number }}&tx_page_size={{ recent_transactions_page_size }}"
+                        href="?tx_page={{ recent_transactions_page.next_page_number }}&tx_page_size={{ recent_transactions_page_size }}&tx_start_date={{ tx_start_date_filter }}&tx_end_date={{ tx_end_date_filter }}&tx_type={{ tx_type_filter }}&tx_direction={{ tx_direction_filter }}&tx_status={{ tx_status_filter }}&tx_q={{ tx_q_filter|urlencode }}"
                     >Next</a>
                     {% else %}
                     <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>

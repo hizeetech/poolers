@@ -193,7 +193,7 @@ class WalletViewTest(TestCase):
             user=agent,
             reference=str(comm.id),
             transaction__transaction_type="commission_payout",
-        ).update(metadata={})
+        ).update(metadata={}, reference="")
 
         self.client.force_login(agent)
         response = self.client.get(reverse("betting:wallet"), {"tx_commission_period": str(period.id)})

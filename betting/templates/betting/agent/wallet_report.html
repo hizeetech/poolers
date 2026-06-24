@@ -107,6 +107,7 @@
                                 <tr>
                                     <th>Timestamp</th>
                                     <th>User</th>
+                                    <th>Commission Period</th>
                                     <th>Direction</th>
                                     <th>Type</th>
                                     <th class="text-end">Amount</th>
@@ -124,6 +125,7 @@
                                 <tr>
                                     <td>{{ entry.created_at|date:"Y-m-d H:i" }}</td>
                                     <td>{{ entry.user.email }}</td>
+                                    <td>{{ entry.commission_period_label|default:"-" }}</td>
                                     <td>{{ entry.direction|title }}</td>
                                     <td>
                                         {% if entry.transaction %}

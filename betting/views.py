@@ -5219,6 +5219,8 @@ def wallet_view(request):
             | Q(reason__icontains=tx_q)
             | Q(transaction__description__icontains=tx_q)
         )
+    selected_commission_period = None
+    commission_period_display = ""
     if tx_commission_period and tx_commission_period != "all":
         try:
             period_id = int(tx_commission_period)
@@ -5227,6 +5229,8 @@ def wallet_view(request):
         if period_id:
             from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
             from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
+            selected_commission_period = CommissionPeriod.objects.filter(id=period_id).first()
+            commission_period_display = str(selected_commission_period) if selected_commission_period else ""
 
             weekly_refs = [
                 str(pk)
@@ -5238,7 +5242,11 @@ def wallet_view(request):
             ]
             commission_refs = weekly_refs + monthly_refs
             ledger_qs = ledger_qs.filter(
-                reference__in=commission_refs
+                (
+                    Q(reference__in=commission_refs)
+                    | Q(reason__icontains=commission_period_display)
+                    | Q(transaction__description__icontains=commission_period_display)
+                )
             ).filter(
                 Q(metadata__type__icontains="commission")
                 | Q(transaction__transaction_type="commission_payout")
@@ -5247,6 +5255,13 @@ def wallet_view(request):
             )
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
+    commission_period_by_ref = {}
+    page_refs = [str(ref).strip() for ref in tx_page.object_list.values_list("reference", flat=True) if str(ref).strip()]
+    if page_refs:
+        for rec in WeeklyAgentCommission.objects.filter(id__in=page_refs).select_related("period"):
+            commission_period_by_ref[str(rec.id)] = str(rec.period)
+        for rec in MonthlyNetworkCommission.objects.filter(id__in=page_refs).select_related("period"):
+            commission_period_by_ref[str(rec.id)] = str(rec.period)
     recent_transactions = []
     for entry in tx_page.object_list:
         tx = getattr(entry, "transaction", None)
@@ -5281,6 +5296,19 @@ def wallet_view(request):
             except Exception:
                 details_url = ""
 
+        commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
+        if not commission_period_label:
+            text_sources = " ".join(
+                [
+                    getattr(tx, "description", "") or "",
+                    entry.reason or "",
+                ]
+            )
+            for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
+                period_text = str(period_obj)
+                if period_text and period_text in text_sources:
+                    commission_period_label = period_text
+                    break
         recent_transactions.append(
             {
                 "id": str(getattr(tx, "id", "")) if tx else str(entry.id),
@@ -5294,6 +5322,7 @@ def wallet_view(request):
                 "details_url": details_url,
                 "balance_before": f"{(_quantize_amount(entry.balance_before) or Decimal('0.00')):.2f}",
                 "balance_after": f"{(_quantize_amount(entry.balance_after) or Decimal('0.00')):.2f}",
+                "commission_period": commission_period_label,
             }
         )
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
@@ -8227,6 +8256,8 @@ def agent_wallet_report(request):
             | Q(user__username__icontains=q)
         )
 
+    selected_commission_period = None
+    commission_period_display = ""
     if commission_period_filter and commission_period_filter != "all":
         try:
             period_id = int(commission_period_filter)
@@ -8235,6 +8266,8 @@ def agent_wallet_report(request):
         if period_id:
             from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
             from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
+            selected_commission_period = CommissionPeriod.objects.filter(id=period_id).first()
+            commission_period_display = str(selected_commission_period) if selected_commission_period else ""
 
             weekly_refs = [
                 str(pk)
@@ -8246,7 +8279,11 @@ def agent_wallet_report(request):
             ]
             commission_refs = weekly_refs + monthly_refs
             ledger_qs = ledger_qs.filter(
-                reference__in=commission_refs
+                (
+                    Q(reference__in=commission_refs)
+                    | Q(reason__icontains=commission_period_display)
+                    | Q(transaction__description__icontains=commission_period_display)
+                )
             ).filter(
                 Q(metadata__type__icontains="commission")
                 | Q(transaction__transaction_type="commission_payout")
@@ -8255,6 +8292,13 @@ def agent_wallet_report(request):
             )
 
     if export_format in {"csv", "xlsx"}:
+        export_refs = [str(ref).strip() for ref in ledger_qs.values_list("reference", flat=True) if str(ref).strip()]
+        commission_period_by_ref = {}
+        if export_refs:
+            for rec in WeeklyAgentCommission.objects.filter(id__in=export_refs).select_related("period"):
+                commission_period_by_ref[str(rec.id)] = str(rec.period)
+            for rec in MonthlyNetworkCommission.objects.filter(id__in=export_refs).select_related("period"):
+                commission_period_by_ref[str(rec.id)] = str(rec.period)
         rows = []
         for entry in ledger_qs:
             tx = entry.transaction
@@ -8289,12 +8333,26 @@ def agent_wallet_report(request):
             target_user_email = ""
             if tx and getattr(tx, "target_user", None):
                 target_user_email = tx.target_user.email
+            commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
+            if not commission_period_label:
+                text_sources = " ".join(
+                    [
+                        getattr(tx, "description", "") or "",
+                        entry.reason or "",
+                    ]
+                )
+                for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
+                    period_text = str(period_obj)
+                    if period_text and period_text in text_sources:
+                        commission_period_label = period_text
+                        break
 
             rows.append(
                 {
                     "Timestamp": timezone.localtime(entry.created_at).strftime("%Y-%m-%d %H:%M:%S"),
                     "User": getattr(entry.user, "email", ""),
                     "User Type": getattr(entry.user, "user_type", ""),
+                    "Commission Period": commission_period_label,
                     "Direction": entry.direction,
                     "Type": tx_type_display,
                     "Amount": f"{(_quantize_amount(entry.amount) or Decimal('0.00')):.2f}",
@@ -8312,6 +8370,28 @@ def agent_wallet_report(request):
 
     paginator = Paginator(ledger_qs, 50)
     entries_page = paginator.get_page(page_number)
+    page_refs = [str(ref).strip() for ref in entries_page.object_list.values_list("reference", flat=True) if str(ref).strip()]
+    commission_period_by_ref = {}
+    if page_refs:
+        for rec in WeeklyAgentCommission.objects.filter(id__in=page_refs).select_related("period"):
+            commission_period_by_ref[str(rec.id)] = str(rec.period)
+        for rec in MonthlyNetworkCommission.objects.filter(id__in=page_refs).select_related("period"):
+            commission_period_by_ref[str(rec.id)] = str(rec.period)
+    for entry in entries_page.object_list:
+        commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
+        if not commission_period_label:
+            text_sources = " ".join(
+                [
+                    getattr(entry.transaction, "description", "") or "",
+                    entry.reason or "",
+                ]
+            )
+            for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
+                period_text = str(period_obj)
+                if period_text and period_text in text_sources:
+                    commission_period_label = period_text
+                    break
+        entry.commission_period_label = commission_period_label
     context = {
         "report_title": "Wallet Transaction Report",
         "entries_page": entries_page,

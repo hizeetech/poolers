@@ -644,6 +644,7 @@
                     <thead class="bg-light">
                         <tr>
                             <th scope="col">Date</th>
+                            <th scope="col">Commission Period</th>
                             <th scope="col">Type</th>
                             <th scope="col">Amount</th>
                             <th scope="col">Balance Before</th>
@@ -657,6 +658,7 @@
                         {% for transaction in recent_transactions %}
                         <tr>
                             <td>{{ transaction.timestamp_display }}</td>
+                            <td>{{ transaction.commission_period|default:"-" }}</td>
                             <td><span class="badge bg-secondary" style="color: black !important;">
                                         {{ transaction.transaction_type_display }}
                                     </span></td>

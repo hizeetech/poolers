@@ -5300,25 +5300,59 @@ def wallet_view(request):
                     created_at__date__lte=selected_commission_period.end_date,
                 )
             ledger_qs = ledger_qs.filter(commission_period_q)
-    tx_paginator = Paginator(ledger_qs, tx_page_size)
-    tx_page = tx_paginator.get_page(tx_page_number)
-    # #region debug-point C:paginator
-    _dbg_wallet_500("C", "wallet paginator resolved", {
-        "page_number": tx_page.number,
-        "page_size": tx_page_size,
-        "page_len": len(tx_page.object_list),
-    })
-    # #endregion
-    commission_period_by_ref = {}
-    page_refs = [str(ref).strip() for ref in tx_page.object_list.values_list("reference", flat=True) if str(ref).strip()]
-    numeric_page_refs = [ref for ref in page_refs if ref.isdigit()]
-    if numeric_page_refs:
-        for rec in WeeklyAgentCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
-            commission_period_by_ref[str(rec.id)] = str(rec.period)
-        for rec in MonthlyNetworkCommission.objects.filter(id__in=numeric_page_refs).select_related("period"):
-            commission_period_by_ref[str(rec.id)] = str(rec.period)
-    recent_transactions = []
-    for entry in tx_page.object_list:
+    commission_period_options_for_labels = list(CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120])
+
+    def _resolve_commission_period_label(reference_value, tx_obj=None, reason_text=""):
+        commission_period_by_ref = getattr(_resolve_commission_period_label, "_cache", None)
+        if commission_period_by_ref is None:
+            commission_period_by_ref = {}
+            setattr(_resolve_commission_period_label, "_cache", commission_period_by_ref)
+        ref_value = (reference_value or "").strip()
+        if ref_value and ref_value in commission_period_by_ref:
+            return commission_period_by_ref.get(ref_value) or ""
+        if ref_value and ref_value.isdigit():
+            weekly_rec = WeeklyAgentCommission.objects.filter(id=ref_value).select_related("period").first()
+            if weekly_rec:
+                commission_period_by_ref[ref_value] = str(weekly_rec.period)
+                return commission_period_by_ref[ref_value]
+            monthly_rec = MonthlyNetworkCommission.objects.filter(id=ref_value).select_related("period").first()
+            if monthly_rec:
+                commission_period_by_ref[ref_value] = str(monthly_rec.period)
+                return commission_period_by_ref[ref_value]
+        text_sources = " ".join(
+            [
+                getattr(tx_obj, "description", "") or "",
+                reason_text or "",
+            ]
+        )
+        for period_obj in commission_period_options_for_labels:
+            period_text = str(period_obj)
+            if period_text and period_text in text_sources:
+                if ref_value:
+                    commission_period_by_ref[ref_value] = period_text
+                return period_text
+        return ""
+
+    def _build_wallet_row(*, row_id, sort_dt, transaction_type_value, transaction_type_display_value, amount_value,
+                          status_value, status_display_value, description_value, details_url_value,
+                          balance_before_value, balance_after_value, commission_period_value):
+        return {
+            "id": row_id,
+            "_sort_dt": sort_dt,
+            "timestamp_display": timezone.localtime(sort_dt).strftime("%b %d, %Y %H:%M"),
+            "transaction_type": transaction_type_value,
+            "transaction_type_display": transaction_type_display_value,
+            "amount": amount_value,
+            "status": status_value,
+            "status_display": status_display_value,
+            "description": description_value,
+            "details_url": details_url_value,
+            "balance_before": balance_before_value,
+            "balance_after": balance_after_value,
+            "commission_period": commission_period_value,
+        }
+
+    def _build_wallet_row_from_entry(entry):
         tx = getattr(entry, "transaction", None)
         transaction_type = getattr(tx, "transaction_type", "") if tx else ""
         transaction_type_display = ""
@@ -5352,21 +5386,12 @@ def wallet_view(request):
                 details_url = ""
 
         try:
-            commission_period_label = commission_period_by_ref.get((entry.reference or "").strip(), "")
-            if not commission_period_label:
-                text_sources = " ".join(
-                    [
-                        getattr(tx, "description", "") or "",
-                        entry.reason or "",
-                    ]
-                )
-                for period_obj in CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120]:
-                    period_text = str(period_obj)
-                    if period_text and period_text in text_sources:
-                        commission_period_label = period_text
-                        break
+            commission_period_label = _resolve_commission_period_label(
+                getattr(entry, "reference", ""),
+                tx_obj=tx,
+                reason_text=getattr(entry, "reason", ""),
+            )
         except Exception as exc:
-            # #region debug-point D:label-resolution-error
             _dbg_wallet_500("D", "wallet commission period label resolution failed", {
                 "entry_id": getattr(entry, "id", None),
                 "reference": getattr(entry, "reference", ""),
@@ -5376,24 +5401,95 @@ def wallet_view(request):
                 "error_type": exc.__class__.__name__,
                 "error": str(exc),
             })
-            # #endregion
             raise
-        recent_transactions.append(
-            {
-                "id": str(getattr(tx, "id", "")) if tx else str(entry.id),
-                "timestamp_display": timezone.localtime(entry.created_at).strftime("%b %d, %Y %H:%M"),
-                "transaction_type": transaction_type or entry.direction,
-                "transaction_type_display": transaction_type_display,
-                "amount": f"{(_quantize_amount(entry.amount) or Decimal('0.00')):.2f}",
-                "status": status,
-                "status_display": status_display,
-                "description": (getattr(tx, "description", None) or entry.reason or "").strip(),
-                "details_url": details_url,
-                "balance_before": f"{(_quantize_amount(entry.balance_before) or Decimal('0.00')):.2f}",
-                "balance_after": f"{(_quantize_amount(entry.balance_after) or Decimal('0.00')):.2f}",
-                "commission_period": commission_period_label,
-            }
+
+        return _build_wallet_row(
+            row_id=str(getattr(tx, "id", "")) if tx else str(entry.id),
+            sort_dt=entry.created_at,
+            transaction_type_value=transaction_type or entry.direction,
+            transaction_type_display_value=transaction_type_display,
+            amount_value=f"{(_quantize_amount(entry.amount) or Decimal('0.00')):.2f}",
+            status_value=status,
+            status_display_value=status_display,
+            description_value=(getattr(tx, "description", None) or entry.reason or "").strip(),
+            details_url_value=details_url,
+            balance_before_value=f"{(_quantize_amount(entry.balance_before) or Decimal('0.00')):.2f}",
+            balance_after_value=f"{(_quantize_amount(entry.balance_after) or Decimal('0.00')):.2f}",
+            commission_period_value=commission_period_label,
         )
+
+    if tx_type == "commission_payout":
+        ledger_entries = list(ledger_qs)
+        recent_transactions = [_build_wallet_row_from_entry(entry) for entry in ledger_entries]
+
+        existing_weekly_periods = {
+            row["commission_period"]
+            for row in recent_transactions
+            if row.get("commission_period") and "weekly commission" in (row.get("description") or "").lower()
+        }
+        weekly_qs = WeeklyAgentCommission.objects.filter(agent=request.user).filter(
+            Q(status="paid") | Q(amount_paid__gt=Decimal("0.00"))
+        ).select_related("period")
+        if selected_commission_period:
+            weekly_qs = weekly_qs.filter(period=selected_commission_period)
+        if tx_start_date:
+            weekly_qs = weekly_qs.filter(Q(paid_at__date__gte=tx_start_date) | Q(created_at__date__gte=tx_start_date))
+        if tx_end_date:
+            weekly_qs = weekly_qs.filter(Q(paid_at__date__lte=tx_end_date) | Q(created_at__date__lte=tx_end_date))
+        if tx_status and tx_status != "all" and tx_status != "completed":
+            weekly_qs = weekly_qs.none()
+
+        for record in weekly_qs.order_by("-paid_at", "-created_at", "-id"):
+            period_label = str(record.period)
+            if period_label in existing_weekly_periods:
+                continue
+            amount_value = _quantize_amount(record.amount_paid or record.commission_total_amount) or Decimal("0.00")
+            description_value = f"Weekly Commission for {record.period}"
+            if tx_q:
+                tx_q_lower = tx_q.lower()
+                searchable_text = " ".join(
+                    [
+                        description_value.lower(),
+                        period_label.lower(),
+                        getattr(record.agent, "username", "").lower(),
+                        getattr(record.agent, "email", "").lower(),
+                    ]
+                )
+                if tx_q_lower not in searchable_text:
+                    continue
+            recent_transactions.append(
+                _build_wallet_row(
+                    row_id=f"weekly-commission-{record.id}",
+                    sort_dt=record.paid_at or record.created_at,
+                    transaction_type_value="commission_payout",
+                    transaction_type_display_value="Commission Payout",
+                    amount_value=f"{amount_value:.2f}",
+                    status_value="completed",
+                    status_display_value="Completed",
+                    description_value=description_value,
+                    details_url_value="",
+                    balance_before_value="-",
+                    balance_after_value="-",
+                    commission_period_value=period_label,
+                )
+            )
+
+        recent_transactions.sort(key=lambda row: (row.get("_sort_dt") or timezone.now(), row.get("id") or ""), reverse=True)
+        tx_paginator = Paginator(recent_transactions, tx_page_size)
+        tx_page = tx_paginator.get_page(tx_page_number)
+        recent_transactions = [{k: v for k, v in row.items() if k != "_sort_dt"} for row in tx_page.object_list]
+    else:
+        tx_paginator = Paginator(ledger_qs, tx_page_size)
+        tx_page = tx_paginator.get_page(tx_page_number)
+        recent_transactions = [_build_wallet_row_from_entry(entry) for entry in tx_page.object_list]
+
+    # #region debug-point C:paginator
+    _dbg_wallet_500("C", "wallet paginator resolved", {
+        "page_number": tx_page.number,
+        "page_size": tx_page_size,
+        "page_len": len(tx_page.object_list),
+    })
+    # #endregion
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
 
     if request.user.maybe_auto_unlock_withdrawal():

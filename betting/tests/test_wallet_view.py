@@ -289,6 +289,50 @@ class WalletViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Period deposit")
 
+    def test_wallet_commission_payout_filter_includes_paid_weekly_commissions_without_ledger_rows(self):
+        agent = User.objects.create_user(
+            email="wallet-commission-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+            username="wallet_commission_agent",
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+
+        period_one = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=timezone.localdate() - timedelta(days=35),
+            end_date=timezone.localdate() - timedelta(days=29),
+        )
+        period_two = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=timezone.localdate() - timedelta(days=28),
+            end_date=timezone.localdate() - timedelta(days=22),
+        )
+
+        WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period_one,
+            commission_total_amount=Decimal("120.00"),
+            amount_paid=Decimal("120.00"),
+            status="paid",
+            paid_at=timezone.now() - timedelta(days=20),
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period_two,
+            commission_total_amount=Decimal("80.00"),
+            amount_paid=Decimal("80.00"),
+            status="paid",
+            paid_at=timezone.now() - timedelta(days=13),
+        )
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:wallet"), {"tx_type": "commission_payout"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"Weekly Commission for {period_one}")
+        self.assertContains(response, f"Weekly Commission for {period_two}")
+        self.assertContains(response, "2 transactions")
+
     def test_agent_wallet_report_commission_period_filter_matches_metadata_only_rows(self):
         agent = User.objects.create_user(
             email="wr-cp-agent@test.com",

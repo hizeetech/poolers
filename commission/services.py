@@ -115,11 +115,8 @@ def pay_weekly_commission(commission_record, actor=None):
         )
         
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + outstanding
-        if commission_record.amount_paid >= (commission_record.commission_total_amount or Decimal('0.00')):
-            commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-            commission_record.status = 'paid'
-        else:
-            commission_record.status = 'partially_paid'
+        commission_record.status = 'paid'
+        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
         commission_record.paid_at = timezone.now()
         if actor:
             commission_record.paid_by = actor
@@ -215,11 +212,8 @@ def pay_weekly_commission_amount(commission_record, amount, actor=None):
         )
 
         commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
-        if commission_record.amount_paid >= (commission_record.commission_total_amount or Decimal('0.00')):
-            commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-            commission_record.status = 'paid'
-        else:
-            commission_record.status = 'partially_paid'
+        commission_record.status = 'paid'
+        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
         commission_record.paid_at = timezone.now()
         if actor:
             commission_record.paid_by = actor
@@ -866,9 +860,19 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
     return data
 
 def calculate_weekly_agent_commission(agent, period):
+    existing = WeeklyAgentCommission.objects.filter(agent=agent, period=period).first()
+    if existing and (existing.status == 'paid' or (existing.amount_paid or Decimal('0.00')) > 0):
+        if existing.status != 'paid':
+            existing.status = 'paid'
+            existing.amount_paid = existing.commission_total_amount or Decimal('0.00')
+            if not existing.paid_at:
+                existing.paid_at = timezone.now()
+            existing.save(update_fields=['status', 'amount_paid', 'paid_at'])
+        return existing
+
     data = calculate_weekly_agent_commission_data(agent, period)
     if not data:
-        return None
+        return existing
 
     # This flag is only used by the admin live view and is not stored on the model.
     data.pop('is_live_period', None)

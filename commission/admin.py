@@ -401,14 +401,21 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
             calc_total = calc.get('commission_total_amount', 0) or Decimal('0.00')
 
             if existing:
+                if (existing.amount_paid or Decimal('0.00')) > 0 and existing.status != 'paid':
+                    existing.status = 'paid'
+                    existing.amount_paid = existing.commission_total_amount or Decimal('0.00')
+                    if not existing.paid_at:
+                        existing.paid_at = timezone.now()
+                    existing.save(update_fields=['status', 'amount_paid', 'paid_at'])
                 existing_total = getattr(existing, 'commission_total_amount', None) or Decimal('0.00')
+                is_paid = existing.status == 'paid' or (existing.amount_paid or Decimal('0.00')) > 0
                 agent_data.append({
                     'agent': agent,
                     'plan': profile.plan.name,
                     'calc': calc,
-                    'status': existing.get_status_display(),
-                    'is_paid': existing.status == 'paid',
-                    'can_pay': (not is_live_period) and (existing.status != 'paid') and ((calc_total > 0) or (existing_total > 0)),
+                    'status': 'Paid' if is_paid else existing.get_status_display(),
+                    'is_paid': is_paid,
+                    'can_pay': (not is_live_period) and (not is_paid) and ((calc_total > 0) or (existing_total > 0)),
                 })
             else:
                 agent_data.append({

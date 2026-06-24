@@ -9,7 +9,8 @@ from django.db.utils import ProgrammingError
 from django.utils import timezone
 
 from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
-from commission.models import CommissionPeriod, NetworkCommissionSettings
+from commission.models import CommissionPeriod, NetworkCommissionSettings, WeeklyAgentCommission
+from commission.services import calculate_weekly_agent_commission, pay_weekly_commission_amount
 from void_requests.models import TicketVoidRequest
 from void_requests.services import approve_and_void_request
 
@@ -576,3 +577,71 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Retail Manager Dashboard")
         self.assertContains(response, "Retail Manager Ticket Transactions")
+
+    def test_partial_weekly_commission_payment_closes_record_as_paid(self):
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+        )
+        comm = WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=period,
+            commission_total_amount=Decimal("100.00"),
+            commission_single_amount=Decimal("40.00"),
+            commission_multiple_amount=Decimal("60.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+
+        ok, _msg = pay_weekly_commission_amount(comm, Decimal("30.00"), actor=self.admin_user)
+        self.assertTrue(ok)
+
+        comm.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        self.assertEqual(comm.status, "paid")
+        self.assertEqual(comm.amount_paid, Decimal("100.00"))
+        self.assertEqual(self.agent.wallet.balance, Decimal("30.00"))
+
+        recalc = calculate_weekly_agent_commission(self.agent, period)
+        self.assertIsNotNone(recalc)
+        recalc.refresh_from_db()
+        self.assertEqual(recalc.status, "paid")
+        self.assertEqual(recalc.amount_paid, Decimal("100.00"))
+
+    def test_agent_dashboard_pending_commission_is_only_latest_weekly_period(self):
+        today = timezone.localdate()
+        older = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=21),
+            end_date=today - timedelta(days=15),
+        )
+        latest = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=older,
+            commission_total_amount=Decimal("10.00"),
+            commission_single_amount=Decimal("5.00"),
+            commission_multiple_amount=Decimal("5.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=latest,
+            commission_total_amount=Decimal("20.00"),
+            commission_single_amount=Decimal("8.00"),
+            commission_multiple_amount=Decimal("12.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse("betting:agent_dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["pending_commission"], Decimal("20.00"))

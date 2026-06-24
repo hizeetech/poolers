@@ -5171,7 +5171,69 @@ def wallet_view(request):
     wallet, created = Wallet.objects.get_or_create(user=request.user, defaults={'balance': Decimal('0.00')})
     if created:
         logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
-    recent_transactions = build_recent_wallet_transactions_payload(request.user, limit=20)
+    tx_page_number = request.GET.get("tx_page") or "1"
+    tx_page_size_raw = request.GET.get("tx_page_size") or "50"
+    try:
+        tx_page_size = max(10, min(200, int(tx_page_size_raw)))
+    except Exception:
+        tx_page_size = 50
+
+    ledger_qs = (
+        WalletLedgerEntry.objects.filter(user=request.user)
+        .select_related("transaction")
+        .order_by("-created_at", "-id")
+    )
+    tx_paginator = Paginator(ledger_qs, tx_page_size)
+    tx_page = tx_paginator.get_page(tx_page_number)
+    recent_transactions = []
+    for entry in tx_page.object_list:
+        tx = getattr(entry, "transaction", None)
+        transaction_type = getattr(tx, "transaction_type", "") if tx else ""
+        transaction_type_display = ""
+        if tx:
+            try:
+                transaction_type_display = tx.get_transaction_type_display()
+            except Exception:
+                transaction_type_display = ""
+        if not transaction_type_display:
+            transaction_type_display = (
+                (transaction_type or entry.direction or "")
+                .replace("_", " ")
+                .strip()
+                .title()
+            )
+        status = getattr(tx, "status", "") if tx else "completed"
+        status_display = ""
+        if tx:
+            try:
+                status_display = tx.get_status_display()
+            except Exception:
+                status_display = ""
+        if not status_display:
+            status_display = (status or "").replace("_", " ").strip().title() or "Completed"
+
+        details_url = ""
+        if tx and getattr(tx, "transaction_type", "") == "deposit" and getattr(tx, "external_reference", None):
+            try:
+                details_url = reverse("betting:deposit_status", args=[tx.external_reference])
+            except Exception:
+                details_url = ""
+
+        recent_transactions.append(
+            {
+                "id": str(getattr(tx, "id", "")) if tx else str(entry.id),
+                "timestamp_display": timezone.localtime(entry.created_at).strftime("%b %d, %Y %H:%M"),
+                "transaction_type": transaction_type or entry.direction,
+                "transaction_type_display": transaction_type_display,
+                "amount": f"{(_quantize_amount(entry.amount) or Decimal('0.00')):.2f}",
+                "status": status,
+                "status_display": status_display,
+                "description": (getattr(tx, "description", None) or entry.reason or "").strip(),
+                "details_url": details_url,
+                "balance_before": f"{(_quantize_amount(entry.balance_before) or Decimal('0.00')):.2f}",
+                "balance_after": f"{(_quantize_amount(entry.balance_after) or Decimal('0.00')):.2f}",
+            }
+        )
     pending_withdrawals = UserWithdrawal.objects.filter(user=request.user, status='pending').order_by('-request_time') # Corrected field name
 
     if request.user.maybe_auto_unlock_withdrawal():
@@ -5221,6 +5283,8 @@ def wallet_view(request):
     context = {
         'wallet': wallet,
         'recent_transactions': recent_transactions,
+        'recent_transactions_page': tx_page,
+        'recent_transactions_page_size': tx_page_size,
         'initiate_deposit_form': InitiateDepositForm(),
         'withdraw_funds_form': WithdrawFundsForm(user=request.user), # Pass user for validation
         'wallet_transfer_form': wallet_transfer_form,
@@ -7336,14 +7400,14 @@ def agent_dashboard(request):
         scope = 'custom'
     elif scope == 'week':
         try:
-            from commission.models import CommissionPeriod
+            from commission.models import CommissionPeriod as WeeklyCommissionPeriodModel
         except Exception:
-            CommissionPeriod = None
+            WeeklyCommissionPeriodModel = None
 
         period = None
-        if CommissionPeriod is not None:
+        if WeeklyCommissionPeriodModel is not None:
             period = (
-                CommissionPeriod.objects.filter(
+                WeeklyCommissionPeriodModel.objects.filter(
                     period_type='weekly',
                     start_date=start_of_week,
                     end_date=last_monday,
@@ -7361,14 +7425,14 @@ def agent_dashboard(request):
         metrics_label = 'Weekly'
     elif scope == 'month':
         try:
-            from commission.models import CommissionPeriod
+            from commission.models import CommissionPeriod as MonthlyCommissionPeriodModel
         except Exception:
-            CommissionPeriod = None
+            MonthlyCommissionPeriodModel = None
 
         period = None
-        if CommissionPeriod is not None:
+        if MonthlyCommissionPeriodModel is not None:
             period = (
-                CommissionPeriod.objects.filter(
+                MonthlyCommissionPeriodModel.objects.filter(
                     period_type='monthly',
                     start_date=start_of_month,
                     end_date=last_day_last_month,
@@ -7411,32 +7475,30 @@ def agent_dashboard(request):
         if metrics_start and metrics_end:
             weekly_comms = weekly_comms.filter(period__end_date__gte=metrics_start, period__start_date__lte=metrics_end)
         total_commission_paid = weekly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
-        pending_total = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('commission_total_amount'))['commission_total_amount__sum'] or Decimal('0.00')
-        pending_paid = weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
-        pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
-
-        pending_rows = list(
-            weekly_comms.filter(status__in=['pending', 'approved', 'partially_paid']).values(
-                'commission_single_amount',
-                'commission_multiple_amount',
-                'commission_total_amount',
-                'amount_paid',
-            )
+        latest_weekly_period = (
+            CommissionPeriod.objects.filter(period_type='weekly', end_date__lte=today)
+            .order_by('-end_date', '-start_date')
+            .first()
         )
-        for r in pending_rows:
-            single_amt = r.get('commission_single_amount') or Decimal('0.00')
-            multiple_amt = r.get('commission_multiple_amount') or Decimal('0.00')
-            total_amt = r.get('commission_total_amount') or (single_amt + multiple_amt) or Decimal('0.00')
-            paid_amt = r.get('amount_paid') or Decimal('0.00')
-            if total_amt > 0 and paid_amt > 0:
-                single_paid_share = (paid_amt * (single_amt / total_amt))
-                multiple_paid_share = (paid_amt * (multiple_amt / total_amt))
-            else:
-                single_paid_share = Decimal('0.00')
-                multiple_paid_share = Decimal('0.00')
+        if latest_weekly_period:
+            latest_comm = WeeklyAgentCommission.objects.filter(agent=user, period=latest_weekly_period).first()
+            if latest_comm and latest_comm.status in ['pending', 'approved']:
+                pending_total = latest_comm.commission_total_amount or Decimal('0.00')
+                pending_paid = latest_comm.amount_paid or Decimal('0.00')
+                pending_commission = max(Decimal('0.00'), pending_total - pending_paid)
 
-            pending_commission_single += max(Decimal('0.00'), single_amt - single_paid_share)
-            pending_commission_multiple += max(Decimal('0.00'), multiple_amt - multiple_paid_share)
+                single_amt = latest_comm.commission_single_amount or Decimal('0.00')
+                multiple_amt = latest_comm.commission_multiple_amount or Decimal('0.00')
+                total_amt = pending_total or (single_amt + multiple_amt) or Decimal('0.00')
+                paid_amt = pending_paid
+                if total_amt > 0 and paid_amt > 0:
+                    single_paid_share = (paid_amt * (single_amt / total_amt))
+                    multiple_paid_share = (paid_amt * (multiple_amt / total_amt))
+                else:
+                    single_paid_share = Decimal('0.00')
+                    multiple_paid_share = Decimal('0.00')
+                pending_commission_single = max(Decimal('0.00'), single_amt - single_paid_share)
+                pending_commission_multiple = max(Decimal('0.00'), multiple_amt - multiple_paid_share)
         if metrics_start and metrics_end and not weekly_comms.exists():
             try:
                 from commission.services import calculate_weekly_agent_commission_data

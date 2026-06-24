@@ -625,6 +625,32 @@
                     </tbody>
                 </table>
             </div>
+            {% if recent_transactions_page %}
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+                <div class="small text-muted">
+                    Page {{ recent_transactions_page.number }} of {{ recent_transactions_page.paginator.num_pages }}
+                    ({{ recent_transactions_page.paginator.count }} transaction{{ recent_transactions_page.paginator.count|pluralize }})
+                </div>
+                <div class="btn-group" role="group" aria-label="Recent transactions pagination">
+                    {% if recent_transactions_page.has_previous %}
+                    <a
+                        class="btn btn-sm btn-outline-secondary"
+                        href="?tx_page={{ recent_transactions_page.previous_page_number }}&tx_page_size={{ recent_transactions_page_size }}"
+                    >Previous</a>
+                    {% else %}
+                    <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
+                    {% endif %}
+                    {% if recent_transactions_page.has_next %}
+                    <a
+                        class="btn btn-sm btn-outline-secondary"
+                        href="?tx_page={{ recent_transactions_page.next_page_number }}&tx_page_size={{ recent_transactions_page_size }}"
+                    >Next</a>
+                    {% else %}
+                    <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
             <p class="text-center text-muted mb-0 {% if recent_transactions %}d-none{% endif %}" id="recentTransactionsEmptyState">No recent transactions.</p>
         </div>
     </div>
@@ -1308,9 +1334,6 @@
                 } else {
                     statusBadge.classList.add('bg-success');
                 }
-            }
-            if (typeof payload.recent_transactions !== 'undefined') {
-                renderRecentTransactions(payload.recent_transactions);
             }
             remitBtn.disabled = !payload.can_remit_overdraft;
             document.dispatchEvent(new CustomEvent('wallet-overdraft-state-updated', { detail: payload }));

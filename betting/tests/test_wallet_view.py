@@ -194,6 +194,29 @@ class WalletViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Weekly Commission")
 
+    def test_wallet_commission_period_filter_options_exclude_inactive_periods(self):
+        today = timezone.localdate()
+        active_period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+            is_active=True,
+        )
+        CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=21),
+            end_date=today - timedelta(days=15),
+            is_active=False,
+        )
+
+        Wallet.objects.get_or_create(user=self.user, defaults={"balance": Decimal("0.00")})
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("betting:wallet"))
+        self.assertEqual(response.status_code, 200)
+        options = list(response.context.get("commission_period_options") or [])
+        self.assertIn(active_period.id, [p.id for p in options])
+        self.assertTrue(all(getattr(p, "is_active", False) for p in options))
+
     def test_apply_repayment_reserves_new_credit_when_outstanding_loan_exists(self):
         super_agent = User.objects.create_user(
             email='superagent@example.com',

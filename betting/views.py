@@ -5352,7 +5352,7 @@ def wallet_view(request):
         'recent_transactions_page_size': tx_page_size,
         'transaction_types': Transaction.TRANSACTION_TYPES,
         'transaction_statuses': Transaction.STATUS_CHOICES,
-        'commission_period_options': CommissionPeriod.objects.order_by('-start_date')[:60],
+        'commission_period_options': CommissionPeriod.objects.filter(is_active=True).order_by('-start_date')[:60],
         'tx_start_date_filter': tx_start_date_str,
         'tx_end_date_filter': tx_end_date_str,
         'tx_type_filter': tx_type,
@@ -7486,6 +7486,7 @@ def agent_dashboard(request):
                     period_type='weekly',
                     start_date=start_of_week,
                     end_date=last_monday,
+                    is_active=True,
                 )
                 .order_by('-start_date')
                 .first()
@@ -7511,6 +7512,7 @@ def agent_dashboard(request):
                     period_type='monthly',
                     start_date=start_of_month,
                     end_date=last_day_last_month,
+                    is_active=True,
                 )
                 .order_by('-start_date')
                 .first()
@@ -7551,7 +7553,7 @@ def agent_dashboard(request):
             weekly_comms = weekly_comms.filter(period__end_date__gte=metrics_start, period__start_date__lte=metrics_end)
         total_commission_paid = weekly_comms.aggregate(Sum('amount_paid'))['amount_paid__sum'] or Decimal('0.00')
         latest_weekly_period = (
-            CommissionPeriod.objects.filter(period_type='weekly', end_date__lte=today)
+            CommissionPeriod.objects.filter(period_type='weekly', end_date__lte=today, is_active=True)
             .order_by('-end_date', '-start_date')
             .first()
         )
@@ -7624,13 +7626,14 @@ def agent_dashboard(request):
                         period_type='monthly',
                         start_date__lte=today,
                         end_date__gte=today,
+                        is_active=True,
                     )
                     .order_by('-end_date', '-start_date')
                     .first()
                 )
                 if monthly_period is None:
                     monthly_period = (
-                        MonthlyCommissionPeriodModel.objects.filter(period_type='monthly')
+                        MonthlyCommissionPeriodModel.objects.filter(period_type='monthly', is_active=True)
                         .order_by('-end_date', '-start_date')
                         .first()
                     )
@@ -8320,7 +8323,7 @@ def agent_wallet_report(request):
         "entries_page": entries_page,
         "transaction_types": Transaction.TRANSACTION_TYPES,
         "transaction_statuses": Transaction.STATUS_CHOICES,
-        "commission_period_options": CommissionPeriod.objects.order_by("-start_date")[:120],
+        "commission_period_options": CommissionPeriod.objects.filter(is_active=True).order_by("-start_date")[:120],
         "all_users": report_users_qs.order_by("email"),
         "current_user_filter": user_filter,
         "current_type_filter": type_filter,
@@ -8695,10 +8698,10 @@ def admin_dashboard(request):
 
     selected_commission_period = None
     commission_period_id = (request.GET.get('commission_period_id') or '').strip()
-    commission_periods = list(CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')[:104])
+    commission_periods = list(CommissionPeriod.objects.filter(period_type='weekly', is_active=True).order_by('-start_date')[:104])
     if commission_period_id:
         try:
-            selected_commission_period = CommissionPeriod.objects.filter(period_type='weekly', id=int(commission_period_id)).first()
+            selected_commission_period = CommissionPeriod.objects.filter(period_type='weekly', is_active=True, id=int(commission_period_id)).first()
         except Exception:
             selected_commission_period = None
     if selected_commission_period is None and commission_periods:
@@ -12700,7 +12703,7 @@ def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
         WeeklyAgentCommission = apps.get_model('commission', 'WeeklyAgentCommission')
         from commission.services import calculate_weekly_agent_commission_data
 
-        period_qs = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
+        period_qs = CommissionPeriod.objects.filter(period_type='weekly', is_active=True).order_by('-start_date')
         commission_period_options = list(period_qs[:200])
 
         selected_period = None
@@ -12709,6 +12712,7 @@ def build_weekly_commission_dashboard_rows(agent_qs, selected_period_id_raw=''):
                 selected_period = CommissionPeriod.objects.filter(
                     id=int(selected_period_id_raw),
                     period_type='weekly',
+                    is_active=True,
                 ).first()
             except Exception:
                 selected_period = None
@@ -15226,13 +15230,13 @@ def retail_dashboard(request):
             WeeklyAgentCommission = apps.get_model('commission', 'WeeklyAgentCommission')
             from commission.services import calculate_weekly_agent_commission_data
 
-            period_qs = CommissionPeriod.objects.filter(period_type='weekly').order_by('-start_date')
+            period_qs = CommissionPeriod.objects.filter(period_type='weekly', is_active=True).order_by('-start_date')
             commission_period_options = list(period_qs[:200])
 
             selected_period = None
             if selected_commission_period_id:
                 try:
-                    selected_period = CommissionPeriod.objects.filter(id=int(selected_commission_period_id), period_type='weekly').first()
+                    selected_period = CommissionPeriod.objects.filter(id=int(selected_commission_period_id), period_type='weekly', is_active=True).first()
                 except Exception:
                     selected_period = None
 

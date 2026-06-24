@@ -328,8 +328,9 @@ class NetworkCommissionSettingsAdmin(admin.ModelAdmin):
     list_editable = ('commission_percent', 'payout_day_description')
 
 class CommissionPeriodAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'period_type', 'start_date', 'end_date', 'is_processed', 'processed_at')
-    list_filter = ('period_type', 'is_processed')
+    list_display = ('__str__', 'period_type', 'start_date', 'end_date', 'is_active', 'is_processed', 'processed_at')
+    list_editable = ('is_active',)
+    list_filter = ('period_type', 'is_active', 'is_processed')
     actions = ['process_period']
 
     def process_period(self, request, queryset):

@@ -155,6 +155,7 @@ class CommissionPeriod(models.Model):
     period_type = models.CharField(max_length=10, choices=PERIOD_TYPE_CHOICES)
     start_date = models.DateField()
     end_date = models.DateField()
+    is_active = models.BooleanField(default=True)
     is_processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(null=True, blank=True)
 

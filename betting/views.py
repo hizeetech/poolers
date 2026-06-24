@@ -5228,25 +5228,22 @@ def wallet_view(request):
             from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
             from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
 
-            weekly_refs = (
-                WeeklyAgentCommissionModel.objects.filter(period_id=period_id)
-                .annotate(ref=Cast("id", output_field=CharField()))
-                .values("ref")
-            )
-            monthly_refs = (
-                MonthlyNetworkCommissionModel.objects.filter(period_id=period_id)
-                .annotate(ref=Cast("id", output_field=CharField()))
-                .values("ref")
-            )
+            weekly_refs = [
+                str(pk)
+                for pk in WeeklyAgentCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
+            ]
+            monthly_refs = [
+                str(pk)
+                for pk in MonthlyNetworkCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
+            ]
+            commission_refs = weekly_refs + monthly_refs
             ledger_qs = ledger_qs.filter(
-                Q(
-                    metadata__type__in=["weekly_commission", "weekly_commission_adjusted"],
-                    reference__in=Subquery(weekly_refs),
-                )
-                | Q(
-                    metadata__type__in=["monthly_network_commission", "monthly_network_commission_adjusted"],
-                    reference__in=Subquery(monthly_refs),
-                )
+                reference__in=commission_refs
+            ).filter(
+                Q(metadata__type__icontains="commission")
+                | Q(transaction__transaction_type="commission_payout")
+                | Q(reason__icontains="commission")
+                | Q(transaction__description__icontains="commission")
             )
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
@@ -8239,25 +8236,22 @@ def agent_wallet_report(request):
             from commission.models import WeeklyAgentCommission as WeeklyAgentCommissionModel
             from commission.models import MonthlyNetworkCommission as MonthlyNetworkCommissionModel
 
-            weekly_refs = (
-                WeeklyAgentCommissionModel.objects.filter(period_id=period_id)
-                .annotate(ref=Cast("id", output_field=CharField()))
-                .values("ref")
-            )
-            monthly_refs = (
-                MonthlyNetworkCommissionModel.objects.filter(period_id=period_id)
-                .annotate(ref=Cast("id", output_field=CharField()))
-                .values("ref")
-            )
+            weekly_refs = [
+                str(pk)
+                for pk in WeeklyAgentCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
+            ]
+            monthly_refs = [
+                str(pk)
+                for pk in MonthlyNetworkCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
+            ]
+            commission_refs = weekly_refs + monthly_refs
             ledger_qs = ledger_qs.filter(
-                Q(
-                    metadata__type__in=["weekly_commission", "weekly_commission_adjusted"],
-                    reference__in=Subquery(weekly_refs),
-                )
-                | Q(
-                    metadata__type__in=["monthly_network_commission", "monthly_network_commission_adjusted"],
-                    reference__in=Subquery(monthly_refs),
-                )
+                reference__in=commission_refs
+            ).filter(
+                Q(metadata__type__icontains="commission")
+                | Q(transaction__transaction_type="commission_payout")
+                | Q(reason__icontains="commission")
+                | Q(transaction__description__icontains="commission")
             )
 
     if export_format in {"csv", "xlsx"}:

@@ -6,7 +6,7 @@ from django.db import models
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
-from betting.models import Loan, LoanPendingCredit, SiteConfiguration, Transaction, User, Wallet
+from betting.models import Loan, LoanPendingCredit, SiteConfiguration, Transaction, User, Wallet, WalletLedgerEntry
 from betting.services.loan_overdraft import (
     apply_repayment_and_credit_wallet,
     build_qualification_snapshot,
@@ -188,6 +188,12 @@ class WalletViewTest(TestCase):
         )
         ok, _msg = pay_weekly_commission(comm, actor=admin_user)
         self.assertTrue(ok)
+
+        WalletLedgerEntry.objects.filter(
+            user=agent,
+            reference=str(comm.id),
+            transaction__transaction_type="commission_payout",
+        ).update(metadata={})
 
         self.client.force_login(agent)
         response = self.client.get(reverse("betting:wallet"), {"tx_commission_period": str(period.id)})

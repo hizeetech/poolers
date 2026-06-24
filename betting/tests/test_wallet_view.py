@@ -200,6 +200,106 @@ class WalletViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Weekly Commission")
 
+    def test_wallet_commission_period_filter_matches_metadata_only_rows(self):
+        agent = User.objects.create_user(
+            email="cp-meta-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+            username="cp_meta_agent",
+        )
+        admin_user = User.objects.create_user(
+            email="cp-meta-admin@test.com",
+            password="testpassword",
+            user_type="admin",
+            username="cp_meta_admin",
+            is_staff=True,
+            is_superuser=True,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+        Wallet.objects.get_or_create(user=admin_user, defaults={"balance": Decimal("1000.00")})
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=21),
+            end_date=today - timedelta(days=15),
+        )
+        comm = WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period,
+            commission_total_amount=Decimal("75.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+        ok, _msg = pay_weekly_commission(comm, actor=admin_user)
+        self.assertTrue(ok)
+
+        payee_entry = WalletLedgerEntry.objects.get(
+            user=agent,
+            transaction__transaction_type="commission_payout",
+            metadata__commission_id=comm.id,
+        )
+        payee_entry.reference = ""
+        payee_entry.reason = "Weekly Commission"
+        payee_entry.save(update_fields=["reference", "reason"])
+        payee_entry.transaction.description = "Weekly Commission"
+        payee_entry.transaction.save(update_fields=["description"])
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:wallet"), {"tx_commission_period": str(period.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Weekly Commission")
+
+    def test_agent_wallet_report_commission_period_filter_matches_metadata_only_rows(self):
+        agent = User.objects.create_user(
+            email="wr-cp-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+            username="wr_cp_agent",
+        )
+        admin_user = User.objects.create_user(
+            email="wr-cp-admin@test.com",
+            password="testpassword",
+            user_type="admin",
+            username="wr_cp_admin",
+            is_staff=True,
+            is_superuser=True,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+        Wallet.objects.get_or_create(user=admin_user, defaults={"balance": Decimal("1000.00")})
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=28),
+            end_date=today - timedelta(days=22),
+        )
+        comm = WeeklyAgentCommission.objects.create(
+            agent=agent,
+            period=period,
+            commission_total_amount=Decimal("80.00"),
+            status="pending",
+            amount_paid=Decimal("0.00"),
+        )
+        ok, _msg = pay_weekly_commission(comm, actor=admin_user)
+        self.assertTrue(ok)
+
+        payee_entry = WalletLedgerEntry.objects.get(
+            user=agent,
+            transaction__transaction_type="commission_payout",
+            metadata__commission_id=comm.id,
+        )
+        payee_entry.reference = ""
+        payee_entry.reason = "Weekly Commission"
+        payee_entry.save(update_fields=["reference", "reason"])
+        payee_entry.transaction.description = "Weekly Commission"
+        payee_entry.transaction.save(update_fields=["description"])
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:agent_wallet_report"), {"commission_period": str(period.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Weekly Commission")
+
     def test_wallet_commission_period_filter_options_exclude_inactive_periods(self):
         today = timezone.localdate()
         active_period = CommissionPeriod.objects.create(

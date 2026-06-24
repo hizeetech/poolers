@@ -5278,6 +5278,7 @@ def wallet_view(request):
                 for pk in MonthlyNetworkCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
             ]
             commission_refs = weekly_refs + monthly_refs
+            numeric_commission_ids = [int(ref) for ref in commission_refs if str(ref).isdigit()]
             # #region debug-point B:commission-filter
             _dbg_wallet_500("B", "wallet commission period filter prepared", {
                 "period_id": period_id,
@@ -5290,6 +5291,7 @@ def wallet_view(request):
             ledger_qs = ledger_qs.filter(
                 (
                     Q(reference__in=commission_refs)
+                    | Q(metadata__commission_id__in=numeric_commission_ids)
                     | Q(reason__icontains=commission_period_display)
                     | Q(transaction__description__icontains=commission_period_display)
                 )
@@ -8346,9 +8348,11 @@ def agent_wallet_report(request):
                 for pk in MonthlyNetworkCommissionModel.objects.filter(period_id=period_id).values_list("id", flat=True)
             ]
             commission_refs = weekly_refs + monthly_refs
+            numeric_commission_ids = [int(ref) for ref in commission_refs if str(ref).isdigit()]
             ledger_qs = ledger_qs.filter(
                 (
                     Q(reference__in=commission_refs)
+                    | Q(metadata__commission_id__in=numeric_commission_ids)
                     | Q(reason__icontains=commission_period_display)
                     | Q(transaction__description__icontains=commission_period_display)
                 )

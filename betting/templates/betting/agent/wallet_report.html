@@ -135,14 +135,14 @@
                                     </td>
                                     <td>
                                         {% if entry.transaction and entry.transaction.initiating_user %}
-                                            {{ entry.transaction.initiating_user.email }}
+                                            {{ entry.transaction.initiating_user.username|default:"-" }}
                                         {% elif entry.actor %}
-                                            {{ entry.actor.email }}
+                                            {{ entry.actor.username|default:"-" }}
                                         {% else %}
                                             System
                                         {% endif %}
                                     </td>
-                                    <td>{% if entry.transaction and entry.transaction.target_user %}{{ entry.transaction.target_user.email }}{% else %}-{% endif %}</td>
+                                    <td>{% if entry.transaction and entry.transaction.target_user %}{{ entry.transaction.target_user.username|default:"-" }}{% else %}-{% endif %}</td>
                                     <td>{{ entry.reference|default:"-" }}</td>
                                     <td>{% if entry.transaction and entry.transaction.description %}{{ entry.transaction.description }}{% elif entry.reason %}{{ entry.reason }}{% else %}-{% endif %}</td>
                                 </tr>

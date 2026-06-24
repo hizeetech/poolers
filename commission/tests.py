@@ -14,6 +14,7 @@ from commission.services import (
     calculate_monthly_network_commission_data,
     calculate_weekly_agent_commission,
     calculate_weekly_agent_commission_data,
+    mark_weekly_commission_period_paid_without_payout,
     restore_historical_weekly_paid_commission_record,
 )
 from commission.tasks import (
@@ -376,6 +377,52 @@ class WeeklyCommissionPeriodTests(TestCase):
         saved_record = agent.weekly_commissions.get(period=period)
         self.assertEqual(saved_record.status, 'paid')
         self.assertEqual(saved_record.amount_paid, Decimal('12.00'))
+
+    def test_mark_weekly_commission_periods_paid_command_marks_period_without_wallet_credit(self):
+        agent = User.objects.create_user(email='manual-paid-agent@example.com', password='password123', user_type='agent')
+        cashier = User.objects.create_user(
+            email='manual-paid-cashier@example.com',
+            password='password123',
+            user_type='cashier',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=cashier)
+        plan = CommissionPlan.objects.create(name='Manual Paid Plan', ggr_percent=Decimal('10.00'))
+        AgentCommissionProfile.objects.create(user=agent, plan=plan, is_active=True)
+
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=date(2026, 5, 25),
+            end_date=date(2026, 5, 31),
+        )
+        ticket = BetTicket.objects.create(
+            user=cashier,
+            stake_amount=Decimal('100.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('200.00'),
+            max_winning=Decimal('0.00'),
+            status='lost',
+            bet_type='single',
+            original_selections_count=1,
+        )
+        ticket.placed_at = timezone.make_aware(datetime(2026, 5, 27, 13, 0, 0))
+        ticket.save(update_fields=['placed_at'])
+
+        out = StringIO()
+        call_command(
+            'mark_weekly_commission_periods_paid',
+            '--period-range',
+            '2026-05-25:2026-05-31',
+            stdout=out,
+        )
+
+        record = agent.weekly_commissions.get(period=period)
+        agent.wallet.refresh_from_db()
+        self.assertEqual(record.status, 'paid')
+        self.assertEqual(record.amount_paid, Decimal('10.00'))
+        self.assertEqual(agent.wallet.balance, Decimal('0.00'))
+        self.assertIn('Marked Weekly (2026-05-25 - 2026-05-31) as paid without payout', out.getvalue())
 
     def test_refresh_weekly_commissions_for_ticket_ids_creates_matching_period(self):
         agent = User.objects.create_user(email='refresh-agent@example.com', password='password123', user_type='agent')

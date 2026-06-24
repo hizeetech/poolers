@@ -92,6 +92,49 @@ def restore_historical_weekly_paid_commission_record(agent, period, *, calc_data
     )
     return record
 
+
+@transaction.atomic
+def mark_weekly_commission_period_paid_without_payout(period, *, actor=None, include_zero_amount=True):
+    profiles = AgentCommissionProfile.objects.filter(is_active=True).select_related('user', 'plan')
+    updated_count = 0
+    created_count = 0
+
+    for profile in profiles:
+        agent = profile.user
+        data = calculate_weekly_agent_commission_data(agent, period) or {}
+        data.pop('is_live_period', None)
+        calc_total = data.get('commission_total_amount')
+        if calc_total is None:
+            calc_total = Decimal('0.00')
+        if calc_total <= 0 and not include_zero_amount:
+            continue
+
+        defaults = {
+            **data,
+            'status': 'paid',
+            'amount_paid': calc_total,
+            'paid_at': timezone.now(),
+            'paid_by': actor,
+            'paid_from_user': actor,
+            'paid_source': 'system',
+            'is_marked_for_payment': False,
+        }
+        record, created = WeeklyAgentCommission.objects.update_or_create(
+            agent=agent,
+            period=period,
+            defaults=defaults,
+        )
+        if created:
+            created_count += 1
+        else:
+            updated_count += 1
+
+    return {
+        'created_count': created_count,
+        'updated_count': updated_count,
+        'total_count': created_count + updated_count,
+    }
+
 def pay_weekly_commission(commission_record, actor=None):
     if commission_record.status == 'paid':
         return False, "Already paid"

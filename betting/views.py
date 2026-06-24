@@ -5288,19 +5288,18 @@ def wallet_view(request):
                 "combined_ref_count": len(commission_refs),
             })
             # #endregion
-            ledger_qs = ledger_qs.filter(
-                (
-                    Q(reference__in=commission_refs)
-                    | Q(metadata__commission_id__in=numeric_commission_ids)
-                    | Q(reason__icontains=commission_period_display)
-                    | Q(transaction__description__icontains=commission_period_display)
-                )
-            ).filter(
-                Q(metadata__type__icontains="commission")
-                | Q(transaction__transaction_type="commission_payout")
-                | Q(reason__icontains="commission")
-                | Q(transaction__description__icontains="commission")
+            commission_period_q = (
+                Q(reference__in=commission_refs)
+                | Q(metadata__commission_id__in=numeric_commission_ids)
+                | Q(reason__icontains=commission_period_display)
+                | Q(transaction__description__icontains=commission_period_display)
             )
+            if selected_commission_period:
+                commission_period_q |= Q(
+                    created_at__date__gte=selected_commission_period.start_date,
+                    created_at__date__lte=selected_commission_period.end_date,
+                )
+            ledger_qs = ledger_qs.filter(commission_period_q)
     tx_paginator = Paginator(ledger_qs, tx_page_size)
     tx_page = tx_paginator.get_page(tx_page_number)
     # #region debug-point C:paginator
@@ -8349,19 +8348,18 @@ def agent_wallet_report(request):
             ]
             commission_refs = weekly_refs + monthly_refs
             numeric_commission_ids = [int(ref) for ref in commission_refs if str(ref).isdigit()]
-            ledger_qs = ledger_qs.filter(
-                (
-                    Q(reference__in=commission_refs)
-                    | Q(metadata__commission_id__in=numeric_commission_ids)
-                    | Q(reason__icontains=commission_period_display)
-                    | Q(transaction__description__icontains=commission_period_display)
-                )
-            ).filter(
-                Q(metadata__type__icontains="commission")
-                | Q(transaction__transaction_type="commission_payout")
-                | Q(reason__icontains="commission")
-                | Q(transaction__description__icontains="commission")
+            commission_period_q = (
+                Q(reference__in=commission_refs)
+                | Q(metadata__commission_id__in=numeric_commission_ids)
+                | Q(reason__icontains=commission_period_display)
+                | Q(transaction__description__icontains=commission_period_display)
             )
+            if selected_commission_period:
+                commission_period_q |= Q(
+                    created_at__date__gte=selected_commission_period.start_date,
+                    created_at__date__lte=selected_commission_period.end_date,
+                )
+            ledger_qs = ledger_qs.filter(commission_period_q)
 
     if export_format in {"csv", "xlsx"}:
         export_refs = [str(ref).strip() for ref in ledger_qs.values_list("reference", flat=True) if str(ref).strip()]

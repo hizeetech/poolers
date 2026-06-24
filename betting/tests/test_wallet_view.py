@@ -250,6 +250,45 @@ class WalletViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Weekly Commission")
 
+    def test_wallet_commission_period_filter_includes_transactions_within_period_dates(self):
+        Wallet.objects.get_or_create(user=self.user, defaults={"balance": Decimal("0.00")})
+        wallet = Wallet.objects.get(user=self.user)
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=7),
+            end_date=today - timedelta(days=1),
+        )
+
+        deposit_tx = Transaction.objects.create(
+            user=self.user,
+            transaction_type="deposit",
+            amount=Decimal("100.00"),
+            is_successful=True,
+            status="completed",
+            description="Period deposit",
+        )
+        wallet.apply_delta(
+            amount=Decimal("100.00"),
+            actor=self.user,
+            transaction_obj=deposit_tx,
+            reference="period-dep-1",
+            reason="Period deposit",
+            metadata={},
+        )
+        ledger_entry = WalletLedgerEntry.objects.get(user=self.user, reference="period-dep-1")
+        inside_dt = timezone.make_aware(
+            datetime.combine(period.start_date + timedelta(days=1), datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        WalletLedgerEntry.objects.filter(pk=ledger_entry.pk).update(created_at=inside_dt)
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("betting:wallet"), {"tx_commission_period": str(period.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Period deposit")
+
     def test_agent_wallet_report_commission_period_filter_matches_metadata_only_rows(self):
         agent = User.objects.create_user(
             email="wr-cp-agent@test.com",
@@ -299,6 +338,51 @@ class WalletViewTest(TestCase):
         response = self.client.get(reverse("betting:agent_wallet_report"), {"commission_period": str(period.id)})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Weekly Commission")
+
+    def test_agent_wallet_report_commission_period_filter_includes_transactions_within_period_dates(self):
+        agent = User.objects.create_user(
+            email="wr-period-agent@test.com",
+            password="testpassword",
+            user_type="agent",
+            username="wr_period_agent",
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={"balance": Decimal("0.00")})
+        wallet = Wallet.objects.get(user=agent)
+
+        today = timezone.localdate()
+        period = CommissionPeriod.objects.create(
+            period_type="weekly",
+            start_date=today - timedelta(days=14),
+            end_date=today - timedelta(days=8),
+        )
+
+        tx = Transaction.objects.create(
+            user=agent,
+            transaction_type="deposit",
+            amount=Decimal("55.00"),
+            is_successful=True,
+            status="completed",
+            description="Report period deposit",
+        )
+        wallet.apply_delta(
+            amount=Decimal("55.00"),
+            actor=agent,
+            transaction_obj=tx,
+            reference="report-period-dep-1",
+            reason="Report period deposit",
+            metadata={},
+        )
+        ledger_entry = WalletLedgerEntry.objects.get(user=agent, reference="report-period-dep-1")
+        inside_dt = timezone.make_aware(
+            datetime.combine(period.start_date + timedelta(days=1), datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        WalletLedgerEntry.objects.filter(pk=ledger_entry.pk).update(created_at=inside_dt)
+
+        self.client.force_login(agent)
+        response = self.client.get(reverse("betting:agent_wallet_report"), {"commission_period": str(period.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Report period deposit")
 
     def test_wallet_commission_period_filter_options_exclude_inactive_periods(self):
         today = timezone.localdate()

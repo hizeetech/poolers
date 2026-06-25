@@ -161,6 +161,8 @@ class BettingAdminSite(admin.AdminSite):
             path('reports/tickets-by-event/', self.admin_view(views.admin_tickets_by_event_report), name='admin_tickets_by_event_report'),
             path('ops/reconciliation/', self.admin_view(views.admin_reconciliation_dashboard), name='admin_reconciliation_dashboard'),
             path('ops/reconciled-credits/', self.admin_view(views.admin_reconciled_credits_dashboard), name='admin_reconciled_credits_dashboard'),
+            path('ops/issued-overdraft/', self.admin_view(views.admin_issued_overdrafts), name='admin_issued_overdrafts'),
+            path('ops/retail-manual-adjustments/', self.admin_view(views.admin_retail_manual_adjustments), name='admin_retail_manual_adjustments'),
             path('ops/loan-overdraft-center/', self.admin_view(views.admin_loan_overdraft_center), name='admin_loan_overdraft_center'),
             path('ops/ticket-transactions/', self.admin_view(views.admin_ticket_transactions), name='admin_ticket_transactions'),
             path('ops/ticket-transactions/backfill/', self.admin_view(views.admin_backfill_ticket_transactions), name='admin_backfill_ticket_transactions'),

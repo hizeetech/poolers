@@ -547,6 +547,15 @@
                                 <label for="id_description" class="form-label">Description (Optional)</label>
                                 <input type="text" name="description" id="id_description" class="form-control rounded-pill px-4 py-2" placeholder="e.g., Funds for betting">
                             </div>
+                            {% if request.user.user_type == 'account_user' or request.user.user_type == 'super_agent' or request.user.user_type == 'master_agent' %}
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" value="1" id="id_treat_as_overdraft" name="treat_as_overdraft">
+                                <label class="form-check-label fw-semibold" for="id_treat_as_overdraft">
+                                    Treat as Overdraft / Loan
+                                </label>
+                                <div class="small text-muted mt-1">Use this only when crediting an agent wallet. Existing overdraft repayment and locking rules will apply automatically.</div>
+                            </div>
+                            {% endif %}
                             <button type="submit" class="btn btn-info rounded-pill px-4 py-2 w-100" id="walletTransferSubmitBtn">Perform Transfer</button>
                         </form>
                     </div>

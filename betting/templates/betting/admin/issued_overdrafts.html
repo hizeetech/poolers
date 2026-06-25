@@ -1,0 +1,173 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}Issued Overdraft{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="h3 mb-1">Issued Overdraft</h2>
+            <div class="text-muted">Central view of overdrafts issued by account users, super agents, and master agents.</div>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'betting_admin:admin_retail_manual_adjustments' %}" class="btn btn-outline-primary">Retail Manual Adjustment</a>
+            <a href="{% url 'betting_admin:dashboard' %}" class="btn btn-outline-secondary">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 bg-light h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Records</div>
+                    <div class="fs-5 fw-bold">{{ rows_page.paginator.count }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 bg-light h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Total Issued</div>
+                    <div class="fs-5 fw-bold">₦{{ summary.total_issued|floatformat:2 }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 bg-light h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Outstanding</div>
+                    <div class="fs-5 fw-bold text-danger">₦{{ summary.total_outstanding|floatformat:2 }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 bg-light h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Current Page</div>
+                    <div class="fs-5 fw-bold">{{ rows_page.number }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form method="get" class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                    <label class="form-label small text-muted mb-1">Search</label>
+                    <input type="text" name="loan_q" value="{{ filters.q }}" class="form-control" placeholder="Agent, phone, issuer">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Start Date</label>
+                    <input type="date" name="start_date" value="{{ filters.start_date }}" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">End Date</label>
+                    <input type="date" name="end_date" value="{{ filters.end_date }}" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Status</label>
+                    <select name="loan_status" class="form-select">
+                        <option value="">All</option>
+                        <option value="approved" {% if filters.status == 'approved' %}selected{% endif %}>Approved</option>
+                        <option value="partially_repaid" {% if filters.status == 'partially_repaid' %}selected{% endif %}>Partially Repaid</option>
+                        <option value="overdue" {% if filters.status == 'overdue' %}selected{% endif %}>Overdue</option>
+                        <option value="fully_settled" {% if filters.status == 'fully_settled' %}selected{% endif %}>Fully Settled</option>
+                        <option value="locked" {% if filters.status == 'locked' %}selected{% endif %}>Locked</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small text-muted mb-1">Issued By</label>
+                    <input type="text" name="loan_issued_by" value="{{ filters.issued_by }}" class="form-control" placeholder="Issuer username">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Withdrawal Locked</label>
+                    <select name="loan_withdrawal_locked" class="form-select">
+                        <option value="">All</option>
+                        <option value="yes" {% if filters.withdrawal_locked == 'yes' %}selected{% endif %}>Yes</option>
+                        <option value="no" {% if filters.withdrawal_locked == 'no' %}selected{% endif %}>No</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1">Account Locked</label>
+                    <select name="loan_account_locked" class="form-select">
+                        <option value="">All</option>
+                        <option value="yes" {% if filters.account_locked == 'yes' %}selected{% endif %}>Yes</option>
+                        <option value="no" {% if filters.account_locked == 'no' %}selected{% endif %}>No</option>
+                    </select>
+                </div>
+                <div class="col-md-8 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                    <a href="{% url 'betting_admin:admin_issued_overdrafts' %}" class="btn btn-outline-secondary">Reset</a>
+                </div>
+            </form>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Date/Time</th>
+                            <th>Agent Username</th>
+                            <th>Agent Phone</th>
+                            <th>Issued By</th>
+                            <th>Issuer Role</th>
+                            <th>Amount</th>
+                            <th>Outstanding Balance</th>
+                            <th>Status</th>
+                            <th>Withdrawal Locked</th>
+                            <th>Account Locked</th>
+                            <th>Active Overdraft</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows_page %}
+                        <tr>
+                            <td>{{ row.date_issued }} {{ row.time_issued }}</td>
+                            <td>{{ row.agent_username }}</td>
+                            <td>{{ row.agent_phone_number }}</td>
+                            <td>{{ row.issued_by }}</td>
+                            <td>{{ row.issuer_role }}</td>
+                            <td>₦{{ row.amount_given|floatformat:2 }}</td>
+                            <td>₦{{ row.outstanding_balance|floatformat:2 }}</td>
+                            <td>{{ row.status }}</td>
+                            <td>{{ row.withdrawal_locked }}</td>
+                            <td>{{ row.account_locked }}</td>
+                            <td>
+                                <input type="checkbox" class="form-check-input" {% if row.active_overdraft == 'Yes' %}checked{% endif %} disabled>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="11" class="text-center text-muted py-4">No issued overdrafts found for the selected filters.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {% if rows_page.has_other_pages %}
+            <nav class="mt-3" aria-label="Issued overdraft pagination">
+                <ul class="pagination mb-0">
+                    {% if rows_page.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ rows_page.previous_page_number }}{% if querystring %}&{{ querystring }}{% endif %}">Previous</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled"><span class="page-link">Previous</span></li>
+                    {% endif %}
+                    <li class="page-item active"><span class="page-link">{{ rows_page.number }}</span></li>
+                    {% if rows_page.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ rows_page.next_page_number }}{% if querystring %}&{{ querystring }}{% endif %}">Next</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled"><span class="page-link">Next</span></li>
+                    {% endif %}
+                </ul>
+            </nav>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

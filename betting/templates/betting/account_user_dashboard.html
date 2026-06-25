@@ -204,6 +204,9 @@ $(document).ready(function() {
             <a class="nav-link" href="#acct-commissions-section">Commissions</a>
         </li>
         <li class="nav-item">
+            <a class="nav-link" href="#acct-issued-overdrafts">Issued Overdrafts</a>
+        </li>
+        <li class="nav-item">
             <a class="nav-link" href="#acct-overdraft-center">Overdraft / Loan Center</a>
         </li>
     </ul>
@@ -476,6 +479,52 @@ $(document).ready(function() {
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4" id="acct-issued-overdrafts">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <div>
+                <div class="fw-semibold">Issued Overdrafts</div>
+                <div class="small text-white-50">All overdrafts issued by account users to agents.</div>
+            </div>
+            <span class="badge bg-light text-dark">{{ issued_overdraft_rows|length }}</span>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Agent</th>
+                            <th>Phone Number</th>
+                            <th>Amount Issued</th>
+                            <th>Outstanding Balance</th>
+                            <th>Date Issued</th>
+                            <th>Status</th>
+                            <th>Withdrawal Locked</th>
+                            <th>Account Locked</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in issued_overdraft_rows %}
+                        <tr>
+                            <td>{{ row.agent_username }}</td>
+                            <td>{{ row.agent_phone_number }}</td>
+                            <td>₦{{ row.amount_given|floatformat:2 }}</td>
+                            <td>₦{{ row.outstanding_balance|floatformat:2 }}</td>
+                            <td>{{ row.date_issued }} {{ row.time_issued }}</td>
+                            <td>{{ row.status }}</td>
+                            <td>{{ row.withdrawal_locked }}</td>
+                            <td>{{ row.account_locked }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="8" class="text-center text-muted py-4">No account-user overdrafts found.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>

@@ -25,6 +25,7 @@ from betting.models import (
     Transaction,
     User,
     Wallet,
+    WalletLedgerEntry,
 )
 from betting.utils import logout_user_from_all_active_sessions
 from notifications.services import create_notification, send_sms_ebulksms
@@ -768,6 +769,183 @@ def create_manual_overdraft(*, actor: User, borrower: User, amount, reason="", i
             data={"loan_id": loan.id},
         )
         return loan
+
+
+def _loan_issue_role_label(user_obj: User | None) -> str:
+    if not user_obj:
+        return ""
+    if getattr(user_obj, "is_superuser", False):
+        return "superadmin"
+    return (getattr(user_obj, "user_type", "") or "").strip().lower()
+
+
+def _loan_issue_entry_metadata(entry: WalletLedgerEntry | None) -> dict:
+    return dict(getattr(entry, "metadata", {}) or {}) if entry is not None else {}
+
+
+def _mark_credit_entry_as_overdraft(*, entry: WalletLedgerEntry | None, loan: Loan, actor: User | None, source: str, converted: bool):
+    if entry is None:
+        return
+    metadata = _loan_issue_entry_metadata(entry)
+    metadata.update(
+        {
+            "classification": "overdraft",
+            "overdraft": True,
+            "loan_id": loan.id,
+            "overdraft_source": source,
+            "converted_to_overdraft": bool(converted),
+            "issuer_role": _loan_issue_role_label(actor),
+        }
+    )
+    entry.metadata = metadata
+    entry.save(update_fields=["metadata"])
+
+
+@transaction.atomic
+def create_overdraft_from_existing_credit(
+    *,
+    actor: User,
+    performed_by: User | None = None,
+    borrower: User,
+    amount,
+    reason="",
+    transaction_obj: Transaction | None = None,
+    wallet_entry: WalletLedgerEntry | None = None,
+    reference="",
+    source="wallet_transfer_overdraft",
+    qualification_amount=None,
+    converted=False,
+    ip_address=None,
+):
+    amount = quantize_money(amount)
+    if amount <= 0:
+        raise LoanOverdraftError("Amount must be greater than zero.")
+    if not actor or not getattr(actor, "is_authenticated", False):
+        raise LoanOverdraftError("A valid issuer is required.")
+    if not borrower or getattr(borrower, "user_type", "") != "agent":
+        raise LoanOverdraftError("Only agent wallet credits can be treated as overdraft.")
+
+    borrower = User.objects.select_for_update().get(pk=borrower.pk)
+    if wallet_entry is None and transaction_obj is not None:
+        wallet_entry = (
+            WalletLedgerEntry.objects.select_for_update()
+            .filter(transaction=transaction_obj, user=borrower, direction="credit")
+            .order_by("-id")
+            .first()
+        )
+    if wallet_entry is not None:
+        entry_metadata = _loan_issue_entry_metadata(wallet_entry)
+        existing_loan_id = entry_metadata.get("loan_id")
+        if existing_loan_id:
+            existing = Loan.objects.filter(pk=existing_loan_id).first()
+            if existing is not None:
+                raise LoanOverdraftError("This wallet credit has already been classified as an overdraft.")
+
+    loan_reason = (reason or "").strip() or "Wallet transfer overdraft"
+    audit_actor = performed_by if getattr(performed_by, "is_authenticated", False) else actor
+    workflow_snapshot = {
+        "issuance_source": source,
+        "source_transaction_id": str(getattr(transaction_obj, "id", "") or ""),
+        "wallet_ledger_entry_id": getattr(wallet_entry, "id", None),
+        "converted_to_overdraft": bool(converted),
+        "issuer_role": _loan_issue_role_label(actor),
+        "issued_by_user_id": actor.id,
+        "conversion_performed_by_id": getattr(audit_actor, "id", None),
+        "existing_credit_used": True,
+        "reference": reference or "",
+    }
+    qualified_amount = quantize_money(qualification_amount if qualification_amount is not None else amount)
+    approval_level = "super_agent" if getattr(actor, "user_type", "") == "super_agent" else "admin"
+
+    loan = Loan.objects.create(
+        borrower=borrower,
+        lender=actor,
+        amount=amount,
+        requested_amount=amount,
+        qualified_amount=qualified_amount,
+        outstanding_balance=amount,
+        status="active",
+        loan_type="manual_overdraft",
+        approval_level=approval_level,
+        approved_by=actor,
+        approved_at=timezone.now(),
+        due_date=_next_due_datetime(),
+        request_reason=loan_reason,
+        manual_assignment=True,
+        workflow_snapshot=workflow_snapshot,
+    )
+    _mark_credit_entry_as_overdraft(
+        entry=wallet_entry,
+        loan=loan,
+        actor=actor,
+        source=source,
+        converted=converted,
+    )
+    create_loan_audit(
+        loan=loan,
+        action="manual_assigned",
+        performed_by=audit_actor,
+        amount=amount,
+        reason=loan_reason,
+        ip_address=ip_address,
+        metadata={
+            "wallet_credited": False,
+            "existing_credit_used": True,
+            "source": source,
+            "converted_to_overdraft": bool(converted),
+            "issuer_user_id": actor.id,
+            "issuer_role": _loan_issue_role_label(actor),
+            "conversion_performed_by_id": getattr(audit_actor, "id", None),
+            "source_transaction_id": str(getattr(transaction_obj, "id", "") or ""),
+            "wallet_ledger_entry_id": getattr(wallet_entry, "id", None),
+            "outstanding_balance": f"{amount:.2f}",
+            "withdrawal_locked": True,
+            "account_locked": False,
+        },
+    )
+    notify_loan_event(
+        user=borrower,
+        title="Overdraft Granted",
+        message=(
+            f"You have been granted an overdraft of N{amount}. "
+            "Withdrawal requests are disabled until the overdraft is fully cleared. "
+            "Please settle the overdraft before the configured repayment deadline."
+        ),
+        notification_type="LOAN_MANUAL_ASSIGNED",
+        data={"loan_id": loan.id, "source": source, "converted_to_overdraft": bool(converted)},
+    )
+    _reassess_borrower_overdraft_lock_state(borrower)
+    return loan
+
+
+@transaction.atomic
+def convert_wallet_credit_entry_to_overdraft(*, actor: User, wallet_entry_id: int, reason="", ip_address=None):
+    entry = (
+        WalletLedgerEntry.objects.select_for_update()
+        .filter(pk=wallet_entry_id, direction="credit", user__user_type="agent")
+        .first()
+    )
+    if entry is None:
+        raise LoanOverdraftError("Selected wallet credit entry was not found.")
+    metadata = _loan_issue_entry_metadata(entry)
+    if metadata.get("loan_id") or metadata.get("overdraft"):
+        raise LoanOverdraftError("Selected wallet credit entry is already classified as overdraft.")
+    if not entry.actor or getattr(entry.actor, "user_type", "") not in {"account_user", "super_agent", "master_agent"}:
+        raise LoanOverdraftError("Only credits issued by Account Users, Super Agents, or Master Agents can be converted.")
+    return create_overdraft_from_existing_credit(
+        actor=entry.actor,
+        performed_by=actor,
+        borrower=entry.user,
+        amount=entry.amount,
+        reason=reason or entry.reason or getattr(entry.transaction, "description", "") or "Retroactive overdraft conversion",
+        transaction_obj=entry.transaction,
+        wallet_entry=entry,
+        reference=entry.reference or "",
+        source="retroactive_manual_adjustment",
+        qualification_amount=entry.amount,
+        converted=True,
+        ip_address=ip_address,
+    )
 
 
 def _loan_lock_targets(borrower: User):

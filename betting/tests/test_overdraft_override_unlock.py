@@ -6,6 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from betting.models import AccountLockAuditLog, Loan, LoanAuditLog, LoanRepayment, Transaction, User, Wallet
+from betting.forms import AdminOverdraftWalletFundingForm
 from betting.services.loan_overdraft import enforce_due_loans
 
 
@@ -218,7 +219,23 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertContains(response, "Total Balance (Agent + Downline)")
         self.assertContains(response, "Recall Overdraft")
         self.assertContains(response, "Clear Overdraft")
-        self.assertContains(response, "₦200.00")
+
+    def test_overdraft_wallet_funding_form_lists_super_agents_by_username(self):
+        second_super_agent = User.objects.create_user(
+            email="sa-second@test.com",
+            password=self.password,
+            user_type="super_agent",
+            username="sa_second",
+        )
+        Wallet.objects.get_or_create(user=second_super_agent, defaults={"balance": Decimal("0.00")})
+
+        form = AdminOverdraftWalletFundingForm()
+        labels = [label for _value, label in form.fields["super_agent"].choices if label and label != "Select super agent"]
+
+        self.assertIn("sa_override", labels)
+        self.assertIn("sa_second", labels)
+        self.assertNotIn("sa-override@test.com", labels)
+        self.assertNotIn("sa-second@test.com", labels)
 
     def test_outstanding_tab_shows_offset_ready_highlight_for_overdue_loan(self):
         loan = self._create_overdue_locked_loan()

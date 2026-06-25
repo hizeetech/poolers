@@ -1661,6 +1661,12 @@ class AdminOverdraftWalletFundingForm(forms.Form):
         ),
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["super_agent"].label_from_instance = (
+            lambda user_obj: (getattr(user_obj, "username", "") or getattr(user_obj, "email", "") or "").strip()
+        )
+
 
 class LoanOverrideUnlockForm(forms.Form):
     loan_id = forms.IntegerField(widget=forms.HiddenInput())

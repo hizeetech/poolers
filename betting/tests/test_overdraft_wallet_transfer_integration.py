@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from betting.models import Loan, Transaction, User, Wallet, WalletLedgerEntry
+from betting.models import Loan, OverdraftWallet, Transaction, User, Wallet, WalletLedgerEntry
 
 
 class OverdraftWalletTransferIntegrationTests(TestCase):
@@ -91,6 +91,48 @@ class OverdraftWalletTransferIntegrationTests(TestCase):
         ).latest("id")
         self.assertEqual(credit_entry.metadata.get("classification"), "overdraft")
         self.assertTrue(credit_entry.metadata.get("overdraft"))
+        self.assertEqual(credit_entry.metadata.get("loan_id"), loan.id)
+
+    def test_super_agent_wallet_transfer_overdraft_uses_funded_overdraft_wallet_when_cash_wallet_is_empty(self):
+        self.super_agent.wallet.balance = Decimal("0.00")
+        self.super_agent.wallet.save(update_fields=["balance"])
+        overdraft_wallet = OverdraftWallet.objects.create(
+            super_agent=self.super_agent,
+            total_funded=Decimal("500.00"),
+            current_balance=Decimal("500.00"),
+        )
+
+        self.client.force_login(self.super_agent)
+        response = self.client.post(
+            reverse("betting:wallet_transfer"),
+            {
+                "recipient_identifier": str(self.agent.id),
+                "amount": "200.00",
+                "transaction_type": "credit",
+                "description": "Super agent overdraft issue",
+                "treat_as_overdraft": "1",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        loan = Loan.objects.get(borrower=self.agent, lender=self.super_agent)
+        self.assertEqual(loan.amount, Decimal("200.00"))
+        self.assertEqual(loan.outstanding_balance, Decimal("200.00"))
+        self.assertEqual(loan.overdraft_wallet_id, overdraft_wallet.id)
+
+        self.super_agent.wallet.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        overdraft_wallet.refresh_from_db()
+        self.assertEqual(self.super_agent.wallet.balance, Decimal("0.00"))
+        self.assertEqual(self.agent.wallet.balance, Decimal("200.00"))
+        self.assertEqual(overdraft_wallet.current_balance, Decimal("300.00"))
+
+        credit_entry = WalletLedgerEntry.objects.filter(
+            user=self.agent,
+            transaction__transaction_type="wallet_transfer_in",
+        ).latest("id")
+        self.assertEqual(credit_entry.metadata.get("funding_source"), "super_agent_overdraft_wallet")
         self.assertEqual(credit_entry.metadata.get("loan_id"), loan.id)
 
     def test_admin_retroactive_conversion_creates_overdraft_without_double_crediting_wallet(self):

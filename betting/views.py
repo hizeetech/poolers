@@ -6975,6 +6975,7 @@ def verify_withdrawal_pin(request):
     return JsonResponse({'status': 'error', 'message': 'Invalid withdrawal PIN.', 'attempts_remaining': remaining}, status=400)
 
 
+@db_transaction.atomic
 def _execute_wallet_credit_transfer(*, actor, recipient, amount, description="", treat_as_overdraft=False, qualification_amount=None, source="wallet_transfer", ip_address=None):
     amount = Decimal(str(amount or "0")).quantize(Decimal("0.01"))
     if amount <= Decimal("0.00"):
@@ -6982,13 +6983,23 @@ def _execute_wallet_credit_transfer(*, actor, recipient, amount, description="",
 
     sender_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=actor, defaults={"balance": Decimal("0.00")})
     recipient_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=recipient, defaults={"balance": Decimal("0.00")})
-    if sender_wallet.balance < amount:
-        raise LoanOverdraftError("Insufficient balance to complete this transfer.")
+    overdraft_wallet = None
+    use_overdraft_wallet = False
     if treat_as_overdraft:
         if not _is_wallet_transfer_overdraft_actor(actor):
             raise LoanOverdraftError("Only Account Users, Super Agents, and Master Agents can issue overdraft from wallet transfer.")
         if getattr(recipient, "user_type", "") != "agent":
             raise LoanOverdraftError("Overdraft can only be issued to an agent.")
+        if getattr(actor, "user_type", "") == "super_agent":
+            overdraft_wallet = get_or_create_overdraft_wallet(actor)
+            overdraft_wallet = OverdraftWallet.objects.select_for_update().get(pk=overdraft_wallet.pk)
+            use_overdraft_wallet = overdraft_wallet.current_balance >= amount
+    if not use_overdraft_wallet and sender_wallet.balance < amount:
+        if treat_as_overdraft and getattr(actor, "user_type", "") == "super_agent":
+            raise LoanOverdraftError(
+                "Insufficient balance to complete this transfer. Fund the Super Agent overdraft wallet or top up the wallet balance."
+            )
+        raise LoanOverdraftError("Insufficient balance to complete this transfer.")
 
     description_text = (description or "").strip()
     if treat_as_overdraft:
@@ -7020,14 +7031,28 @@ def _execute_wallet_credit_transfer(*, actor, recipient, amount, description="",
         description=transfer_description_recipient,
         timestamp=timezone.now(),
     )
-    sender_wallet.apply_delta(
-        amount=-amount,
-        actor=actor,
-        transaction_obj=tx_sender,
-        reference=str(tx_sender.id),
-        reason=tx_sender.description,
-        metadata={"transfer": "out", "counterparty": recipient.id, "treat_as_overdraft": bool(treat_as_overdraft), "source": source},
-    )
+    if use_overdraft_wallet and overdraft_wallet is not None:
+        overdraft_wallet.apply_delta(
+            amount=-amount,
+            actor=actor,
+            reference=f"wallet-transfer:{tx_recipient.id}",
+            reason=tx_sender.description,
+            metadata={
+                "source": source,
+                "funding_source": "super_agent_overdraft_wallet",
+                "recipient_id": recipient.id,
+                "transaction_id": str(tx_recipient.id),
+            },
+        )
+    else:
+        sender_wallet.apply_delta(
+            amount=-amount,
+            actor=actor,
+            transaction_obj=tx_sender,
+            reference=str(tx_sender.id),
+            reason=tx_sender.description,
+            metadata={"transfer": "out", "counterparty": recipient.id, "treat_as_overdraft": bool(treat_as_overdraft), "source": source},
+        )
     recipient_wallet.apply_delta(
         amount=amount,
         actor=actor,
@@ -7040,6 +7065,7 @@ def _execute_wallet_credit_transfer(*, actor, recipient, amount, description="",
             "treat_as_overdraft": bool(treat_as_overdraft),
             "classification": "overdraft" if treat_as_overdraft else "manual_credit",
             "source": source,
+            "funding_source": "super_agent_overdraft_wallet" if use_overdraft_wallet else "wallet",
         },
     )
 
@@ -7059,6 +7085,12 @@ def _execute_wallet_credit_transfer(*, actor, recipient, amount, description="",
             qualification_amount=qualification_amount,
             ip_address=ip_address,
         )
+        if use_overdraft_wallet and overdraft_wallet is not None:
+            workflow_snapshot = dict(getattr(loan, "workflow_snapshot", {}) or {})
+            workflow_snapshot["funding_source"] = "super_agent_overdraft_wallet"
+            loan.overdraft_wallet = overdraft_wallet
+            loan.workflow_snapshot = workflow_snapshot
+            loan.save(update_fields=["overdraft_wallet", "workflow_snapshot", "updated_at"])
         action_type = 'wallet_transfer_overdraft'
         status = 'active'
         reference_id = str(loan.id)

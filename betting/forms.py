@@ -836,10 +836,20 @@ class WalletTransferForm(forms.Form):
 
         # Balance Check
         if amount is not None and recipient_user:
+            treat_as_overdraft = (self.data.get('treat_as_overdraft') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
             if transaction_type == 'credit':
-                sender_wallet = Wallet.objects.get(user=self.sender_user)
-                if sender_wallet.balance < amount:
+                sender_wallet, _ = Wallet.objects.get_or_create(user=self.sender_user, defaults={'balance': Decimal('0.00')})
+                overdraft_wallet_balance = Decimal('0.00')
+                if (
+                    treat_as_overdraft
+                    and self.sender_user.user_type == 'super_agent'
+                    and recipient_user.user_type == 'agent'
+                ):
+                    from .services.loan_overdraft import get_or_create_overdraft_wallet
+
+                    overdraft_wallet_balance = get_or_create_overdraft_wallet(self.sender_user).current_balance
+                if sender_wallet.balance < amount and overdraft_wallet_balance < amount:
                     self.add_error('amount', "Insufficient balance in your wallet to credit the recipient.")
             elif transaction_type == 'debit':
                 recipient_wallet = Wallet.objects.get(user=recipient_user)

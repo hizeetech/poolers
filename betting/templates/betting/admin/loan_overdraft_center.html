@@ -361,7 +361,22 @@
                                     </form>
                                 </div>
                                 {% elif loan.status == 'pending' and loan.approval_level == 'super_agent' %}
-                                <span class="badge bg-warning text-dark">Awaiting Super Agent</span>
+                                <div class="d-flex flex-column gap-2" style="min-width: 220px;">
+                                    <form method="post" class="d-flex gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <input type="hidden" name="action" value="approve">
+                                        <button type="submit" name="loan_decision_submit" class="btn btn-sm btn-success">Approve</button>
+                                    </form>
+                                    <form method="post" class="d-flex gap-2">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="loan_id" value="{{ loan.id }}">
+                                        <input type="hidden" name="action" value="reject">
+                                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="Reason for rejection" required>
+                                        <button type="submit" name="loan_decision_submit" class="btn btn-sm btn-outline-danger">Reject</button>
+                                    </form>
+                                    <div class="small text-muted">Uses the mapped Super Agent overdraft wallet when approved.</div>
+                                </div>
                                 {% elif loan.can_relock_after_override %}
                                 <form method="post" class="d-flex flex-column gap-2" style="min-width: 220px;">
                                     {% csrf_token %}

@@ -184,6 +184,51 @@ class RBACTests(TestCase):
         self.assertEqual(loan.outstanding_balance, Decimal('500.00'))
         self.assertEqual(self.super_agent.wallet.balance, Decimal('500.00'))
 
+    def test_admin_loan_center_can_approve_pending_agent_request_from_pending_tab(self):
+        OverdraftWallet.objects.create(
+            super_agent=self.super_agent,
+            total_funded=Decimal('1000.00'),
+            current_balance=Decimal('1000.00'),
+        )
+        loan = Loan.objects.create(
+            borrower=self.agent,
+            lender=self.super_agent,
+            amount=Decimal('0.00'),
+            requested_amount=Decimal('400.00'),
+            qualified_amount=Decimal('400.00'),
+            outstanding_balance=Decimal('0.00'),
+            status='pending',
+            loan_type='agent_overdraft',
+            approval_level='super_agent',
+        )
+
+        self.client.force_login(self.admin)
+        page_response = self.client.get(reverse('betting_admin:admin_loan_overdraft_center'), {'tab': 'pending'})
+        self.assertEqual(page_response.status_code, 200)
+        self.assertContains(page_response, 'Approve')
+        self.assertContains(page_response, 'Reject')
+
+        response = self.client.post(
+            reverse('betting_admin:admin_loan_overdraft_center') + '?tab=pending',
+            {
+                'loan_id': str(loan.id),
+                'action': 'approve',
+                'loan_decision_submit': '1',
+            },
+            follow=True,
+        )
+
+        loan.refresh_from_db()
+        self.agent.wallet.refresh_from_db()
+        overdraft_wallet = OverdraftWallet.objects.get(super_agent=self.super_agent)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(loan.status, 'active')
+        self.assertEqual(loan.outstanding_balance, Decimal('400.00'))
+        self.assertEqual(loan.approved_by, self.admin)
+        self.assertEqual(self.agent.wallet.balance, Decimal('400.00'))
+        self.assertEqual(overdraft_wallet.current_balance, Decimal('600.00'))
+
     def test_admin_loan_center_can_fund_super_agent_overdraft_wallet(self):
         self.client.force_login(self.admin)
         response = self.client.post(

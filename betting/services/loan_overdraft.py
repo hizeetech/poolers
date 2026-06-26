@@ -552,8 +552,11 @@ def submit_overdraft_request(*, borrower: User, requested_amount, reason="", ip_
 
 def _approve_agent_loan(*, actor: User, loan: Loan, ip_address=None):
     funding_user = getattr(loan.borrower, "super_agent", None) or loan.lender
-    if not funding_user or funding_user.id != actor.id:
-        raise LoanOverdraftError("Only the mapped super agent can approve this overdraft request.")
+    actor_is_admin = bool(getattr(actor, "is_superuser", False) or getattr(actor, "user_type", "") == "admin")
+    if not funding_user:
+        raise LoanOverdraftError("No mapped super agent is configured for this overdraft request.")
+    if funding_user.id != actor.id and not actor_is_admin:
+        raise LoanOverdraftError("Only the mapped super agent, admin, or superadmin can approve this overdraft request.")
     overdraft_wallet = get_or_create_overdraft_wallet(funding_user)
     overdraft_wallet = OverdraftWallet.objects.select_for_update().get(pk=overdraft_wallet.pk)
     amount = quantize_money(loan.requested_amount)
@@ -669,8 +672,9 @@ def reject_loan_request(*, actor: User, loan_id: int, reason: str, ip_address=No
         loan = Loan.objects.select_for_update().select_related("borrower").get(id=loan_id)
         if loan.status != "pending":
             raise LoanOverdraftError("This loan request has already been processed.")
-        if loan.approval_level == "super_agent" and actor.id != loan.lender_id:
-            raise LoanOverdraftError("Only the mapped super agent can reject this request.")
+        actor_is_admin = bool(getattr(actor, "is_superuser", False) or getattr(actor, "user_type", "") == "admin")
+        if loan.approval_level == "super_agent" and actor.id != loan.lender_id and not actor_is_admin:
+            raise LoanOverdraftError("Only the mapped super agent, admin, or superadmin can reject this request.")
         if loan.approval_level == "admin" and not (actor.is_superuser or actor.user_type == "admin"):
             raise LoanOverdraftError("Only admin or superadmin can reject this request.")
         loan.status = "rejected"

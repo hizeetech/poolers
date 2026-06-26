@@ -1449,13 +1449,48 @@ class PaymentGatewayDepositAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'user', 'payment_gateway', 'amount', 'status', 'is_successful', 'external_reference')
     list_filter = ('payment_gateway', 'status', 'is_successful', 'timestamp')
     search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
-    readonly_fields = ('timestamp',)
+    readonly_fields = (
+        'id',
+        'user',
+        'initiating_user',
+        'target_user',
+        'transaction_type',
+        'amount',
+        'is_successful',
+        'status',
+        'description',
+        'timestamp',
+        'related_bet_ticket',
+        'related_withdrawal_request',
+        'related_payout',
+        'payment_gateway',
+        'paystack_reference',
+        'external_reference',
+    )
+    fields = readonly_fields
     date_hierarchy = 'timestamp'
-    list_select_related = ('user',)
+    list_select_related = (
+        'user',
+        'initiating_user',
+        'target_user',
+        'related_bet_ticket',
+        'related_withdrawal_request',
+        'related_payout',
+    )
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
+        qs = super().get_queryset(request).select_related(
+            'user',
+            'initiating_user',
+            'target_user',
+            'related_bet_ticket',
+            'related_withdrawal_request',
+            'related_payout',
+        )
         return qs.filter(transaction_type='deposit', payment_gateway__in=['monnify', 'paystack', 'kora'])
+
+    def has_add_permission(self, request):
+        return False
 
     def changelist_view(self, request, extra_context=None):
         extra_context = extra_context or {}

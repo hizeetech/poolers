@@ -265,6 +265,21 @@ def user_has_overdraft_due_restriction(user: User) -> bool:
     )
 
 
+def user_has_overdraft_bet_restriction(user: User) -> bool:
+    borrower = get_overdraft_restriction_borrower(user)
+    if not borrower:
+        return False
+    now = timezone.now()
+    due_loans = list(
+        get_user_outstanding_loans(borrower).filter(
+            Q(status__in=["overdue", "defaulted"]) | Q(due_date__lt=now)
+        )
+    )
+    if not due_loans:
+        return False
+    return any(not loan_has_active_lock_override(loan) for loan in due_loans)
+
+
 def get_user_pending_credit_amount(user: User) -> Decimal:
     total = (
         LoanPendingCredit.objects.filter(borrower=user, remaining_amount__gt=Decimal("0.00")).aggregate(
@@ -280,7 +295,11 @@ def can_user_transfer_from_wallet(user: User) -> bool:
 
 
 def can_user_place_bet(user: User) -> bool:
-    return getattr(user, "is_authenticated", False) and getattr(user, "user_type", "") == "cashier" and not user_has_overdraft_due_restriction(user)
+    return (
+        getattr(user, "is_authenticated", False)
+        and getattr(user, "user_type", "") == "cashier"
+        and not user_has_overdraft_bet_restriction(user)
+    )
 
 
 def build_recent_wallet_transactions_payload(user: User, *, limit: int = 20):

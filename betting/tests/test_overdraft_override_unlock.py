@@ -5,9 +5,19 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from betting.models import AccountLockAuditLog, Loan, LoanAuditLog, LoanRepayment, Transaction, User, Wallet
+from betting.models import (
+    AccountLockAuditLog,
+    BettingPeriod,
+    Fixture,
+    Loan,
+    LoanAuditLog,
+    LoanRepayment,
+    Transaction,
+    User,
+    Wallet,
+)
 from betting.forms import AdminOverdraftWalletFundingForm
-from betting.services.loan_overdraft import enforce_due_loans
+from betting.services.loan_overdraft import can_user_place_bet, enforce_due_loans
 
 
 class OverdraftOverrideUnlockTests(TestCase):
@@ -129,6 +139,64 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertFalse(loan.account_locked_due_to_default)
         self.assertFalse(self.agent.is_locked)
         self.assertFalse(self.cashier.is_locked)
+
+    def test_override_unlock_keeps_withdrawals_blocked_but_restores_cashier_bet_access(self):
+        loan = self._create_overdue_locked_loan()
+        today = timezone.localdate()
+        period = BettingPeriod.objects.create(
+            name="Override Unlock Week",
+            start_date=today - timedelta(days=1),
+            end_date=today + timedelta(days=5),
+            is_active=True,
+        )
+        Fixture.objects.create(
+            betting_period=period,
+            serial_number=11,
+            home_team="Override Home",
+            away_team="Override Away",
+            match_date=today + timedelta(days=1),
+            match_time=timezone.localtime().time().replace(hour=18, minute=0, second=0, microsecond=0),
+            status="scheduled",
+            is_active=True,
+            draw_odd="3.10",
+        )
+
+        self.assertFalse(can_user_place_bet(self.cashier))
+
+        self.client.force_login(self.superadmin)
+        response = self.client.post(
+            reverse("betting_admin:admin_loan_overdraft_center") + "?tab=locked",
+            {
+                "loan_id": str(loan.id),
+                "reason": "Restore login and ticket sales while keeping repayment enforcement active",
+                "override_unlock_submit": "1",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        loan.refresh_from_db()
+        self.agent.refresh_from_db()
+        self.cashier.refresh_from_db()
+
+        self.assertTrue((loan.workflow_snapshot or {}).get("lock_override_active"))
+        self.assertFalse(self.agent.is_locked)
+        self.assertFalse(self.cashier.is_locked)
+        self.assertTrue(can_user_place_bet(self.cashier))
+
+        agent_client = self.client_class()
+        cashier_client = self.client_class()
+        self.assertTrue(agent_client.login(username=self.agent.username, password=self.password))
+        self.assertTrue(cashier_client.login(username=self.cashier.username, password=self.password))
+
+        wallet_response = agent_client.get(reverse("betting:wallet"))
+        self.assertEqual(wallet_response.status_code, 200)
+        self.assertFalse(wallet_response.context["can_withdraw_from_wallet"])
+        self.assertContains(wallet_response, "Withdrawal Disabled")
+
+        fixtures_response = cashier_client.get(reverse("betting:fixtures_with_period", args=[period.id]))
+        self.assertEqual(fixtures_response.status_code, 200)
+        self.assertTrue(fixtures_response.context["can_place_bet"])
 
     def test_non_superuser_admin_cannot_override_unlock_without_payment(self):
         loan = self._create_overdue_locked_loan()

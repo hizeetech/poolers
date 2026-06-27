@@ -257,6 +257,7 @@ class OverdraftOverrideUnlockTests(TestCase):
         self.assertEqual((loan.workflow_snapshot or {}).get("lock_relock_reason"), "Unlock was granted in error")
         self.assertTrue(self.agent.is_locked)
         self.assertTrue(self.cashier.is_locked)
+        self.assertFalse(can_user_place_bet(self.cashier))
         relock_audit = LoanAuditLog.objects.filter(loan=loan, action="override").latest("created_at")
         self.assertEqual(relock_audit.performed_by, self.superadmin)
         self.assertEqual(relock_audit.metadata.get("override_type"), "relock_after_override")
@@ -274,6 +275,27 @@ class OverdraftOverrideUnlockTests(TestCase):
                 locked_by=self.superadmin,
             ).exists()
         )
+
+        agent_login_client = self.client_class()
+        cashier_login_client = self.client_class()
+        agent_login_response = agent_login_client.post(
+            reverse("betting:login"),
+            {
+                "identifier": self.agent.username,
+                "password": self.password,
+            },
+        )
+        cashier_login_response = cashier_login_client.post(
+            reverse("betting:login"),
+            {
+                "identifier": self.cashier.username,
+                "password": self.password,
+            },
+        )
+        self.assertContains(agent_login_response, "overdraft/loan obligation", status_code=200)
+        self.assertContains(cashier_login_response, "overdraft/loan obligation", status_code=200)
+        self.assertFalse(agent_login_response.wsgi_request.user.is_authenticated)
+        self.assertFalse(cashier_login_response.wsgi_request.user.is_authenticated)
 
     def test_overdue_center_shows_total_balance_and_new_action_buttons(self):
         loan = self._create_overdue_locked_loan()

@@ -275,9 +275,12 @@ class LoginForm(AuthenticationForm):
         if user and user.is_locked:
             reason = (user.lock_reason or "").strip()
             if "overdraft/loan obligation" in reason.lower():
-                from betting.services.loan_overdraft import reassess_borrower_overdraft_lock_state
+                from betting.services.loan_overdraft import (
+                    get_overdraft_restriction_borrower,
+                    reassess_borrower_overdraft_lock_state,
+                )
 
-                reassess_borrower_overdraft_lock_state(user)
+                reassess_borrower_overdraft_lock_state(get_overdraft_restriction_borrower(user) or user)
                 user.refresh_from_db()
             if user.is_locked:
                 lock_message = (

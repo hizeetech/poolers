@@ -13207,7 +13207,7 @@ def account_user_dashboard(request):
 
     # --- Wallets Management ---
     wallet_search = request.GET.get('wallet_search', '')
-    all_wallets = Wallet.objects.select_related('user').all().order_by('-balance')
+    all_wallets = Wallet.objects.select_related('user', 'user__agent').all().order_by('-balance')
     
     if wallet_search:
         all_wallets = all_wallets.filter(

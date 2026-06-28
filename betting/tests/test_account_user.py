@@ -107,6 +107,40 @@ class AccountUserTests(TestCase):
         self.assertContains(response, '<td>account_player</td>', html=True)
         self.assertContains(response, '<div class="small text-muted">account_player</div>', html=True)
 
+    def test_account_user_wallets_table_shows_agent_username_column(self):
+        self.client.force_login(self.account_user)
+
+        agent = User.objects.create_user(
+            email='wallet-agent@test.com',
+            password=self.password,
+            user_type='agent',
+            username='wallet_agent',
+        )
+        player = User.objects.create_user(
+            email='wallet-player@test.com',
+            password=self.password,
+            user_type='player',
+            username='wallet_player',
+            first_name='Wallet',
+            last_name='Player',
+            agent=agent,
+        )
+        Wallet.objects.get_or_create(user=agent, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.update_or_create(
+            user=player,
+            defaults={'balance': Decimal('125.00')},
+        )
+
+        response = self.client.get(
+            reverse('betting:account_user_dashboard'),
+            {'wallet_search': 'wallet-player@test.com'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Agent Username')
+        self.assertContains(response, 'wallet_agent')
+        self.assertContains(response, 'wallet-player@test.com')
+
     def test_player_cannot_access_account_user_dashboard(self):
         self.client.force_login(self.player)
         

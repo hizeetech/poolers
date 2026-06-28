@@ -12524,9 +12524,8 @@ def account_user_dashboard(request):
         ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
 
         total_withdrawals = UserWithdrawal.objects.filter(
-            status='approved',
-            approved_rejected_time__gte=metrics_start_dt,
-            approved_rejected_time__lte=metrics_end_dt,
+            request_time__gte=metrics_start_dt,
+            request_time__lte=metrics_end_dt,
         ).aggregate(v=Sum('amount'))['v'] or Decimal('0.00')
 
         pending_withdrawals_count = UserWithdrawal.objects.filter(status='pending').count()
@@ -12591,11 +12590,10 @@ def account_user_dashboard(request):
 
         withdrawal_series = (
             UserWithdrawal.objects.filter(
-                status='approved',
-                approved_rejected_time__gte=metrics_start_dt,
-                approved_rejected_time__lte=metrics_end_dt,
+                request_time__gte=metrics_start_dt,
+                request_time__lte=metrics_end_dt,
             )
-            .annotate(day=TruncDate('approved_rejected_time'))
+            .annotate(day=TruncDate('request_time'))
             .values('day')
             .annotate(withdrawals=Sum('amount'))
             .order_by('day')

@@ -242,6 +242,70 @@ class AccountUserTests(TestCase):
         self.assertEqual(captured_context['kpis']['total_paid_commission'], '50.00')
         self.assertEqual(captured_context['kpis']['ngr'], '150.00')
 
+    def test_account_user_dashboard_total_withdrawals_uses_request_time_with_date_filter(self):
+        self.client.force_login(self.account_user)
+        captured_context = {}
+
+        in_range_user = User.objects.create_user(
+            email='withdrawal-in-range@test.com',
+            password=self.password,
+            user_type='player',
+        )
+        out_of_range_user = User.objects.create_user(
+            email='withdrawal-out-range@test.com',
+            password=self.password,
+            user_type='player',
+        )
+        Wallet.objects.get_or_create(user=in_range_user, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=out_of_range_user, defaults={'balance': Decimal('0.00')})
+
+        in_range_withdrawal = UserWithdrawal.objects.create(
+            user=in_range_user,
+            amount=Decimal('150.00'),
+            bank_name='Test Bank',
+            account_number='1234567890',
+            account_name='In Range Player',
+            status='approved',
+        )
+        out_of_range_withdrawal = UserWithdrawal.objects.create(
+            user=out_of_range_user,
+            amount=Decimal('90.00'),
+            bank_name='Test Bank',
+            account_number='1234567890',
+            account_name='Out Range Player',
+            status='approved',
+        )
+
+        UserWithdrawal.objects.filter(pk=in_range_withdrawal.pk).update(
+            request_time=timezone.make_aware(datetime(2026, 6, 26, 10, 0, 0)),
+            approved_rejected_time=timezone.make_aware(datetime(2026, 6, 28, 9, 0, 0)),
+        )
+        UserWithdrawal.objects.filter(pk=out_of_range_withdrawal.pk).update(
+            request_time=timezone.make_aware(datetime(2026, 6, 25, 18, 0, 0)),
+            approved_rejected_time=timezone.make_aware(datetime(2026, 6, 26, 11, 0, 0)),
+        )
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:account_user_dashboard'),
+                {
+                    'section': 'overview',
+                    'start_date': '2026-06-26',
+                    'end_date': '2026-06-27',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['kpis']['total_withdrawals'], '150.00')
+        self.assertEqual(
+            captured_context['charts_data']['withdrawal_series'],
+            [{'day': '2026-06-26', 'withdrawals': '150.00'}],
+        )
+
     def test_admin_dashboard_period_ngr_uses_amount_paid_including_partial_payments(self):
         self.client.force_login(self.super_admin)
         captured_context = {}

@@ -1655,8 +1655,45 @@ class ApprovedNewCashierAdmin(admin.ModelAdmin):
         return qs.filter(status='APPROVED')
 
 # --- UserWithdrawal Admin ---
+class UserWithdrawalAdminForm(forms.ModelForm):
+    class Meta:
+        model = UserWithdrawal
+        fields = "__all__"
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        if not self.instance.pk:
+            return cleaned_data
+
+        new_status = (cleaned_data.get("status") or "").strip()
+        try:
+            old_instance = UserWithdrawal.objects.only("status", "amount", "user_id").get(pk=self.instance.pk)
+        except UserWithdrawal.DoesNotExist:
+            return cleaned_data
+
+        if old_instance.status != "rejected" or new_status == "rejected":
+            return cleaned_data
+
+        try:
+            wallet_balance = Wallet.objects.only("balance").get(user_id=old_instance.user_id).balance
+        except Wallet.DoesNotExist:
+            wallet_balance = Decimal("0.00")
+
+        if wallet_balance < (old_instance.amount or Decimal("0.00")):
+            raise forms.ValidationError(
+                "Cannot reopen this withdrawal request because the user's wallet balance is insufficient to re-deduct the withdrawal amount."
+            )
+
+        return cleaned_data
+
+
 class UserWithdrawalAdmin(admin.ModelAdmin):
+    form = UserWithdrawalAdminForm
     change_list_template = "betting/admin/userwithdrawal_change_list.html"
+    reopen_insufficient_funds_message = (
+        "Cannot reopen this withdrawal request because the user's wallet balance is insufficient to re-deduct the withdrawal amount."
+    )
 
     def short_id(self, obj):
         return str(getattr(obj, 'id', '') or '')[:8]
@@ -1699,6 +1736,27 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
     actions = ['resend_emails_backfill_email_timestamps']
+
+    def _is_reopen_insufficient_funds_error(self, exc):
+        return str(exc) == "Insufficient funds to reopen withdrawal request."
+
+    def changelist_view(self, request, extra_context=None):
+        try:
+            return super().changelist_view(request, extra_context=extra_context)
+        except ValueError as exc:
+            if not self._is_reopen_insufficient_funds_error(exc):
+                raise
+            self.message_user(request, self.reopen_insufficient_funds_message, level=messages.ERROR)
+            return redirect(request.get_full_path())
+
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        try:
+            return super().change_view(request, object_id, form_url=form_url, extra_context=extra_context)
+        except ValueError as exc:
+            if not self._is_reopen_insufficient_funds_error(exc):
+                raise
+            self.message_user(request, self.reopen_insufficient_funds_message, level=messages.ERROR)
+            return redirect(request.get_full_path())
 
     def resend_emails_backfill_email_timestamps(self, request, queryset):
         try:

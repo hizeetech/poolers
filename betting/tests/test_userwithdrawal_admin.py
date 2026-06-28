@@ -56,6 +56,41 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertContains(response, "startPolling")
         self.assertContains(response, "POLL_INTERVAL_MS = 15000")
 
+    def test_userwithdrawal_changelist_reopen_with_insufficient_funds_shows_form_error(self):
+        Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))
+        withdrawal = self._create_withdrawal(status="rejected")
+        self.client.force_login(self.admin_user)
+
+        changelist_url = reverse("betting_admin:betting_userwithdrawal_changelist")
+        response = self.client.get(changelist_url)
+
+        self.assertEqual(response.status_code, 200)
+        formset = response.context["cl"].formset
+
+        post_data = {
+            field.html_name: field.value() or ""
+            for field in formset.management_form
+        }
+        for form in formset.forms:
+            for field in form:
+                post_data[field.html_name] = field.value() or ""
+
+        target_form = next(form for form in formset.forms if form.instance.pk == withdrawal.pk)
+        post_data[f"{target_form.prefix}-status"] = "approved"
+        post_data["_save"] = "Save"
+
+        post_response = self.client.post(changelist_url, post_data, follow=True)
+
+        self.assertEqual(post_response.status_code, 200)
+        self.assertContains(
+            post_response,
+            "Cannot reopen this withdrawal request because the user&#x27;s wallet balance is insufficient to re-deduct the withdrawal amount.",
+            html=False,
+        )
+
+        withdrawal.refresh_from_db()
+        self.assertEqual(withdrawal.status, "rejected")
+
     @patch("betting.signals.schedule_admin_userwithdrawal_refresh")
     @patch("betting.signals.transaction.on_commit")
     @patch("betting.signals._run_after_commit_in_background")

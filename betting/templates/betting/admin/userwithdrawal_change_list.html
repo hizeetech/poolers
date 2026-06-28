@@ -6,6 +6,8 @@
 document.addEventListener('DOMContentLoaded', function () {
     const body = document.body;
     const changelist = document.getElementById('changelist');
+    const changelistForm = document.getElementById('changelist-form');
+    const POLL_INTERVAL_MS = 15000;
     if (!changelist) {
         return;
     }
@@ -14,9 +16,27 @@ document.addEventListener('DOMContentLoaded', function () {
     let refreshQueued = false;
     let socket = null;
     let reconnectTimer = null;
+    let pollTimer = null;
 
     function hasActiveSelection() {
         return document.querySelector('#changelist-form input.action-select:checked') !== null;
+    }
+
+    function hasUnsafeFocus() {
+        const activeElement = document.activeElement;
+        return !!(
+            activeElement &&
+            activeElement !== document.body &&
+            activeElement.matches &&
+            activeElement.matches('#toolbar input, #toolbar select, #toolbar textarea, #changelist-form input, #changelist-form select, #changelist-form textarea, .actions select')
+        );
+    }
+
+    function hasPendingEdits() {
+        return !!(
+            changelistForm &&
+            changelistForm.dataset.liveRefreshDirty === 'true'
+        );
     }
 
     function replaceFromSnapshot(snapshotDoc, selector) {
@@ -33,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        if (document.hidden || hasActiveSelection()) {
+        if (document.hidden || hasActiveSelection() || hasUnsafeFocus() || hasPendingEdits()) {
             refreshQueued = true;
             return;
         }
@@ -124,12 +144,58 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function startPolling() {
+        if (pollTimer) {
+            return;
+        }
+        body.dataset.liveRefreshPolling = 'enabled';
+        pollTimer = window.setInterval(function () {
+            if (!document.hidden) {
+                scheduleRefresh();
+            }
+        }, POLL_INTERVAL_MS);
+    }
+
+    function stopPolling() {
+        if (!pollTimer) {
+            return;
+        }
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+        body.dataset.liveRefreshPolling = 'disabled';
+    }
+
+    if (changelistForm) {
+        changelistForm.addEventListener('change', function (event) {
+            const target = event.target;
+            if (!target || !target.matches) {
+                return;
+            }
+            if (target.matches('input.action-select, input.select-across')) {
+                return;
+            }
+            changelistForm.dataset.liveRefreshDirty = 'true';
+        });
+
+        changelistForm.addEventListener('submit', function () {
+            changelistForm.dataset.liveRefreshDirty = 'false';
+        });
+    }
+
     document.addEventListener('visibilitychange', function () {
         if (!document.hidden && refreshQueued) {
             refreshUserWithdrawalList();
         }
     });
 
+    window.addEventListener('beforeunload', function () {
+        stopPolling();
+        if (socket) {
+            socket.close();
+        }
+    });
+
+    startPolling();
     connectSocket();
 });
 </script>

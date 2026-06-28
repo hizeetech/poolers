@@ -53,6 +53,8 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertContains(response, "refreshUserWithdrawalList")
         self.assertContains(response, "/ws/admin/userwithdrawal/")
         self.assertContains(response, "connectSocket")
+        self.assertContains(response, "startPolling")
+        self.assertContains(response, "POLL_INTERVAL_MS = 15000")
 
     @patch("betting.signals.schedule_admin_userwithdrawal_refresh")
     @patch("betting.signals.transaction.on_commit")

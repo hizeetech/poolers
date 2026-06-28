@@ -1,4 +1,5 @@
 from django.test import TestCase, Client
+from django.http import HttpResponse
 from django.urls import reverse
 from decimal import Decimal
 from datetime import timedelta
@@ -6,6 +7,7 @@ from unittest.mock import patch
 from django.utils import timezone
 from betting.models import User, Wallet, UserWithdrawal, Transaction, CRMActionLog, CreditRequest, WithdrawalReport, BetTicket, BulkMessageCampaign, BulkMessageDelivery, BulkMessageTemplate, CRMOpsAuditLog, SiteConfiguration, CustomerComplaint, CustomerComplaintNote, Loan, OverdraftWallet
 from betting.views import process_due_bulk_message_campaigns
+from commission.models import CommissionPeriod, WeeklyAgentCommission
 from notifications.models import Notification, NotificationCampaign
 from notifications.tasks import send_campaign
 from betting.tasks import _maybe_alert_stuck_deposit
@@ -120,6 +122,66 @@ class RBACTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'System')
         self.assertContains(response, self.player.username or self.player.email)
+
+    @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
+    def test_crm_dashboard_commission_total_matches_breakdown_rows(self, _mock_weekly_calc):
+        captured_context = {}
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=timezone.datetime(2026, 6, 23).date(),
+            end_date=timezone.datetime(2026, 6, 29).date(),
+            is_active=True,
+        )
+
+        self.agent.username = 'crm_agent_one'
+        self.agent.save(update_fields=['username'])
+        second_agent = User.objects.create_user(
+            email='crm-agent-two@test.com',
+            password=self.password,
+            user_type='agent',
+            username='crm_agent_two',
+        )
+        Wallet.objects.get_or_create(user=second_agent, defaults={'balance': Decimal('0.00')})
+
+        WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=period,
+            total_stake=Decimal('1000.00'),
+            total_winnings=Decimal('600.00'),
+            ggr=Decimal('400.00'),
+            commission_total_amount=Decimal('250.00'),
+            amount_paid=Decimal('25.00'),
+            status='pending',
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=second_agent,
+            period=period,
+            total_stake=Decimal('1500.00'),
+            total_winnings=Decimal('700.00'),
+            ggr=Decimal('800.00'),
+            commission_total_amount=Decimal('300.00'),
+            amount_paid=Decimal('100.00'),
+            status='partially_paid',
+        )
+
+        self.client.force_login(self.crm_viewer)
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:crm_dashboard'),
+                {
+                    'tab': 'commissions',
+                    'commission_period': str(period.id),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['commission_rows_total'], Decimal('550.00'))
+        self.assertEqual(len(captured_context['commission_rows']), 2)
 
     def test_admin_reconciled_credits_dashboard_lists_reconcile_wallet_credits(self):
         tx = Transaction.objects.create(

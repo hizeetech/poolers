@@ -306,6 +306,74 @@ class AccountUserTests(TestCase):
             [{'day': '2026-06-26', 'withdrawals': '150.00'}],
         )
 
+    @patch('commission.services.calculate_monthly_network_commission_data', return_value=None)
+    @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
+    def test_account_user_dashboard_pending_commissions_total_matches_visible_rows(
+        self,
+        _mock_weekly_calc,
+        _mock_monthly_calc,
+    ):
+        self.client.force_login(self.account_user)
+        captured_context = {}
+
+        period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=timezone.datetime(2026, 6, 23).date(),
+            end_date=timezone.datetime(2026, 6, 29).date(),
+        )
+        agent_one = User.objects.create_user(
+            email='pending-agent-one@test.com',
+            password=self.password,
+            user_type='agent',
+            username='pending_agent_one',
+        )
+        agent_two = User.objects.create_user(
+            email='pending-agent-two@test.com',
+            password=self.password,
+            user_type='agent',
+            username='pending_agent_two',
+        )
+        Wallet.objects.get_or_create(user=agent_one, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=agent_two, defaults={'balance': Decimal('0.00')})
+
+        WeeklyAgentCommission.objects.create(
+            agent=agent_one,
+            period=period,
+            total_stake=Decimal('1000.00'),
+            total_winnings=Decimal('500.00'),
+            ggr=Decimal('500.00'),
+            commission_total_amount=Decimal('300.00'),
+            amount_paid=Decimal('50.00'),
+            status='pending',
+        )
+        WeeklyAgentCommission.objects.create(
+            agent=agent_two,
+            period=period,
+            total_stake=Decimal('800.00'),
+            total_winnings=Decimal('300.00'),
+            ggr=Decimal('500.00'),
+            commission_total_amount=Decimal('200.00'),
+            amount_paid=Decimal('20.00'),
+            status='approved',
+        )
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:account_user_dashboard'),
+                {
+                    'section': 'commissions',
+                    'commission_period': str(period.id),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['pending_commissions_total'], Decimal('430.00'))
+        self.assertEqual(len(captured_context['pending_commissions'].object_list), 2)
+
     def test_admin_dashboard_period_ngr_uses_amount_paid_including_partial_payments(self):
         self.client.force_login(self.super_admin)
         captured_context = {}

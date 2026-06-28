@@ -13134,6 +13134,10 @@ def account_user_dashboard(request):
         pending_commissions_page = commissions_paginator.page(1)
     except EmptyPage:
         pending_commissions_page = commissions_paginator.page(commissions_paginator.num_pages)
+    pending_commissions_total = sum(
+        ((comm.get('amount') or Decimal('0.00')) for comm in pending_commissions_page.object_list),
+        Decimal('0.00'),
+    )
 
     # Construct Activity Log if user found
     if found_user:
@@ -13311,6 +13315,7 @@ def account_user_dashboard(request):
         'recent_transactions': recent_transactions,
         'wallet': request.user.wallet,
         'pending_commissions': pending_commissions_page, # Paginated
+        'pending_commissions_total': pending_commissions_total,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
         'commission_search': commission_search,
@@ -14826,6 +14831,7 @@ def crm_dashboard(request):
     commission_rows = []
     commission_period_options = []
     selected_commission_period_id = ''
+    commission_rows_total = Decimal('0.00')
     if active_tab == 'commissions':
         selected_commission_period_id = (request.GET.get('commission_period') or '').strip()
         crm_agents_qs = User.objects.filter(user_type='agent', is_superuser=False)
@@ -14837,6 +14843,10 @@ def crm_dashboard(request):
         commission_rows, commission_period_options, selected_commission_period_id = build_weekly_commission_dashboard_rows(
             crm_agents_qs,
             selected_commission_period_id,
+        )
+        commission_rows_total = sum(
+            ((row.get('total') or Decimal('0.00')) for row in commission_rows),
+            Decimal('0.00'),
         )
 
     recent_agent_transfers = []
@@ -14992,6 +15002,7 @@ def crm_dashboard(request):
         'hierarchy_search_results': hierarchy_search_results,
         'hierarchy_agent_q': hierarchy_agent_q,
         'commission_rows': commission_rows,
+        'commission_rows_total': commission_rows_total,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
         'commission_agent_q': commission_agent_q,

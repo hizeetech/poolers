@@ -1269,6 +1269,69 @@ class BetTicket(models.Model):
                     break
         super().save(*args, **kwargs)
 
+    def _snapshot_ticket_odds_value(self):
+        snapshot = self.betting_limits_snapshot or {}
+        raw_value = snapshot.get('ticket_odds')
+        if raw_value in (None, ''):
+            return None
+        try:
+            return Decimal(str(raw_value)).quantize(Decimal('0.01'))
+        except Exception:
+            return None
+
+    def _selection_odds_for_display(self):
+        odds = []
+        selection_values = list(self.selections.values_list('odd_selected', flat=True))
+        if selection_values:
+            for odd in selection_values:
+                try:
+                    odds.append(Decimal(str(odd)))
+                except Exception:
+                    continue
+            return odds
+
+        snapshot = (self.betting_limits_snapshot or {}).get('selections_snapshot') or []
+        for item in snapshot:
+            raw_odd = item.get('odd_selected')
+            if raw_odd in (None, ''):
+                continue
+            try:
+                odds.append(Decimal(str(raw_odd)))
+            except Exception:
+                continue
+        return odds
+
+    def get_display_total_odd(self):
+        try:
+            stored_total = Decimal(str(self.total_odd or Decimal('0.00'))).quantize(Decimal('0.01'))
+        except Exception:
+            stored_total = Decimal('0.00')
+
+        if stored_total > Decimal('0.00'):
+            return stored_total
+
+        snapshot_total = self._snapshot_ticket_odds_value()
+        if snapshot_total and snapshot_total > Decimal('0.00'):
+            return snapshot_total
+
+        odds = self._selection_odds_for_display()
+        if not odds:
+            return stored_total
+
+        if self.bet_type == 'system' and self.system_min_count:
+            k = int(self.system_min_count or 0)
+            if k <= 0 or len(odds) < k:
+                return stored_total
+            computed_total = Decimal('1.00')
+            for odd in sorted(odds, reverse=True)[:k]:
+                computed_total *= odd
+            return computed_total.quantize(Decimal('0.01'))
+
+        computed_total = Decimal('1.00')
+        for odd in odds:
+            computed_total *= odd
+        return computed_total.quantize(Decimal('0.01'))
+
     def calculate_total_odd_and_potential_winning(self):
         calculated_odd = Decimal('1.00')
         for selection in self.selections.all(): 

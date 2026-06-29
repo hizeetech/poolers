@@ -761,7 +761,7 @@ class TicketSelectionCountFilter(admin.SimpleListFilter):
 class BetTicketAdmin(admin.ModelAdmin):
     change_list_template = "betting/admin/betticket_change_list.html"
     list_display = (
-        'ticket_id', 'user', 'selection_count', 'stake_amount', 'total_odd', 'potential_winning',
+        'ticket_id', 'user', 'selection_count', 'stake_amount', 'display_total_odd', 'potential_winning',
         'min_winning', 'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
     )
     list_filter = ('status', TicketSelectionCountFilter, 'placed_at', 'user')
@@ -781,6 +781,12 @@ class BetTicketAdmin(admin.ModelAdmin):
 
     selection_count.short_description = 'No. of Selections'
     selection_count.admin_order_field = 'original_selections_count'
+
+    def display_total_odd(self, obj):
+        return obj.get_display_total_odd()
+
+    display_total_odd.short_description = 'Total odd'
+    display_total_odd.admin_order_field = 'total_odd'
 
     def selections_snapshot_preview(self, obj):
         snap = (getattr(obj, 'betting_limits_snapshot', None) or {}).get('selections_snapshot') or []
@@ -805,7 +811,7 @@ class BetTicketAdmin(admin.ModelAdmin):
                  obj.deleted_at = timezone.now()
         super().save_model(request, obj, form, change)
 
-    actions = ['recalculate_selected_tickets', 'void_selected_tickets', 'settle_won_selected_tickets']
+    actions = ['recalculate_selected_tickets', 'backfill_selected_total_odds', 'void_selected_tickets', 'settle_won_selected_tickets']
 
     @admin.action(description='Recalculate selected pending tickets (refresh odds/status)')
     def recalculate_selected_tickets(self, request, queryset):
@@ -832,6 +838,43 @@ class BetTicketAdmin(admin.ModelAdmin):
             messages.info(request, f"Skipped {skipped} non-pending ticket(s).")
         if failed:
             messages.warning(request, f"Failed to recalculate {failed} ticket(s).")
+
+    @admin.action(description='Backfill selected ticket odds display data')
+    def backfill_selected_total_odds(self, request, queryset):
+        updated = 0
+        skipped = 0
+
+        for ticket in queryset.prefetch_related('selections'):
+            changed_fields = []
+            display_odd = ticket.get_display_total_odd()
+            if display_odd <= Decimal('0.00'):
+                skipped += 1
+                continue
+
+            if ticket.bet_type == 'system' and ticket.system_min_count:
+                snapshot = dict(ticket.betting_limits_snapshot or {})
+                snapshot_odd = ticket._snapshot_ticket_odds_value()
+                if not snapshot_odd or snapshot_odd <= Decimal('0.00'):
+                    snapshot['ticket_odds'] = str(display_odd)
+                    ticket.betting_limits_snapshot = snapshot
+                    changed_fields.append('betting_limits_snapshot')
+            else:
+                current_total = Decimal(str(ticket.total_odd or Decimal('0.00'))).quantize(Decimal('0.01'))
+                if current_total <= Decimal('0.00'):
+                    ticket.total_odd = display_odd
+                    changed_fields.append('total_odd')
+
+            if not changed_fields:
+                skipped += 1
+                continue
+
+            ticket.save(update_fields=changed_fields)
+            updated += 1
+
+        if updated:
+            messages.success(request, f"Backfilled display odds for {updated} ticket(s).")
+        if skipped:
+            messages.info(request, f"Skipped {skipped} ticket(s) that already had usable odds data.")
 
     @admin.action(description='Void selected bet tickets and refund stake')
     def void_selected_tickets(self, request, queryset):

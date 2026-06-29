@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.admin.sites import AdminSite
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
@@ -70,6 +71,104 @@ class BetTicketAdminTests(TestCase):
         annotated_ticket = self.admin.get_queryset(self.factory.get("/admin/betting/betticket/")).get(pk=ticket.pk)
 
         self.assertEqual(self.admin.selection_count(annotated_ticket), 2)
+
+    def test_display_total_odd_falls_back_to_selection_product_for_multiple_ticket(self):
+        ticket = self._create_ticket(bet_type="multiple", original_selections_count=2)
+        ticket.total_odd = Decimal("0.00")
+        ticket.save(update_fields=["total_odd"])
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team A",
+            fixture_away_team="Team B",
+            bet_type="home_win",
+            odd_selected=Decimal("1.50"),
+        )
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team C",
+            fixture_away_team="Team D",
+            bet_type="away_win",
+            odd_selected=Decimal("2.10"),
+        )
+
+        self.assertEqual(self.admin.display_total_odd(ticket), Decimal("3.15"))
+
+    def test_display_total_odd_uses_snapshot_ticket_odds_for_system_ticket(self):
+        ticket = self._create_ticket(bet_type="system", original_selections_count=4)
+        ticket.system_min_count = 3
+        ticket.total_odd = Decimal("0.00")
+        ticket.betting_limits_snapshot = {"ticket_odds": "14.06"}
+        ticket.save(update_fields=["system_min_count", "total_odd", "betting_limits_snapshot"])
+
+        self.assertEqual(self.admin.display_total_odd(ticket), Decimal("14.06"))
+
+    def test_backfill_selected_total_odds_updates_multiple_ticket_total_odd(self):
+        ticket = self._create_ticket(bet_type="multiple", original_selections_count=2)
+        ticket.total_odd = Decimal("0.00")
+        ticket.save(update_fields=["total_odd"])
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team A",
+            fixture_away_team="Team B",
+            bet_type="home_win",
+            odd_selected=Decimal("1.50"),
+        )
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team C",
+            fixture_away_team="Team D",
+            bet_type="away_win",
+            odd_selected=Decimal("2.10"),
+        )
+
+        request = self.factory.post("/admin/betting/betticket/")
+        request.user = self.admin_user
+        setattr(request, "session", self.client.session)
+        setattr(request, "_messages", FallbackStorage(request))
+
+        self.admin.backfill_selected_total_odds(request, BetTicket.objects.filter(pk=ticket.pk))
+
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.total_odd, Decimal("3.15"))
+
+    def test_backfill_selected_total_odds_stores_system_snapshot_ticket_odds(self):
+        ticket = self._create_ticket(bet_type="system", original_selections_count=3)
+        ticket.system_min_count = 2
+        ticket.total_odd = Decimal("0.00")
+        ticket.betting_limits_snapshot = {}
+        ticket.save(update_fields=["system_min_count", "total_odd", "betting_limits_snapshot"])
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team A",
+            fixture_away_team="Team B",
+            bet_type="home_win",
+            odd_selected=Decimal("1.50"),
+        )
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team C",
+            fixture_away_team="Team D",
+            bet_type="away_win",
+            odd_selected=Decimal("2.10"),
+        )
+        Selection.objects.create(
+            bet_ticket=ticket,
+            fixture_home_team="Team E",
+            fixture_away_team="Team F",
+            bet_type="draw",
+            odd_selected=Decimal("1.80"),
+        )
+
+        request = self.factory.post("/admin/betting/betticket/")
+        request.user = self.admin_user
+        setattr(request, "session", self.client.session)
+        setattr(request, "_messages", FallbackStorage(request))
+
+        self.admin.backfill_selected_total_odds(request, BetTicket.objects.filter(pk=ticket.pk))
+
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.total_odd, Decimal("0.00"))
+        self.assertEqual(ticket.betting_limits_snapshot.get("ticket_odds"), "3.78")
 
     def test_single_and_multiple_filter_split_ticket_queryset_by_selection_count(self):
         single_ticket = self._create_ticket(bet_type="single", original_selections_count=1)

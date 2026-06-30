@@ -549,6 +549,12 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
         amount_paid = commission_record.amount_paid or Decimal('0.00')
         old_status = commission_record.status
 
+    effective_total_amount = total_amount
+    if effective_total_amount <= Decimal('0.00') and amount_paid > Decimal('0.00'):
+        effective_total_amount = amount_paid
+    if amount_paid > effective_total_amount:
+        effective_total_amount = amount_paid
+
     if amount_paid <= 0:
         return False, "Commission has no paid amount to recall."
 
@@ -652,22 +658,44 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
             )
 
         new_amount_paid = amount_paid - amount
-        if commission_type == 'weekly':
-            WeeklyAgentCommission.objects.filter(id=commission_record.id).update(amount_paid=new_amount_paid)
-        else:
-            MonthlyNetworkCommission.objects.filter(id=commission_record.id).update(amount_paid=new_amount_paid)
-
         if new_amount_paid <= 0:
             new_status = 'pending'
-        elif new_amount_paid >= total_amount:
+        elif new_amount_paid >= effective_total_amount:
             new_status = 'paid'
         else:
             new_status = 'partially_paid'
 
         if commission_type == 'weekly':
-            WeeklyAgentCommission.objects.filter(id=commission_record.id).update(status=new_status)
+            update_fields = {
+                'amount_paid': new_amount_paid,
+                'status': new_status,
+            }
+            if new_amount_paid <= 0:
+                update_fields.update(
+                    {
+                        'paid_at': None,
+                        'paid_by': None,
+                        'paid_source': '',
+                        'paid_from_user': None,
+                        'is_marked_for_payment': False,
+                    }
+                )
+            WeeklyAgentCommission.objects.filter(id=commission_record.id).update(**update_fields)
         else:
-            MonthlyNetworkCommission.objects.filter(id=commission_record.id).update(status=new_status)
+            update_fields = {
+                'amount_paid': new_amount_paid,
+                'status': new_status,
+            }
+            if new_amount_paid <= 0:
+                update_fields.update(
+                    {
+                        'paid_at': None,
+                        'paid_by': None,
+                        'paid_source': '',
+                        'paid_from_user': None,
+                    }
+                )
+            MonthlyNetworkCommission.objects.filter(id=commission_record.id).update(**update_fields)
 
         recall.executed_at = now
         recall.status = 'executed'
@@ -691,8 +719,8 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
             new_status=new_status,
             old_amount_paid=amount_paid,
             new_amount_paid=new_amount_paid,
-            old_total_amount=total_amount,
-            new_total_amount=total_amount,
+            old_total_amount=effective_total_amount,
+            new_total_amount=effective_total_amount,
         )
 
     try:

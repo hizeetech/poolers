@@ -9,13 +9,22 @@ from django.urls import reverse
 from django.utils import timezone
 
 from betting.models import BetTicket, Transaction, User, Wallet
-from commission.models import AgentCommissionProfile, CommissionPeriod, CommissionPlan, NetworkCommissionSettings
+from commission.models import (
+    AgentCommissionProfile,
+    CommissionPeriod,
+    CommissionPlan,
+    MonthlyNetworkCommission,
+    NetworkCommissionSettings,
+    WeeklyAgentCommission,
+)
 from commission.services import (
     calculate_monthly_network_commission_data,
     calculate_weekly_agent_commission,
     calculate_weekly_agent_commission_data,
     mark_weekly_commission_period_paid_without_payout,
+    recall_commission,
     restore_historical_weekly_paid_commission_record,
+    decide_commission_recall,
 )
 from commission.tasks import (
     ensure_last_completed_weekly_commission_period_for_date,
@@ -718,3 +727,107 @@ class WeeklyCommissionPeriodTests(TestCase):
         self.assertEqual(record.ngr, Decimal('0.00'))
         self.assertEqual(record.commission_amount, Decimal('0.00'))
         self.assertIn('Monthly summary: total=1, changed=1', out.getvalue())
+
+
+class CommissionRecallTests(TestCase):
+    def setUp(self):
+        self.password = 'password123'
+        self.admin_user = User.objects.create_user(
+            email='recall-admin@example.com',
+            password=self.password,
+            user_type='admin',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.account_user = User.objects.create_user(
+            email='recall-account-user@example.com',
+            password=self.password,
+            user_type='account_user',
+            username='recall_account_user',
+        )
+        self.agent = User.objects.create_user(
+            email='recall-agent@example.com',
+            password=self.password,
+            user_type='agent',
+            username='recall_agent',
+        )
+        Wallet.objects.get_or_create(user=self.admin_user, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=self.account_user, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=self.agent, defaults={'balance': Decimal('1000.00')})
+
+        self.period = CommissionPeriod.objects.create(
+            period_type='weekly',
+            start_date=date(2026, 6, 16),
+            end_date=date(2026, 6, 22),
+        )
+
+    def test_approved_recall_reopens_paid_commission_even_when_total_amount_is_zero(self):
+        weekly = WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=self.period,
+            commission_total_amount=Decimal('0.00'),
+            amount_paid=Decimal('500.00'),
+            status='paid',
+            paid_at=timezone.now(),
+            paid_by=self.admin_user,
+            paid_from_user=self.account_user,
+            paid_source='account_user_wallet',
+        )
+
+        ok, _msg = recall_commission(
+            commission_type='weekly',
+            commission_id=weekly.id,
+            amount=Decimal('100.00'),
+            reason='wrong_calculation',
+            notes='test',
+            actor=self.account_user,
+            require_approval=True,
+        )
+        self.assertTrue(ok)
+
+        from commission.models import CommissionRecall
+
+        recall = CommissionRecall.objects.get(weekly_commission=weekly)
+        ok2, _msg2 = decide_commission_recall(
+            recall_id=recall.id,
+            actor=self.admin_user,
+            decision='approve',
+            note='approved',
+        )
+        self.assertTrue(ok2)
+
+        weekly.refresh_from_db()
+        self.assertEqual(weekly.amount_paid, Decimal('400.00'))
+        self.assertEqual(weekly.status, 'partially_paid')
+
+    def test_full_recall_clears_paid_markers_and_sets_pending(self):
+        weekly = WeeklyAgentCommission.objects.create(
+            agent=self.agent,
+            period=self.period,
+            commission_total_amount=Decimal('0.00'),
+            amount_paid=Decimal('200.00'),
+            status='paid',
+            paid_at=timezone.now(),
+            paid_by=self.admin_user,
+            paid_from_user=self.account_user,
+            paid_source='account_user_wallet',
+        )
+
+        ok, _msg = recall_commission(
+            commission_type='weekly',
+            commission_id=weekly.id,
+            amount=Decimal('200.00'),
+            reason='wrong_calculation',
+            notes='test',
+            actor=self.admin_user,
+            require_approval=False,
+        )
+        self.assertTrue(ok)
+
+        weekly.refresh_from_db()
+        self.assertEqual(weekly.amount_paid, Decimal('0.00'))
+        self.assertEqual(weekly.status, 'pending')
+        self.assertIsNone(weekly.paid_at)
+        self.assertIsNone(weekly.paid_by)
+        self.assertIsNone(weekly.paid_from_user)
+        self.assertEqual(weekly.paid_source, '')

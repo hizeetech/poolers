@@ -177,17 +177,19 @@
                             <input type="number" name="amount" id="id_amount_deposit" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 5000" min="100" required>
                         </div>
                         <div class="row g-2 mb-3">
-                            <div class="col-md-4">
+                            <div class="col-md-6">
                                 <button type="submit" name="gateway" value="paystack" id="paystack-button" class="btn btn-primary rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
                                     <i class="fas fa-credit-card me-2"></i> Paystack
                                 </button>
                             </div>
+                            {% comment %}
                             <div class="col-md-4">
                                 <button type="submit" name="gateway" value="monnify" class="btn btn-dark rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
                                     <i class="fas fa-university me-2"></i> Monnify
                                 </button>
                             </div>
-                            <div class="col-md-4">
+                            {% endcomment %}
+                            <div class="col-md-6">
                                 <button type="submit" name="gateway" value="kora" class="btn btn-info rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center text-white">
                                     <i class="fas fa-bolt me-2"></i> Kora
                                 </button>

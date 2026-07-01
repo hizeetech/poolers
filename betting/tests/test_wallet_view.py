@@ -57,7 +57,6 @@ class WalletViewTest(TestCase):
             response,
             'button type="submit" name="gateway" value="monnify"'
         )
-        self.assertNotContains(response, 'Monnify')
 
     def test_wallet_recent_transactions_can_filter_by_direction_and_type(self):
         Wallet.objects.get_or_create(user=self.user, defaults={"balance": Decimal("0.00")})

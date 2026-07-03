@@ -1116,6 +1116,8 @@
                         width: var(--content-width);
                         padding: var(--pad-y) var(--pad-x);
                         margin: 0 auto;
+                        position: relative;
+                        overflow: hidden;
                     }
                     .thermal-logo {
                         display: block;
@@ -1127,14 +1129,26 @@
                         display: none !important;
                     }
                     .thermal-flag {
-                        border: var(--rule) solid #000;
-                        padding: 1.2mm 1.6mm;
+                        position: absolute;
+                        left: -10%;
+                        top: 44%;
+                        width: 120%;
+                        margin: 0;
+                        padding: 0;
                         font-weight: 900;
                         text-transform: uppercase;
-                        letter-spacing: 0.4px;
-                        font-size: var(--font-base);
+                        letter-spacing: 1px;
+                        font-size: calc(var(--font-strong) * 2.2);
                         text-align: center;
-                        margin: 0 0 2.0mm 0;
+                        opacity: 0.05;
+                        transform: rotate(-34deg);
+                        pointer-events: none;
+                        z-index: 3;
+                        white-space: nowrap;
+                    }
+                    .thermal-root > :not(.thermal-flag) {
+                        position: relative;
+                        z-index: 1;
                     }
                     .thermal-divider {
                         border-top: var(--rule) solid #000;

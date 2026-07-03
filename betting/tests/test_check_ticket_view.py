@@ -116,3 +116,5 @@ class CheckTicketViewTests(TestCase):
         self.assertContains(response, "TOTAL WIN")
         self.assertNotContains(response, "SETTLED WINNING")
         self.assertNotContains(response, "TOTAL PAYOUT")
+        self.assertContains(response, "REPRINTED COPY")
+        self.assertContains(response, "ticket-reprint-watermark")

@@ -18142,7 +18142,8 @@ def finance_dashboard(request):
 
     recent_events = []
     if active_tab == 'overview':
-        recent_txs = list(Transaction.objects.select_related('user').order_by('-timestamp')[:15])
+        recent_txs_qs = Transaction.objects.select_related('user').order_by('-timestamp')
+        recent_txs = list(recent_txs_qs[:15])
         recent_withdrawals = list(UserWithdrawal.objects.select_related('user').order_by('-request_time')[:15])
         recent_bets = list(BetTicket.objects.select_related('user').order_by('-placed_at')[:15])
         for tx in recent_txs:
@@ -19884,6 +19885,7 @@ def get_ticket_details_json(request):
         'total_odd': 0.0 if is_voided else float(ticket.total_odd),
         'max_winning': 0.0 if is_voided else float(ticket.max_winning),
         'potential_winning': 0.0 if is_voided else float(ticket.potential_winning),
+        'min_winning': 0.0 if is_voided else float(ticket.min_winning),
         'bonus_percentage_applied': 0.0 if is_voided else float(ticket.bonus_percentage_applied),
         'bonus_base': ticket.bonus_base,
         'bonus_base_amount': 0.0 if is_voided else float(ticket.bonus_base_amount),

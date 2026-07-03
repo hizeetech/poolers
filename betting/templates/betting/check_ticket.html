@@ -470,15 +470,19 @@
                                     <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-total-odds"></td>
                                 </tr>
                                 <tr>
-                                    <td style="border: 1px solid #000; font-weight: 700;">SETTLED WINNING</td>
+                                    <td style="border: 1px solid #000; font-weight: 700;">POT. WIN</td>
                                     <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-potential-winning"></td>
                                 </tr>
                                 <tr>
-                                    <td style="border: 1px solid #000; font-weight: 700;">BONUS <span id="modal-bonus-percent" class="fw-bold"></span></td>
+                                    <td style="border: 1px solid #000; font-weight: 700;">BONUS</td>
                                     <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-bonus-amount"></td>
                                 </tr>
+                                <tr class="d-none" id="modal-min-winning-row">
+                                    <td style="border: 1px solid #000; font-weight: 700;">MIN WIN</td>
+                                    <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num" id="modal-min-winning"></td>
+                                </tr>
                                 <tr>
-                                    <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL PAYOUT</td>
+                                    <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;">TOTAL WIN</td>
                                     <td style="border: 1px solid #000; font-weight: 800; font-size: 1rem;" class="text-end ticket-num ticket-strong" id="modal-max-winning"></td>
                                 </tr>
                             </tbody>
@@ -548,13 +552,19 @@
                     document.getElementById('modal-ticket-id').textContent = ticket.ticket_id;
                     document.getElementById('modal-placed-at').textContent = ticket.placed_at;
                     document.getElementById('modal-stake-amount').textContent = '₦' + ticket.stake_amount.toFixed(2);
-                    document.getElementById('modal-total-odds').textContent = ticket.total_odd.toFixed(2);
+                    document.getElementById('modal-total-odds').textContent = ticket.bet_type === 'system' ? 'Variable' : ticket.total_odd.toFixed(2);
                     document.getElementById('modal-potential-winning').textContent = '₦' + ticket.potential_winning.toFixed(2);
-                    const pct = (ticket.bonus_percentage_applied || 0) * 100;
-                    const pctEl = document.getElementById('modal-bonus-percent');
-                    if (pctEl) pctEl.textContent = `(${pct.toFixed(2)}%)`;
                     const derivedBonus = ticket.bonus_is_final ? (ticket.bonus_amount || 0) : Math.max(0, (ticket.max_winning || 0) - (ticket.potential_winning || 0));
                     document.getElementById('modal-bonus-amount').textContent = '₦' + derivedBonus.toFixed(2);
+                    const minWinningRow = document.getElementById('modal-min-winning-row');
+                    const minWinningEl = document.getElementById('modal-min-winning');
+                    const showMinWinning = ticket.bet_type === 'system';
+                    if (minWinningRow) {
+                        minWinningRow.classList.toggle('d-none', !showMinWinning);
+                    }
+                    if (minWinningEl) {
+                        minWinningEl.textContent = showMinWinning ? ('₦' + (ticket.min_winning || 0).toFixed(2)) : '';
+                    }
                     document.getElementById('modal-max-winning').textContent = '₦' + ticket.max_winning.toFixed(2);
                     document.getElementById('modal-generation-time').textContent = new Date().toLocaleString();
                     

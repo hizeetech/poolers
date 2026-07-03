@@ -28,6 +28,26 @@ def can_cashier_request_void(cashier) -> bool:
     )
 
 
+def get_ticket_cancellation_window_minutes() -> int:
+    raw = SystemSetting.get_setting("ticket_cancellation_window_minutes", "60")
+    try:
+        minutes = int(str(raw).strip())
+    except Exception:
+        minutes = 60
+    if minutes < 0:
+        minutes = 0
+    return minutes
+
+
+def is_ticket_within_cancellation_window(ticket, *, now=None) -> bool:
+    if not ticket or not getattr(ticket, "placed_at", None):
+        return False
+    reference_time = now or timezone.now()
+    diff = reference_time - ticket.placed_at
+    minutes = diff.total_seconds() / 60
+    return minutes <= get_ticket_cancellation_window_minutes()
+
+
 def compute_auto_void_at(*, requested_at):
     raw = SystemSetting.get_setting("VOID_REQUEST_TIMEOUT_MINUTES", "3")
     try:
@@ -52,6 +72,8 @@ def create_void_request(*, ticket, cashier, reason=""):
         raise ValueError("Only pending tickets can be requested for void.")
     if ticket.status in ["cancelled", "deleted"]:
         raise ValueError("Ticket is already voided.")
+    if not is_ticket_within_cancellation_window(ticket):
+        raise ValueError("Cancellation window has expired for this ticket.")
     if TicketVoidRequest.objects.filter(ticket=ticket).exists():
         raise ValueError("Void request already exists for this ticket.")
 

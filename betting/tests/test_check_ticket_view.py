@@ -1,9 +1,12 @@
 from decimal import Decimal
 
+from datetime import timedelta
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
-from betting.models import BetTicket, User, Wallet
+from betting.models import BetTicket, SystemSetting, User, Wallet
+from void_requests.models import CashierVoidPermission
 
 
 class CheckTicketViewTests(TestCase):
@@ -118,3 +121,82 @@ class CheckTicketViewTests(TestCase):
         self.assertNotContains(response, "TOTAL PAYOUT")
         self.assertContains(response, "REPRINTED COPY")
         self.assertContains(response, "ticket-reprint-watermark")
+
+    def test_cashier_void_button_only_shows_within_cancellation_window(self):
+        SystemSetting.objects.update_or_create(
+            key="ticket_cancellation_window_minutes",
+            defaults={"value": "10", "description": "Agent ticket void window (minutes)"},
+        )
+        CashierVoidPermission.objects.update_or_create(
+            agent=self.agent,
+            cashier=self.cashier,
+            defaults={"can_request_void": True},
+        )
+        recent_ticket = BetTicket.objects.create(
+            user=self.cashier,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("200.00"),
+            max_winning=Decimal("200.00"),
+            status="pending",
+            bet_type="single",
+            original_selections_count=1,
+        )
+        old_ticket = BetTicket.objects.create(
+            user=self.cashier,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("200.00"),
+            max_winning=Decimal("200.00"),
+            status="pending",
+            bet_type="single",
+            original_selections_count=1,
+        )
+        BetTicket.objects.filter(pk=old_ticket.pk).update(placed_at=timezone.now() - timedelta(minutes=30))
+
+        self.client.force_login(self.cashier)
+        response = self.client.get(reverse("betting:check_ticket_status"))
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8")
+        self.assertIn(recent_ticket.ticket_id, html)
+        self.assertIn(old_ticket.ticket_id, html)
+        self.assertEqual(html.count('class="btn btn-sm btn-outline-warning void-request-btn"'), 1)
+
+    def test_cashier_cannot_create_void_request_outside_cancellation_window(self):
+        SystemSetting.objects.update_or_create(
+            key="ticket_cancellation_window_minutes",
+            defaults={"value": "10", "description": "Agent ticket void window (minutes)"},
+        )
+        CashierVoidPermission.objects.update_or_create(
+            agent=self.agent,
+            cashier=self.cashier,
+            defaults={"can_request_void": True},
+        )
+        ticket = BetTicket.objects.create(
+            user=self.cashier,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("200.00"),
+            max_winning=Decimal("200.00"),
+            status="pending",
+            bet_type="single",
+            original_selections_count=1,
+        )
+        BetTicket.objects.filter(pk=ticket.pk).update(placed_at=timezone.now() - timedelta(minutes=30))
+        ticket.refresh_from_db()
+
+        self.client.force_login(self.cashier)
+        response = self.client.post(
+            reverse("betting:create_ticket_void_request"),
+            {"ticket_id": ticket.ticket_id},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"success": False, "message": "Cancellation window has expired for this ticket."},
+        )

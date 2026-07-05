@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.db.utils import ProgrammingError
 from django.utils import timezone
 
-from betting.models import BetTicket, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
+from betting.models import BetTicket, SiteConfiguration, TicketTransactionLedger, Transaction, User, UserWithdrawal, Wallet, WalletLedgerEntry
 from commission.models import CommissionPeriod, NetworkCommissionSettings, WeeklyAgentCommission
 from commission.services import calculate_weekly_agent_commission, pay_weekly_commission_amount
 from commission.tasks import get_current_weekly_period_bounds
@@ -662,3 +662,27 @@ class TicketTransactionLedgerTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["pending_commission"], Decimal("30.00"))
         self.assertEqual(response.context["pending_commission_period_label"], str(current))
+
+    def test_agent_dashboard_shows_pending_commission_card_when_enabled(self):
+        config = SiteConfiguration.load()
+        config.show_agent_pending_commission_card = True
+        config.save(update_fields=["show_agent_pending_commission_card"])
+
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse("betting:agent_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pending Commission")
+        self.assertContains(response, 'id="dashboardPendingCommissionAmount"', html=False)
+
+    def test_agent_dashboard_hides_pending_commission_card_when_disabled(self):
+        config = SiteConfiguration.load()
+        config.show_agent_pending_commission_card = False
+        config.save(update_fields=["show_agent_pending_commission_card"])
+
+        self.client.force_login(self.agent)
+        response = self.client.get(reverse("betting:agent_dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Pending Commission")
+        self.assertNotContains(response, 'id="dashboardPendingCommissionAmount"', html=False)

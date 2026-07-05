@@ -2822,6 +2822,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('Commission Settings', {
             'fields': ('commission_payment_source', 'account_user_commission_authority', 'require_commission_recall_approval')
         }),
+        ('Agent Dashboard Display', {
+            'fields': ('show_agent_pending_commission_card',),
+            'description': 'Control whether the Pending Commission card is shown on the agent dashboard frontend.',
+        }),
         ('Ticket Void Settings', {
             'fields': ('enable_global_cashier_voiding',),
         }),

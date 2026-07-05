@@ -51,6 +51,11 @@ class SiteConfiguration(models.Model):
         default=False,
         help_text='If enabled, Account User commission recalls require Admin approval before reversal occurs.'
     )
+
+    show_agent_pending_commission_card = models.BooleanField(
+        default=True,
+        help_text='Show or hide the Pending Commission card on the agent dashboard frontend.',
+    )
     
     PAYMENT_SOURCE_CHOICES = [
         ('system', 'System Default (Super Admin Wallet)'), 

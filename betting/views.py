@@ -19992,6 +19992,7 @@ def admin_manual_wallet_manager(request):
     found_user = None
     search_results = None
     manual_transaction_types = ['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
+    recent_page_number = request.GET.get('recent_page') or request.POST.get('recent_page') or 1
 
     if request.method == 'POST':
         if 'search_user' in request.POST:
@@ -20054,7 +20055,10 @@ def admin_manual_wallet_manager(request):
                 messages.success(request, f"Deleted {deleted_count} selected manual action log(s).")
             else:
                 messages.warning(request, "No selected manual action logs were deleted.")
-            return redirect('betting_admin:admin_manual_wallet_manager')
+            redirect_url = reverse('betting_admin:admin_manual_wallet_manager')
+            if recent_page_number:
+                redirect_url = f"{redirect_url}?recent_page={recent_page_number}"
+            return redirect(redirect_url)
 
         elif 'perform_action' in request.POST:
             action_form = AdminManualWalletForm(request.POST)
@@ -20164,9 +20168,11 @@ def admin_manual_wallet_manager(request):
                  messages.error(request, "Target user not specified.")
 
     # Get recent manual transactions (Admin and Account User)
-    recent_transactions = Transaction.objects.filter(
+    recent_transactions_queryset = Transaction.objects.filter(
         transaction_type__in=manual_transaction_types
-    ).select_related('user', 'initiating_user').order_by('-timestamp')[:20]
+    ).select_related('user', 'initiating_user').order_by('-timestamp')
+    recent_transactions_paginator = Paginator(recent_transactions_queryset, 20)
+    recent_transactions = recent_transactions_paginator.get_page(recent_page_number)
 
     context = {
         'search_form': search_form,
@@ -20174,6 +20180,7 @@ def admin_manual_wallet_manager(request):
         'found_user': found_user,
         'search_results': search_results,
         'recent_transactions': recent_transactions,
+        'recent_page_number': recent_transactions.number,
     }
     return render(request, 'betting/admin/manual_wallet_manager.html', context)
 

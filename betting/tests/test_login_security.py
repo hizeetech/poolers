@@ -243,3 +243,54 @@ class LoginSecurityTest(TestCase):
         self.assertFalse(Transaction.objects.filter(id=manual_debit.id).exists())
         self.assertTrue(Transaction.objects.filter(id=non_manual.id).exists())
         self.assertContains(response, 'Deleted 2 selected manual action log(s).')
+
+    def test_admin_manual_wallet_recent_actions_table_is_paginated(self):
+        admin_user = User.objects.create_superuser(
+            email='admin-wallet-pagination@test.com',
+            password=self.password,
+        )
+        for idx in range(21):
+            Transaction.objects.create(
+                user=self.user,
+                initiating_user=admin_user,
+                transaction_type='manual_credit',
+                amount=Decimal('10.00'),
+                status='completed',
+                is_successful=True,
+                description=f'Manual paginated log {idx:02d}',
+            )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(reverse('betting_admin:admin_manual_wallet_manager'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Page 1 of 2')
+        self.assertContains(response, 'Manual paginated log 20')
+        self.assertNotContains(response, 'Manual paginated log 00')
+
+    def test_admin_manual_wallet_recent_actions_second_page_shows_remaining_logs(self):
+        admin_user = User.objects.create_superuser(
+            email='admin-wallet-pagination-two@test.com',
+            password=self.password,
+        )
+        for idx in range(21):
+            Transaction.objects.create(
+                user=self.user,
+                initiating_user=admin_user,
+                transaction_type='manual_credit',
+                amount=Decimal('10.00'),
+                status='completed',
+                is_successful=True,
+                description=f'Manual paginated page-two log {idx:02d}',
+            )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse('betting_admin:admin_manual_wallet_manager'),
+            {'recent_page': 2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Page 2 of 2')
+        self.assertContains(response, 'Manual paginated page-two log 00')
+        self.assertNotContains(response, 'Manual paginated page-two log 20')

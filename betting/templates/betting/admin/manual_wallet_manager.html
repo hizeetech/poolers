@@ -161,6 +161,7 @@ $(document).ready(function() {
                 <div class="card-body p-0">
                     <form method="post">
                         {% csrf_token %}
+                        <input type="hidden" name="recent_page" value="{{ recent_page_number }}">
                         <div class="d-flex flex-column flex-md-row gap-2 justify-content-between align-items-stretch align-items-md-center p-3 border-bottom bg-light">
                             <div class="d-flex gap-2 align-items-center">
                                 <select name="recent_action" class="form-select form-select-sm" style="max-width: 220px;">
@@ -229,6 +230,26 @@ $(document).ready(function() {
                             </tbody>
                         </table>
                     </div>
+                    {% if recent_transactions.paginator.count %}
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 p-3 border-top bg-light">
+                        <div class="small text-muted">
+                            Page {{ recent_transactions.number }} of {{ recent_transactions.paginator.num_pages }}
+                            ({{ recent_transactions.paginator.count }} log{{ recent_transactions.paginator.count|pluralize }})
+                        </div>
+                        <div class="btn-group" role="group" aria-label="Recent manual actions pagination">
+                            {% if recent_transactions.has_previous %}
+                            <a class="btn btn-sm btn-outline-secondary" href="?recent_page={{ recent_transactions.previous_page_number }}">Previous</a>
+                            {% else %}
+                            <button class="btn btn-sm btn-outline-secondary" disabled>Previous</button>
+                            {% endif %}
+                            {% if recent_transactions.has_next %}
+                            <a class="btn btn-sm btn-outline-secondary" href="?recent_page={{ recent_transactions.next_page_number }}">Next</a>
+                            {% else %}
+                            <button class="btn btn-sm btn-outline-secondary" disabled>Next</button>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
                     </form>
                 </div>
             </div>

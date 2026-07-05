@@ -19991,6 +19991,7 @@ def admin_manual_wallet_manager(request):
     action_form = AdminManualWalletForm()
     found_user = None
     search_results = None
+    manual_transaction_types = ['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
 
     if request.method == 'POST':
         if 'search_user' in request.POST:
@@ -20024,6 +20025,36 @@ def admin_manual_wallet_manager(request):
                     messages.warning(request, "Multiple users found. Please select one.")
                 else:
                     messages.error(request, "No user found.")
+
+        elif 'apply_recent_action' in request.POST:
+            selected_transaction_ids = request.POST.getlist('selected_transaction_ids')
+            recent_action = (request.POST.get('recent_action') or '').strip()
+
+            if recent_action != 'delete_selected':
+                messages.error(request, "Please choose a valid action for the selected logs.")
+                return redirect('betting_admin:admin_manual_wallet_manager')
+
+            if not selected_transaction_ids:
+                messages.error(request, "Please select at least one manual action log to delete.")
+                return redirect('betting_admin:admin_manual_wallet_manager')
+
+            deleted_count, _ = Transaction.objects.filter(
+                id__in=selected_transaction_ids,
+                transaction_type__in=manual_transaction_types,
+            ).delete()
+            deleted_count = deleted_count or 0
+
+            if deleted_count:
+                log_admin_activity(
+                    request,
+                    f"Deleted {deleted_count} manual wallet action log(s).",
+                    action_type="MANUAL_LOG_DELETE",
+                    affected_object="Manual Wallet Manager",
+                )
+                messages.success(request, f"Deleted {deleted_count} selected manual action log(s).")
+            else:
+                messages.warning(request, "No selected manual action logs were deleted.")
+            return redirect('betting_admin:admin_manual_wallet_manager')
 
         elif 'perform_action' in request.POST:
             action_form = AdminManualWalletForm(request.POST)
@@ -20134,7 +20165,7 @@ def admin_manual_wallet_manager(request):
 
     # Get recent manual transactions (Admin and Account User)
     recent_transactions = Transaction.objects.filter(
-        transaction_type__in=['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
+        transaction_type__in=manual_transaction_types
     ).select_related('user', 'initiating_user').order_by('-timestamp')[:20]
 
     context = {

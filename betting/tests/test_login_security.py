@@ -1,7 +1,7 @@
 from django.test import TestCase, Client, RequestFactory
 from django.urls import reverse
 from django.utils import timezone
-from betting.models import Loan, User, LoginAttempt
+from betting.models import Loan, User, LoginAttempt, Transaction
 from betting.services.loan_overdraft import LOAN_LOCK_REASON
 from datetime import timedelta
 from decimal import Decimal
@@ -170,3 +170,76 @@ class LoginSecurityTest(TestCase):
         self.assertIn('no-store', cache_control)
         self.assertIn('must-revalidate', cache_control)
         self.assertIn('csrftoken', response.cookies)
+
+    def test_admin_manual_wallet_page_shows_recent_action_bulk_delete_controls(self):
+        admin_user = User.objects.create_superuser(
+            email='admin-wallet-controls@test.com',
+            password=self.password,
+        )
+        Transaction.objects.create(
+            user=self.user,
+            initiating_user=admin_user,
+            transaction_type='account_user_credit',
+            amount=Decimal('500.00'),
+            status='completed',
+            is_successful=True,
+            description='Manual credit log row',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(reverse('betting_admin:admin_manual_wallet_manager'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="recent_action"', html=False)
+        self.assertContains(response, 'value="delete_selected"', html=False)
+        self.assertContains(response, 'name="selected_transaction_ids"', html=False)
+
+    def test_admin_manual_wallet_bulk_delete_removes_selected_manual_logs_only(self):
+        admin_user = User.objects.create_superuser(
+            email='admin-wallet-delete@test.com',
+            password=self.password,
+        )
+        manual_credit = Transaction.objects.create(
+            user=self.user,
+            initiating_user=admin_user,
+            transaction_type='manual_credit',
+            amount=Decimal('100.00'),
+            status='completed',
+            is_successful=True,
+            description='Delete this manual credit log',
+        )
+        manual_debit = Transaction.objects.create(
+            user=self.user,
+            initiating_user=admin_user,
+            transaction_type='manual_debit',
+            amount=Decimal('50.00'),
+            status='completed',
+            is_successful=True,
+            description='Delete this manual debit log',
+        )
+        non_manual = Transaction.objects.create(
+            user=self.user,
+            initiating_user=admin_user,
+            transaction_type='deposit',
+            amount=Decimal('75.00'),
+            status='completed',
+            is_successful=True,
+            description='Do not delete this deposit',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.post(
+            reverse('betting_admin:admin_manual_wallet_manager'),
+            {
+                'recent_action': 'delete_selected',
+                'apply_recent_action': '1',
+                'selected_transaction_ids': [str(manual_credit.id), str(manual_debit.id), str(non_manual.id)],
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Transaction.objects.filter(id=manual_credit.id).exists())
+        self.assertFalse(Transaction.objects.filter(id=manual_debit.id).exists())
+        self.assertTrue(Transaction.objects.filter(id=non_manual.id).exists())
+        self.assertContains(response, 'Deleted 2 selected manual action log(s).')

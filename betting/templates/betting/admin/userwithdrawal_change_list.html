@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const changelist = document.getElementById('changelist');
     const changelistForm = document.getElementById('changelist-form');
     const POLL_INTERVAL_MS = 15000;
+    const SUBMIT_REFRESH_PAUSE_MS = 5000;
+    const LIVE_REFRESH_PAUSE_KEY = 'userWithdrawalAdminPauseUntil';
     if (!changelist) {
         return;
     }
@@ -17,6 +19,29 @@ document.addEventListener('DOMContentLoaded', function () {
     let socket = null;
     let reconnectTimer = null;
     let pollTimer = null;
+
+    function getRefreshPauseUntil() {
+        try {
+            return Number(window.sessionStorage.getItem(LIVE_REFRESH_PAUSE_KEY) || '0');
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    function isRefreshPaused() {
+        return Date.now() < getRefreshPauseUntil();
+    }
+
+    function pauseLiveRefresh(durationMs) {
+        try {
+            window.sessionStorage.setItem(
+                LIVE_REFRESH_PAUSE_KEY,
+                String(Date.now() + (durationMs || SUBMIT_REFRESH_PAUSE_MS))
+            );
+        } catch (error) {
+            return;
+        }
+    }
 
     function hasActiveSelection() {
         return document.querySelector('#changelist-form input.action-select:checked') !== null;
@@ -52,6 +77,13 @@ document.addEventListener('DOMContentLoaded', function () {
             refreshQueued = true;
             return;
         }
+
+        if (isRefreshPaused()) {
+            body.dataset.liveRefreshPaused = 'true';
+            refreshQueued = false;
+            return;
+        }
+        body.dataset.liveRefreshPaused = 'false';
 
         if (document.hidden || hasActiveSelection() || hasUnsafeFocus() || hasPendingEdits()) {
             refreshQueued = true;
@@ -96,6 +128,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function scheduleRefresh() {
+        if (isRefreshPaused()) {
+            body.dataset.liveRefreshPaused = 'true';
+            return;
+        }
         if (refreshQueued || refreshInFlight) {
             refreshQueued = true;
             return;
@@ -178,7 +214,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         changelistForm.addEventListener('submit', function () {
+            pauseLiveRefresh();
             changelistForm.dataset.liveRefreshDirty = 'false';
+            refreshQueued = false;
+            stopPolling();
+            if (socket) {
+                socket.close();
+                socket = null;
+            }
         });
     }
 

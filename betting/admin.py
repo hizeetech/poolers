@@ -82,6 +82,10 @@ class BettingAdminSite(admin.AdminSite):
     def index(self, request, extra_context=None):
         extra_context = extra_context or {}
         try:
+            pending_user_withdrawal_count = UserWithdrawal.objects.filter(status='pending').count()
+        except Exception:
+            pending_user_withdrawal_count = 0
+        try:
             pending_crm_wallet_approval_count = CreditRequest.objects.filter(
                 status='pending',
                 request_type__in=views.CRM_WALLET_APPROVAL_REQUEST_TYPES,
@@ -96,6 +100,9 @@ class BettingAdminSite(admin.AdminSite):
             pending_agent_registration_count = 0
 
         extra_context.update({
+            'pending_user_withdrawal_count': pending_user_withdrawal_count,
+            'pending_user_withdrawal_admin_url': reverse(f'{self.name}:betting_userwithdrawal_changelist'),
+            'updated_withdrawals_admin_url': reverse(f'{self.name}:betting_processedwithdrawal_changelist'),
             'pending_crm_wallet_approval_count': pending_crm_wallet_approval_count,
             'crm_wallet_approval_admin_url': reverse(f'{self.name}:betting_crmwalletapprovalrequest_changelist'),
             'crm_wallet_dashboard_url': reverse(f'{self.name}:dashboard'),
@@ -103,6 +110,38 @@ class BettingAdminSite(admin.AdminSite):
             'pending_agent_registration_admin_url': reverse(f'{self.name}:pending_registration_pendingagentregistration_changelist'),
         })
         return super().index(request, extra_context)
+
+    def get_app_list(self, request, app_label=None):
+        app_list = super().get_app_list(request, app_label=app_label)
+        processed_model = None
+        filtered_apps = []
+
+        for app in app_list:
+            models = []
+            for model in app.get('models', []):
+                if model.get('object_name') == 'ProcessedWithdrawal':
+                    processed_model = {
+                        **model,
+                        'name': 'Updated Withdrawals',
+                    }
+                    continue
+                models.append(model)
+
+            if models:
+                filtered_apps.append({**app, 'models': models})
+
+        if processed_model and app_label in (None, 'updated_withdrawals'):
+            filtered_apps.append(
+                {
+                    'name': 'Updated Withdrawals',
+                    'app_label': 'updated_withdrawals',
+                    'app_url': reverse(f'{self.name}:betting_processedwithdrawal_changelist'),
+                    'has_module_perms': True,
+                    'models': [processed_model],
+                }
+            )
+
+        return filtered_apps
 
     def admin_view(self, view, cacheable=False):
         from django.shortcuts import render
@@ -1780,6 +1819,10 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     list_select_related = ('user',)
     actions = ['resend_emails_backfill_email_timestamps']
 
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(status='pending').select_related('user')
+
     def _is_reopen_insufficient_funds_error(self, exc):
         return str(exc) == "Insufficient funds to reopen withdrawal request."
 
@@ -2546,23 +2589,31 @@ betting_admin_site.register(NotificationCampaign, NotificationCampaignAdmin)
 # --- Processed Withdrawal Admin (Audit) ---
 class ProcessedWithdrawalAdmin(admin.ModelAdmin):
     list_display = (
-        'id',
+        'short_id',
         'user',
         'amount',
-        'balance_before_display',
-        'balance_after_display',
-        'approved_rejected_by_display',
-        'approver_balance_before_display',
-        'approver_balance_after_display',
-        'status_badge',
-        'approved_rejected_time_display',
+        'bank_name',
+        'account_number',
+        'account_name',
+        'status',
+        'request_time',
+        'email_request_admin_sent_at',
+        'email_request_user_sent_at',
+        'email_approved_admin_sent_at',
+        'email_approved_user_sent_at',
+        'email_completed_admin_sent_at',
+        'email_completed_user_sent_at',
     )
-    list_filter = ('approved_rejected_time', 'approved_rejected_by', 'user')
-    search_fields = ('user__email', 'user__username', 'id', 'processed_ip')
+    list_filter = ('status', 'approved_rejected_time', 'request_time', 'bank_name')
+    search_fields = ('user__email', 'user__username', 'id', 'account_number', 'account_name')
     readonly_fields = [field.name for field in UserWithdrawal._meta.fields] + ['balance_before', 'balance_after', 'approver_balance_before', 'approver_balance_after', 'processed_ip']
     date_hierarchy = 'approved_rejected_time'
-    ordering = ('-approved_rejected_time',)
+    ordering = ('-approved_rejected_time', '-request_time')
     change_list_template = 'betting/admin/processed_withdrawal_change_list.html'
+
+    def short_id(self, obj):
+        return str(getattr(obj, 'id', '') or '')[:8]
+    short_id.short_description = "ID"
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)

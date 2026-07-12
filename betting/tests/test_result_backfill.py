@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from betting.models import BetTicket, BettingPeriod, Fixture, Selection, Transaction, Wallet
+from betting.services.ticket_results import recalculate_tickets_for_fixture_sync
 
 
 User = get_user_model()
@@ -97,6 +98,53 @@ class ResultBackfillTests(TestCase):
         self.assertTrue(self.ticket.payout_processed)
         self.assertEqual(self.wallet.balance, Decimal('200.00'))
         self.assertEqual(payout_tx.amount, Decimal('200.00'))
+
+    def test_recalculate_service_continues_when_one_ticket_fails(self):
+        other_ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal('50.00'),
+            total_odd=Decimal('2.00'),
+            potential_winning=Decimal('100.00'),
+            max_winning=Decimal('100.00'),
+            min_winning=Decimal('100.00'),
+            status='pending',
+            bet_type='single',
+        )
+        Selection.objects.create(
+            bet_ticket=other_ticket,
+            fixture=self.fixture,
+            betting_period=self.period,
+            fixture_serial_number=self.fixture.serial_number,
+            fixture_home_team=self.fixture.home_team,
+            fixture_away_team=self.fixture.away_team,
+            fixture_match_date=self.fixture.match_date,
+            fixture_match_time=self.fixture.match_time,
+            bet_type='home_win',
+            odd_selected=Decimal('2.00'),
+        )
+
+        Fixture.objects.filter(pk=self.fixture.pk).update(
+            home_score=1,
+            away_score=0,
+            status='finished',
+        )
+
+        original_recalculate = BetTicket.recalculate_ticket
+
+        def flaky_recalculate(ticket):
+            if ticket.pk == self.ticket.pk:
+                raise ValueError('boom')
+            return original_recalculate(ticket)
+
+        with patch.object(BetTicket, 'recalculate_ticket', autospec=True, side_effect=flaky_recalculate):
+            result = recalculate_tickets_for_fixture_sync(self.fixture.id)
+
+        self.ticket.refresh_from_db()
+        other_ticket.refresh_from_db()
+
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['failed'], 1)
+        self.assertEqual(other_ticket.status, 'won')
 
     def test_corrected_result_backfills_won_ticket_to_lost_and_reverses_payout(self):
         self.fixture.home_score = 2

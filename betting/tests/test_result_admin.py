@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+import betting.models as betting_models
 from betting.models import BetTicket, BettingPeriod, Fixture, Result, Selection, Wallet
 
 
@@ -116,3 +117,26 @@ class ResultAdminTests(TestCase):
         self.assertEqual(self.wallet.balance, Decimal('200.00'))
         self.assertEqual(result_obj.home_score, 2)
         self.assertEqual(result_obj.away_score, 0)
+
+    def test_result_save_defers_background_recalc_until_after_commit_when_no_workers(self):
+        callbacks = []
+
+        with patch.object(betting_models.sys, 'argv', ['manage.py', 'runserver']), \
+             patch('betting.models.cache.get', return_value=False), \
+             patch('betting.models.cache.set'), \
+             patch('betting.models.transaction.on_commit') as on_commit_mock, \
+             patch('betting.models.threading.Thread') as thread_cls:
+            on_commit_mock.side_effect = callbacks.append
+
+            self.fixture.home_score = 1
+            self.fixture.away_score = 0
+            self.fixture.status = 'finished'
+            self.fixture.save()
+
+            self.assertEqual(len(callbacks), 1)
+            thread_cls.assert_not_called()
+
+            callbacks[0]()
+
+            thread_cls.assert_called_once()
+            thread_cls.return_value.start.assert_called_once()

@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import close_old_connections, models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -3128,10 +3128,21 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
                 return ok
 
             def _run_in_background():
+                close_old_connections()
                 try:
                     recalculate_tickets_for_fixture_sync(instance.id)
                 except Exception:
                     return
+                finally:
+                    close_old_connections()
+
+            def _schedule_background_thread():
+                t = threading.Thread(
+                    target=_run_in_background,
+                    name=f"fixture-recalc-{instance.id}",
+                    daemon=True,
+                )
+                t.start()
 
             if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
                 recalculate_tickets_for_fixture_sync(instance.id)
@@ -3141,14 +3152,12 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
             if use_celery:
                 try:
                     from .tasks import recalculate_tickets_for_fixture
-                    recalculate_tickets_for_fixture.delay(instance.id)
+                    transaction.on_commit(lambda: recalculate_tickets_for_fixture.delay(instance.id))
                     return
                 except Exception:
                     pass
 
-            t = threading.Thread(target=_run_in_background)
-            t.daemon = True
-            t.start()
+            transaction.on_commit(_schedule_background_thread)
         except Exception:
             try:
                 recalculate_tickets_for_fixture_sync(instance.id)

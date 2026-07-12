@@ -1,4 +1,5 @@
 import logging
+from itertools import islice
 
 from django.db import transaction
 from django.db.models import Q
@@ -8,9 +9,22 @@ from commission.sync_utils import refresh_weekly_commissions_for_ticket_ids_sync
 
 
 logger = logging.getLogger(__name__)
+RECALCULATION_BATCH_SIZE = 100
+
+
+def _batched(values, size):
+    iterator = iter(values)
+    while True:
+        batch = list(islice(iterator, size))
+        if not batch:
+            return
+        yield batch
 
 
 def recalculate_tickets_for_fixture_sync(fixture_id):
+    affected_ticket_ids = []
+    processed = 0
+    failed = 0
     try:
         try:
             fixture = Fixture.objects.get(id=fixture_id)
@@ -45,28 +59,57 @@ def recalculate_tickets_for_fixture_sync(fixture_id):
         except Exception:
             pass
 
-        tickets = list(
+        ticket_ids = list(
             BetTicket.objects.filter(selections__fixture=fixture)
             .exclude(status__in=[*BetTicket.VOIDED_STATUSES, "cashed_out"])
+            .values_list("id", flat=True)
             .distinct()
         )
-        count = len(tickets)
-        affected_ticket_ids = [str(ticket.id) for ticket in tickets]
+        count = len(ticket_ids)
+        affected_ticket_ids = [str(ticket_id) for ticket_id in ticket_ids]
         logger.info("Starting recalculation for %s tickets for fixture %s", count, fixture)
 
-        with transaction.atomic():
-            for ticket in tickets:
-                current_ticket = BetTicket.objects.get(pk=ticket.pk)
-                if current_ticket.status == "pending":
-                    current_ticket.recalculate_ticket()
-                    current_ticket.check_and_update_status()
-                else:
-                    current_ticket.backfill_after_result_correction(reason=f"Fixture {fixture.id} result corrected")
+        for ticket_batch in _batched(ticket_ids, RECALCULATION_BATCH_SIZE):
+            for ticket_id in ticket_batch:
+                try:
+                    with transaction.atomic():
+                        current_ticket = BetTicket.objects.get(pk=ticket_id)
+                        if current_ticket.status == "pending":
+                            current_ticket.recalculate_ticket()
+                            current_ticket.check_and_update_status()
+                        else:
+                            current_ticket.backfill_after_result_correction(
+                                reason=f"Fixture {fixture.id} result corrected"
+                            )
+                    processed += 1
+                except Exception:
+                    failed += 1
+                    logger.exception(
+                        "Failed to recalculate ticket %s for fixture %s",
+                        ticket_id,
+                        fixture_id,
+                    )
 
-        logger.info("Completed recalculation for %s tickets for fixture %s", count, fixture)
+        logger.info(
+            "Completed recalculation for %s tickets for fixture %s (processed=%s failed=%s)",
+            count,
+            fixture,
+            processed,
+            failed,
+        )
         if affected_ticket_ids:
             refresh_weekly_commissions_for_ticket_ids_sync(affected_ticket_ids)
-        return {"error": None, "affected_ticket_ids": affected_ticket_ids, "processed": count}
+        return {
+            "error": None,
+            "affected_ticket_ids": affected_ticket_ids,
+            "processed": processed,
+            "failed": failed,
+        }
     except Exception as exc:
-        logger.error("Critical error in recalculate_tickets_for_fixture_sync: %s", exc)
-        return {"error": str(exc), "affected_ticket_ids": locals().get("affected_ticket_ids", []), "processed": 0}
+        logger.exception("Critical error in recalculate_tickets_for_fixture_sync: %s", exc)
+        return {
+            "error": str(exc),
+            "affected_ticket_ids": affected_ticket_ids,
+            "processed": processed,
+            "failed": failed,
+        }

@@ -96,6 +96,25 @@ class UserWithdrawalAdminTests(TestCase):
             [approved_withdrawal.id, rejected_withdrawal.id, completed_withdrawal.id],
         )
 
+    def test_processed_withdrawal_admin_list_display_shows_audit_columns(self):
+        self.assertEqual(
+            self.processed_admin.list_display,
+            (
+                "short_id",
+                "user",
+                "amount",
+                "status",
+                "balance_before_display",
+                "balance_after_display",
+                "approved_rejected_by_display",
+                "approved_rejected_time_display",
+                "request_time",
+                "bank_name",
+                "account_number",
+                "account_name",
+            ),
+        )
+
     def test_userwithdrawal_admin_form_blocks_reopen_with_insufficient_funds(self):
         Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))
         withdrawal = self._create_withdrawal(status="rejected")
@@ -163,15 +182,17 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "User Withdrawal")
         self.assertContains(response, "Pending withdrawals: 1")
+        self.assertContains(response, "Processed Withdrawals")
+        self.assertContains(response, reverse("betting_admin:betting_processedwithdrawal_changelist"))
 
-    def test_admin_app_list_moves_processed_withdrawals_to_updated_withdrawals_section(self):
+    def test_admin_app_list_moves_processed_withdrawals_to_processed_withdrawals_section(self):
         request = self.factory.get("/admin/")
         request.user = self.admin_user
 
         app_list = betting_admin_site.get_app_list(request)
 
-        updated_withdrawals_app = next(app for app in app_list if app["name"] == "Updated Withdrawals")
-        self.assertEqual(updated_withdrawals_app["models"][0]["name"], "Updated Withdrawals")
+        processed_withdrawals_app = next(app for app in app_list if app["name"] == "Processed Withdrawals")
+        self.assertEqual(processed_withdrawals_app["models"][0]["name"], "Processed Withdrawals")
 
         betting_app = next(app for app in app_list if app["app_label"] == "betting")
         self.assertFalse(any(model["object_name"] == "ProcessedWithdrawal" for model in betting_app["models"]))

@@ -190,6 +190,15 @@
                         </a>
                     </div>
                     <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{{ processed_withdrawals_admin_url|default:'#' }}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #343a40 0%, #1d2124 100%);">
+                            <div>
+                                <div class="admin-quick-link-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+                                <div class="admin-quick-link-title">Processed Withdrawals</div>
+                            </div>
+                            <div class="admin-quick-link-text">View balance before, amount, balance after, processor, and time.</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
                         <a href="{% url 'betting_admin:admin_manual_wallet_manager' %}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);">
                             <div>
                                 <div class="admin-quick-link-icon"><i class="fas fa-wallet"></i></div>

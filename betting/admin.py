@@ -102,7 +102,7 @@ class BettingAdminSite(admin.AdminSite):
         extra_context.update({
             'pending_user_withdrawal_count': pending_user_withdrawal_count,
             'pending_user_withdrawal_admin_url': reverse(f'{self.name}:betting_userwithdrawal_changelist'),
-            'updated_withdrawals_admin_url': reverse(f'{self.name}:betting_processedwithdrawal_changelist'),
+            'processed_withdrawals_admin_url': reverse(f'{self.name}:betting_processedwithdrawal_changelist'),
             'pending_crm_wallet_approval_count': pending_crm_wallet_approval_count,
             'crm_wallet_approval_admin_url': reverse(f'{self.name}:betting_crmwalletapprovalrequest_changelist'),
             'crm_wallet_dashboard_url': reverse(f'{self.name}:dashboard'),
@@ -122,7 +122,7 @@ class BettingAdminSite(admin.AdminSite):
                 if model.get('object_name') == 'ProcessedWithdrawal':
                     processed_model = {
                         **model,
-                        'name': 'Updated Withdrawals',
+                        'name': 'Processed Withdrawals',
                     }
                     continue
                 models.append(model)
@@ -133,7 +133,7 @@ class BettingAdminSite(admin.AdminSite):
         if processed_model and app_label in (None, 'updated_withdrawals'):
             filtered_apps.append(
                 {
-                    'name': 'Updated Withdrawals',
+                    'name': 'Processed Withdrawals',
                     'app_label': 'updated_withdrawals',
                     'app_url': reverse(f'{self.name}:betting_processedwithdrawal_changelist'),
                     'has_module_perms': True,
@@ -2592,17 +2592,15 @@ class ProcessedWithdrawalAdmin(admin.ModelAdmin):
         'short_id',
         'user',
         'amount',
+        'status',
+        'balance_before_display',
+        'balance_after_display',
+        'approved_rejected_by_display',
+        'approved_rejected_time_display',
+        'request_time',
         'bank_name',
         'account_number',
         'account_name',
-        'status',
-        'request_time',
-        'email_request_admin_sent_at',
-        'email_request_user_sent_at',
-        'email_approved_admin_sent_at',
-        'email_approved_user_sent_at',
-        'email_completed_admin_sent_at',
-        'email_completed_user_sent_at',
     )
     list_filter = ('status', 'approved_rejected_time', 'request_time', 'bank_name')
     search_fields = ('user__email', 'user__username', 'id', 'account_number', 'account_name')

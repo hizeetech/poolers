@@ -57,6 +57,24 @@
                             A: {{ fixture.away_win_odd|floatformat:2 }}
                         </button>
             {% endif %}
+            {% if fixture.home_or_draw_odd %}
+            <button class="btn btn-sm px-3 rounded-pill bet-selection-btn fixture-period-odd-button" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="home_or_draw" data-odd="{{ fixture.home_or_draw_odd|floatformat:2 }}" data-selection-text="1X ({{ fixture.home_or_draw_odd|floatformat:2 }})"
+                data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                            1X: {{ fixture.home_or_draw_odd|floatformat:2 }}
+                        </button>
+            {% endif %}
+            {% if fixture.either_team_win_odd %}
+            <button class="btn btn-sm px-3 rounded-pill bet-selection-btn fixture-period-odd-button" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="either_team_win" data-odd="{{ fixture.either_team_win_odd|floatformat:2 }}" data-selection-text="12 ({{ fixture.either_team_win_odd|floatformat:2 }})"
+                data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                            12: {{ fixture.either_team_win_odd|floatformat:2 }}
+                        </button>
+            {% endif %}
+            {% if fixture.away_or_draw_odd %}
+            <button class="btn btn-sm px-3 rounded-pill bet-selection-btn fixture-period-odd-button" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="away_or_draw" data-odd="{{ fixture.away_or_draw_odd|floatformat:2 }}" data-selection-text="X2 ({{ fixture.away_or_draw_odd|floatformat:2 }})"
+                data-period-name="{{ fixture.betting_period.name }}" data-home-team="{{ fixture.home_team }}" data-away-team="{{ fixture.away_team }}" data-match-date="{{ fixture.match_date|date:'Y-m-d' }}" data-match-time="{{ fixture.match_time|time:'H:i' }}">
+                            X2: {{ fixture.away_or_draw_odd|floatformat:2 }}
+                        </button>
+            {% endif %}
             <!-- Additional Bet Types -->
             {% if fixture.home_dnb_odd %}
             <button class="btn btn-sm px-3 rounded-pill bet-selection-btn fixture-period-odd-button" data-event-number="{{ fixture.serial_number }}" data-fixture-id="{{ fixture.id }}" data-bet-type="home_dnb" data-odd="{{ fixture.home_dnb_odd|floatformat:2 }}" data-selection-text="{{ fixture.home_team }} DNB ({{ fixture.home_dnb_odd|floatformat:2 }})"

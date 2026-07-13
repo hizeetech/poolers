@@ -49,6 +49,8 @@ def market_key_for_bet_type(bet_type):
     bt = (bet_type or "").strip().lower()
     if bt in ["home_win", "draw", "away_win"]:
         return "1X2"
+    if bt in ["home_or_draw", "either_team_win", "away_or_draw"]:
+        return "DOUBLE_CHANCE"
     if bt in ["home_dnb", "away_dnb"]:
         return "DNB"
     if bt.startswith("over_") or bt.startswith("under_"):

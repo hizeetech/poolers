@@ -40,6 +40,9 @@ class SystemBetTestCase(TestCase):
             home_win_odd=1.5,
             draw_odd=3.0,
             away_win_odd=2.5,
+            home_or_draw_odd=1.20,
+            either_team_win_odd=1.35,
+            away_or_draw_odd=1.30,
             status='scheduled'
         )
         self.fixture2 = Fixture.objects.create(
@@ -52,6 +55,9 @@ class SystemBetTestCase(TestCase):
             home_win_odd=1.8,
             draw_odd=3.2,
             away_win_odd=2.1,
+            home_or_draw_odd=1.25,
+            either_team_win_odd=1.32,
+            away_or_draw_odd=1.28,
             status='scheduled'
         )
         self.fixture3 = Fixture.objects.create(
@@ -64,6 +70,9 @@ class SystemBetTestCase(TestCase):
             home_win_odd=2.0,
             draw_odd=3.1,
             away_win_odd=2.8,
+            home_or_draw_odd=1.30,
+            either_team_win_odd=1.40,
+            away_or_draw_odd=1.24,
             status='scheduled'
         )
         
@@ -198,6 +207,71 @@ class SystemBetTestCase(TestCase):
         self.assertEqual(ticket.status, 'won')
         self.assertTrue(ticket.payout_processed)
         self.assertEqual(self.wallet.balance, Decimal('1050.00'))
+
+    def test_double_chance_markets_place_and_auto_settle_from_draw_result(self):
+        test_cases = [
+            ("home_or_draw", Decimal("1.20"), "won"),
+            ("either_team_win", Decimal("1.35"), "lost"),
+            ("away_or_draw", Decimal("1.30"), "won"),
+        ]
+
+        ticket_ids = []
+        for outcome, odd, _expected_status in test_cases:
+            response = self.client.post(
+                '/place-bet/',
+                {
+                    'selections': json.dumps([
+                        {'fixtureId': self.fixture1.id, 'outcome': outcome, 'odd': float(odd)}
+                    ]),
+                    'stake_amount': '100',
+                    'is_system_bet': 'false',
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload['success'], msg=payload.get('message'))
+            ticket_ids.append(payload['ticket_id'])
+
+        self.fixture1.home_score = 1
+        self.fixture1.away_score = 1
+        self.fixture1.status = 'finished'
+        self.fixture1.save()
+
+        statuses = {
+            ticket.ticket_id: ticket.status
+            for ticket in BetTicket.objects.filter(ticket_id__in=ticket_ids)
+        }
+        expected_statuses = {
+            ticket_id: expected_status
+            for ticket_id, (_outcome, _odd, expected_status) in zip(ticket_ids, test_cases)
+        }
+        self.assertEqual(statuses, expected_statuses)
+
+    def test_either_team_win_market_wins_when_match_has_a_winner(self):
+        response = self.client.post(
+            '/place-bet/',
+            {
+                'selections': json.dumps([
+                    {'fixtureId': self.fixture2.id, 'outcome': 'either_team_win', 'odd': 1.32}
+                ]),
+                'stake_amount': '100',
+                'is_system_bet': 'false',
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['success'], msg=payload.get('message'))
+
+        ticket = BetTicket.objects.get(ticket_id=payload['ticket_id'])
+        self.assertEqual(ticket.total_odd, Decimal('1.32'))
+
+        self.fixture2.home_score = 2
+        self.fixture2.away_score = 1
+        self.fixture2.status = 'finished'
+        self.fixture2.save()
+
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.status, 'won')
 
     def test_duplicate_fixture_in_payload_is_rejected(self):
         selections = [

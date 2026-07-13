@@ -1059,6 +1059,9 @@ class Fixture(models.Model):
     home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     away_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    home_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    either_team_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    away_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     over_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     under_1_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     over_2_5_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -1078,6 +1081,9 @@ class PopularPick(models.Model):
         ('home_win', 'Home Win'),
         ('draw', 'Draw'),
         ('away_win', 'Away Win'),
+        ('home_or_draw', 'Home Win or Draw (1X)'),
+        ('either_team_win', 'Anybody Wins (12)'),
+        ('away_or_draw', 'Away Win or Draw (X2)'),
         ('home_dnb', 'Home DNB'),
         ('away_dnb', 'Away DNB'),
         ('over_1_5', 'Over 1.5'),
@@ -1110,6 +1116,9 @@ class PopularPick(models.Model):
             'home_win': 'home_win_odd',
             'draw': 'draw_odd',
             'away_win': 'away_win_odd',
+            'home_or_draw': 'home_or_draw_odd',
+            'either_team_win': 'either_team_win_odd',
+            'away_or_draw': 'away_or_draw_odd',
             'home_dnb': 'home_dnb_odd',
             'away_dnb': 'away_dnb_odd',
             'over_1_5': 'over_1_5_odd',
@@ -1130,6 +1139,8 @@ class PopularPick(models.Model):
     def market_label(self):
         if self.bet_type in ('home_win', 'draw', 'away_win'):
             return '1x2'
+        if self.bet_type in ('home_or_draw', 'either_team_win', 'away_or_draw'):
+            return 'Double Chance'
         if self.bet_type in ('home_dnb', 'away_dnb'):
             return 'DNB'
         if self.bet_type.startswith('over_') or self.bet_type.startswith('under_'):
@@ -1146,6 +1157,12 @@ class PopularPick(models.Model):
             return 'X'
         if self.bet_type == 'away_win':
             return '2'
+        if self.bet_type == 'home_or_draw':
+            return '1X'
+        if self.bet_type == 'either_team_win':
+            return '12'
+        if self.bet_type == 'away_or_draw':
+            return 'X2'
         if self.bet_type == 'home_dnb':
             return 'Home DNB'
         if self.bet_type == 'away_dnb':
@@ -1599,6 +1616,12 @@ class BetTicket(models.Model):
                         new_value = fixture.home_score == fixture.away_score
                     elif selection.bet_type == 'away_win':
                         new_value = fixture.home_score < fixture.away_score
+                    elif selection.bet_type == 'home_or_draw':
+                        new_value = fixture.home_score >= fixture.away_score
+                    elif selection.bet_type == 'either_team_win':
+                        new_value = fixture.home_score != fixture.away_score
+                    elif selection.bet_type == 'away_or_draw':
+                        new_value = fixture.home_score <= fixture.away_score
                     elif selection.bet_type == 'over_1_5':
                         new_value = total_goals > Decimal('1.5')
                     elif selection.bet_type == 'under_1_5':
@@ -3001,6 +3024,9 @@ def track_fixture_update_flags(sender, instance, **kwargs):
             "home_win_odd",
             "draw_odd",
             "away_win_odd",
+            "home_or_draw_odd",
+            "either_team_win_odd",
+            "away_or_draw_odd",
             "over_1_5_odd",
             "under_1_5_odd",
             "over_2_5_odd",
@@ -3036,6 +3062,9 @@ def track_fixture_update_flags(sender, instance, **kwargs):
         "home_win_odd",
         "draw_odd",
         "away_win_odd",
+        "home_or_draw_odd",
+        "either_team_win_odd",
+        "away_or_draw_odd",
         "over_1_5_odd",
         "under_1_5_odd",
         "over_2_5_odd",

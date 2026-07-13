@@ -4270,6 +4270,9 @@ def place_bet(request):
                         if outcome == 'home_win': odd = fixture.home_win_odd
                         elif outcome == 'draw': odd = fixture.draw_odd
                         elif outcome == 'away_win': odd = fixture.away_win_odd
+                        elif outcome == 'home_or_draw': odd = fixture.home_or_draw_odd
+                        elif outcome == 'either_team_win': odd = fixture.either_team_win_odd
+                        elif outcome == 'away_or_draw': odd = fixture.away_or_draw_odd
                         elif outcome == 'home_dnb': odd = fixture.home_dnb_odd
                         elif outcome == 'away_dnb': odd = fixture.away_dnb_odd
                         elif outcome == 'over_1_5': odd = fixture.over_1_5_odd
@@ -4838,6 +4841,12 @@ def place_bet(request):
                         odd = fixture.draw_odd
                     elif selected_outcome == 'away_win':
                         odd = fixture.away_win_odd 
+                    elif selected_outcome == 'home_or_draw':
+                        odd = fixture.home_or_draw_odd
+                    elif selected_outcome == 'either_team_win':
+                        odd = fixture.either_team_win_odd
+                    elif selected_outcome == 'away_or_draw':
+                        odd = fixture.away_or_draw_odd
                     elif selected_outcome == 'home_dnb':
                         odd = fixture.home_dnb_odd
                     elif selected_outcome == 'away_dnb':
@@ -9767,6 +9776,12 @@ def declare_result(request, fixture_id):
 
                     # Simplified: if the selection matches the declared fixture result, it's winning for that selection
                     if selection_for_this_fixture.bet_type == fixture.result:
+                        is_selection_winning = True
+                    elif selection_for_this_fixture.bet_type == 'home_or_draw' and fixture.result in ('home_win', 'draw'):
+                        is_selection_winning = True
+                    elif selection_for_this_fixture.bet_type == 'either_team_win' and fixture.result in ('home_win', 'away_win'):
+                        is_selection_winning = True
+                    elif selection_for_this_fixture.bet_type == 'away_or_draw' and fixture.result in ('away_win', 'draw'):
                         is_selection_winning = True
                     # Handle DNB cases where a draw voids the selection
                     elif selection_for_this_fixture.bet_type == 'home_dnb' and fixture.result == 'draw':
@@ -19845,6 +19860,9 @@ def get_ticket_details_json(request):
             if bt == 'home_win': current_odd = getattr(fixture, 'home_win_odd', None)
             elif bt == 'draw': current_odd = getattr(fixture, 'draw_odd', None)
             elif bt == 'away_win': current_odd = getattr(fixture, 'away_win_odd', None)
+            elif bt == 'home_or_draw': current_odd = getattr(fixture, 'home_or_draw_odd', None)
+            elif bt == 'either_team_win': current_odd = getattr(fixture, 'either_team_win_odd', None)
+            elif bt == 'away_or_draw': current_odd = getattr(fixture, 'away_or_draw_odd', None)
             elif bt == 'home_dnb': current_odd = getattr(fixture, 'home_dnb_odd', None)
             elif bt == 'away_dnb': current_odd = getattr(fixture, 'away_dnb_odd', None)
             elif bt == 'over_1_5': current_odd = getattr(fixture, 'over_1_5_odd', None)

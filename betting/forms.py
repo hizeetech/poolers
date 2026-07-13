@@ -567,6 +567,9 @@ class FixtureForm(forms.ModelForm):
     active_home_win_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
     active_draw_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
     active_away_win_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_home_or_draw_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_either_team_win_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
+    active_away_or_draw_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
     
     active_over_1_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
     active_under_1_5_odd = forms.BooleanField(required=False, label="Active", initial=True, widget=forms.CheckboxInput(attrs={'class': 'form-check-input'}))
@@ -591,6 +594,7 @@ class FixtureForm(forms.ModelForm):
         fields = [
             'betting_period', 'match_date', 'match_time', 'home_team', 'away_team', 'serial_number', 'status', 'is_active',
             'home_win_odd', 'draw_odd', 'away_win_odd',
+            'home_or_draw_odd', 'either_team_win_odd', 'away_or_draw_odd',
             'over_1_5_odd', 'under_1_5_odd',
             'over_2_5_odd', 'under_2_5_odd',
             'over_3_5_odd', 'under_3_5_odd',
@@ -610,6 +614,9 @@ class FixtureForm(forms.ModelForm):
             'home_win_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             'draw_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             'away_win_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'home_or_draw_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'either_team_win_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
+            'away_or_draw_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             
             'over_1_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             'under_1_5_odd': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
@@ -633,6 +640,7 @@ class FixtureForm(forms.ModelForm):
         if self.instance.pk:
             odds_fields = [
                 'home_win_odd', 'draw_odd', 'away_win_odd',
+                'home_or_draw_odd', 'either_team_win_odd', 'away_or_draw_odd',
                 'over_1_5_odd', 'under_1_5_odd',
                 'over_2_5_odd', 'under_2_5_odd',
                 'over_3_5_odd', 'under_3_5_odd',
@@ -670,6 +678,9 @@ class FixtureForm(forms.ModelForm):
             'active_home_win_odd', 'home_win_odd',
             'active_draw_odd', 'draw_odd',
             'active_away_win_odd', 'away_win_odd',
+            'active_home_or_draw_odd', 'home_or_draw_odd',
+            'active_either_team_win_odd', 'either_team_win_odd',
+            'active_away_or_draw_odd', 'away_or_draw_odd',
             'active_over_1_5_odd', 'over_1_5_odd',
             'active_under_1_5_odd', 'under_1_5_odd',
             'active_over_2_5_odd', 'over_2_5_odd',
@@ -686,6 +697,7 @@ class FixtureForm(forms.ModelForm):
         cleaned_data = super().clean()
         odds_fields = [
             'home_win_odd', 'draw_odd', 'away_win_odd',
+            'home_or_draw_odd', 'either_team_win_odd', 'away_or_draw_odd',
             'over_1_5_odd', 'under_1_5_odd',
             'over_2_5_odd', 'under_2_5_odd',
             'over_3_5_odd', 'under_3_5_odd',

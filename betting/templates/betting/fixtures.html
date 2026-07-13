@@ -696,7 +696,7 @@
 
     function rebuildSmartPickFromFixtures() {
         if (!smartPickGrid) return;
-        const buttons = Array.from(document.querySelectorAll('.bet-selection-btn[data-event-number][data-fixture-id]'));
+        const buttons = Array.from(document.querySelectorAll('.bet-selection-btn[data-event-number][data-fixture-id][data-bet-type="draw"]'));
         const map = {};
         for (const btn of buttons) {
             const ev = String(btn.dataset.eventNumber || '').trim();
@@ -717,7 +717,11 @@
 
     function updateSmartPickHighlights() {
         if (!smartPickGrid) return;
-        const selectedFixtureIds = new Set((selectedBets || []).map(b => String(b.fixture_id)));
+        const selectedFixtureIds = new Set(
+            (selectedBets || [])
+                .filter(b => String(b.bet_type || '') === 'draw')
+                .map(b => String(b.fixture_id))
+        );
         smartPickGrid.querySelectorAll('.smart-pick-number[data-event-number]').forEach((el) => {
             const ev = String(el.dataset.eventNumber || '').trim();
             const fid = smartPickEventToFixtureId[ev];
@@ -729,12 +733,7 @@
     function findPreferredButtonForFixtureId(fixtureId) {
         const fid = String(fixtureId || '').trim();
         if (!fid) return null;
-        const preferred = ['home_win', 'draw', 'away_win'];
-        for (const bt of preferred) {
-            const btn = document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"][data-bet-type="${cssEscape(bt)}"]`);
-            if (btn) return btn;
-        }
-        return document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"]`);
+        return document.querySelector(`.bet-selection-btn[data-fixture-id="${cssEscape(fid)}"][data-bet-type="draw"]`);
     }
 
     function findButtonForFixtureAndBetType(fixtureId, betType) {
@@ -751,16 +750,17 @@
             const ev = String(target.dataset.eventNumber || '').trim();
             const fid = smartPickEventToFixtureId[ev];
             if (!fid) return;
+            const drawBtn = findPreferredButtonForFixtureId(fid);
+            if (!drawBtn) return;
 
             const existing = (selectedBets || []).find(bet => String(bet.fixture_id) === String(fid));
-            if (existing) {
-                const removeBtn = findButtonForFixtureAndBetType(fid, existing.bet_type);
+            if (existing && String(existing.bet_type || '') === 'draw') {
+                const removeBtn = findButtonForFixtureAndBetType(fid, 'draw');
                 if (removeBtn) removeBtn.click();
                 return;
             }
 
-            const addBtn = findPreferredButtonForFixtureId(fid);
-            if (addBtn) addBtn.click();
+            drawBtn.click();
         });
     }
 

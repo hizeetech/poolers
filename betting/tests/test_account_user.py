@@ -478,6 +478,58 @@ class AccountUserTests(TestCase):
             super_agent.id,
         )
 
+    @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
+    @patch('commission.services.calculate_monthly_network_commission_data')
+    def test_account_user_dashboard_renders_calculated_super_agent_monthly_commission_without_saved_record(
+        self,
+        mock_monthly_calc,
+        _mock_weekly_calc,
+    ):
+        self.client.force_login(self.account_user)
+
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=timezone.datetime(2026, 6, 2).date(),
+            end_date=timezone.datetime(2026, 6, 29).date(),
+        )
+        super_agent = User.objects.create_user(
+            email='calculated-super-agent@test.com',
+            password=self.password,
+            user_type='super_agent',
+            username='calculated_super_agent',
+            phone_number='08012345679',
+        )
+        Wallet.objects.get_or_create(user=super_agent, defaults={'balance': Decimal('0.00')})
+
+        mock_monthly_calc.side_effect = lambda user, selected_period: (
+            {
+                'role': 'super_agent',
+                'downline_stake': Decimal('1134490.30'),
+                'downline_winnings': Decimal('577026.31'),
+                'downline_paid_commissions': Decimal('250121.23'),
+                'ngr': Decimal('307261.76'),
+                'commission_percent': Decimal('5.00'),
+                'commission_amount': Decimal('15363.09'),
+            }
+            if user.id == super_agent.id and selected_period.id == period.id else None
+        )
+
+        response = self.client.get(
+            reverse('betting:account_user_dashboard'),
+            {
+                'section': 'commissions',
+                'commission_period': str(period.id),
+                'commission_search': 'calculated',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Search Super Agent')
+        self.assertContains(response, 'Commission Total')
+        self.assertContains(response, 'calculated_super_agent')
+        self.assertContains(response, '15363.09')
+        self.assertContains(response, '08012345679')
+
     @patch('commission.services.calculate_monthly_network_commission_data', return_value=None)
     @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
     def test_account_user_can_pay_adjusted_super_agent_monthly_commission_from_dashboard(

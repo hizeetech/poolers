@@ -12682,10 +12682,21 @@ def account_user_dashboard(request):
                 return redirect('betting:account_user_dashboard')
 
             try:
-                comm_type, comm_id = comm_key.split('_', 1)
-                if comm_type != 'monthly':
+                from commission.services import calculate_monthly_network_commission
+
+                parts = comm_key.split('_', 1)
+                comm_type = parts[0]
+                comm_id = parts[1] if len(parts) > 1 else ''
+                if comm_type == 'monthlycalc':
+                    target_user = User.objects.get(id=comm_id, user_type='super_agent')
+                    period = CommissionPeriod.objects.get(id=selected_period_id)
+                    comm = calculate_monthly_network_commission(target_user, period)
+                    if not comm:
+                        raise InvalidOperation("Unable to calculate Super Agent monthly commission for this user.")
+                elif comm_type == 'monthly':
+                    comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
+                else:
                     raise InvalidOperation("Invalid commission type for Super Agent monthly payment.")
-                comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
                 if comm.period_id != selected_period_id:
                     raise InvalidOperation("Selected item does not match the selected commission period.")
                 success, msg = pay_monthly_network_commission_amount(comm, amount, actor=request.user)
@@ -12727,10 +12738,21 @@ def account_user_dashboard(request):
             success_count = 0
             for item in selected_items:
                 try:
-                    comm_type, comm_id = item.split('_', 1)
-                    if comm_type != 'monthly':
+                    from commission.services import calculate_monthly_network_commission
+
+                    parts = item.split('_', 1)
+                    comm_type = parts[0]
+                    comm_id = parts[1] if len(parts) > 1 else ''
+                    if comm_type == 'monthlycalc':
+                        target_user = User.objects.get(id=comm_id, user_type='super_agent')
+                        period = CommissionPeriod.objects.get(id=selected_period_id)
+                        comm = calculate_monthly_network_commission(target_user, period)
+                        if not comm:
+                            raise InvalidOperation("Unable to calculate Super Agent monthly commission for this user.")
+                    elif comm_type == 'monthly':
+                        comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
+                    else:
                         raise InvalidOperation("Invalid commission type for Super Agent monthly payment.")
-                    comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
                     if comm.period_id != selected_period_id:
                         raise InvalidOperation("Selected item does not match the selected commission period.")
                     success, msg = pay_monthly_network_commission(comm, actor=request.user)
@@ -13127,16 +13149,18 @@ def account_user_dashboard(request):
     selected_commission_period_id = None
     try:
         from commission.models import CommissionPeriod as CommissionPeriodModel
-        period_ids = set(pending_weekly_base.values_list('period_id', flat=True).distinct()) | set(pending_monthly_base.values_list('period_id', flat=True).distinct())
-        if period_ids:
-            commission_period_options = list(CommissionPeriodModel.objects.filter(id__in=period_ids).order_by('-start_date'))
+        commission_period_options = list(CommissionPeriodModel.objects.order_by('-start_date'))
         if commission_period_id_raw:
             try:
                 selected_commission_period_id = int(commission_period_id_raw)
             except Exception:
                 selected_commission_period_id = None
-        if selected_commission_period_id is None and commission_period_options:
-            selected_commission_period_id = commission_period_options[0].id
+        if selected_commission_period_id is None:
+            period_ids = list(pending_weekly_base.values_list('period_id', flat=True).distinct()) + list(pending_monthly_base.values_list('period_id', flat=True).distinct())
+            if period_ids:
+                selected_commission_period_id = period_ids[0]
+            elif commission_period_options:
+                selected_commission_period_id = commission_period_options[0].id
     except Exception:
         commission_period_options = []
         selected_commission_period_id = None
@@ -13229,16 +13253,51 @@ def account_user_dashboard(request):
         })
 
     super_agent_monthly_commissions = []
-    for mc in pending_super_agent_monthly:
-        super_agent_monthly_commissions.append({
-            'id_str': f"monthly_{mc.id}",
-            'type': "Monthly (Super Agent)",
-            'user': mc.user,
-            'period': mc.period,
-            'amount': (mc.commission_amount or Decimal('0.00')) - (mc.amount_paid or Decimal('0.00')),
-            'ggr_ngr': mc.ngr,
-            'status': mc.status,
-        })
+    selected_commission_period = next((p for p in commission_period_options if p.id == selected_commission_period_id), None)
+    if selected_commission_period and selected_commission_period.period_type == 'monthly':
+        saved_super_agent_map = {
+            rec.user_id: rec
+            for rec in pending_super_agent_monthly.select_related('user', 'period')
+        }
+        super_agent_users = User.objects.filter(user_type='super_agent', is_active=True).order_by('username', 'email')
+        if commission_search:
+            super_agent_users = super_agent_users.filter(
+                Q(email__icontains=commission_search) |
+                Q(username__icontains=commission_search) |
+                Q(phone_number__icontains=commission_search) |
+                Q(first_name__icontains=commission_search) |
+                Q(last_name__icontains=commission_search) |
+                Q(other_name__icontains=commission_search)
+            )
+        for super_agent in super_agent_users:
+            saved_record = saved_super_agent_map.get(super_agent.id)
+            if saved_record:
+                outstanding = (saved_record.commission_amount or Decimal('0.00')) - (saved_record.amount_paid or Decimal('0.00'))
+                if outstanding > 0:
+                    super_agent_monthly_commissions.append({
+                        'id_str': f"monthly_{saved_record.id}",
+                        'type': "Monthly (Super Agent)",
+                        'user': saved_record.user,
+                        'period': saved_record.period,
+                        'amount': outstanding,
+                        'ggr_ngr': saved_record.ngr,
+                        'status': saved_record.status,
+                    })
+                continue
+
+            if calculate_monthly_network_commission_data:
+                calc = calculate_monthly_network_commission_data(super_agent, selected_commission_period) or {}
+                commission_amount = calc.get('commission_amount') or Decimal('0.00')
+                if commission_amount > 0:
+                    super_agent_monthly_commissions.append({
+                        'id_str': f"monthlycalc_{super_agent.id}",
+                        'type': "Monthly (Super Agent)",
+                        'user': super_agent,
+                        'period': selected_commission_period,
+                        'amount': commission_amount,
+                        'ggr_ngr': calc.get('ngr') or Decimal('0.00'),
+                        'status': 'pending',
+                    })
 
     # Fetch Pending Withdrawals
     all_pending_withdrawals = UserWithdrawal.objects.filter(status='pending').select_related('user').order_by('request_time')

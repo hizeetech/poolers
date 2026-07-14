@@ -1045,7 +1045,27 @@ $(document).ready(function() {
                      <i class="fas fa-chevron-down"></i>
                 </div>
                 <div class="card-body collapse show" id="superAgentMonthlyCommissionsBody">
-                    <div class="small text-muted mb-3">Uses the same commission period and search filters selected in Pending Commission Payouts.</div>
+                    <form method="get" class="mb-3">
+                        <input type="hidden" name="section" value="commissions">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-12 col-md-5">
+                                <label class="form-label small text-muted mb-1">Commission Period</label>
+                                <select name="commission_period" class="form-select">
+                                    {% for p in commission_period_options %}
+                                    <option value="{{ p.id }}" {% if p.id == selected_commission_period_id %}selected{% endif %}>{{ p }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-12 col-md-5">
+                                <label class="form-label small text-muted mb-1">Search Super Agent</label>
+                                <input type="text" name="commission_search" value="{{ commission_search }}" class="form-control" placeholder="Name, email, username, phone number">
+                            </div>
+                            <div class="col-12 col-md-2 d-flex gap-2">
+                                <button type="submit" class="btn btn-dark w-100">Filter</button>
+                                <a class="btn btn-outline-secondary w-100" href="{% url 'betting:account_user_dashboard' %}?section=commissions#acct-commissions-section">Reset</a>
+                            </div>
+                        </div>
+                    </form>
                     <form method="post">
                         {% csrf_token %}
                         <input type="hidden" name="section" value="commissions">
@@ -1121,7 +1141,7 @@ $(document).ready(function() {
                             <nav aria-label="Super Agent Monthly Commissions Pagination">
                                 <ul class="pagination pagination-sm justify-content-center mb-0">
                                     {% if super_agent_monthly_commissions.has_previous %}
-                                    <li class="page-item"><a class="page-link" href="?super_agent_commissions_page={{ super_agent_monthly_commissions.previous_page_number }}&commission_period={{ selected_commission_period_id }}&commission_search={{ commission_search|urlencode }}">&laquo;</a></li>
+                                    <li class="page-item"><a class="page-link" href="?section=commissions&super_agent_commissions_page={{ super_agent_monthly_commissions.previous_page_number }}&commission_period={{ selected_commission_period_id }}&commission_search={{ commission_search|urlencode }}#acct-commissions-section">&laquo;</a></li>
                                     {% else %}
                                     <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
                                     {% endif %}
@@ -1129,7 +1149,7 @@ $(document).ready(function() {
                                     <li class="page-item active"><span class="page-link">{{ super_agent_monthly_commissions.number }}</span></li>
                                     
                                     {% if super_agent_monthly_commissions.has_next %}
-                                    <li class="page-item"><a class="page-link" href="?super_agent_commissions_page={{ super_agent_monthly_commissions.next_page_number }}&commission_period={{ selected_commission_period_id }}&commission_search={{ commission_search|urlencode }}">&raquo;</a></li>
+                                    <li class="page-item"><a class="page-link" href="?section=commissions&super_agent_commissions_page={{ super_agent_monthly_commissions.next_page_number }}&commission_period={{ selected_commission_period_id }}&commission_search={{ commission_search|urlencode }}#acct-commissions-section">&raquo;</a></li>
                                     {% else %}
                                     <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
                                     {% endif %}

@@ -12655,6 +12655,102 @@ def account_user_dashboard(request):
             messages.error(request, "User not found or invalid ID.")
 
     if request.method == 'POST':
+        if 'pay_super_agent_adjusted' in request.POST:
+            config = SiteConfiguration.load()
+            if not config.account_user_commission_authority:
+                messages.error(request, "Commission disbursement is disabled for Account Users in Site Configuration.")
+                return redirect('betting:account_user_dashboard')
+
+            comm_key = (request.POST.get('pay_super_agent_adjusted') or '').strip()
+            selected_period_raw = (request.POST.get('commission_period') or '').strip()
+            selected_period_id = None
+            if selected_period_raw:
+                try:
+                    selected_period_id = int(selected_period_raw)
+                except Exception:
+                    selected_period_id = None
+
+            if not selected_period_id:
+                messages.error(request, "Please select a commission period before paying.")
+                return redirect('betting:account_user_dashboard')
+
+            amount_raw = request.POST.get(f"super_agent_adjusted_amount_{comm_key}")
+            try:
+                amount = Decimal(str(amount_raw))
+            except Exception:
+                messages.error(request, "Invalid adjusted commission amount.")
+                return redirect('betting:account_user_dashboard')
+
+            try:
+                comm_type, comm_id = comm_key.split('_', 1)
+                if comm_type != 'monthly':
+                    raise InvalidOperation("Invalid commission type for Super Agent monthly payment.")
+                comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
+                if comm.period_id != selected_period_id:
+                    raise InvalidOperation("Selected item does not match the selected commission period.")
+                success, msg = pay_monthly_network_commission_amount(comm, amount, actor=request.user)
+            except Exception as e:
+                success, msg = False, str(e)
+
+            if success:
+                messages.success(request, msg)
+            else:
+                messages.error(request, msg)
+
+            qd = QueryDict(mutable=True)
+            qd['commission_period'] = str(selected_period_id)
+            qd['section'] = 'commissions'
+            commission_search_post = (request.POST.get('commission_search') or '').strip()
+            if commission_search_post:
+                qd['commission_search'] = commission_search_post
+            return redirect(f"{reverse('betting:account_user_dashboard')}?{qd.urlencode()}")
+
+        if 'pay_super_agent_commissions' in request.POST:
+            config = SiteConfiguration.load()
+            if not config.account_user_commission_authority:
+                messages.error(request, "Commission disbursement is disabled for Account Users in Site Configuration.")
+                return redirect('betting:account_user_dashboard')
+
+            selected_items = request.POST.getlist('selected_super_agent_commissions')
+            selected_period_raw = (request.POST.get('commission_period') or '').strip()
+            selected_period_id = None
+            if selected_period_raw:
+                try:
+                    selected_period_id = int(selected_period_raw)
+                except Exception:
+                    selected_period_id = None
+
+            if not selected_period_id:
+                messages.error(request, "Please select a commission period before paying.")
+                return redirect('betting:account_user_dashboard')
+
+            success_count = 0
+            for item in selected_items:
+                try:
+                    comm_type, comm_id = item.split('_', 1)
+                    if comm_type != 'monthly':
+                        raise InvalidOperation("Invalid commission type for Super Agent monthly payment.")
+                    comm = MonthlyNetworkCommission.objects.get(id=comm_id, role='super_agent')
+                    if comm.period_id != selected_period_id:
+                        raise InvalidOperation("Selected item does not match the selected commission period.")
+                    success, msg = pay_monthly_network_commission(comm, actor=request.user)
+                    if success:
+                        success_count += 1
+                    else:
+                        messages.error(request, f"Error paying {item}: {msg}")
+                except Exception as e:
+                    messages.error(request, f"Error processing {item}: {str(e)}")
+
+            if success_count > 0:
+                messages.success(request, f"Successfully paid {success_count} Super Agent monthly commissions.")
+            qd = QueryDict(mutable=True)
+            qd['commission_period'] = str(selected_period_id)
+            qd['section'] = 'commissions'
+            commission_search_post = (request.POST.get('commission_search') or '').strip()
+            if commission_search_post:
+                qd['commission_search'] = commission_search_post
+            return redirect(f"{reverse('betting:account_user_dashboard')}?{qd.urlencode()}")
+
         if 'pay_adjusted' in request.POST:
             config = SiteConfiguration.load()
             if not config.account_user_commission_authority:
@@ -13047,10 +13143,12 @@ def account_user_dashboard(request):
 
     pending_weekly = pending_weekly_base
     pending_monthly = pending_monthly_base
+    pending_super_agent_monthly = pending_monthly_base.filter(role='super_agent')
 
     if selected_commission_period_id:
         pending_weekly = pending_weekly.filter(period_id=selected_commission_period_id)
         pending_monthly = pending_monthly.filter(period_id=selected_commission_period_id)
+        pending_super_agent_monthly = pending_super_agent_monthly.filter(period_id=selected_commission_period_id)
 
     if commission_search:
         weekly_q = (
@@ -13071,6 +13169,7 @@ def account_user_dashboard(request):
         )
         pending_weekly = pending_weekly.filter(weekly_q)
         pending_monthly = pending_monthly.filter(monthly_q)
+        pending_super_agent_monthly = pending_super_agent_monthly.filter(monthly_q)
     
     try:
         from commission.services import calculate_weekly_agent_commission_data, calculate_monthly_network_commission_data
@@ -13129,6 +13228,18 @@ def account_user_dashboard(request):
             'status': mc.status,
         })
 
+    super_agent_monthly_commissions = []
+    for mc in pending_super_agent_monthly:
+        super_agent_monthly_commissions.append({
+            'id_str': f"monthly_{mc.id}",
+            'type': "Monthly (Super Agent)",
+            'user': mc.user,
+            'period': mc.period,
+            'amount': (mc.commission_amount or Decimal('0.00')) - (mc.amount_paid or Decimal('0.00')),
+            'ggr_ngr': mc.ngr,
+            'status': mc.status,
+        })
+
     # Fetch Pending Withdrawals
     all_pending_withdrawals = UserWithdrawal.objects.filter(status='pending').select_related('user').order_by('request_time')
     withdrawals_paginator = Paginator(all_pending_withdrawals, 10)
@@ -13151,6 +13262,19 @@ def account_user_dashboard(request):
         pending_commissions_page = commissions_paginator.page(commissions_paginator.num_pages)
     pending_commissions_total = sum(
         ((comm.get('amount') or Decimal('0.00')) for comm in pending_commissions_page.object_list),
+        Decimal('0.00'),
+    )
+
+    super_agent_commissions_paginator = Paginator(super_agent_monthly_commissions, 10)
+    super_agent_commissions_page_num = request.GET.get('super_agent_commissions_page')
+    try:
+        super_agent_monthly_commissions_page = super_agent_commissions_paginator.page(super_agent_commissions_page_num)
+    except PageNotAnInteger:
+        super_agent_monthly_commissions_page = super_agent_commissions_paginator.page(1)
+    except EmptyPage:
+        super_agent_monthly_commissions_page = super_agent_commissions_paginator.page(super_agent_commissions_paginator.num_pages)
+    super_agent_monthly_commissions_total = sum(
+        ((comm.get('amount') or Decimal('0.00')) for comm in super_agent_monthly_commissions_page.object_list),
         Decimal('0.00'),
     )
 
@@ -13331,6 +13455,8 @@ def account_user_dashboard(request):
         'wallet': request.user.wallet,
         'pending_commissions': pending_commissions_page, # Paginated
         'pending_commissions_total': pending_commissions_total,
+        'super_agent_monthly_commissions': super_agent_monthly_commissions_page,
+        'super_agent_monthly_commissions_total': super_agent_monthly_commissions_total,
         'commission_period_options': commission_period_options,
         'selected_commission_period_id': selected_commission_period_id,
         'commission_search': commission_search,

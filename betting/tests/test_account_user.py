@@ -5,8 +5,8 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 from unittest.mock import patch
-from betting.models import User, Wallet, BetTicket, Transaction, UserWithdrawal
-from commission.models import CommissionPeriod, WeeklyAgentCommission
+from betting.models import User, Wallet, BetTicket, Transaction, UserWithdrawal, SiteConfiguration
+from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from decimal import Decimal
 
 class AccountUserTests(TestCase):
@@ -407,6 +407,141 @@ class AccountUserTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured_context['pending_commissions_total'], Decimal('430.00'))
         self.assertEqual(len(captured_context['pending_commissions'].object_list), 2)
+
+    @patch('commission.services.calculate_monthly_network_commission_data', return_value=None)
+    @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
+    def test_account_user_dashboard_has_dedicated_super_agent_monthly_commission_section(
+        self,
+        _mock_weekly_calc,
+        _mock_monthly_calc,
+    ):
+        self.client.force_login(self.account_user)
+        captured_context = {}
+
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=timezone.datetime(2026, 7, 1).date(),
+            end_date=timezone.datetime(2026, 7, 31).date(),
+        )
+        super_agent = User.objects.create_user(
+            email='super-agent-commission@test.com',
+            password=self.password,
+            user_type='super_agent',
+            username='super_agent_commission',
+        )
+        master_agent = User.objects.create_user(
+            email='master-agent-commission@test.com',
+            password=self.password,
+            user_type='master_agent',
+            username='master_agent_commission',
+        )
+        Wallet.objects.get_or_create(user=super_agent, defaults={'balance': Decimal('0.00')})
+        Wallet.objects.get_or_create(user=master_agent, defaults={'balance': Decimal('0.00')})
+
+        MonthlyNetworkCommission.objects.create(
+            user=super_agent,
+            period=period,
+            role='super_agent',
+            ngr=Decimal('1200.00'),
+            commission_amount=Decimal('300.00'),
+            amount_paid=Decimal('50.00'),
+            status='approved',
+        )
+        MonthlyNetworkCommission.objects.create(
+            user=master_agent,
+            period=period,
+            role='master_agent',
+            ngr=Decimal('5000.00'),
+            commission_amount=Decimal('900.00'),
+            amount_paid=Decimal('0.00'),
+            status='pending',
+        )
+
+        def fake_render(_request, _template_name, context):
+            captured_context.update(context)
+            return HttpResponse('ok')
+
+        with patch('betting.views.render', side_effect=fake_render):
+            response = self.client.get(
+                reverse('betting:account_user_dashboard'),
+                {
+                    'section': 'commissions',
+                    'commission_period': str(period.id),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_context['super_agent_monthly_commissions_total'], Decimal('250.00'))
+        self.assertEqual(len(captured_context['super_agent_monthly_commissions'].object_list), 1)
+        self.assertEqual(
+            captured_context['super_agent_monthly_commissions'].object_list[0]['user'].id,
+            super_agent.id,
+        )
+
+    @patch('commission.services.calculate_monthly_network_commission_data', return_value=None)
+    @patch('commission.services.calculate_weekly_agent_commission_data', return_value=None)
+    def test_account_user_can_pay_adjusted_super_agent_monthly_commission_from_dashboard(
+        self,
+        _mock_weekly_calc,
+        _mock_monthly_calc,
+    ):
+        self.client.force_login(self.account_user)
+
+        config = SiteConfiguration.load()
+        config.account_user_commission_authority = True
+        config.commission_payment_source = 'account_wallet'
+        config.save(update_fields=['account_user_commission_authority', 'commission_payment_source'])
+
+        account_wallet = Wallet.objects.get(user=self.account_user)
+        account_wallet.balance = Decimal('1000.00')
+        account_wallet.save(update_fields=['balance'])
+
+        period = CommissionPeriod.objects.create(
+            period_type='monthly',
+            start_date=timezone.datetime(2026, 7, 1).date(),
+            end_date=timezone.datetime(2026, 7, 31).date(),
+        )
+        super_agent = User.objects.create_user(
+            email='payable-super-agent@test.com',
+            password=self.password,
+            user_type='super_agent',
+            username='payable_super_agent',
+        )
+        super_agent_wallet, _ = Wallet.objects.get_or_create(user=super_agent, defaults={'balance': Decimal('0.00')})
+
+        commission = MonthlyNetworkCommission.objects.create(
+            user=super_agent,
+            period=period,
+            role='super_agent',
+            ngr=Decimal('2000.00'),
+            commission_amount=Decimal('400.00'),
+            amount_paid=Decimal('0.00'),
+            status='pending',
+        )
+
+        response = self.client.post(
+            reverse('betting:account_user_dashboard'),
+            {
+                'section': 'commissions',
+                'commission_period': str(period.id),
+                'commission_search': '',
+                'pay_super_agent_adjusted': f'monthly_{commission.id}',
+                f'super_agent_adjusted_amount_monthly_{commission.id}': '150.00',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        commission.refresh_from_db()
+        account_wallet.refresh_from_db()
+        super_agent_wallet.refresh_from_db()
+
+        self.assertEqual(commission.amount_paid, Decimal('150.00'))
+        self.assertEqual(commission.status, 'partially_paid')
+        self.assertEqual(commission.paid_source, 'account_wallet')
+        self.assertEqual(commission.paid_from_user_id, self.account_user.id)
+        self.assertEqual(account_wallet.balance, Decimal('850.00'))
+        self.assertEqual(super_agent_wallet.balance, Decimal('150.00'))
 
     def test_admin_dashboard_period_ngr_uses_amount_paid_including_partial_payments(self):
         self.client.force_login(self.super_admin)

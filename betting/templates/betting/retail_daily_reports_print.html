@@ -1,0 +1,37 @@
+{% extends 'betting/base.html' %}
+{% block title %}Retail Daily Reports Print View{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Retail Daily Reports</h2>
+      <div class="text-muted small">Print-friendly export</div>
+    </div>
+    <button class="btn btn-outline-secondary" onclick="window.print()">Print</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-bordered table-sm align-middle">
+      <thead>
+        <tr>
+          {% if rows %}
+            {% for key, value in rows.0.items %}
+            <th>{{ key|title }}</th>
+            {% endfor %}
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for key, value in row.items %}
+          <td>{{ value }}</td>
+          {% endfor %}
+        </tr>
+        {% empty %}
+        <tr><td class="text-center text-muted py-4">No rows available.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.mail import send_mail, get_connection
 from django.contrib.auth.hashers import make_password
 
-from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, DashboardTask, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration
+from .models import User, Fixture, BettingPeriod, Wallet, UserWithdrawal, BetTicket, Transaction, BonusRule, SystemSetting, LoginAttempt, CreditRequest, State, RetailManagerDashboardNote, DashboardTask, AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog, CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, SiteConfiguration, CRMDailyReport, RetailDailyReport
 from .services.usernames import create_agent_and_cashiers
 from .services.email_policy import (
     duplicate_email_details,
@@ -33,6 +33,33 @@ from pending_registration.models import PendingAgentRegistration
 # Get the custom User model dynamically
 CustomUser = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+class MultiFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultiFileField(forms.FileField):
+    widget = MultiFileInput
+
+    def clean(self, data, initial=None):
+        single_clean = super().clean
+        if isinstance(data, (list, tuple)):
+            if not data:
+                return []
+            cleaned = []
+            errors = []
+            for uploaded in data:
+                try:
+                    cleaned.append(single_clean(uploaded, initial))
+                except ValidationError as exc:
+                    errors.extend(exc.error_list)
+            if errors:
+                raise ValidationError(errors)
+            return cleaned
+        if not data:
+            return []
+        return [single_clean(data, initial)]
 
 
 class DuplicateEmailConfirmationMixin:
@@ -1992,6 +2019,308 @@ class CRMThresholdSettingsForm(forms.ModelForm):
             'crm_large_deposit_threshold': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             'crm_failed_deposit_repeat_threshold': forms.NumberInput(attrs={'class': 'form-control', 'min': '1'}),
         }
+
+
+class CRMDailyReportForm(forms.ModelForm):
+    attachments = MultiFileField(
+        required=False,
+        widget=MultiFileInput(attrs={'class': 'form-control', 'multiple': True, 'accept': '.pdf,.xlsx,.xls,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.ogg,.m4a,.aac,.webm'}),
+    )
+
+    class Meta:
+        model = CRMDailyReport
+        fields = (
+            'report_date',
+            'branch_name',
+            'calls_made',
+            'calls_received',
+            'whatsapp_conversations',
+            'emails_sent',
+            'sms_sent',
+            'push_notifications_sent',
+            'social_media_responses',
+            'general_notes',
+            'complaints_received',
+            'complaints_resolved',
+            'pending_complaints',
+            'escalated_cases',
+            'reopened_cases',
+            'dormant_customers_contacted',
+            'active_customers_followed_up',
+            'vip_customers_contacted',
+            'welcome_calls',
+            'birthday_messages',
+            'loyalty_calls',
+            'engagement_remarks',
+            'dormant_customers_reactivated',
+            'returning_customers',
+            'customers_retained',
+            'high_risk_customers_identified',
+            'customers_lost',
+            'reason_for_loss',
+            'new_registrations',
+            'first_time_depositors',
+            'repeat_depositors',
+            'customers_assisted_to_deposit',
+            'customers_assisted_to_place_bets',
+            'total_deposits_influenced',
+            'estimated_revenue_influenced',
+            'agents_contacted',
+            'retail_shops_contacted',
+            'agent_complaints_resolved',
+            'training_conducted',
+            'support_visits',
+            'positive_feedback',
+            'negative_feedback',
+            'customer_suggestions',
+            'recommendations',
+        )
+        widgets = {
+            'report_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'branch_name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Branch or operational desk'}),
+            'calls_made': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'calls_received': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'whatsapp_conversations': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'emails_sent': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'sms_sent': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'push_notifications_sent': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'social_media_responses': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'general_notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'General notes for the day'}),
+            'complaints_received': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'complaints_resolved': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'pending_complaints': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'escalated_cases': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'reopened_cases': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'dormant_customers_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'active_customers_followed_up': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'vip_customers_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'welcome_calls': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'birthday_messages': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'loyalty_calls': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'engagement_remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'dormant_customers_reactivated': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'returning_customers': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'customers_retained': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'high_risk_customers_identified': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'customers_lost': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'reason_for_loss': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'new_registrations': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'first_time_depositors': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'repeat_depositors': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'customers_assisted_to_deposit': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'customers_assisted_to_place_bets': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'total_deposits_influenced': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01', 'min': '0'}),
+            'estimated_revenue_influenced': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01', 'min': '0'}),
+            'agents_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'retail_shops_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'agent_complaints_resolved': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'training_conducted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'support_visits': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'positive_feedback': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'negative_feedback': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'customer_suggestions': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'recommendations': CKEditor5Widget(attrs={'class': 'django_ckeditor_5'}, config_name='default'),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.actor = kwargs.pop('actor', None)
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        report_date = cleaned_data.get('report_date')
+        branch_name = (cleaned_data.get('branch_name') or '').strip()
+        cleaned_data['branch_name'] = branch_name
+
+        actor = self.actor
+        if actor and getattr(actor, 'user_type', '') != 'crm':
+            raise ValidationError('Only CRM staff can create or edit CRM daily reports.')
+
+        if self.instance.pk and not self.instance.is_editable_by_staff:
+            raise ValidationError('This report can no longer be edited by CRM staff.')
+
+        if actor and report_date:
+            existing = CRMDailyReport.objects.filter(staff=actor, report_date=report_date)
+            if self.instance.pk:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                self.add_error('report_date', 'A daily report already exists for this date.')
+
+        if cleaned_data.get('complaints_resolved', 0) > cleaned_data.get('complaints_received', 0):
+            self.add_error('complaints_resolved', 'Complaints resolved cannot exceed complaints received.')
+        if cleaned_data.get('pending_complaints', 0) > cleaned_data.get('complaints_received', 0) and cleaned_data.get('complaints_received', 0) > 0:
+            self.add_error('pending_complaints', 'Pending complaints cannot exceed complaints received.')
+        if cleaned_data.get('dormant_customers_reactivated', 0) > cleaned_data.get('dormant_customers_contacted', 0):
+            self.add_error('dormant_customers_reactivated', 'Dormant customers reactivated cannot exceed dormant customers contacted.')
+        return cleaned_data
+
+
+class CRMAdminReviewForm(forms.Form):
+    ACTION_CHOICES = (
+        ('comment', 'Add Comment'),
+        ('approve', 'Approve'),
+        ('reject', 'Reject'),
+        ('return', 'Return For Correction'),
+    )
+
+    action = forms.ChoiceField(choices=ACTION_CHOICES, widget=forms.Select(attrs={'class': 'form-select'}))
+    comment = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add review notes or return instructions'}),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        action = cleaned_data.get('action')
+        comment = (cleaned_data.get('comment') or '').strip()
+        if action in {'reject', 'return'} and not comment:
+            self.add_error('comment', 'A comment is required when rejecting or returning a report.')
+        cleaned_data['comment'] = comment
+        return cleaned_data
+
+
+class RetailDailyReportForm(forms.ModelForm):
+    attachments = MultiFileField(
+        required=False,
+        widget=MultiFileInput(attrs={'class': 'form-control', 'multiple': True, 'accept': '.pdf,.xlsx,.xls,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.ogg,.m4a,.aac,.webm'}),
+    )
+
+    class Meta:
+        model = RetailDailyReport
+        fields = (
+            'report_date',
+            'branch_name',
+            'shops_visited',
+            'agents_supported',
+            'cashiers_supported',
+            'support_calls_made',
+            'support_calls_received',
+            'whatsapp_followups',
+            'escalation_cases',
+            'general_notes',
+            'pending_withdrawals_reviewed',
+            'withdrawals_resolved',
+            'dormant_accounts_contacted',
+            'dormant_accounts_reactivated',
+            'agent_complaints_received',
+            'agent_complaints_resolved',
+            'shop_issues_identified',
+            'shop_issues_resolved',
+            'new_agents_onboarded',
+            'training_sessions_conducted',
+            'compliance_checks_completed',
+            'terminals_checked',
+            'terminals_fixed',
+            'stock_requests_handled',
+            'marketing_support_requests',
+            'field_visit_notes',
+            'total_stake_influenced',
+            'estimated_revenue_influenced',
+            'commissions_followed_up',
+            'fraud_cases_flagged',
+            'retention_actions_taken',
+            'customers_assisted_to_bet',
+            'high_value_players_contacted',
+            'inactive_shops_reactivated',
+            'positive_feedback',
+            'negative_feedback',
+            'recommendations',
+        )
+        widgets = {
+            'report_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'branch_name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Retail branch or zone'}),
+            'shops_visited': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'agents_supported': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'cashiers_supported': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'support_calls_made': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'support_calls_received': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'whatsapp_followups': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'escalation_cases': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'general_notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'pending_withdrawals_reviewed': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'withdrawals_resolved': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'dormant_accounts_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'dormant_accounts_reactivated': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'agent_complaints_received': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'agent_complaints_resolved': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'shop_issues_identified': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'shop_issues_resolved': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'new_agents_onboarded': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'training_sessions_conducted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'compliance_checks_completed': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'terminals_checked': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'terminals_fixed': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'stock_requests_handled': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'marketing_support_requests': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'field_visit_notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'total_stake_influenced': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01', 'min': '0'}),
+            'estimated_revenue_influenced': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01', 'min': '0'}),
+            'commissions_followed_up': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'fraud_cases_flagged': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'retention_actions_taken': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'customers_assisted_to_bet': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'high_value_players_contacted': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'inactive_shops_reactivated': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
+            'positive_feedback': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'negative_feedback': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'recommendations': CKEditor5Widget(attrs={'class': 'django_ckeditor_5'}, config_name='default'),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.actor = kwargs.pop('actor', None)
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        report_date = cleaned_data.get('report_date')
+        branch_name = (cleaned_data.get('branch_name') or '').strip()
+        cleaned_data['branch_name'] = branch_name
+
+        actor = self.actor
+        if actor and getattr(actor, 'user_type', '') != 'retail_manager':
+            raise ValidationError('Only Retail Managers can create or edit retail daily reports.')
+
+        if self.instance.pk and not self.instance.is_editable_by_manager:
+            raise ValidationError('This report can no longer be edited by Retail Managers.')
+
+        if actor and report_date:
+            existing = RetailDailyReport.objects.filter(retail_manager=actor, report_date=report_date)
+            if self.instance.pk:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                self.add_error('report_date', 'A retail daily report already exists for this date.')
+
+        if cleaned_data.get('withdrawals_resolved', 0) > cleaned_data.get('pending_withdrawals_reviewed', 0):
+            self.add_error('withdrawals_resolved', 'Withdrawals resolved cannot exceed pending withdrawals reviewed.')
+        if cleaned_data.get('dormant_accounts_reactivated', 0) > cleaned_data.get('dormant_accounts_contacted', 0):
+            self.add_error('dormant_accounts_reactivated', 'Dormant accounts reactivated cannot exceed dormant accounts contacted.')
+        if cleaned_data.get('shop_issues_resolved', 0) > cleaned_data.get('shop_issues_identified', 0):
+            self.add_error('shop_issues_resolved', 'Shop issues resolved cannot exceed shop issues identified.')
+        return cleaned_data
+
+
+class RetailAdminReviewForm(forms.Form):
+    ACTION_CHOICES = (
+        ('comment', 'Add Comment'),
+        ('approve', 'Approve'),
+        ('reject', 'Reject'),
+        ('return', 'Return For Correction'),
+    )
+
+    action = forms.ChoiceField(choices=ACTION_CHOICES, widget=forms.Select(attrs={'class': 'form-select'}))
+    comment = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add review notes or return instructions'}),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        action = cleaned_data.get('action')
+        comment = (cleaned_data.get('comment') or '').strip()
+        if action in {'reject', 'return'} and not comment:
+            self.add_error('comment', 'A comment is required when rejecting or returning a report.')
+        cleaned_data['comment'] = comment
+        return cleaned_data
 
 
 class RetailManagerDashboardNoteForm(forms.ModelForm):

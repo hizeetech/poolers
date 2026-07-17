@@ -4,12 +4,13 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 import uuid
 from decimal import Decimal
-from django.core.validators import MinValueValidator, RegexValidator
+from django.core.validators import MinValueValidator, RegexValidator, FileExtensionValidator
 import secrets
 import string
 import re
 import hashlib
 import math
+import os
 import sys
 from datetime import timedelta, time
 from django.contrib.auth.hashers import make_password, check_password
@@ -2695,6 +2696,7 @@ class CRMOpsAuditLog(models.Model):
         ('agent_performance', 'Agent Performance'),
         ('user_activation', 'User Activation'),
         ('bulk_messaging', 'Bulk Messaging'),
+        ('daily_reporting', 'Daily Reporting'),
     )
 
     actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_ops_actions')
@@ -2714,6 +2716,651 @@ class CRMOpsAuditLog(models.Model):
     def __str__(self):
         who = self.actor.email if self.actor else 'System'
         return f"{self.module}:{self.action} by {who}"
+
+
+def crm_report_attachment_upload_to(instance, filename):
+    report_id = getattr(instance, 'report_id', None) or 'unassigned'
+    suffix = uuid.uuid4().hex[:12]
+    safe_name = os.path.basename(filename or 'attachment')
+    return f"crm_reports/{report_id}/{suffix}_{safe_name}"
+
+
+def validate_crm_report_attachment_size(value):
+    max_size = 20 * 1024 * 1024
+    size = getattr(value, 'size', 0) or 0
+    if size > max_size:
+        raise ValidationError("Attachment size must not exceed 20 MB.")
+
+
+class CRMDailyReport(models.Model):
+    class STATUS(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+        RETURNED = 'returned', 'Returned For Correction'
+
+    staff = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='crm_daily_reports',
+        limit_choices_to={'user_type': 'crm'},
+    )
+    report_date = models.DateField(db_index=True)
+    branch_name = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS.choices, default=STATUS.DRAFT, db_index=True)
+
+    calls_made = models.PositiveIntegerField(default=0)
+    calls_received = models.PositiveIntegerField(default=0)
+    whatsapp_conversations = models.PositiveIntegerField(default=0)
+    emails_sent = models.PositiveIntegerField(default=0)
+    sms_sent = models.PositiveIntegerField(default=0)
+    push_notifications_sent = models.PositiveIntegerField(default=0)
+    social_media_responses = models.PositiveIntegerField(default=0)
+    general_notes = models.TextField(blank=True, default='')
+
+    complaints_received = models.PositiveIntegerField(default=0)
+    complaints_resolved = models.PositiveIntegerField(default=0)
+    pending_complaints = models.PositiveIntegerField(default=0)
+    escalated_cases = models.PositiveIntegerField(default=0)
+    reopened_cases = models.PositiveIntegerField(default=0)
+
+    dormant_customers_contacted = models.PositiveIntegerField(default=0)
+    active_customers_followed_up = models.PositiveIntegerField(default=0)
+    vip_customers_contacted = models.PositiveIntegerField(default=0)
+    welcome_calls = models.PositiveIntegerField(default=0)
+    birthday_messages = models.PositiveIntegerField(default=0)
+    loyalty_calls = models.PositiveIntegerField(default=0)
+    engagement_remarks = models.TextField(blank=True, default='')
+
+    dormant_customers_reactivated = models.PositiveIntegerField(default=0)
+    returning_customers = models.PositiveIntegerField(default=0)
+    customers_retained = models.PositiveIntegerField(default=0)
+    high_risk_customers_identified = models.PositiveIntegerField(default=0)
+    customers_lost = models.PositiveIntegerField(default=0)
+    reason_for_loss = models.TextField(blank=True, default='')
+
+    new_registrations = models.PositiveIntegerField(default=0)
+    first_time_depositors = models.PositiveIntegerField(default=0)
+    repeat_depositors = models.PositiveIntegerField(default=0)
+    customers_assisted_to_deposit = models.PositiveIntegerField(default=0)
+    customers_assisted_to_place_bets = models.PositiveIntegerField(default=0)
+    total_deposits_influenced = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    estimated_revenue_influenced = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+
+    agents_contacted = models.PositiveIntegerField(default=0)
+    retail_shops_contacted = models.PositiveIntegerField(default=0)
+    agent_complaints_resolved = models.PositiveIntegerField(default=0)
+    training_conducted = models.PositiveIntegerField(default=0)
+    support_visits = models.PositiveIntegerField(default=0)
+
+    positive_feedback = models.TextField(blank=True, default='')
+    negative_feedback = models.TextField(blank=True, default='')
+    customer_suggestions = models.TextField(blank=True, default='')
+    recommendations = CKEditor5Field(blank=True, default='', config_name='default')
+
+    calls_achievement_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    complaint_resolution_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    customer_reactivation_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    campaign_conversion_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    customer_retention_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    overall_productivity_score = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    approved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    rejected_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    returned_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_daily_reports_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_daily_reports_updated',
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_daily_reports_reviewed',
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    browser_information = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+    last_modified_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ['-report_date', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['staff', 'report_date'], name='uniq_crm_daily_report_staff_date'),
+        ]
+        verbose_name = 'CRM Daily Report'
+        verbose_name_plural = 'CRM Daily Reports'
+
+    def __str__(self):
+        identifier = self.staff.username or self.staff.email or f"user#{self.staff_id}"
+        return f"CRM Daily Report - {identifier} - {self.report_date}"
+
+    @property
+    def is_editable_by_staff(self):
+        return self.status in {self.STATUS.DRAFT, self.STATUS.RETURNED}
+
+    def recalculate_kpis(self, *, campaign_rows=None):
+        def _pct(numerator, denominator):
+            numerator_q = Decimal(str(numerator or 0))
+            denominator_q = Decimal(str(denominator or 0))
+            if denominator_q <= Decimal('0.00'):
+                return Decimal('0.00')
+            value = (numerator_q / denominator_q) * Decimal('100.00')
+            return min(value.quantize(Decimal('0.01')), Decimal('100.00'))
+
+        campaign_rows = list(campaign_rows if campaign_rows is not None else self.campaign_rows.all())
+        campaign_audience = sum(int(getattr(row, 'audience_size', 0) or 0) for row in campaign_rows)
+        campaign_conversions = sum(int(getattr(row, 'conversions', 0) or 0) for row in campaign_rows)
+
+        engagement_actions = (
+            self.calls_made
+            + self.whatsapp_conversations
+            + self.emails_sent
+            + self.sms_sent
+            + self.push_notifications_sent
+            + self.social_media_responses
+        )
+        engagement_target = max(
+            self.calls_made + self.calls_received + self.whatsapp_conversations + self.emails_sent + self.sms_sent + self.push_notifications_sent,
+            1,
+        )
+
+        self.calls_achievement_rate = _pct(engagement_actions, engagement_target)
+        self.complaint_resolution_rate = _pct(self.complaints_resolved, self.complaints_received)
+        self.customer_reactivation_rate = _pct(self.dormant_customers_reactivated, self.dormant_customers_contacted)
+        self.campaign_conversion_rate = _pct(campaign_conversions, campaign_audience)
+        self.customer_retention_rate = _pct(self.customers_retained, self.customers_retained + self.customers_lost)
+
+        weighted_total = (
+            self.calls_achievement_rate
+            + self.complaint_resolution_rate
+            + self.customer_reactivation_rate
+            + self.campaign_conversion_rate
+            + self.customer_retention_rate
+        )
+        self.overall_productivity_score = (weighted_total / Decimal('5.00')).quantize(Decimal('0.01'))
+
+
+class CRMComplaint(models.Model):
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='complaint_rows')
+    customer_name = models.CharField(max_length=160)
+    complaint = models.TextField()
+    escalated_to = models.CharField(max_length=160, blank=True, default='')
+    status = models.CharField(max_length=80, blank=True, default='Pending')
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'CRM Daily Report Complaint'
+        verbose_name_plural = 'CRM Daily Report Complaints'
+
+    def __str__(self):
+        return f"Complaint Row #{self.pk or 'new'}"
+
+
+class CRMCampaignPerformance(models.Model):
+    CHANNEL_CHOICES = (
+        ('sms', 'SMS'),
+        ('whatsapp', 'WhatsApp'),
+        ('email', 'Email'),
+        ('push_notification', 'Push Notification'),
+    )
+
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='campaign_rows')
+    campaign_name = models.CharField(max_length=180)
+    campaign_type = models.CharField(max_length=120)
+    channel = models.CharField(max_length=30, choices=CHANNEL_CHOICES)
+    audience_size = models.PositiveIntegerField(default=0)
+    responses = models.PositiveIntegerField(default=0)
+    conversions = models.PositiveIntegerField(default=0)
+    revenue_generated = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'CRM Campaign Performance'
+        verbose_name_plural = 'CRM Campaign Performance Rows'
+
+    def __str__(self):
+        return self.campaign_name
+
+
+class CRMChallenge(models.Model):
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='challenge_rows')
+    challenge = models.CharField(max_length=255)
+    impact = models.TextField(blank=True, default='')
+    action_taken = models.TextField(blank=True, default='')
+    current_status = models.CharField(max_length=120, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'CRM Challenge'
+        verbose_name_plural = 'CRM Challenges'
+
+    def __str__(self):
+        return self.challenge
+
+
+class CRMNextDayTask(models.Model):
+    PRIORITY_CHOICES = (
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+    )
+
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='next_day_tasks')
+    task = models.CharField(max_length=255)
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium')
+    expected_outcome = models.TextField(blank=True, default='')
+    deadline = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'CRM Next Day Task'
+        verbose_name_plural = 'CRM Next Day Tasks'
+
+    def __str__(self):
+        return self.task
+
+
+class CRMAdminComment(models.Model):
+    ACTION_CHOICES = (
+        ('comment', 'Comment'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('returned', 'Returned For Correction'),
+    )
+
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='admin_comments')
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_daily_report_comments',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, default='comment', db_index=True)
+    comment = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'CRM Daily Report Admin Comment'
+        verbose_name_plural = 'CRM Daily Report Admin Comments'
+
+    def __str__(self):
+        return f"{self.get_action_display()} - report #{self.report_id}"
+
+
+class CRMReportAttachment(models.Model):
+    report = models.ForeignKey(CRMDailyReport, on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(
+        upload_to=crm_report_attachment_upload_to,
+        validators=[
+            validate_crm_report_attachment_size,
+            FileExtensionValidator(
+                allowed_extensions=['pdf', 'xlsx', 'xls', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'webm']
+            ),
+        ],
+    )
+    uploaded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crm_report_attachments_uploaded',
+    )
+    original_name = models.CharField(max_length=255, blank=True, default='')
+    file_size = models.PositiveIntegerField(default=0)
+    mime_type = models.CharField(max_length=120, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'CRM Report Attachment'
+        verbose_name_plural = 'CRM Report Attachments'
+
+    def __str__(self):
+        return self.original_name or f"Attachment #{self.pk}"
+
+    def save(self, *args, **kwargs):
+        if self.file:
+            self.original_name = self.original_name or os.path.basename(self.file.name)
+            self.file_size = getattr(self.file, 'size', self.file_size or 0) or 0
+        super().save(*args, **kwargs)
+
+
+def retail_report_attachment_upload_to(instance, filename):
+    report_id = getattr(instance, 'report_id', None) or 'unassigned'
+    suffix = uuid.uuid4().hex[:12]
+    safe_name = os.path.basename(filename or 'attachment')
+    return f"retail_reports/{report_id}/{suffix}_{safe_name}"
+
+
+class RetailDailyReport(models.Model):
+    class STATUS(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+        RETURNED = 'returned', 'Returned For Correction'
+
+    retail_manager = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='retail_daily_reports',
+        limit_choices_to={'user_type': 'retail_manager'},
+    )
+    report_date = models.DateField(db_index=True)
+    branch_name = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS.choices, default=STATUS.DRAFT, db_index=True)
+
+    shops_visited = models.PositiveIntegerField(default=0)
+    agents_supported = models.PositiveIntegerField(default=0)
+    cashiers_supported = models.PositiveIntegerField(default=0)
+    support_calls_made = models.PositiveIntegerField(default=0)
+    support_calls_received = models.PositiveIntegerField(default=0)
+    whatsapp_followups = models.PositiveIntegerField(default=0)
+    escalation_cases = models.PositiveIntegerField(default=0)
+    general_notes = models.TextField(blank=True, default='')
+
+    pending_withdrawals_reviewed = models.PositiveIntegerField(default=0)
+    withdrawals_resolved = models.PositiveIntegerField(default=0)
+    dormant_accounts_contacted = models.PositiveIntegerField(default=0)
+    dormant_accounts_reactivated = models.PositiveIntegerField(default=0)
+    agent_complaints_received = models.PositiveIntegerField(default=0)
+    agent_complaints_resolved = models.PositiveIntegerField(default=0)
+    shop_issues_identified = models.PositiveIntegerField(default=0)
+    shop_issues_resolved = models.PositiveIntegerField(default=0)
+
+    new_agents_onboarded = models.PositiveIntegerField(default=0)
+    training_sessions_conducted = models.PositiveIntegerField(default=0)
+    compliance_checks_completed = models.PositiveIntegerField(default=0)
+    terminals_checked = models.PositiveIntegerField(default=0)
+    terminals_fixed = models.PositiveIntegerField(default=0)
+    stock_requests_handled = models.PositiveIntegerField(default=0)
+    marketing_support_requests = models.PositiveIntegerField(default=0)
+    field_visit_notes = models.TextField(blank=True, default='')
+
+    total_stake_influenced = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    estimated_revenue_influenced = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    commissions_followed_up = models.PositiveIntegerField(default=0)
+    fraud_cases_flagged = models.PositiveIntegerField(default=0)
+    retention_actions_taken = models.PositiveIntegerField(default=0)
+    customers_assisted_to_bet = models.PositiveIntegerField(default=0)
+    high_value_players_contacted = models.PositiveIntegerField(default=0)
+    inactive_shops_reactivated = models.PositiveIntegerField(default=0)
+
+    positive_feedback = models.TextField(blank=True, default='')
+    negative_feedback = models.TextField(blank=True, default='')
+    recommendations = CKEditor5Field(blank=True, default='', config_name='default')
+
+    support_resolution_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    reactivation_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    field_visit_completion_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    training_completion_rate = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    overall_productivity_score = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    approved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    rejected_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    returned_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retail_daily_reports_created',
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retail_daily_reports_updated',
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retail_daily_reports_reviewed',
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    browser_information = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+    last_modified_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ['-report_date', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['retail_manager', 'report_date'], name='uniq_retail_daily_report_manager_date'),
+        ]
+        verbose_name = 'Retail Daily Report'
+        verbose_name_plural = 'Retail Daily Reports'
+
+    def __str__(self):
+        identifier = self.retail_manager.username or self.retail_manager.email or f"user#{self.retail_manager_id}"
+        return f"Retail Daily Report - {identifier} - {self.report_date}"
+
+    @property
+    def is_editable_by_manager(self):
+        return self.status in {self.STATUS.DRAFT, self.STATUS.RETURNED}
+
+    def recalculate_kpis(self, *, campaign_rows=None):
+        def _pct(numerator, denominator):
+            numerator_q = Decimal(str(numerator or 0))
+            denominator_q = Decimal(str(denominator or 0))
+            if denominator_q <= Decimal('0.00'):
+                return Decimal('0.00')
+            value = (numerator_q / denominator_q) * Decimal('100.00')
+            return min(value.quantize(Decimal('0.01')), Decimal('100.00'))
+
+        campaign_rows = list(campaign_rows if campaign_rows is not None else self.campaign_rows.all())
+        campaign_targets = sum(int(getattr(row, 'target_count', 0) or 0) for row in campaign_rows)
+        campaign_resolved = sum(int(getattr(row, 'conversions', 0) or 0) for row in campaign_rows)
+
+        self.support_resolution_rate = _pct(
+            self.withdrawals_resolved + self.agent_complaints_resolved + self.shop_issues_resolved,
+            self.pending_withdrawals_reviewed + self.agent_complaints_received + self.shop_issues_identified,
+        )
+        self.reactivation_rate = _pct(
+            self.dormant_accounts_reactivated + self.inactive_shops_reactivated,
+            self.dormant_accounts_contacted + self.shops_visited,
+        )
+        self.field_visit_completion_rate = _pct(
+            self.shops_visited + self.terminals_checked,
+            self.shops_visited + self.terminals_checked + self.support_calls_made,
+        )
+        self.training_completion_rate = _pct(
+            self.training_sessions_conducted + self.new_agents_onboarded,
+            self.training_sessions_conducted + self.new_agents_onboarded + self.marketing_support_requests,
+        )
+
+        weighted_total = (
+            self.support_resolution_rate
+            + self.reactivation_rate
+            + self.field_visit_completion_rate
+            + self.training_completion_rate
+            + _pct(campaign_resolved, campaign_targets)
+        )
+        self.overall_productivity_score = (weighted_total / Decimal('5.00')).quantize(Decimal('0.01'))
+
+
+class RetailSupportActivity(models.Model):
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='support_rows')
+    shop_or_agent = models.CharField(max_length=180)
+    issue = models.TextField()
+    escalated_to = models.CharField(max_length=160, blank=True, default='')
+    status = models.CharField(max_length=80, blank=True, default='Open')
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Retail Support Activity'
+        verbose_name_plural = 'Retail Support Activities'
+
+    def __str__(self):
+        return f"Retail Support Row #{self.pk or 'new'}"
+
+
+class RetailCampaignPerformance(models.Model):
+    CHANNEL_CHOICES = (
+        ('sms', 'SMS'),
+        ('whatsapp', 'WhatsApp'),
+        ('email', 'Email'),
+        ('field_visit', 'Field Visit'),
+    )
+
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='campaign_rows')
+    campaign_name = models.CharField(max_length=180)
+    campaign_type = models.CharField(max_length=120)
+    channel = models.CharField(max_length=30, choices=CHANNEL_CHOICES)
+    target_count = models.PositiveIntegerField(default=0)
+    responses = models.PositiveIntegerField(default=0)
+    conversions = models.PositiveIntegerField(default=0)
+    revenue_generated = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Retail Campaign Performance'
+        verbose_name_plural = 'Retail Campaign Performance Rows'
+
+    def __str__(self):
+        return self.campaign_name
+
+
+class RetailChallenge(models.Model):
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='challenge_rows')
+    challenge = models.CharField(max_length=255)
+    impact = models.TextField(blank=True, default='')
+    action_taken = models.TextField(blank=True, default='')
+    current_status = models.CharField(max_length=120, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Retail Challenge'
+        verbose_name_plural = 'Retail Challenges'
+
+    def __str__(self):
+        return self.challenge
+
+
+class RetailNextDayTask(models.Model):
+    PRIORITY_CHOICES = (
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+    )
+
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='next_day_tasks')
+    task = models.CharField(max_length=255)
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium')
+    expected_outcome = models.TextField(blank=True, default='')
+    deadline = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Retail Next Day Task'
+        verbose_name_plural = 'Retail Next Day Tasks'
+
+    def __str__(self):
+        return self.task
+
+
+class RetailAdminComment(models.Model):
+    ACTION_CHOICES = (
+        ('comment', 'Comment'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('returned', 'Returned For Correction'),
+    )
+
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='admin_comments')
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retail_daily_report_comments',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, default='comment', db_index=True)
+    comment = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Retail Daily Report Admin Comment'
+        verbose_name_plural = 'Retail Daily Report Admin Comments'
+
+    def __str__(self):
+        return f"{self.get_action_display()} - report #{self.report_id}"
+
+
+class RetailReportAttachment(models.Model):
+    report = models.ForeignKey(RetailDailyReport, on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(
+        upload_to=retail_report_attachment_upload_to,
+        validators=[
+            validate_crm_report_attachment_size,
+            FileExtensionValidator(
+                allowed_extensions=['pdf', 'xlsx', 'xls', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'webm']
+            ),
+        ],
+    )
+    uploaded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retail_report_attachments_uploaded',
+    )
+    original_name = models.CharField(max_length=255, blank=True, default='')
+    file_size = models.PositiveIntegerField(default=0)
+    mime_type = models.CharField(max_length=120, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Retail Report Attachment'
+        verbose_name_plural = 'Retail Report Attachments'
+
+    def __str__(self):
+        return self.original_name or f"Attachment #{self.pk}"
+
+    def save(self, *args, **kwargs):
+        if self.file:
+            self.original_name = self.original_name or os.path.basename(self.file.name)
+            self.file_size = getattr(self.file, 'size', self.file_size or 0) or 0
+        super().save(*args, **kwargs)
 
 
 class FinanceAuditLog(models.Model):

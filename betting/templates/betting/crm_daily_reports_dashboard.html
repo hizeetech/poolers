@@ -1,0 +1,420 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+{% block title %}CRM Daily Reporting Dashboard{% endblock %}
+{% block content %}
+<style>
+  .crm-report-shell .rm-tabs.nav-tabs {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    gap: 6px;
+  }
+  .crm-report-shell .rm-tabs.nav-tabs .nav-link {
+    border: 1px solid rgba(0,0,0,0.08);
+    color: #132C46;
+    background: #ffffff;
+    font-weight: 600;
+    border-radius: 10px 10px 0 0;
+    padding: 10px 14px;
+  }
+  .crm-report-shell .kpi-card {
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  }
+  .crm-report-shell .kpi-label { color: #6c757d; font-size: 0.82rem; }
+  .crm-report-shell .kpi-value { font-weight: 800; font-size: 1.2rem; color: #132C46; }
+  .crm-report-shell .chart-card,
+  .crm-report-shell .table-card {
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  }
+  .crm-report-shell .badge-soft {
+    border-radius: 999px;
+    padding: 0.35rem 0.65rem;
+    font-weight: 700;
+  }
+  .crm-report-shell .badge-soft.draft { background: #f8f9fa; color: #495057; }
+  .crm-report-shell .badge-soft.submitted { background: rgba(255, 193, 7, 0.18); color: #8a6d00; }
+  .crm-report-shell .badge-soft.approved { background: rgba(25, 135, 84, 0.18); color: #0f5132; }
+  .crm-report-shell .badge-soft.rejected { background: rgba(220, 53, 69, 0.18); color: #842029; }
+  .crm-report-shell .badge-soft.returned { background: rgba(13, 110, 253, 0.16); color: #084298; }
+  .crm-report-shell .card-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .crm-report-shell .metric-grid .col {
+    min-width: 180px;
+  }
+  [data-bs-theme="dark"] .crm-report-shell .kpi-card,
+  [data-bs-theme="dark"] .crm-report-shell .chart-card,
+  [data-bs-theme="dark"] .crm-report-shell .table-card {
+    background: #1e1e1e;
+    border-color: rgba(255,255,255,0.08);
+    box-shadow: none;
+  }
+  [data-bs-theme="dark"] .crm-report-shell .kpi-value,
+  [data-bs-theme="dark"] .crm-report-shell .table,
+  [data-bs-theme="dark"] .crm-report-shell .table thead th {
+    color: #f8f9fa;
+  }
+</style>
+
+<div class="container py-4 crm-report-shell">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">CRM Daily Reporting Dashboard</h2>
+      <div class="text-muted small">Retail-style monitoring, approval workflow, and staff productivity analytics</div>
+      <div class="text-muted small">Range: {{ filters.start_date }} → {{ filters.end_date }}</div>
+    </div>
+    <div class="card-toolbar">
+      {% if create_report_url %}
+      <a class="btn btn-success" href="{{ create_report_url }}">Create Daily Report</a>
+      {% endif %}
+      <a class="btn btn-outline-success" href="{% url 'betting:crm_daily_report_export' %}?{{ current_query }}&format=csv">Export CSV</a>
+      <a class="btn btn-outline-success" href="{% url 'betting:crm_daily_report_export' %}?{{ current_query }}&format=xlsx">Export Excel</a>
+      <a class="btn btn-outline-danger" href="{% url 'betting:crm_daily_report_export' %}?{{ current_query }}&format=pdf">Export PDF</a>
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_daily_report_export' %}?{{ current_query }}&format=print" target="_blank">Print View</a>
+    </div>
+  </div>
+
+  <div class="table-card p-3 mb-4">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Range</label>
+        <select name="range" class="form-select">
+          <option value="today" {% if filters.range == 'today' %}selected{% endif %}>Today</option>
+          <option value="yesterday" {% if filters.range == 'yesterday' %}selected{% endif %}>Yesterday</option>
+          <option value="this_week" {% if filters.range == 'this_week' %}selected{% endif %}>This Week</option>
+          <option value="this_month" {% if filters.range == 'this_month' %}selected{% endif %}>This Month</option>
+          <option value="custom" {% if filters.range == 'custom' %}selected{% endif %}>Custom Date</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ filters.start_date }}" class="form-control">
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ filters.end_date }}" class="form-control">
+      </div>
+      {% if is_admin_view %}
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">CRM Staff</label>
+        <select name="staff" class="form-select">
+          <option value="">All Staff</option>
+          {% for staff in staff_options %}
+          <option value="{{ staff.id }}" {% if filters.staff == staff.id|stringformat:'s' %}selected{% endif %}>{{ staff.username|default:staff.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Branch</label>
+        <select name="branch" class="form-select">
+          <option value="">All Branches</option>
+          {% for branch in branch_options %}
+          <option value="{{ branch }}" {% if filters.branch == branch %}selected{% endif %}>{{ branch }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Status</label>
+        <select name="status" class="form-select">
+          <option value="">All Statuses</option>
+          {% for value, label in status_choices %}
+          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-lg-6">
+        <label class="form-label small text-muted mb-1">Search</label>
+        <input type="text" name="q" value="{{ filters.q }}" class="form-control" placeholder="Search staff, branch, or notes">
+      </div>
+      <div class="col-12 col-lg-6 d-flex gap-2 justify-content-lg-end">
+        <button class="btn btn-primary" type="submit">Apply Filters</button>
+        <a class="btn btn-outline-secondary" href="{% url 'betting:crm_daily_reports_dashboard' %}">Reset</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="row g-3 mb-4 metric-grid">
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Reports Submitted Today</div><div class="kpi-value">{{ cards.submitted_today }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Pending Reports</div><div class="kpi-value">{{ cards.pending_reports }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Approved Reports</div><div class="kpi-value">{{ cards.approved_reports }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Rejected Reports</div><div class="kpi-value">{{ cards.rejected_reports }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Draft Reports</div><div class="kpi-value">{{ cards.draft_reports }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Customers Contacted</div><div class="kpi-value">{{ cards.customers_contacted }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Calls Made</div><div class="kpi-value">{{ cards.calls_made }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Total Calls Received</div><div class="kpi-value">{{ cards.calls_received }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">WhatsApp Conversations</div><div class="kpi-value">{{ cards.whatsapp_conversations }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Emails Sent</div><div class="kpi-value">{{ cards.emails_sent }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">SMS Sent</div><div class="kpi-value">{{ cards.sms_sent }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Push Notifications Sent</div><div class="kpi-value">{{ cards.push_notifications_sent }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Complaints Received</div><div class="kpi-value">{{ cards.complaints_received }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Complaints Resolved</div><div class="kpi-value">{{ cards.complaints_resolved }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Pending Complaints</div><div class="kpi-value">{{ cards.pending_complaints }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Dormant Customers Contacted</div><div class="kpi-value">{{ cards.dormant_customers_contacted }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Dormant Customers Reactivated</div><div class="kpi-value">{{ cards.dormant_customers_reactivated }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">VIP Customers Contacted</div><div class="kpi-value">{{ cards.vip_customers_contacted }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Active Customers Followed Up</div><div class="kpi-value">{{ cards.active_customers_followed_up }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">New Registrations Assisted</div><div class="kpi-value">{{ cards.new_registrations_assisted }}</div></div></div>
+
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">First-Time Depositors Assisted</div><div class="kpi-value">{{ cards.first_time_depositors_assisted }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Repeat Depositors Assisted</div><div class="kpi-value">{{ cards.repeat_depositors_assisted }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Customers Assisted to Place Bets</div><div class="kpi-value">{{ cards.customers_assisted_to_place_bets }}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="kpi-card p-3 h-100"><div class="kpi-label">Estimated Revenue Influenced</div><div class="kpi-value">₦{{ cards.estimated_revenue_influenced|floatformat:2 }}</div></div></div>
+
+    <div class="col-12 col-lg-4"><div class="kpi-card p-3 h-100"><div class="kpi-label">Overall CRM Productivity (%)</div><div class="kpi-value">{{ cards.overall_productivity|floatformat:2 }}%</div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Daily Productivity</div><canvas id="crmChartDailyProductivity"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Weekly Productivity</div><canvas id="crmChartWeeklyProductivity"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Monthly Productivity</div><canvas id="crmChartMonthlyProductivity"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Calls Trend</div><canvas id="crmChartCallsTrend"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Complaint Resolution Trend</div><canvas id="crmChartComplaintTrend"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Campaign Performance</div><canvas id="crmChartCampaignPerformance"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Dormant Customer Reactivation</div><canvas id="crmChartDormantReactivation"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Customer Retention</div><canvas id="crmChartRetention"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Estimated Revenue Influenced</div><canvas id="crmChartRevenue"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Staff Productivity Ranking</div><canvas id="crmChartRanking"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Top Performing CRM Staff</div><canvas id="crmChartTopStaff"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3 h-100"><div class="fw-semibold mb-2">Lowest Performing CRM Staff</div><canvas id="crmChartLowestStaff"></canvas></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-xl-6">
+      <div class="table-card p-3 h-100">
+        <div class="fw-semibold mb-3">Top Performing CRM Staff</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Staff</th>
+                <th class="text-end">Reports</th>
+                <th class="text-end">Avg Productivity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in top_staff %}
+              <tr>
+                <td>{{ row.staff__username|default:row.staff__email }}</td>
+                <td class="text-end">{{ row.reports }}</td>
+                <td class="text-end">{{ row.avg_score|floatformat:2 }}%</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="3" class="text-center text-muted py-4">No ranking data yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="table-card p-3 h-100">
+        <div class="fw-semibold mb-3">Lowest Performing CRM Staff</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Staff</th>
+                <th class="text-end">Reports</th>
+                <th class="text-end">Avg Productivity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in lowest_staff %}
+              <tr>
+                <td>{{ row.staff__username|default:row.staff__email }}</td>
+                <td class="text-end">{{ row.reports }}</td>
+                <td class="text-end">{{ row.avg_score|floatformat:2 }}%</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="3" class="text-center text-muted py-4">No ranking data yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <div class="fw-semibold">CRM Daily Reports</div>
+        <div class="text-muted small">Review history, workflow status, and staff productivity.</div>
+      </div>
+      <div class="text-muted small">{{ reports_page.paginator.count }} report(s)</div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle" id="crmDailyReportsTable">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th>CRM Staff</th>
+            <th>Branch</th>
+            <th>Status</th>
+            <th class="text-end">Calls</th>
+            <th class="text-end">Complaints</th>
+            <th class="text-end">Revenue</th>
+            <th class="text-end">Productivity</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report in reports_page %}
+          <tr>
+            <td>
+              <div class="fw-semibold">{{ report.report_date }}</div>
+              <div class="text-muted small">Updated {{ report.updated_at|date:"Y-m-d H:i" }}</div>
+            </td>
+            <td>{{ report.staff.get_full_name|default:report.staff.username|default:report.staff.email }}</td>
+            <td>{{ report.branch_name|default:"-" }}</td>
+            <td><span class="badge-soft {{ report.status }}">{{ report.get_status_display }}</span></td>
+            <td class="text-end">{{ report.calls_made|add:report.calls_received }}</td>
+            <td class="text-end">{{ report.complaints_received }}</td>
+            <td class="text-end">₦{{ report.estimated_revenue_influenced|floatformat:2 }}</td>
+            <td class="text-end">{{ report.overall_productivity_score|floatformat:2 }}%</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:crm_daily_report_detail' report.id %}">Open</a>
+              {% if not is_admin_view and report.is_editable_by_staff %}
+              <a class="btn btn-sm btn-outline-success" href="{% url 'betting:crm_daily_report_edit' report.id %}">Edit</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="9" class="text-center text-muted py-4">No CRM daily reports found for the selected filters.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if reports_page.paginator.num_pages > 1 %}
+    <nav class="mt-3">
+      <ul class="pagination pagination-sm mb-0">
+        {% if reports_page.has_previous %}
+        <li class="page-item"><a class="page-link" href="?{{ current_query }}&page={{ reports_page.previous_page_number }}">Previous</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Previous</span></li>
+        {% endif %}
+        <li class="page-item active"><span class="page-link">{{ reports_page.number }}</span></li>
+        {% if reports_page.has_next %}
+        <li class="page-item"><a class="page-link" href="?{{ current_query }}&page={{ reports_page.next_page_number }}">Next</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Next</span></li>
+        {% endif %}
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+<script>
+  (function () {
+    const chartPayload = JSON.parse('{{ charts_json|escapejs }}');
+    const topStaff = [{% for row in top_staff %}{ label: "{{ row.staff__username|default:row.staff__email|escapejs }}", value: {{ row.avg_score|default:0 }} }{% if not forloop.last %},{% endif %}{% endfor %}];
+    const lowestStaff = [{% for row in lowest_staff %}{ label: "{{ row.staff__username|default:row.staff__email|escapejs }}", value: {{ row.avg_score|default:0 }} }{% if not forloop.last %},{% endif %}{% endfor %}];
+
+    function mountChart(id, config) {
+      const el = document.getElementById(id);
+      if (!el || !window.Chart) return;
+      new Chart(el, config);
+    }
+
+    mountChart('crmChartDailyProductivity', {
+      type: 'line',
+      data: { labels: chartPayload.daily_productivity.labels, datasets: [{ label: 'Daily Productivity', data: chartPayload.daily_productivity.values, borderColor: '#198754', backgroundColor: 'rgba(25,135,84,.18)', tension: .3 }] },
+    });
+    mountChart('crmChartWeeklyProductivity', {
+      type: 'bar',
+      data: { labels: chartPayload.weekly_productivity.labels, datasets: [{ label: 'Weekly Productivity', data: chartPayload.weekly_productivity.values, backgroundColor: '#0d6efd' }] },
+    });
+    mountChart('crmChartMonthlyProductivity', {
+      type: 'bar',
+      data: { labels: chartPayload.monthly_productivity.labels, datasets: [{ label: 'Monthly Productivity', data: chartPayload.monthly_productivity.values, backgroundColor: '#6f42c1' }] },
+    });
+    mountChart('crmChartCallsTrend', {
+      type: 'line',
+      data: {
+        labels: chartPayload.calls_trend.labels,
+        datasets: [
+          { label: 'Calls Made', data: chartPayload.calls_trend.made, borderColor: '#198754', tension: .3 },
+          { label: 'Calls Received', data: chartPayload.calls_trend.received, borderColor: '#ffc107', tension: .3 }
+        ]
+      },
+    });
+    mountChart('crmChartComplaintTrend', {
+      type: 'bar',
+      data: {
+        labels: chartPayload.complaint_resolution_trend.labels,
+        datasets: [
+          { label: 'Complaints Received', data: chartPayload.complaint_resolution_trend.received, backgroundColor: '#dc3545' },
+          { label: 'Complaints Resolved', data: chartPayload.complaint_resolution_trend.resolved, backgroundColor: '#20c997' }
+        ]
+      },
+    });
+    mountChart('crmChartCampaignPerformance', {
+      type: 'bar',
+      data: {
+        labels: chartPayload.campaign_performance.labels,
+        datasets: [
+          { label: 'Conversions', data: chartPayload.campaign_performance.conversions, backgroundColor: '#0d6efd' },
+          { label: 'Revenue', data: chartPayload.campaign_performance.revenue, backgroundColor: '#198754' }
+        ]
+      },
+    });
+    mountChart('crmChartDormantReactivation', {
+      type: 'line',
+      data: { labels: chartPayload.dormant_reactivation.labels, datasets: [{ label: 'Dormant Customers Reactivated', data: chartPayload.dormant_reactivation.reactivated, borderColor: '#fd7e14', tension: .3 }] },
+    });
+    mountChart('crmChartRetention', {
+      type: 'bar',
+      data: {
+        labels: chartPayload.customer_retention.labels,
+        datasets: [
+          { label: 'Customers Retained', data: chartPayload.customer_retention.retained, backgroundColor: '#198754' },
+          { label: 'Customers Lost', data: chartPayload.customer_retention.lost, backgroundColor: '#dc3545' }
+        ]
+      },
+    });
+    mountChart('crmChartRevenue', {
+      type: 'line',
+      data: { labels: chartPayload.estimated_revenue.labels, datasets: [{ label: 'Estimated Revenue Influenced', data: chartPayload.estimated_revenue.values, borderColor: '#20c997', tension: .3 }] },
+    });
+    mountChart('crmChartRanking', {
+      type: 'bar',
+      data: { labels: chartPayload.staff_productivity_ranking.labels, datasets: [{ label: 'Avg Productivity', data: chartPayload.staff_productivity_ranking.values, backgroundColor: '#0dcaf0' }] },
+      options: { indexAxis: 'y' }
+    });
+    mountChart('crmChartTopStaff', {
+      type: 'bar',
+      data: { labels: topStaff.map(item => item.label), datasets: [{ label: 'Top Staff', data: topStaff.map(item => item.value), backgroundColor: '#198754' }] },
+    });
+    mountChart('crmChartLowestStaff', {
+      type: 'bar',
+      data: { labels: lowestStaff.map(item => item.label), datasets: [{ label: 'Lowest Staff', data: lowestStaff.map(item => item.value), backgroundColor: '#dc3545' }] },
+    });
+
+    if (window.jQuery && window.jQuery.fn && window.jQuery.fn.DataTable) {
+      window.jQuery('#crmDailyReportsTable').DataTable({
+        paging: false,
+        info: false,
+        searching: false,
+        ordering: true,
+        responsive: true,
+      });
+    }
+  })();
+</script>
+{% endblock %}

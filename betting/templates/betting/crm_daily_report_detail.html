@@ -1,0 +1,236 @@
+{% extends 'betting/base.html' %}
+{% block title %}CRM Daily Report Detail{% endblock %}
+{% block content %}
+<style>
+  .crm-report-detail .detail-card {
+    border: 1px solid rgba(0,0,0,.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,.06);
+  }
+  .crm-report-detail .status-pill {
+    border-radius: 999px;
+    padding: .4rem .75rem;
+    font-weight: 700;
+    display: inline-block;
+  }
+  .crm-report-detail .status-draft { background: #f8f9fa; color: #495057; }
+  .crm-report-detail .status-submitted { background: rgba(255,193,7,.18); color: #8a6d00; }
+  .crm-report-detail .status-approved { background: rgba(25,135,84,.18); color: #0f5132; }
+  .crm-report-detail .status-rejected { background: rgba(220,53,69,.18); color: #842029; }
+  .crm-report-detail .status-returned { background: rgba(13,110,253,.16); color: #084298; }
+  [data-bs-theme="dark"] .crm-report-detail .detail-card {
+    background: #1e1e1e;
+    border-color: rgba(255,255,255,.08);
+    box-shadow: none;
+  }
+</style>
+
+<div class="container py-4 crm-report-detail">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">CRM Daily Report Detail</h2>
+      <div class="text-muted small">{{ report.staff.get_full_name|default:report.staff.username|default:report.staff.email }} | {{ report.report_date }}</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      {% if can_edit_report %}
+      <a class="btn btn-success" href="{% url 'betting:crm_daily_report_edit' report.id %}">Edit Report</a>
+      {% endif %}
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_daily_reports_dashboard' %}">Back to Dashboard</a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-xl-8">
+      <div class="detail-card p-3 mb-3">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div>
+            <div class="fw-semibold">Workflow Status</div>
+            <div class="text-muted small">Submitted {{ report.submitted_at|date:"Y-m-d H:i"|default:"-" }} | Reviewed {{ report.reviewed_at|date:"Y-m-d H:i"|default:"-" }}</div>
+          </div>
+          <span class="status-pill status-{{ report.status }}">{{ report.get_status_display }}</span>
+        </div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Daily Activity Summary</div>
+        <div class="row g-3">
+          <div class="col-6 col-lg-3"><div class="small text-muted">Calls Made</div><div class="fw-bold">{{ report.calls_made }}</div></div>
+          <div class="col-6 col-lg-3"><div class="small text-muted">Calls Received</div><div class="fw-bold">{{ report.calls_received }}</div></div>
+          <div class="col-6 col-lg-3"><div class="small text-muted">WhatsApp</div><div class="fw-bold">{{ report.whatsapp_conversations }}</div></div>
+          <div class="col-6 col-lg-3"><div class="small text-muted">Emails Sent</div><div class="fw-bold">{{ report.emails_sent }}</div></div>
+          <div class="col-6 col-lg-3"><div class="small text-muted">SMS Sent</div><div class="fw-bold">{{ report.sms_sent }}</div></div>
+          <div class="col-6 col-lg-3"><div class="small text-muted">Push Sent</div><div class="fw-bold">{{ report.push_notifications_sent }}</div></div>
+          <div class="col-12"><div class="small text-muted">General Notes</div><div>{{ report.general_notes|default:"-"|linebreaksbr }}</div></div>
+        </div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">KPI Snapshot</div>
+        <div class="small text-muted">Calls Achievement Rate</div>
+        <div class="progress mb-2"><div class="progress-bar bg-success" style="width: {{ report.calls_achievement_rate }}%">{{ report.calls_achievement_rate|floatformat:2 }}%</div></div>
+        <div class="small text-muted">Complaint Resolution Rate</div>
+        <div class="progress mb-2"><div class="progress-bar bg-info" style="width: {{ report.complaint_resolution_rate }}%">{{ report.complaint_resolution_rate|floatformat:2 }}%</div></div>
+        <div class="small text-muted">Customer Reactivation Rate</div>
+        <div class="progress mb-2"><div class="progress-bar bg-warning" style="width: {{ report.customer_reactivation_rate }}%">{{ report.customer_reactivation_rate|floatformat:2 }}%</div></div>
+        <div class="small text-muted">Campaign Conversion Rate</div>
+        <div class="progress mb-2"><div class="progress-bar bg-primary" style="width: {{ report.campaign_conversion_rate }}%">{{ report.campaign_conversion_rate|floatformat:2 }}%</div></div>
+        <div class="small text-muted">Customer Retention Rate</div>
+        <div class="progress mb-2"><div class="progress-bar bg-secondary" style="width: {{ report.customer_retention_rate }}%">{{ report.customer_retention_rate|floatformat:2 }}%</div></div>
+        <div class="small text-muted">Overall Productivity Score</div>
+        <div class="progress"><div class="progress-bar bg-dark" style="width: {{ report.overall_productivity_score }}%">{{ report.overall_productivity_score|floatformat:2 }}%</div></div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Complaint Rows</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light"><tr><th>Customer</th><th>Complaint</th><th>Escalated To</th><th>Status</th><th>Remarks</th></tr></thead>
+            <tbody>
+              {% for row in report.complaint_rows.all %}
+              <tr><td>{{ row.customer_name }}</td><td>{{ row.complaint }}</td><td>{{ row.escalated_to|default:"-" }}</td><td>{{ row.status }}</td><td>{{ row.remarks|default:"-" }}</td></tr>
+              {% empty %}
+              <tr><td colspan="5" class="text-center text-muted py-3">No complaint rows.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Campaign Performance</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light"><tr><th>Campaign</th><th>Type</th><th>Channel</th><th>Audience</th><th>Responses</th><th>Conversions</th><th>Revenue</th></tr></thead>
+            <tbody>
+              {% for row in report.campaign_rows.all %}
+              <tr><td>{{ row.campaign_name }}</td><td>{{ row.campaign_type }}</td><td>{{ row.get_channel_display }}</td><td>{{ row.audience_size }}</td><td>{{ row.responses }}</td><td>{{ row.conversions }}</td><td>₦{{ row.revenue_generated|floatformat:2 }}</td></tr>
+              {% empty %}
+              <tr><td colspan="7" class="text-center text-muted py-3">No campaign rows.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Challenges Encountered</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light"><tr><th>Challenge</th><th>Impact</th><th>Action Taken</th><th>Current Status</th></tr></thead>
+            <tbody>
+              {% for row in report.challenge_rows.all %}
+              <tr><td>{{ row.challenge }}</td><td>{{ row.impact|default:"-" }}</td><td>{{ row.action_taken|default:"-" }}</td><td>{{ row.current_status|default:"-" }}</td></tr>
+              {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-3">No challenge rows.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Work Plan for the Next Day</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light"><tr><th>Task</th><th>Priority</th><th>Expected Outcome</th><th>Deadline</th></tr></thead>
+            <tbody>
+              {% for row in report.next_day_tasks.all %}
+              <tr><td>{{ row.task }}</td><td>{{ row.get_priority_display }}</td><td>{{ row.expected_outcome|default:"-" }}</td><td>{{ row.deadline|date:"Y-m-d H:i"|default:"-" }}</td></tr>
+              {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-3">No next day tasks.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="detail-card p-3">
+        <div class="fw-semibold mb-2">Recommendations</div>
+        <div>{{ report.recommendations|safe|default:"-" }}</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Audit Trail</div>
+        <div class="small text-muted">Created By</div>
+        <div class="mb-2">{{ report.created_by|default:"-" }}</div>
+        <div class="small text-muted">Updated By</div>
+        <div class="mb-2">{{ report.updated_by|default:"-" }}</div>
+        <div class="small text-muted">Reviewed By</div>
+        <div class="mb-2">{{ report.reviewed_by|default:"-" }}</div>
+        <div class="small text-muted">IP Address</div>
+        <div class="mb-2">{{ report.ip_address|default:"-" }}</div>
+        <div class="small text-muted">Browser Information</div>
+        <div class="small mb-2">{{ report.browser_information|default:"-" }}</div>
+        <div class="small text-muted">Last Modified</div>
+        <div>{{ report.last_modified_at|date:"Y-m-d H:i" }}</div>
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Attachments</div>
+        {% if report.attachments.all %}
+        <ul class="list-group list-group-flush">
+          {% for attachment in report.attachments.all %}
+          <li class="list-group-item px-0">
+            <a href="{{ attachment.file.url }}" target="_blank">{{ attachment.original_name|default:attachment.file.name }}</a>
+            <div class="text-muted small">{{ attachment.file_size }} bytes | {{ attachment.created_at|date:"Y-m-d H:i" }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-muted">No attachments uploaded.</div>
+        {% endif %}
+      </div>
+
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Admin Comments</div>
+        {% if report.admin_comments.all %}
+        <div class="d-flex flex-column gap-3">
+          {% for note in report.admin_comments.all %}
+          <div class="border rounded p-2">
+            <div class="d-flex justify-content-between gap-2">
+              <div class="fw-semibold">{{ note.author|default:"System" }}</div>
+              <div class="small text-muted">{{ note.created_at|date:"Y-m-d H:i" }}</div>
+            </div>
+            <div class="small text-uppercase text-muted">{{ note.get_action_display }}</div>
+            <div>{{ note.comment|default:"-"|linebreaksbr }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-muted">No admin comments yet.</div>
+        {% endif %}
+      </div>
+
+      {% if is_admin_view %}
+      <div class="detail-card p-3 mb-3">
+        <div class="fw-semibold mb-2">Administrator Review</div>
+        <form method="post" action="{% url 'betting:crm_daily_report_action' report.id %}">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label">Action</label>
+            {{ review_form.action }}
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Comment</label>
+            {{ review_form.comment }}
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Apply Review Action</button>
+        </form>
+      </div>
+
+      <div class="detail-card p-3">
+        <div class="fw-semibold text-danger mb-2">Danger Zone</div>
+        <form method="post" action="{% url 'betting:crm_daily_report_action' report.id %}" onsubmit="return confirm('Delete this report permanently?');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <button type="submit" class="btn btn-outline-danger w-100">Delete Report</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

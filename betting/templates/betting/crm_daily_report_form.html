@@ -1,0 +1,513 @@
+{% extends 'betting/base.html' %}
+{% block title %}{% if is_editing %}Edit CRM Daily Report{% else %}Create CRM Daily Report{% endif %}{% endblock %}
+{% block content %}
+<style>
+  .crm-report-form .section-card {
+    border: 1px solid rgba(0,0,0,.06);
+    border-radius: 14px;
+    box-shadow: 0 8px 22px rgba(0,0,0,.06);
+    background: #fff;
+  }
+  .crm-report-form .section-card .card-header {
+    border-bottom: 1px solid rgba(0,0,0,.06);
+    background: rgba(11, 61, 46, .04);
+    font-weight: 700;
+  }
+  .crm-report-form .sticky-tools {
+    position: sticky;
+    top: 86px;
+    z-index: 10;
+  }
+  [data-bs-theme="dark"] .crm-report-form .section-card {
+    background: #1e1e1e;
+    border-color: rgba(255,255,255,.08);
+    box-shadow: none;
+  }
+</style>
+
+<div class="container py-4 crm-report-form">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">{% if is_editing %}Edit CRM Daily Report{% else %}Create CRM Daily Report{% endif %}</h2>
+      <div class="text-muted small">Save as draft, autosave every 60 seconds, and submit when ready for admin review.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      {% if is_editing %}
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_daily_report_detail' report.id %}">Back to Detail</a>
+      {% endif %}
+      <a class="btn btn-outline-secondary" href="{% url 'betting:crm_daily_reports_dashboard' %}">Dashboard</a>
+    </div>
+  </div>
+
+  {% if form.errors %}
+  <div class="alert alert-danger">
+    <div class="fw-semibold mb-2">Please correct the highlighted errors.</div>
+    {{ form.errors }}
+  </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" id="crmDailyReportForm">
+    {% csrf_token %}
+    <input type="hidden" name="action" id="crmReportActionInput" value="draft">
+
+    <div class="sticky-tools section-card p-3 mb-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-12 col-md-3">
+          <label class="form-label small text-muted mb-1">Report Date</label>
+          {{ form.report_date }}
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small text-muted mb-1">Branch</label>
+          {{ form.branch_name }}
+        </div>
+        <div class="col-12 col-md-5 d-flex flex-wrap gap-2 justify-content-md-end">
+          <button type="button" class="btn btn-outline-primary" id="crmSaveDraftBtn">Save Draft</button>
+          <button type="submit" class="btn btn-success" id="crmSubmitBtn">Submit Daily Report</button>
+          <span class="small text-muted align-self-center" id="crmAutosaveStatus">Autosave ready</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 1 - Daily Activity Summary</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6 col-lg-3"><label class="form-label">Calls Made</label>{{ form.calls_made }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Calls Received</label>{{ form.calls_received }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">WhatsApp Conversations</label>{{ form.whatsapp_conversations }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Emails Sent</label>{{ form.emails_sent }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">SMS Sent</label>{{ form.sms_sent }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Push Notifications Sent</label>{{ form.push_notifications_sent }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Social Media Responses</label>{{ form.social_media_responses }}</div>
+              <div class="col-12"><label class="form-label">General Notes</label>{{ form.general_notes }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 2 - Customer Support Activities</div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-6 col-lg-3"><label class="form-label">Complaints Received</label>{{ form.complaints_received }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Complaints Resolved</label>{{ form.complaints_resolved }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Pending Complaints</label>{{ form.pending_complaints }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Escalated Cases</label>{{ form.escalated_cases }}</div>
+              <div class="col-6 col-lg-3"><label class="form-label">Reopened Cases</label>{{ form.reopened_cases }}</div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Complaint Rows</div>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-add-row="complaints">Add Complaint Row</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead class="table-light">
+                  <tr><th>Customer Name</th><th>Complaint</th><th>Escalated To</th><th>Status</th><th>Remarks</th><th></th></tr>
+                </thead>
+                <tbody id="complaintsTableBody">
+                  {% for row in complaint_rows %}
+                  <tr>
+                    <td><input type="text" name="complaint_customer_name[]" class="form-control form-control-sm" value="{{ row.customer_name }}"></td>
+                    <td><textarea name="complaint_text[]" class="form-control form-control-sm" rows="2">{{ row.complaint }}</textarea></td>
+                    <td><input type="text" name="complaint_escalated_to[]" class="form-control form-control-sm" value="{{ row.escalated_to }}"></td>
+                    <td><input type="text" name="complaint_status[]" class="form-control form-control-sm" value="{{ row.status }}"></td>
+                    <td><textarea name="complaint_remarks[]" class="form-control form-control-sm" rows="2">{{ row.remarks }}</textarea></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card section-card h-100">
+          <div class="card-header">Section 3 - Customer Engagement</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6">{{ form.dormant_customers_contacted.label_tag }}{{ form.dormant_customers_contacted }}</div>
+              <div class="col-6">{{ form.active_customers_followed_up.label_tag }}{{ form.active_customers_followed_up }}</div>
+              <div class="col-6">{{ form.vip_customers_contacted.label_tag }}{{ form.vip_customers_contacted }}</div>
+              <div class="col-6">{{ form.welcome_calls.label_tag }}{{ form.welcome_calls }}</div>
+              <div class="col-6">{{ form.birthday_messages.label_tag }}{{ form.birthday_messages }}</div>
+              <div class="col-6">{{ form.loyalty_calls.label_tag }}{{ form.loyalty_calls }}</div>
+              <div class="col-12">{{ form.engagement_remarks.label_tag }}{{ form.engagement_remarks }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card section-card h-100">
+          <div class="card-header">Section 4 - Customer Retention</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6">{{ form.dormant_customers_reactivated.label_tag }}{{ form.dormant_customers_reactivated }}</div>
+              <div class="col-6">{{ form.returning_customers.label_tag }}{{ form.returning_customers }}</div>
+              <div class="col-6">{{ form.customers_retained.label_tag }}{{ form.customers_retained }}</div>
+              <div class="col-6">{{ form.high_risk_customers_identified.label_tag }}{{ form.high_risk_customers_identified }}</div>
+              <div class="col-6">{{ form.customers_lost.label_tag }}{{ form.customers_lost }}</div>
+              <div class="col-12">{{ form.reason_for_loss.label_tag }}{{ form.reason_for_loss }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 5 - Campaign Performance</div>
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Campaign Rows</div>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-add-row="campaigns">Add Campaign Row</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead class="table-light">
+                  <tr><th>Campaign Name</th><th>Campaign Type</th><th>Channel</th><th>Audience Size</th><th>Responses</th><th>Conversions</th><th>Revenue</th><th>Remarks</th><th></th></tr>
+                </thead>
+                <tbody id="campaignsTableBody">
+                  {% for row in campaign_rows %}
+                  <tr>
+                    <td><input type="text" name="campaign_name[]" class="form-control form-control-sm" value="{{ row.campaign_name }}"></td>
+                    <td><input type="text" name="campaign_type[]" class="form-control form-control-sm" value="{{ row.campaign_type }}"></td>
+                    <td>
+                      <select name="campaign_channel[]" class="form-select form-select-sm">
+                        <option value="sms" {% if row.channel == 'sms' %}selected{% endif %}>SMS</option>
+                        <option value="whatsapp" {% if row.channel == 'whatsapp' %}selected{% endif %}>WhatsApp</option>
+                        <option value="email" {% if row.channel == 'email' %}selected{% endif %}>Email</option>
+                        <option value="push_notification" {% if row.channel == 'push_notification' %}selected{% endif %}>Push Notification</option>
+                      </select>
+                    </td>
+                    <td><input type="number" min="0" name="campaign_audience_size[]" class="form-control form-control-sm" value="{{ row.audience_size }}"></td>
+                    <td><input type="number" min="0" name="campaign_responses[]" class="form-control form-control-sm" value="{{ row.responses }}"></td>
+                    <td><input type="number" min="0" name="campaign_conversions[]" class="form-control form-control-sm" value="{{ row.conversions }}"></td>
+                    <td><input type="number" min="0" step="0.01" name="campaign_revenue_generated[]" class="form-control form-control-sm" value="{{ row.revenue_generated }}"></td>
+                    <td><textarea name="campaign_remarks[]" class="form-control form-control-sm" rows="2">{{ row.remarks }}</textarea></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card section-card h-100">
+          <div class="card-header">Section 6 - Sales & Conversion</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6">{{ form.new_registrations.label_tag }}{{ form.new_registrations }}</div>
+              <div class="col-6">{{ form.first_time_depositors.label_tag }}{{ form.first_time_depositors }}</div>
+              <div class="col-6">{{ form.repeat_depositors.label_tag }}{{ form.repeat_depositors }}</div>
+              <div class="col-6">{{ form.customers_assisted_to_deposit.label_tag }}{{ form.customers_assisted_to_deposit }}</div>
+              <div class="col-6">{{ form.customers_assisted_to_place_bets.label_tag }}{{ form.customers_assisted_to_place_bets }}</div>
+              <div class="col-6">{{ form.total_deposits_influenced.label_tag }}{{ form.total_deposits_influenced }}</div>
+              <div class="col-12">{{ form.estimated_revenue_influenced.label_tag }}{{ form.estimated_revenue_influenced }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card section-card h-100">
+          <div class="card-header">Section 7 - Agent & Retail Engagement</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6">{{ form.agents_contacted.label_tag }}{{ form.agents_contacted }}</div>
+              <div class="col-6">{{ form.retail_shops_contacted.label_tag }}{{ form.retail_shops_contacted }}</div>
+              <div class="col-6">{{ form.agent_complaints_resolved.label_tag }}{{ form.agent_complaints_resolved }}</div>
+              <div class="col-6">{{ form.training_conducted.label_tag }}{{ form.training_conducted }}</div>
+              <div class="col-6">{{ form.support_visits.label_tag }}{{ form.support_visits }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 8 - Customer Feedback</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-12 col-xl-4">{{ form.positive_feedback.label_tag }}{{ form.positive_feedback }}</div>
+              <div class="col-12 col-xl-4">{{ form.negative_feedback.label_tag }}{{ form.negative_feedback }}</div>
+              <div class="col-12 col-xl-4">{{ form.customer_suggestions.label_tag }}{{ form.customer_suggestions }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 9 - Challenges Encountered</div>
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Challenge Rows</div>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-add-row="challenges">Add Challenge Row</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead class="table-light">
+                  <tr><th>Challenge</th><th>Impact</th><th>Action Taken</th><th>Current Status</th><th></th></tr>
+                </thead>
+                <tbody id="challengesTableBody">
+                  {% for row in challenge_rows %}
+                  <tr>
+                    <td><input type="text" name="challenge_title[]" class="form-control form-control-sm" value="{{ row.challenge }}"></td>
+                    <td><textarea name="challenge_impact[]" class="form-control form-control-sm" rows="2">{{ row.impact }}</textarea></td>
+                    <td><textarea name="challenge_action_taken[]" class="form-control form-control-sm" rows="2">{{ row.action_taken }}</textarea></td>
+                    <td><input type="text" name="challenge_status[]" class="form-control form-control-sm" value="{{ row.current_status }}"></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 10 - Recommendations</div>
+          <div class="card-body">{{ form.recommendations }}</div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 11 - Key Performance Indicators (Live Preview)</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-12 col-xl-4">
+                <div class="small text-muted">Calls Achievement Rate</div>
+                <div class="progress mb-2"><div class="progress-bar bg-success" style="width: {{ report.calls_achievement_rate|default:0 }}%">{{ report.calls_achievement_rate|default:0|floatformat:2 }}%</div></div>
+                <div class="small text-muted">Complaint Resolution Rate</div>
+                <div class="progress mb-2"><div class="progress-bar bg-info" style="width: {{ report.complaint_resolution_rate|default:0 }}%">{{ report.complaint_resolution_rate|default:0|floatformat:2 }}%</div></div>
+              </div>
+              <div class="col-12 col-xl-4">
+                <div class="small text-muted">Customer Reactivation Rate</div>
+                <div class="progress mb-2"><div class="progress-bar bg-warning" style="width: {{ report.customer_reactivation_rate|default:0 }}%">{{ report.customer_reactivation_rate|default:0|floatformat:2 }}%</div></div>
+                <div class="small text-muted">Campaign Conversion Rate</div>
+                <div class="progress mb-2"><div class="progress-bar bg-primary" style="width: {{ report.campaign_conversion_rate|default:0 }}%">{{ report.campaign_conversion_rate|default:0|floatformat:2 }}%</div></div>
+              </div>
+              <div class="col-12 col-xl-4">
+                <div class="small text-muted">Customer Retention Rate</div>
+                <div class="progress mb-2"><div class="progress-bar bg-secondary" style="width: {{ report.customer_retention_rate|default:0 }}%">{{ report.customer_retention_rate|default:0|floatformat:2 }}%</div></div>
+                <div class="small text-muted">Overall Daily Productivity Score</div>
+                <div class="progress mb-2"><div class="progress-bar bg-dark" style="width: {{ report.overall_productivity_score|default:0 }}%">{{ report.overall_productivity_score|default:0|floatformat:2 }}%</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Section 12 - Work Plan for the Next Day</div>
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Next Day Tasks</div>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-add-row="next-day">Add Task Row</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead class="table-light">
+                  <tr><th>Task</th><th>Priority</th><th>Expected Outcome</th><th>Deadline</th><th></th></tr>
+                </thead>
+                <tbody id="nextDayTableBody">
+                  {% for row in next_day_tasks %}
+                  <tr>
+                    <td><input type="text" name="next_day_task[]" class="form-control form-control-sm" value="{{ row.task }}"></td>
+                    <td>
+                      <select name="next_day_priority[]" class="form-select form-select-sm">
+                        <option value="high" {% if row.priority == 'high' %}selected{% endif %}>High</option>
+                        <option value="medium" {% if row.priority == 'medium' %}selected{% endif %}>Medium</option>
+                        <option value="low" {% if row.priority == 'low' %}selected{% endif %}>Low</option>
+                      </select>
+                    </td>
+                    <td><textarea name="next_day_outcome[]" class="form-control form-control-sm" rows="2">{{ row.expected_outcome }}</textarea></td>
+                    <td><input type="datetime-local" name="next_day_deadline[]" class="form-control form-control-sm" value="{% if row.deadline %}{{ row.deadline|date:'Y-m-d\\TH:i' }}{% endif %}"></td>
+                    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card section-card">
+          <div class="card-header">Attachments</div>
+          <div class="card-body">
+            <div class="row g-3 align-items-end">
+              <div class="col-12 col-lg-8">
+                <label class="form-label">Upload Supporting Files (Max 20 MB each)</label>
+                {{ form.attachments }}
+                <div class="form-text">Supported formats: PDF, Excel, Word, Images, Screenshots, and Voice Notes.</div>
+              </div>
+            </div>
+            {% if attachments %}
+            <div class="table-responsive mt-3">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr><th>File</th><th>Size</th><th>Uploaded</th></tr>
+                </thead>
+                <tbody>
+                  {% for attachment in attachments %}
+                  <tr>
+                    <td><a href="{{ attachment.file.url }}" target="_blank">{{ attachment.original_name|default:attachment.file.name }}</a></td>
+                    <td>{{ attachment.file_size }}</td>
+                    <td>{{ attachment.created_at|date:"Y-m-d H:i" }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</div>
+
+<template id="complaintsRowTemplate">
+  <tr>
+    <td><input type="text" name="complaint_customer_name[]" class="form-control form-control-sm"></td>
+    <td><textarea name="complaint_text[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><input type="text" name="complaint_escalated_to[]" class="form-control form-control-sm"></td>
+    <td><input type="text" name="complaint_status[]" class="form-control form-control-sm" value="Pending"></td>
+    <td><textarea name="complaint_remarks[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+  </tr>
+</template>
+<template id="campaignsRowTemplate">
+  <tr>
+    <td><input type="text" name="campaign_name[]" class="form-control form-control-sm"></td>
+    <td><input type="text" name="campaign_type[]" class="form-control form-control-sm"></td>
+    <td><select name="campaign_channel[]" class="form-select form-select-sm"><option value="sms">SMS</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="push_notification">Push Notification</option></select></td>
+    <td><input type="number" min="0" name="campaign_audience_size[]" class="form-control form-control-sm" value="0"></td>
+    <td><input type="number" min="0" name="campaign_responses[]" class="form-control form-control-sm" value="0"></td>
+    <td><input type="number" min="0" name="campaign_conversions[]" class="form-control form-control-sm" value="0"></td>
+    <td><input type="number" min="0" step="0.01" name="campaign_revenue_generated[]" class="form-control form-control-sm" value="0.00"></td>
+    <td><textarea name="campaign_remarks[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+  </tr>
+</template>
+<template id="challengesRowTemplate">
+  <tr>
+    <td><input type="text" name="challenge_title[]" class="form-control form-control-sm"></td>
+    <td><textarea name="challenge_impact[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><textarea name="challenge_action_taken[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><input type="text" name="challenge_status[]" class="form-control form-control-sm"></td>
+    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+  </tr>
+</template>
+<template id="nextDayRowTemplate">
+  <tr>
+    <td><input type="text" name="next_day_task[]" class="form-control form-control-sm"></td>
+    <td><select name="next_day_priority[]" class="form-select form-select-sm"><option value="high">High</option><option value="medium" selected>Medium</option><option value="low">Low</option></select></td>
+    <td><textarea name="next_day_outcome[]" class="form-control form-control-sm" rows="2"></textarea></td>
+    <td><input type="datetime-local" name="next_day_deadline[]" class="form-control form-control-sm"></td>
+    <td><button type="button" class="btn btn-sm btn-outline-danger" data-remove-row>Remove</button></td>
+  </tr>
+</template>
+
+<script>
+  (function () {
+    const form = document.getElementById('crmDailyReportForm');
+    const actionInput = document.getElementById('crmReportActionInput');
+    const autosaveStatus = document.getElementById('crmAutosaveStatus');
+    const saveDraftBtn = document.getElementById('crmSaveDraftBtn');
+
+    const rowTargets = {
+      complaints: { tableBody: document.getElementById('complaintsTableBody'), template: document.getElementById('complaintsRowTemplate') },
+      campaigns: { tableBody: document.getElementById('campaignsTableBody'), template: document.getElementById('campaignsRowTemplate') },
+      challenges: { tableBody: document.getElementById('challengesTableBody'), template: document.getElementById('challengesRowTemplate') },
+      'next-day': { tableBody: document.getElementById('nextDayTableBody'), template: document.getElementById('nextDayRowTemplate') }
+    };
+
+    Object.entries(rowTargets).forEach(([key, cfg]) => {
+      if (cfg.tableBody && cfg.tableBody.children.length === 0 && cfg.template) {
+        cfg.tableBody.appendChild(cfg.template.content.cloneNode(true));
+      }
+    });
+
+    document.querySelectorAll('[data-add-row]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-add-row');
+        const cfg = rowTargets[key];
+        if (cfg && cfg.template && cfg.tableBody) {
+          cfg.tableBody.appendChild(cfg.template.content.cloneNode(true));
+        }
+      });
+    });
+
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-remove-row]');
+      if (!button) return;
+      const row = button.closest('tr');
+      const tbody = row && row.parentElement;
+      if (row && tbody && tbody.children.length > 1) {
+        row.remove();
+      }
+    });
+
+    saveDraftBtn.addEventListener('click', () => {
+      actionInput.value = 'draft';
+      form.submit();
+    });
+
+    form.addEventListener('submit', () => {
+      if (document.activeElement && document.activeElement.id === 'crmSubmitBtn') {
+        actionInput.value = 'submit';
+      }
+    });
+
+    let autosaveTimer = null;
+    let autosaveInFlight = false;
+
+    async function autosaveDraft() {
+      if (autosaveInFlight) return;
+      autosaveInFlight = true;
+      autosaveStatus.textContent = 'Autosaving...';
+      const formData = new FormData(form);
+      formData.set('action', 'autosave');
+      formData.delete('attachments');
+
+      try {
+        const response = await fetch(window.location.href, {
+          method: 'POST',
+          body: formData,
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        const data = await response.json();
+        autosaveStatus.textContent = data.ok ? 'Draft autosaved' : 'Autosave failed';
+      } catch (error) {
+        autosaveStatus.textContent = 'Autosave failed';
+      } finally {
+        autosaveInFlight = false;
+      }
+    }
+
+    function queueAutosave() {
+      window.clearTimeout(autosaveTimer);
+      autosaveTimer = window.setTimeout(autosaveDraft, 60000);
+      autosaveStatus.textContent = 'Changes pending autosave';
+    }
+
+    form.addEventListener('input', queueAutosave);
+    form.addEventListener('change', queueAutosave);
+  })();
+</script>
+{% endblock %}

@@ -67,6 +67,8 @@ from .models import (
     CustomerComplaint, CustomerComplaintNote, DashboardTask,
     BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery,
     CRMOpsAuditLog,
+    CRMDailyReport, CRMComplaint, CRMCampaignPerformance, CRMChallenge, CRMNextDayTask, CRMAdminComment, CRMReportAttachment,
+    RetailDailyReport, RetailSupportActivity, RetailCampaignPerformance, RetailChallenge, RetailNextDayTask, RetailAdminComment, RetailReportAttachment,
     OverdraftWallet, OverdraftWalletLedgerEntry, LoanRepayment, LoanAuditLog,
 )
 from . import signals
@@ -2403,6 +2405,332 @@ class CRMOpsAuditLogAdmin(admin.ModelAdmin):
         return request.user.is_superuser
 
 
+class CRMComplaintInline(admin.TabularInline):
+    model = CRMComplaint
+    extra = 0
+    can_delete = False
+    readonly_fields = ('customer_name', 'complaint', 'escalated_to', 'status', 'remarks', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMCampaignPerformanceInline(admin.TabularInline):
+    model = CRMCampaignPerformance
+    extra = 0
+    can_delete = False
+    readonly_fields = (
+        'campaign_name', 'campaign_type', 'channel', 'audience_size', 'responses',
+        'conversions', 'revenue_generated', 'remarks', 'created_at'
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMChallengeInline(admin.TabularInline):
+    model = CRMChallenge
+    extra = 0
+    can_delete = False
+    readonly_fields = ('challenge', 'impact', 'action_taken', 'current_status', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMNextDayTaskInline(admin.TabularInline):
+    model = CRMNextDayTask
+    extra = 0
+    can_delete = False
+    readonly_fields = ('task', 'priority', 'expected_outcome', 'deadline', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMAdminCommentInline(admin.TabularInline):
+    model = CRMAdminComment
+    extra = 0
+    can_delete = False
+    readonly_fields = ('author', 'action', 'comment', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMReportAttachmentInline(admin.TabularInline):
+    model = CRMReportAttachment
+    extra = 0
+    can_delete = False
+    readonly_fields = ('attachment_file', 'original_name', 'file_size', 'mime_type', 'uploaded_by', 'created_at')
+    fields = ('attachment_file', 'original_name', 'file_size', 'mime_type', 'uploaded_by', 'created_at')
+
+    def attachment_file(self, obj):
+        if getattr(obj, 'file', None):
+            return format_html('<a href="{}" target="_blank">Open attachment</a>', obj.file.url)
+        return '-'
+    attachment_file.short_description = 'File'
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class CRMDailyReportAdmin(admin.ModelAdmin):
+    list_display = (
+        'report_date', 'staff', 'branch_name', 'status', 'calls_made', 'calls_received',
+        'complaints_received', 'complaints_resolved', 'estimated_revenue_influenced',
+        'overall_productivity_score', 'submitted_at', 'reviewed_by', 'review_link',
+    )
+    list_filter = ('status', 'report_date', 'branch_name', 'submitted_at', 'reviewed_at')
+    search_fields = (
+        'staff__username', 'staff__email', 'staff__first_name', 'staff__last_name',
+        'branch_name', 'general_notes'
+    )
+    autocomplete_fields = ('staff', 'created_by', 'updated_by', 'reviewed_by')
+    list_select_related = ('staff', 'created_by', 'updated_by', 'reviewed_by')
+    date_hierarchy = 'report_date'
+    readonly_fields = [field.name for field in CRMDailyReport._meta.fields] + ['review_link']
+    inlines = [
+        CRMComplaintInline,
+        CRMCampaignPerformanceInline,
+        CRMChallengeInline,
+        CRMNextDayTaskInline,
+        CRMAdminCommentInline,
+        CRMReportAttachmentInline,
+    ]
+
+    fieldsets = (
+        ('Report', {
+            'fields': (
+                'staff', 'report_date', 'branch_name', 'status', 'review_link',
+                'submitted_at', 'reviewed_at', 'approved_at', 'rejected_at', 'returned_at',
+            )
+        }),
+        ('Daily Activity Summary', {
+            'fields': (
+                'calls_made', 'calls_received', 'whatsapp_conversations', 'emails_sent',
+                'sms_sent', 'push_notifications_sent', 'social_media_responses', 'general_notes',
+            )
+        }),
+        ('Customer Support Activities', {
+            'fields': (
+                'complaints_received', 'complaints_resolved', 'pending_complaints',
+                'escalated_cases', 'reopened_cases',
+            )
+        }),
+        ('Customer Engagement', {
+            'fields': (
+                'dormant_customers_contacted', 'active_customers_followed_up', 'vip_customers_contacted',
+                'welcome_calls', 'birthday_messages', 'loyalty_calls', 'engagement_remarks',
+            )
+        }),
+        ('Customer Retention', {
+            'fields': (
+                'dormant_customers_reactivated', 'returning_customers', 'customers_retained',
+                'high_risk_customers_identified', 'customers_lost', 'reason_for_loss',
+            )
+        }),
+        ('Sales and Conversion', {
+            'fields': (
+                'new_registrations', 'first_time_depositors', 'repeat_depositors',
+                'customers_assisted_to_deposit', 'customers_assisted_to_place_bets',
+                'total_deposits_influenced', 'estimated_revenue_influenced',
+            )
+        }),
+        ('Agent and Retail Engagement', {
+            'fields': (
+                'agents_contacted', 'retail_shops_contacted', 'agent_complaints_resolved',
+                'training_conducted', 'support_visits',
+            )
+        }),
+        ('Feedback and Recommendations', {
+            'fields': (
+                'positive_feedback', 'negative_feedback', 'customer_suggestions', 'recommendations',
+            )
+        }),
+        ('KPI Snapshot', {
+            'fields': (
+                'calls_achievement_rate', 'complaint_resolution_rate', 'customer_reactivation_rate',
+                'campaign_conversion_rate', 'customer_retention_rate', 'overall_productivity_score',
+            )
+        }),
+        ('Audit', {
+            'fields': (
+                'created_by', 'updated_by', 'reviewed_by', 'ip_address',
+                'browser_information', 'created_at', 'updated_at', 'last_modified_at',
+            )
+        }),
+    )
+
+    def review_link(self, obj):
+        url = reverse('betting:crm_daily_report_detail', args=[obj.id])
+        return format_html('<a class="button" href="{}" target="_blank">Open CRM Review Page</a>', url)
+    review_link.short_description = 'CRM Review'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+class RetailSupportActivityInline(admin.TabularInline):
+    model = RetailSupportActivity
+    extra = 0
+    can_delete = False
+    readonly_fields = ('shop_or_agent', 'issue', 'escalated_to', 'status', 'remarks', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailCampaignPerformanceInline(admin.TabularInline):
+    model = RetailCampaignPerformance
+    extra = 0
+    can_delete = False
+    readonly_fields = (
+        'campaign_name', 'campaign_type', 'channel', 'target_count', 'responses',
+        'conversions', 'revenue_generated', 'remarks', 'created_at'
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailChallengeInline(admin.TabularInline):
+    model = RetailChallenge
+    extra = 0
+    can_delete = False
+    readonly_fields = ('challenge', 'impact', 'action_taken', 'current_status', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailNextDayTaskInline(admin.TabularInline):
+    model = RetailNextDayTask
+    extra = 0
+    can_delete = False
+    readonly_fields = ('task', 'priority', 'expected_outcome', 'deadline', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailAdminCommentInline(admin.TabularInline):
+    model = RetailAdminComment
+    extra = 0
+    can_delete = False
+    readonly_fields = ('author', 'action', 'comment', 'created_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailReportAttachmentInline(admin.TabularInline):
+    model = RetailReportAttachment
+    extra = 0
+    can_delete = False
+    readonly_fields = ('attachment_file', 'original_name', 'file_size', 'mime_type', 'uploaded_by', 'created_at')
+    fields = ('attachment_file', 'original_name', 'file_size', 'mime_type', 'uploaded_by', 'created_at')
+
+    def attachment_file(self, obj):
+        if getattr(obj, 'file', None):
+            return format_html('<a href="{}" target="_blank">Open attachment</a>', obj.file.url)
+        return '-'
+    attachment_file.short_description = 'File'
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class RetailDailyReportAdmin(admin.ModelAdmin):
+    list_display = (
+        'report_date', 'retail_manager', 'branch_name', 'status', 'shops_visited',
+        'agents_supported', 'cashiers_supported', 'estimated_revenue_influenced',
+        'overall_productivity_score', 'submitted_at', 'reviewed_by', 'review_link',
+    )
+    list_filter = ('status', 'report_date', 'branch_name', 'submitted_at', 'reviewed_at')
+    search_fields = (
+        'retail_manager__username', 'retail_manager__email', 'retail_manager__first_name',
+        'retail_manager__last_name', 'branch_name', 'general_notes'
+    )
+    autocomplete_fields = ('retail_manager', 'created_by', 'updated_by', 'reviewed_by')
+    list_select_related = ('retail_manager', 'created_by', 'updated_by', 'reviewed_by')
+    date_hierarchy = 'report_date'
+    readonly_fields = [field.name for field in RetailDailyReport._meta.fields] + ['review_link']
+    inlines = [
+        RetailSupportActivityInline,
+        RetailCampaignPerformanceInline,
+        RetailChallengeInline,
+        RetailNextDayTaskInline,
+        RetailAdminCommentInline,
+        RetailReportAttachmentInline,
+    ]
+
+    fieldsets = (
+        ('Report', {
+            'fields': (
+                'retail_manager', 'report_date', 'branch_name', 'status', 'review_link',
+                'submitted_at', 'reviewed_at', 'approved_at', 'rejected_at', 'returned_at',
+            )
+        }),
+        ('Field Activity Summary', {
+            'fields': (
+                'shops_visited', 'agents_supported', 'cashiers_supported', 'support_calls_made',
+                'support_calls_received', 'whatsapp_followups', 'escalation_cases', 'general_notes',
+            )
+        }),
+        ('Operations and Resolution', {
+            'fields': (
+                'pending_withdrawals_reviewed', 'withdrawals_resolved', 'dormant_accounts_contacted',
+                'dormant_accounts_reactivated', 'agent_complaints_received', 'agent_complaints_resolved',
+                'shop_issues_identified', 'shop_issues_resolved',
+            )
+        }),
+        ('Training and Support', {
+            'fields': (
+                'new_agents_onboarded', 'training_sessions_conducted', 'compliance_checks_completed',
+                'terminals_checked', 'terminals_fixed', 'stock_requests_handled',
+                'marketing_support_requests', 'field_visit_notes',
+            )
+        }),
+        ('Commercial Outcomes', {
+            'fields': (
+                'total_stake_influenced', 'estimated_revenue_influenced', 'commissions_followed_up',
+                'fraud_cases_flagged', 'retention_actions_taken', 'customers_assisted_to_bet',
+                'high_value_players_contacted', 'inactive_shops_reactivated',
+            )
+        }),
+        ('Feedback and Recommendations', {
+            'fields': ('positive_feedback', 'negative_feedback', 'recommendations')
+        }),
+        ('KPI Snapshot', {
+            'fields': (
+                'support_resolution_rate', 'reactivation_rate', 'field_visit_completion_rate',
+                'training_completion_rate', 'overall_productivity_score',
+            )
+        }),
+        ('Audit', {
+            'fields': (
+                'created_by', 'updated_by', 'reviewed_by', 'ip_address',
+                'browser_information', 'created_at', 'updated_at', 'last_modified_at',
+            )
+        }),
+    )
+
+    def review_link(self, obj):
+        url = reverse('betting:retail_daily_report_detail', args=[obj.id])
+        return format_html('<a class="button" href="{}" target="_blank">Open Retail Review Page</a>', url)
+    review_link.short_description = 'Retail Review'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
 class AgentTransferLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'agent', 'old_super_agent', 'new_super_agent', 'transferred_by')
     list_filter = ('created_at', 'old_super_agent', 'new_super_agent', 'transferred_by')
@@ -2504,6 +2832,8 @@ betting_admin_site.register(BulkMessageTemplate, BulkMessageTemplateAdmin)
 betting_admin_site.register(BulkMessageCampaign, BulkMessageCampaignAdmin)
 betting_admin_site.register(BulkMessageDelivery, BulkMessageDeliveryAdmin)
 betting_admin_site.register(CRMOpsAuditLog, CRMOpsAuditLogAdmin)
+betting_admin_site.register(CRMDailyReport, CRMDailyReportAdmin)
+betting_admin_site.register(RetailDailyReport, RetailDailyReportAdmin)
 betting_admin_site.register(AgentTransferLog, AgentTransferLogAdmin)
 betting_admin_site.register(AccountUnlockAppeal, AccountUnlockAppealAdmin)
 betting_admin_site.register(AccountLockAuditLog, AccountLockAuditLogAdmin)

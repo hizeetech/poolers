@@ -1,0 +1,236 @@
+{% extends 'betting/base.html' %}
+{% load static %}
+{% block title %}Retail Daily Reporting Dashboard{% endblock %}
+{% block content %}
+<style>
+  .retail-report-shell .kpi-card,
+  .retail-report-shell .chart-card,
+  .retail-report-shell .table-card {
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+  }
+  .retail-report-shell .kpi-label { color: #6c757d; font-size: 0.82rem; }
+  .retail-report-shell .kpi-value { font-weight: 800; font-size: 1.2rem; color: #132C46; }
+  .retail-report-shell .badge-soft { border-radius: 999px; padding: 0.35rem 0.65rem; font-weight: 700; }
+  .retail-report-shell .badge-soft.draft { background: #f8f9fa; color: #495057; }
+  .retail-report-shell .badge-soft.submitted { background: rgba(255, 193, 7, 0.18); color: #8a6d00; }
+  .retail-report-shell .badge-soft.approved { background: rgba(25, 135, 84, 0.18); color: #0f5132; }
+  .retail-report-shell .badge-soft.rejected { background: rgba(220, 53, 69, 0.18); color: #842029; }
+  .retail-report-shell .badge-soft.returned { background: rgba(13, 110, 253, 0.16); color: #084298; }
+  [data-bs-theme="dark"] .retail-report-shell .kpi-card,
+  [data-bs-theme="dark"] .retail-report-shell .chart-card,
+  [data-bs-theme="dark"] .retail-report-shell .table-card {
+    background: #1e1e1e;
+    border-color: rgba(255,255,255,0.08);
+    box-shadow: none;
+  }
+</style>
+
+<div class="container py-4 retail-report-shell">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start align-items-lg-center gap-3 mb-3">
+    <div>
+      <h2 class="fw-bold mb-0">Retail Daily Reporting Dashboard</h2>
+      <div class="text-muted small">Retail Manager daily activity, approval workflow, and performance analytics.</div>
+      <div class="text-muted small">Range: {{ filters.start_date }} -> {{ filters.end_date }}</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      {% if create_report_url %}
+      <a class="btn btn-success" href="{{ create_report_url }}">Create Daily Report</a>
+      {% endif %}
+      <a class="btn btn-outline-success" href="{% url 'betting:retail_daily_report_export' %}?{{ current_query }}&format=csv">Export CSV</a>
+      <a class="btn btn-outline-success" href="{% url 'betting:retail_daily_report_export' %}?{{ current_query }}&format=xlsx">Export Excel</a>
+      <a class="btn btn-outline-danger" href="{% url 'betting:retail_daily_report_export' %}?{{ current_query }}&format=pdf">Export PDF</a>
+      <a class="btn btn-outline-secondary" href="{% url 'betting:retail_daily_report_export' %}?{{ current_query }}&format=print" target="_blank">Print View</a>
+    </div>
+  </div>
+
+  <div class="table-card p-3 mb-4">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Range</label>
+        <select name="range" class="form-select">
+          <option value="today" {% if filters.range == 'today' %}selected{% endif %}>Today</option>
+          <option value="yesterday" {% if filters.range == 'yesterday' %}selected{% endif %}>Yesterday</option>
+          <option value="this_week" {% if filters.range == 'this_week' %}selected{% endif %}>This Week</option>
+          <option value="this_month" {% if filters.range == 'this_month' %}selected{% endif %}>This Month</option>
+          <option value="custom" {% if filters.range == 'custom' %}selected{% endif %}>Custom Date</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">From</label>
+        <input type="date" name="start_date" value="{{ filters.start_date }}" class="form-control">
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">To</label>
+        <input type="date" name="end_date" value="{{ filters.end_date }}" class="form-control">
+      </div>
+      {% if is_admin_view %}
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Retail Manager</label>
+        <select name="manager" class="form-select">
+          <option value="">All Managers</option>
+          {% for manager in manager_options %}
+          <option value="{{ manager.id }}" {% if filters.manager == manager.id|stringformat:'s' %}selected{% endif %}>{{ manager.username|default:manager.email }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Branch</label>
+        <select name="branch" class="form-select">
+          <option value="">All Branches</option>
+          {% for branch in branch_options %}
+          <option value="{{ branch }}" {% if filters.branch == branch %}selected{% endif %}>{{ branch }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-2">
+        <label class="form-label small text-muted mb-1">Status</label>
+        <select name="status" class="form-select">
+          <option value="">All Statuses</option>
+          {% for value, label in status_choices %}
+          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-lg-4">
+        <label class="form-label small text-muted mb-1">Search</label>
+        <input type="text" name="q" value="{{ filters.q }}" class="form-control" placeholder="Manager, branch, notes">
+      </div>
+      <div class="col-12 col-lg-2 d-flex gap-2">
+        <button type="submit" class="btn btn-primary flex-fill">Apply</button>
+        <a href="{% url 'betting:retail_daily_reports_dashboard' %}" class="btn btn-outline-secondary">Reset</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-3 mb-4">
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Submitted Today</div><div class="kpi-value">{{ cards.submitted_today }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Pending Reports</div><div class="kpi-value">{{ cards.pending_reports }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Approved Reports</div><div class="kpi-value">{{ cards.approved_reports }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Rejected Reports</div><div class="kpi-value">{{ cards.rejected_reports }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Draft Reports</div><div class="kpi-value">{{ cards.draft_reports }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Shops Visited</div><div class="kpi-value">{{ cards.shops_visited }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Agents Supported</div><div class="kpi-value">{{ cards.agents_supported }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Cashiers Supported</div><div class="kpi-value">{{ cards.cashiers_supported }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Withdrawals Reviewed</div><div class="kpi-value">{{ cards.withdrawals_reviewed }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Withdrawals Resolved</div><div class="kpi-value">{{ cards.withdrawals_resolved }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Dormant Contacted</div><div class="kpi-value">{{ cards.dormant_contacted }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Dormant Reactivated</div><div class="kpi-value">{{ cards.dormant_reactivated }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Trainings</div><div class="kpi-value">{{ cards.training_sessions }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Total Stake Influenced</div><div class="kpi-value">N{{ cards.total_stake_influenced }}</div></div></div>
+    <div class="col"><div class="kpi-card p-3"><div class="kpi-label">Overall Productivity</div><div class="kpi-value">{{ cards.overall_productivity }}%</div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-xl-6"><div class="chart-card p-3"><h6 class="fw-bold mb-3">Daily Productivity</h6><canvas id="retailDailyProductivityChart" height="140"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3"><h6 class="fw-bold mb-3">Field Activity Trend</h6><canvas id="retailFieldActivityChart" height="140"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3"><h6 class="fw-bold mb-3">Resolution Trend</h6><canvas id="retailResolutionChart" height="140"></canvas></div></div>
+    <div class="col-12 col-xl-6"><div class="chart-card p-3"><h6 class="fw-bold mb-3">Estimated Revenue</h6><canvas id="retailRevenueChart" height="140"></canvas></div></div>
+  </div>
+
+  <div class="table-card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-bold mb-0">Retail Daily Reports</h5>
+      <div class="small text-muted">{{ reports_page.paginator.count }} report{{ reports_page.paginator.count|pluralize }}</div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th>Retail Manager</th>
+            <th>Branch</th>
+            <th>Status</th>
+            <th>Shops</th>
+            <th>Agents</th>
+            <th>Resolved</th>
+            <th>Revenue</th>
+            <th>Score</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report in reports_page %}
+          <tr>
+            <td>{{ report.report_date }}</td>
+            <td>{{ report.retail_manager.username|default:report.retail_manager.email }}</td>
+            <td>{{ report.branch_name|default:'-' }}</td>
+            <td><span class="badge-soft {{ report.status }}">{{ report.get_status_display }}</span></td>
+            <td>{{ report.shops_visited }}</td>
+            <td>{{ report.agents_supported }}</td>
+            <td>{{ report.withdrawals_resolved|add:report.agent_complaints_resolved|add:report.shop_issues_resolved }}</td>
+            <td>N{{ report.estimated_revenue_influenced }}</td>
+            <td>{{ report.overall_productivity_score }}%</td>
+            <td class="text-end"><a href="{% url 'betting:retail_daily_report_detail' report.id %}" class="btn btn-sm btn-outline-primary">Open</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="10" class="text-center text-muted py-4">No retail daily reports found for the selected filters.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if reports_page.paginator.num_pages > 1 %}
+    <nav class="mt-3">
+      <ul class="pagination pagination-sm mb-0">
+        {% if reports_page.has_previous %}
+        <li class="page-item"><a class="page-link" href="?{{ current_query }}&page={{ reports_page.previous_page_number }}">Previous</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Previous</span></li>
+        {% endif %}
+        <li class="page-item disabled"><span class="page-link">Page {{ reports_page.number }} of {{ reports_page.paginator.num_pages }}</span></li>
+        {% if reports_page.has_next %}
+        <li class="page-item"><a class="page-link" href="?{{ current_query }}&page={{ reports_page.next_page_number }}">Next</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Next</span></li>
+        {% endif %}
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
+</div>
+
+{{ charts_json|json_script:"retail-report-charts-data" }}
+<script>
+  (function () {
+    if (typeof Chart === 'undefined') return;
+    const payloadNode = document.getElementById('retail-report-charts-data');
+    if (!payloadNode) return;
+    const charts = JSON.parse(payloadNode.textContent || '{}');
+    const makeChart = (id, config) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      new Chart(el, config);
+    };
+    makeChart('retailDailyProductivityChart', {
+      type: 'line',
+      data: { labels: charts.daily_productivity?.labels || [], datasets: [{ label: 'Productivity %', data: charts.daily_productivity?.values || [], borderColor: '#0d6efd', tension: 0.25 }] },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+    makeChart('retailFieldActivityChart', {
+      type: 'bar',
+      data: { labels: charts.field_activity?.labels || [], datasets: [
+        { label: 'Shops', data: charts.field_activity?.shops || [], backgroundColor: '#198754' },
+        { label: 'Agents', data: charts.field_activity?.agents || [], backgroundColor: '#0d6efd' },
+        { label: 'Cashiers', data: charts.field_activity?.cashiers || [], backgroundColor: '#ffc107' }
+      ]},
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+    makeChart('retailResolutionChart', {
+      type: 'line',
+      data: { labels: charts.resolution_trend?.labels || [], datasets: [
+        { label: 'Reviewed', data: charts.resolution_trend?.reviewed || [], borderColor: '#6c757d', tension: 0.25 },
+        { label: 'Resolved', data: charts.resolution_trend?.resolved || [], borderColor: '#198754', tension: 0.25 }
+      ]},
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+    makeChart('retailRevenueChart', {
+      type: 'bar',
+      data: { labels: charts.estimated_revenue?.labels || [], datasets: [{ label: 'Estimated Revenue', data: charts.estimated_revenue?.values || [], backgroundColor: '#dc3545' }] },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+  })();
+</script>
+{% endblock %}

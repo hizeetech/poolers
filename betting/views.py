@@ -11,13 +11,14 @@ import smtplib
 from urllib.parse import urlencode
 from functools import wraps
 from types import SimpleNamespace
+from collections import defaultdict
 from django.core.mail import send_mail
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch, CharField
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch, CharField, Avg
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -103,7 +104,9 @@ from .models import (
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
     ScheduledFinanceReport, OverdraftWallet, LoanAuditLog, LoanRepayment, TicketTransactionLedger,
-    DashboardTask,
+    DashboardTask, CRMDailyReport, CRMComplaint, CRMCampaignPerformance, CRMChallenge, CRMNextDayTask,
+    CRMAdminComment, CRMReportAttachment, RetailDailyReport, RetailSupportActivity,
+    RetailCampaignPerformance, RetailChallenge, RetailNextDayTask, RetailAdminComment, RetailReportAttachment,
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -120,7 +123,8 @@ from .forms import (
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
     RetailManagerDashboardNoteForm, DashboardTaskReportForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
     CustomerComplaintForm, CustomerComplaintActionForm, CustomerComplaintNoteForm, BulkMessageTemplateForm,
-    BulkMessageCampaignForm, CRMThresholdSettingsForm
+    BulkMessageCampaignForm, CRMThresholdSettingsForm, CRMDailyReportForm, CRMAdminReviewForm,
+    RetailDailyReportForm, RetailAdminReviewForm
 )
 from .services.email_policy import duplicate_email_details, normalize_email_value, resolve_user_from_identifier
 from .services.ticket_refund_reversal_adjustments import (
@@ -15563,6 +15567,1373 @@ def crm_export(request):
         return HttpResponse("Unknown dataset.", status=400)
 
     return _export_simple_rows(rows=rows, title=title, fmt=fmt)
+
+
+def is_crm_daily_reporting_user(user):
+    return bool(
+        getattr(user, 'is_authenticated', False)
+        and (user.is_superuser or getattr(user, 'user_type', '') in ['crm', 'admin'])
+    )
+
+
+def is_crm_daily_reporting_admin(user):
+    return bool(
+        getattr(user, 'is_authenticated', False)
+        and (user.is_superuser or getattr(user, 'user_type', '') == 'admin')
+    )
+
+
+def _crm_daily_reports_queryset_for_user(user):
+    qs = CRMDailyReport.objects.select_related(
+        'staff', 'created_by', 'updated_by', 'reviewed_by'
+    ).prefetch_related(
+        'complaint_rows',
+        'campaign_rows',
+        'challenge_rows',
+        'next_day_tasks',
+        'attachments',
+        Prefetch(
+            'admin_comments',
+            queryset=CRMAdminComment.objects.select_related('author').order_by('-created_at'),
+        ),
+    )
+    if is_crm_daily_reporting_admin(user):
+        return qs
+    return qs.filter(staff=user)
+
+
+def _crm_reporting_admin_queryset():
+    return User.objects.filter(Q(is_superuser=True) | Q(user_type='admin')).distinct()
+
+
+def _crm_report_browser_info(request):
+    return (request.META.get('HTTP_USER_AGENT') or '').strip()
+
+
+def _crm_report_notification_link(report):
+    return reverse('betting:crm_daily_report_detail', args=[report.id])
+
+
+def _notify_crm_daily_report_submitted(report):
+    message = f"{report.staff.get_full_name() or report.staff.email} submitted CRM report for {report.report_date}."
+    for admin_user in _crm_reporting_admin_queryset().iterator():
+        create_notification(
+            recipient=admin_user,
+            notification_type='SYSTEM_ANNOUNCEMENT',
+            title='CRM Daily Report Submitted',
+            message=message,
+            data={'url': _crm_report_notification_link(report), 'report_id': report.id},
+        )
+
+
+def _notify_crm_daily_report_staff(report, *, title, message):
+    create_notification(
+        recipient=report.staff,
+        notification_type='SYSTEM_ANNOUNCEMENT',
+        title=title,
+        message=message,
+        data={'url': _crm_report_notification_link(report), 'report_id': report.id},
+    )
+
+
+def _crm_decimal_or_zero(value):
+    try:
+        return Decimal(str(value or '0')).quantize(Decimal('0.01'))
+    except Exception:
+        return Decimal('0.00')
+
+
+def _crm_int_or_zero(value):
+    try:
+        return max(int(value or 0), 0)
+    except Exception:
+        return 0
+
+
+def _crm_parse_deadline(value):
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed)
+    return parsed
+
+
+def _crm_post_list(request, name):
+    values = request.POST.getlist(name)
+    if not values:
+        values = request.POST.getlist(f'{name}[]')
+    return values
+
+
+def _crm_build_dynamic_rows(request):
+    complaints = []
+    complaint_names = _crm_post_list(request, 'complaint_customer_name')
+    complaint_texts = _crm_post_list(request, 'complaint_text')
+    complaint_escalated = _crm_post_list(request, 'complaint_escalated_to')
+    complaint_statuses = _crm_post_list(request, 'complaint_status')
+    complaint_remarks = _crm_post_list(request, 'complaint_remarks')
+    for idx in range(max(len(complaint_names), len(complaint_texts), len(complaint_escalated), len(complaint_statuses), len(complaint_remarks))):
+        row = {
+            'customer_name': (complaint_names[idx] if idx < len(complaint_names) else '').strip(),
+            'complaint': (complaint_texts[idx] if idx < len(complaint_texts) else '').strip(),
+            'escalated_to': (complaint_escalated[idx] if idx < len(complaint_escalated) else '').strip(),
+            'status': (complaint_statuses[idx] if idx < len(complaint_statuses) else '').strip() or 'Pending',
+            'remarks': (complaint_remarks[idx] if idx < len(complaint_remarks) else '').strip(),
+        }
+        if any(row.values()):
+            complaints.append(row)
+
+    campaigns = []
+    campaign_names = _crm_post_list(request, 'campaign_name')
+    campaign_types = _crm_post_list(request, 'campaign_type')
+    campaign_channels = _crm_post_list(request, 'campaign_channel')
+    campaign_audiences = _crm_post_list(request, 'campaign_audience_size')
+    campaign_responses = _crm_post_list(request, 'campaign_responses')
+    campaign_conversions = _crm_post_list(request, 'campaign_conversions')
+    campaign_revenue = _crm_post_list(request, 'campaign_revenue_generated')
+    campaign_remarks = _crm_post_list(request, 'campaign_remarks')
+    for idx in range(max(len(campaign_names), len(campaign_types), len(campaign_channels), len(campaign_audiences), len(campaign_responses), len(campaign_conversions), len(campaign_revenue), len(campaign_remarks))):
+        row = {
+            'campaign_name': (campaign_names[idx] if idx < len(campaign_names) else '').strip(),
+            'campaign_type': (campaign_types[idx] if idx < len(campaign_types) else '').strip(),
+            'channel': (campaign_channels[idx] if idx < len(campaign_channels) else '').strip() or 'sms',
+            'audience_size': _crm_int_or_zero(campaign_audiences[idx] if idx < len(campaign_audiences) else 0),
+            'responses': _crm_int_or_zero(campaign_responses[idx] if idx < len(campaign_responses) else 0),
+            'conversions': _crm_int_or_zero(campaign_conversions[idx] if idx < len(campaign_conversions) else 0),
+            'revenue_generated': _crm_decimal_or_zero(campaign_revenue[idx] if idx < len(campaign_revenue) else 0),
+            'remarks': (campaign_remarks[idx] if idx < len(campaign_remarks) else '').strip(),
+        }
+        if row['campaign_name'] or row['campaign_type'] or row['audience_size'] or row['responses'] or row['conversions'] or row['revenue_generated']:
+            campaigns.append(row)
+
+    challenges = []
+    challenge_titles = _crm_post_list(request, 'challenge_title')
+    challenge_impacts = _crm_post_list(request, 'challenge_impact')
+    challenge_actions = _crm_post_list(request, 'challenge_action_taken')
+    challenge_statuses = _crm_post_list(request, 'challenge_status')
+    for idx in range(max(len(challenge_titles), len(challenge_impacts), len(challenge_actions), len(challenge_statuses))):
+        row = {
+            'challenge': (challenge_titles[idx] if idx < len(challenge_titles) else '').strip(),
+            'impact': (challenge_impacts[idx] if idx < len(challenge_impacts) else '').strip(),
+            'action_taken': (challenge_actions[idx] if idx < len(challenge_actions) else '').strip(),
+            'current_status': (challenge_statuses[idx] if idx < len(challenge_statuses) else '').strip(),
+        }
+        if any(row.values()):
+            challenges.append(row)
+
+    next_day_tasks = []
+    task_titles = _crm_post_list(request, 'next_day_task')
+    task_priorities = _crm_post_list(request, 'next_day_priority')
+    task_outcomes = _crm_post_list(request, 'next_day_outcome')
+    task_deadlines = _crm_post_list(request, 'next_day_deadline')
+    for idx in range(max(len(task_titles), len(task_priorities), len(task_outcomes), len(task_deadlines))):
+        row = {
+            'task': (task_titles[idx] if idx < len(task_titles) else '').strip(),
+            'priority': (task_priorities[idx] if idx < len(task_priorities) else '').strip() or 'medium',
+            'expected_outcome': (task_outcomes[idx] if idx < len(task_outcomes) else '').strip(),
+            'deadline': _crm_parse_deadline(task_deadlines[idx] if idx < len(task_deadlines) else ''),
+        }
+        if row['task'] or row['expected_outcome'] or row['deadline']:
+            next_day_tasks.append(row)
+
+    return {
+        'complaints': complaints,
+        'campaigns': campaigns,
+        'challenges': challenges,
+        'next_day_tasks': next_day_tasks,
+    }
+
+
+def _sync_crm_daily_report_children(report, rows):
+    report.complaint_rows.all().delete()
+    report.campaign_rows.all().delete()
+    report.challenge_rows.all().delete()
+    report.next_day_tasks.all().delete()
+
+    complaint_objs = [CRMComplaint(report=report, **row) for row in rows['complaints']]
+    campaign_objs = [CRMCampaignPerformance(report=report, **row) for row in rows['campaigns']]
+    challenge_objs = [CRMChallenge(report=report, **row) for row in rows['challenges']]
+    task_objs = [CRMNextDayTask(report=report, **row) for row in rows['next_day_tasks']]
+
+    if complaint_objs:
+        CRMComplaint.objects.bulk_create(complaint_objs)
+    if campaign_objs:
+        CRMCampaignPerformance.objects.bulk_create(campaign_objs)
+    if challenge_objs:
+        CRMChallenge.objects.bulk_create(challenge_objs)
+    if task_objs:
+        CRMNextDayTask.objects.bulk_create(task_objs)
+
+    report.recalculate_kpis(campaign_rows=campaign_objs)
+    report.save(
+        update_fields=[
+            'calls_achievement_rate',
+            'complaint_resolution_rate',
+            'customer_reactivation_rate',
+            'campaign_conversion_rate',
+            'customer_retention_rate',
+            'overall_productivity_score',
+            'updated_at',
+            'last_modified_at',
+        ]
+    )
+
+
+def _attach_files_to_crm_report(report, request, *, uploaded_by=None):
+    for uploaded_file in request.FILES.getlist('attachments'):
+        CRMReportAttachment.objects.create(
+            report=report,
+            file=uploaded_file,
+            uploaded_by=uploaded_by,
+            original_name=getattr(uploaded_file, 'name', '') or '',
+            file_size=getattr(uploaded_file, 'size', 0) or 0,
+            mime_type=getattr(uploaded_file, 'content_type', '') or '',
+        )
+
+
+def _crm_report_date_bounds(request):
+    preset = (request.GET.get('range') or 'today').strip() or 'today'
+    custom_start = (request.GET.get('start_date') or '').strip()
+    custom_end = (request.GET.get('end_date') or '').strip()
+    today = timezone.localdate()
+
+    def _parse_date(raw):
+        raw = (raw or '').strip()
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, '%Y-%m-%d').date()
+        except Exception:
+            return None
+
+    if preset == 'yesterday':
+        start_date = today - timedelta(days=1)
+        end_date = start_date
+    elif preset == 'this_week':
+        start_date = today - timedelta(days=today.weekday())
+        end_date = today
+    elif preset == 'this_month':
+        start_date = today.replace(day=1)
+        end_date = today
+    elif preset == 'custom':
+        start_date = _parse_date(custom_start)
+        end_date = _parse_date(custom_end)
+        if start_date is None:
+            start_date = today
+        if end_date is None:
+            end_date = today
+    else:
+        preset = 'today'
+        start_date = today
+        end_date = today
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    return preset, start_date, end_date
+
+
+def _filter_crm_daily_reports_queryset(request, base_qs):
+    preset, start_date, end_date = _crm_report_date_bounds(request)
+    status = (request.GET.get('status') or '').strip()
+    branch = (request.GET.get('branch') or '').strip()
+    staff_id = (request.GET.get('staff') or '').strip()
+    q = (request.GET.get('q') or '').strip()
+
+    qs = base_qs.filter(report_date__gte=start_date, report_date__lte=end_date)
+    if status:
+        qs = qs.filter(status=status)
+    if branch:
+        qs = qs.filter(branch_name__iexact=branch)
+    if staff_id.isdigit() and is_crm_daily_reporting_admin(request.user):
+        qs = qs.filter(staff_id=int(staff_id))
+    if q:
+        qs = qs.filter(
+            Q(staff__username__icontains=q)
+            | Q(staff__email__icontains=q)
+            | Q(staff__first_name__icontains=q)
+            | Q(staff__last_name__icontains=q)
+            | Q(branch_name__icontains=q)
+            | Q(general_notes__icontains=q)
+        )
+    return qs.order_by('-report_date', '-updated_at'), {
+        'range': preset,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'status': status,
+        'branch': branch,
+        'staff': staff_id,
+        'q': q,
+    }
+
+
+def _crm_daily_report_export_rows(queryset):
+    rows = []
+    for report in queryset[:5000]:
+        rows.append({
+            'report_date': report.report_date.isoformat(),
+            'staff': report.staff.username or report.staff.email or '',
+            'branch': report.branch_name,
+            'status': report.get_status_display(),
+            'calls_made': report.calls_made,
+            'calls_received': report.calls_received,
+            'whatsapp_conversations': report.whatsapp_conversations,
+            'emails_sent': report.emails_sent,
+            'sms_sent': report.sms_sent,
+            'push_notifications_sent': report.push_notifications_sent,
+            'complaints_received': report.complaints_received,
+            'complaints_resolved': report.complaints_resolved,
+            'dormant_customers_contacted': report.dormant_customers_contacted,
+            'dormant_customers_reactivated': report.dormant_customers_reactivated,
+            'vip_customers_contacted': report.vip_customers_contacted,
+            'new_registrations': report.new_registrations,
+            'first_time_depositors': report.first_time_depositors,
+            'repeat_depositors': report.repeat_depositors,
+            'customers_assisted_to_place_bets': report.customers_assisted_to_place_bets,
+            'estimated_revenue_influenced': str(report.estimated_revenue_influenced or Decimal('0.00')),
+            'calls_achievement_rate': str(report.calls_achievement_rate or Decimal('0.00')),
+            'complaint_resolution_rate': str(report.complaint_resolution_rate or Decimal('0.00')),
+            'customer_reactivation_rate': str(report.customer_reactivation_rate or Decimal('0.00')),
+            'campaign_conversion_rate': str(report.campaign_conversion_rate or Decimal('0.00')),
+            'customer_retention_rate': str(report.customer_retention_rate or Decimal('0.00')),
+            'overall_productivity_score': str(report.overall_productivity_score or Decimal('0.00')),
+            'submitted_at': report.submitted_at.isoformat(sep=' ', timespec='seconds') if report.submitted_at else '',
+            'reviewed_at': report.reviewed_at.isoformat(sep=' ', timespec='seconds') if report.reviewed_at else '',
+        })
+    return rows
+
+
+@user_passes_test_403(is_crm_daily_reporting_user)
+def crm_daily_reports_dashboard(request):
+    base_qs = _crm_daily_reports_queryset_for_user(request.user)
+    filtered_qs, filters = _filter_crm_daily_reports_queryset(request, base_qs)
+    page_obj = Paginator(filtered_qs, 20).get_page(request.GET.get('page') or 1)
+
+    aggregate_data = filtered_qs.aggregate(
+        report_count=Count('id'),
+        avg_productivity=Coalesce(Avg('overall_productivity_score'), Value(0), output_field=DecimalField(max_digits=6, decimal_places=2)),
+        total_calls_made=Coalesce(Sum('calls_made'), Value(0)),
+        total_calls_received=Coalesce(Sum('calls_received'), Value(0)),
+        total_whatsapp=Coalesce(Sum('whatsapp_conversations'), Value(0)),
+        total_emails=Coalesce(Sum('emails_sent'), Value(0)),
+        total_sms=Coalesce(Sum('sms_sent'), Value(0)),
+        total_push=Coalesce(Sum('push_notifications_sent'), Value(0)),
+        total_complaints_received=Coalesce(Sum('complaints_received'), Value(0)),
+        total_complaints_resolved=Coalesce(Sum('complaints_resolved'), Value(0)),
+        total_pending_complaints=Coalesce(Sum('pending_complaints'), Value(0)),
+        total_dormant_contacted=Coalesce(Sum('dormant_customers_contacted'), Value(0)),
+        total_dormant_reactivated=Coalesce(Sum('dormant_customers_reactivated'), Value(0)),
+        total_vip_contacted=Coalesce(Sum('vip_customers_contacted'), Value(0)),
+        total_active_followups=Coalesce(Sum('active_customers_followed_up'), Value(0)),
+        total_new_registrations=Coalesce(Sum('new_registrations'), Value(0)),
+        total_ftd=Coalesce(Sum('first_time_depositors'), Value(0)),
+        total_repeat_depositors=Coalesce(Sum('repeat_depositors'), Value(0)),
+        total_bet_assists=Coalesce(Sum('customers_assisted_to_place_bets'), Value(0)),
+        total_estimated_revenue=Coalesce(Sum('estimated_revenue_influenced'), Value(0), output_field=DecimalField(max_digits=14, decimal_places=2)),
+    )
+
+    reports_today_submitted = base_qs.filter(submitted_at__date=timezone.localdate()).count()
+    status_counts = {
+        'draft': filtered_qs.filter(status=CRMDailyReport.STATUS.DRAFT).count(),
+        'pending': filtered_qs.filter(status=CRMDailyReport.STATUS.SUBMITTED).count(),
+        'approved': filtered_qs.filter(status=CRMDailyReport.STATUS.APPROVED).count(),
+        'rejected': filtered_qs.filter(status=CRMDailyReport.STATUS.REJECTED).count(),
+        'returned': filtered_qs.filter(status=CRMDailyReport.STATUS.RETURNED).count(),
+    }
+
+    report_list = list(filtered_qs.prefetch_related('campaign_rows'))
+    daily_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0, 'calls_made': 0, 'calls_received': 0, 'complaints_received': 0, 'complaints_resolved': 0, 'reactivated': 0, 'retained': 0, 'lost': 0, 'revenue': Decimal('0.00')})
+    weekly_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0})
+    monthly_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0})
+    channel_map = defaultdict(lambda: {'conversions': 0, 'revenue': Decimal('0.00')})
+    for report in report_list:
+        d_key = report.report_date.isoformat()
+        daily_map[d_key]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        daily_map[d_key]['count'] += 1
+        daily_map[d_key]['calls_made'] += report.calls_made
+        daily_map[d_key]['calls_received'] += report.calls_received
+        daily_map[d_key]['complaints_received'] += report.complaints_received
+        daily_map[d_key]['complaints_resolved'] += report.complaints_resolved
+        daily_map[d_key]['reactivated'] += report.dormant_customers_reactivated
+        daily_map[d_key]['retained'] += report.customers_retained
+        daily_map[d_key]['lost'] += report.customers_lost
+        daily_map[d_key]['revenue'] += report.estimated_revenue_influenced or Decimal('0.00')
+
+        week_start = report.report_date - timedelta(days=report.report_date.weekday())
+        week_key = week_start.isoformat()
+        weekly_map[week_key]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        weekly_map[week_key]['count'] += 1
+
+        month_key = report.report_date.strftime('%Y-%m')
+        monthly_map[month_key]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        monthly_map[month_key]['count'] += 1
+
+        for campaign in report.campaign_rows.all():
+            channel_map[campaign.get_channel_display()]['conversions'] += campaign.conversions
+            channel_map[campaign.get_channel_display()]['revenue'] += campaign.revenue_generated or Decimal('0.00')
+
+    def _avg_payload(source):
+        labels = sorted(source.keys())
+        return {
+            'labels': labels,
+            'values': [
+                float((source[label]['score_sum'] / Decimal(str(source[label]['count'] or 1))).quantize(Decimal('0.01')))
+                for label in labels
+            ],
+        }
+
+    daily_labels = sorted(daily_map.keys())
+    charts = {
+        'daily_productivity': _avg_payload(daily_map),
+        'weekly_productivity': _avg_payload(weekly_map),
+        'monthly_productivity': _avg_payload(monthly_map),
+        'calls_trend': {
+            'labels': daily_labels,
+            'made': [daily_map[label]['calls_made'] for label in daily_labels],
+            'received': [daily_map[label]['calls_received'] for label in daily_labels],
+        },
+        'complaint_resolution_trend': {
+            'labels': daily_labels,
+            'received': [daily_map[label]['complaints_received'] for label in daily_labels],
+            'resolved': [daily_map[label]['complaints_resolved'] for label in daily_labels],
+        },
+        'campaign_performance': {
+            'labels': list(channel_map.keys()),
+            'conversions': [channel_map[label]['conversions'] for label in channel_map.keys()],
+            'revenue': [float(channel_map[label]['revenue']) for label in channel_map.keys()],
+        },
+        'dormant_reactivation': {
+            'labels': daily_labels,
+            'reactivated': [daily_map[label]['reactivated'] for label in daily_labels],
+        },
+        'customer_retention': {
+            'labels': daily_labels,
+            'retained': [daily_map[label]['retained'] for label in daily_labels],
+            'lost': [daily_map[label]['lost'] for label in daily_labels],
+        },
+        'estimated_revenue': {
+            'labels': daily_labels,
+            'values': [float(daily_map[label]['revenue']) for label in daily_labels],
+        },
+    }
+
+    ranking_qs = list(
+        filtered_qs.values('staff_id', 'staff__email', 'staff__username', 'staff__first_name', 'staff__last_name')
+        .annotate(avg_score=Avg('overall_productivity_score'), reports=Count('id'))
+        .order_by('-avg_score', 'staff__email')
+    )
+    top_staff = ranking_qs[:5]
+    lowest_staff = list(reversed(ranking_qs[-5:])) if ranking_qs else []
+    charts['staff_productivity_ranking'] = {
+        'labels': [row['staff__username'] or row['staff__email'] or f"CRM #{row['staff_id']}" for row in ranking_qs[:10]],
+        'values': [float(row['avg_score'] or 0) for row in ranking_qs[:10]],
+    }
+
+    branch_options = [value for value in base_qs.exclude(branch_name='').values_list('branch_name', flat=True).distinct().order_by('branch_name')]
+    staff_options = User.objects.filter(user_type='crm').order_by('username', 'email') if is_crm_daily_reporting_admin(request.user) else User.objects.filter(pk=request.user.pk)
+
+    context = {
+        'filters': filters,
+        'reports_page': page_obj,
+        'branch_options': branch_options,
+        'staff_options': staff_options,
+        'status_choices': CRMDailyReport.STATUS.choices,
+        'is_admin_view': is_crm_daily_reporting_admin(request.user),
+        'cards': {
+            'submitted_today': reports_today_submitted,
+            'pending_reports': status_counts['pending'],
+            'approved_reports': status_counts['approved'],
+            'rejected_reports': status_counts['rejected'],
+            'draft_reports': status_counts['draft'],
+            'customers_contacted': aggregate_data['total_dormant_contacted'] + aggregate_data['total_active_followups'] + aggregate_data['total_vip_contacted'],
+            'calls_made': aggregate_data['total_calls_made'],
+            'calls_received': aggregate_data['total_calls_received'],
+            'whatsapp_conversations': aggregate_data['total_whatsapp'],
+            'emails_sent': aggregate_data['total_emails'],
+            'sms_sent': aggregate_data['total_sms'],
+            'push_notifications_sent': aggregate_data['total_push'],
+            'complaints_received': aggregate_data['total_complaints_received'],
+            'complaints_resolved': aggregate_data['total_complaints_resolved'],
+            'pending_complaints': aggregate_data['total_pending_complaints'],
+            'dormant_customers_contacted': aggregate_data['total_dormant_contacted'],
+            'dormant_customers_reactivated': aggregate_data['total_dormant_reactivated'],
+            'vip_customers_contacted': aggregate_data['total_vip_contacted'],
+            'active_customers_followed_up': aggregate_data['total_active_followups'],
+            'new_registrations_assisted': aggregate_data['total_new_registrations'],
+            'first_time_depositors_assisted': aggregate_data['total_ftd'],
+            'repeat_depositors_assisted': aggregate_data['total_repeat_depositors'],
+            'customers_assisted_to_place_bets': aggregate_data['total_bet_assists'],
+            'estimated_revenue_influenced': aggregate_data['total_estimated_revenue'],
+            'overall_productivity': aggregate_data['avg_productivity'],
+        },
+        'charts_json': json.dumps(charts),
+        'top_staff': top_staff,
+        'lowest_staff': lowest_staff,
+        'create_report_url': reverse('betting:crm_daily_report_create') if request.user.user_type == 'crm' else '',
+        'selected_report_id': (request.GET.get('report_id') or '').strip(),
+        'current_query': request.GET.urlencode(),
+    }
+    return render(request, 'betting/crm_daily_reports_dashboard.html', context)
+
+
+@user_passes_test_403(lambda u: getattr(u, 'is_authenticated', False) and getattr(u, 'user_type', '') == 'crm')
+def crm_daily_report_create(request):
+    return _crm_daily_report_form_view(request)
+
+
+@user_passes_test_403(lambda u: getattr(u, 'is_authenticated', False) and getattr(u, 'user_type', '') == 'crm')
+def crm_daily_report_edit(request, report_id):
+    report = get_object_or_404(CRMDailyReport, pk=report_id, staff=request.user)
+    return _crm_daily_report_form_view(request, report=report)
+
+
+def _crm_daily_report_form_view(request, report=None):
+    posted_rows = None
+    action = (request.POST.get('action') or '').strip().lower()
+    is_autosave = action == 'autosave'
+    if report and not report.is_editable_by_staff:
+        messages.error(request, 'This report can no longer be edited.')
+        return redirect('betting:crm_daily_report_detail', report.id)
+
+    if request.method == 'POST':
+        file_payload = None if is_autosave else request.FILES
+        form = CRMDailyReportForm(request.POST, file_payload, instance=report, actor=request.user)
+        posted_rows = _crm_build_dynamic_rows(request)
+        if form.is_valid():
+            child_rows = posted_rows
+            with db_transaction.atomic():
+                existing_status = report.status if report else ''
+                daily_report = form.save(commit=False)
+                is_new = not bool(daily_report.pk)
+                daily_report.staff = request.user
+                daily_report.created_by = daily_report.created_by or request.user
+                daily_report.updated_by = request.user
+                daily_report.ip_address = get_client_ip(request)
+                daily_report.browser_information = _crm_report_browser_info(request)
+
+                if action == 'submit':
+                    daily_report.status = CRMDailyReport.STATUS.SUBMITTED
+                    daily_report.submitted_at = timezone.now()
+                elif not daily_report.pk:
+                    daily_report.status = CRMDailyReport.STATUS.DRAFT
+                elif daily_report.status == CRMDailyReport.STATUS.RETURNED:
+                    daily_report.status = CRMDailyReport.STATUS.RETURNED
+                else:
+                    daily_report.status = CRMDailyReport.STATUS.DRAFT
+
+                daily_report.save()
+                _sync_crm_daily_report_children(daily_report, child_rows)
+                if not is_autosave:
+                    _attach_files_to_crm_report(daily_report, request, uploaded_by=request.user)
+
+                if action == 'submit' and existing_status in ['', CRMDailyReport.STATUS.DRAFT, CRMDailyReport.STATUS.RETURNED]:
+                    _notify_crm_daily_report_submitted(daily_report)
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='crm_daily_report_submitted',
+                        target_user=daily_report.staff,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+                elif is_new:
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='crm_daily_report_created',
+                        target_user=daily_report.staff,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+                else:
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='crm_daily_report_updated',
+                        target_user=daily_report.staff,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+
+            if is_autosave:
+                return JsonResponse({
+                    'ok': True,
+                    'message': 'Draft autosaved.',
+                    'report_id': daily_report.id,
+                    'detail_url': reverse('betting:crm_daily_report_detail', args=[daily_report.id]),
+                })
+
+            if action == 'submit':
+                messages.success(request, 'CRM daily report submitted successfully.')
+            else:
+                messages.success(request, 'CRM daily report saved as draft.')
+            return redirect('betting:crm_daily_report_detail', daily_report.id)
+
+        if is_autosave:
+            return JsonResponse({'ok': False, 'errors': form.errors}, status=400)
+        messages.error(request, 'Unable to save CRM daily report. Please review the form.')
+    else:
+        form = CRMDailyReportForm(instance=report, actor=request.user)
+
+    report = report or CRMDailyReport(report_date=timezone.localdate(), branch_name='')
+    context = {
+        'form': form,
+        'report': report,
+        'is_editing': bool(getattr(report, 'pk', None)),
+        'complaint_rows': posted_rows['complaints'] if posted_rows is not None else (list(getattr(report, 'complaint_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'campaign_rows': posted_rows['campaigns'] if posted_rows is not None else (list(getattr(report, 'campaign_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'challenge_rows': posted_rows['challenges'] if posted_rows is not None else (list(getattr(report, 'challenge_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'next_day_tasks': posted_rows['next_day_tasks'] if posted_rows is not None else (list(getattr(report, 'next_day_tasks', []).all()) if getattr(report, 'pk', None) else []),
+        'attachments': list(getattr(report, 'attachments', []).all()) if getattr(report, 'pk', None) else [],
+    }
+    return render(request, 'betting/crm_daily_report_form.html', context)
+
+
+@user_passes_test_403(is_crm_daily_reporting_user)
+def crm_daily_report_detail(request, report_id):
+    report = get_object_or_404(_crm_daily_reports_queryset_for_user(request.user), pk=report_id)
+    review_form = CRMAdminReviewForm()
+    context = {
+        'report': report,
+        'review_form': review_form,
+        'is_admin_view': is_crm_daily_reporting_admin(request.user),
+        'can_edit_report': request.user.user_type == 'crm' and report.staff_id == request.user.id and report.is_editable_by_staff,
+    }
+    return render(request, 'betting/crm_daily_report_detail.html', context)
+
+
+@require_POST
+@user_passes_test_403(is_crm_daily_reporting_admin)
+def crm_daily_report_action(request, report_id):
+    report = get_object_or_404(CRMDailyReport.objects.select_related('staff'), pk=report_id)
+    action = (request.POST.get('action') or '').strip().lower()
+
+    if action == 'delete':
+        report_label = f"{report.staff.username or report.staff.email} - {report.report_date}"
+        _log_crm_ops_action(
+            request,
+            module='daily_reporting',
+            action='crm_daily_report_deleted',
+            target_user=report.staff,
+            metadata={'report_id': report.id, 'report_date': report.report_date.isoformat()},
+        )
+        report.delete()
+        messages.success(request, f'CRM daily report deleted: {report_label}.')
+        return redirect('betting:crm_daily_reports_dashboard')
+
+    form = CRMAdminReviewForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, 'Unable to process review action. Please check the form and try again.')
+        return redirect('betting:crm_daily_report_detail', report.id)
+
+    action = form.cleaned_data['action']
+    comment = form.cleaned_data['comment']
+    now = timezone.now()
+    comment_action = 'comment'
+    notification_title = 'CRM Daily Report Comment Added'
+    notification_message = comment or 'An administrator added a comment to your CRM daily report.'
+    audit_action = 'crm_daily_report_comment_added'
+
+    if action == 'approve':
+        report.status = CRMDailyReport.STATUS.APPROVED
+        report.reviewed_at = now
+        report.approved_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'approved_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'approved'
+        notification_title = 'CRM Daily Report Approved'
+        notification_message = comment or f'Your CRM daily report for {report.report_date} has been approved.'
+        audit_action = 'crm_daily_report_approved'
+        messages.success(request, 'CRM daily report approved.')
+    elif action == 'reject':
+        report.status = CRMDailyReport.STATUS.REJECTED
+        report.reviewed_at = now
+        report.rejected_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'rejected_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'rejected'
+        notification_title = 'CRM Daily Report Rejected'
+        notification_message = comment or f'Your CRM daily report for {report.report_date} has been rejected.'
+        audit_action = 'crm_daily_report_rejected'
+        messages.success(request, 'CRM daily report rejected.')
+    elif action == 'return':
+        report.status = CRMDailyReport.STATUS.RETURNED
+        report.reviewed_at = now
+        report.returned_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'returned_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'returned'
+        notification_title = 'CRM Daily Report Returned'
+        notification_message = comment or f'Your CRM daily report for {report.report_date} was returned for correction.'
+        audit_action = 'crm_daily_report_returned'
+        messages.success(request, 'CRM daily report returned for correction.')
+    else:
+        messages.success(request, 'Comment added to CRM daily report.')
+
+    CRMAdminComment.objects.create(
+        report=report,
+        author=request.user,
+        action=comment_action,
+        comment=comment,
+    )
+    _notify_crm_daily_report_staff(report, title=notification_title, message=notification_message)
+    _log_crm_ops_action(
+        request,
+        module='daily_reporting',
+        action=audit_action,
+        target_user=report.staff,
+        metadata={'report_id': report.id, 'status': report.status, 'comment': comment},
+    )
+    return redirect('betting:crm_daily_report_detail', report.id)
+
+
+@user_passes_test_403(is_crm_daily_reporting_user)
+def crm_daily_report_export(request):
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    filtered_qs, filters = _filter_crm_daily_reports_queryset(request, _crm_daily_reports_queryset_for_user(request.user))
+    rows = _crm_daily_report_export_rows(filtered_qs)
+    if fmt == 'print':
+        return render(request, 'betting/crm_daily_reports_print.html', {'rows': rows, 'filters': filters})
+    return _export_simple_rows(rows=rows, title='crm_daily_reports', fmt=fmt)
+
+
+def is_retail_daily_reporting_user(user):
+    return bool(
+        getattr(user, 'is_authenticated', False)
+        and (user.is_superuser or getattr(user, 'user_type', '') in ['retail_manager', 'admin'])
+    )
+
+
+def is_retail_daily_reporting_admin(user):
+    return bool(
+        getattr(user, 'is_authenticated', False)
+        and (user.is_superuser or getattr(user, 'user_type', '') == 'admin')
+    )
+
+
+def _retail_daily_reports_queryset_for_user(user):
+    qs = RetailDailyReport.objects.select_related(
+        'retail_manager', 'created_by', 'updated_by', 'reviewed_by'
+    ).prefetch_related(
+        'support_rows',
+        'campaign_rows',
+        'challenge_rows',
+        'next_day_tasks',
+        'attachments',
+        Prefetch(
+            'admin_comments',
+            queryset=RetailAdminComment.objects.select_related('author').order_by('-created_at'),
+        ),
+    )
+    if is_retail_daily_reporting_admin(user):
+        return qs
+    return qs.filter(retail_manager=user)
+
+
+def _retail_report_notification_link(report):
+    return reverse('betting:retail_daily_report_detail', args=[report.id])
+
+
+def _notify_retail_daily_report_submitted(report):
+    message = f"{report.retail_manager.get_full_name() or report.retail_manager.email} submitted Retail report for {report.report_date}."
+    for admin_user in _crm_reporting_admin_queryset().iterator():
+        create_notification(
+            recipient=admin_user,
+            notification_type='SYSTEM_ANNOUNCEMENT',
+            title='Retail Daily Report Submitted',
+            message=message,
+            data={'url': _retail_report_notification_link(report), 'report_id': report.id},
+        )
+
+
+def _notify_retail_daily_report_manager(report, *, title, message):
+    create_notification(
+        recipient=report.retail_manager,
+        notification_type='SYSTEM_ANNOUNCEMENT',
+        title=title,
+        message=message,
+        data={'url': _retail_report_notification_link(report), 'report_id': report.id},
+    )
+
+
+def _retail_post_list(request, name):
+    values = request.POST.getlist(name)
+    if not values:
+        values = request.POST.getlist(f'{name}[]')
+    return values
+
+
+def _build_retail_dynamic_rows(request):
+    support_rows = []
+    names = _retail_post_list(request, 'support_shop_or_agent')
+    issues = _retail_post_list(request, 'support_issue')
+    escalated = _retail_post_list(request, 'support_escalated_to')
+    statuses = _retail_post_list(request, 'support_status')
+    remarks = _retail_post_list(request, 'support_remarks')
+    for idx in range(max(len(names), len(issues), len(escalated), len(statuses), len(remarks))):
+        row = {
+            'shop_or_agent': (names[idx] if idx < len(names) else '').strip(),
+            'issue': (issues[idx] if idx < len(issues) else '').strip(),
+            'escalated_to': (escalated[idx] if idx < len(escalated) else '').strip(),
+            'status': (statuses[idx] if idx < len(statuses) else '').strip() or 'Open',
+            'remarks': (remarks[idx] if idx < len(remarks) else '').strip(),
+        }
+        if any(row.values()):
+            support_rows.append(row)
+
+    campaigns = []
+    campaign_names = _retail_post_list(request, 'campaign_name')
+    campaign_types = _retail_post_list(request, 'campaign_type')
+    campaign_channels = _retail_post_list(request, 'campaign_channel')
+    campaign_targets = _retail_post_list(request, 'campaign_target_count')
+    campaign_responses = _retail_post_list(request, 'campaign_responses')
+    campaign_conversions = _retail_post_list(request, 'campaign_conversions')
+    campaign_revenue = _retail_post_list(request, 'campaign_revenue_generated')
+    campaign_remarks = _retail_post_list(request, 'campaign_remarks')
+    for idx in range(max(len(campaign_names), len(campaign_types), len(campaign_channels), len(campaign_targets), len(campaign_responses), len(campaign_conversions), len(campaign_revenue), len(campaign_remarks))):
+        row = {
+            'campaign_name': (campaign_names[idx] if idx < len(campaign_names) else '').strip(),
+            'campaign_type': (campaign_types[idx] if idx < len(campaign_types) else '').strip(),
+            'channel': (campaign_channels[idx] if idx < len(campaign_channels) else '').strip() or 'sms',
+            'target_count': _crm_int_or_zero(campaign_targets[idx] if idx < len(campaign_targets) else 0),
+            'responses': _crm_int_or_zero(campaign_responses[idx] if idx < len(campaign_responses) else 0),
+            'conversions': _crm_int_or_zero(campaign_conversions[idx] if idx < len(campaign_conversions) else 0),
+            'revenue_generated': _crm_decimal_or_zero(campaign_revenue[idx] if idx < len(campaign_revenue) else 0),
+            'remarks': (campaign_remarks[idx] if idx < len(campaign_remarks) else '').strip(),
+        }
+        if row['campaign_name'] or row['campaign_type'] or row['target_count'] or row['responses'] or row['conversions'] or row['revenue_generated']:
+            campaigns.append(row)
+
+    challenges = []
+    challenge_titles = _retail_post_list(request, 'challenge_title')
+    challenge_impacts = _retail_post_list(request, 'challenge_impact')
+    challenge_actions = _retail_post_list(request, 'challenge_action_taken')
+    challenge_statuses = _retail_post_list(request, 'challenge_status')
+    for idx in range(max(len(challenge_titles), len(challenge_impacts), len(challenge_actions), len(challenge_statuses))):
+        row = {
+            'challenge': (challenge_titles[idx] if idx < len(challenge_titles) else '').strip(),
+            'impact': (challenge_impacts[idx] if idx < len(challenge_impacts) else '').strip(),
+            'action_taken': (challenge_actions[idx] if idx < len(challenge_actions) else '').strip(),
+            'current_status': (challenge_statuses[idx] if idx < len(challenge_statuses) else '').strip(),
+        }
+        if any(row.values()):
+            challenges.append(row)
+
+    next_day_tasks = []
+    task_titles = _retail_post_list(request, 'next_day_task')
+    task_priorities = _retail_post_list(request, 'next_day_priority')
+    task_outcomes = _retail_post_list(request, 'next_day_outcome')
+    task_deadlines = _retail_post_list(request, 'next_day_deadline')
+    for idx in range(max(len(task_titles), len(task_priorities), len(task_outcomes), len(task_deadlines))):
+        row = {
+            'task': (task_titles[idx] if idx < len(task_titles) else '').strip(),
+            'priority': (task_priorities[idx] if idx < len(task_priorities) else '').strip() or 'medium',
+            'expected_outcome': (task_outcomes[idx] if idx < len(task_outcomes) else '').strip(),
+            'deadline': _crm_parse_deadline(task_deadlines[idx] if idx < len(task_deadlines) else ''),
+        }
+        if row['task'] or row['expected_outcome'] or row['deadline']:
+            next_day_tasks.append(row)
+
+    return {
+        'support_rows': support_rows,
+        'campaigns': campaigns,
+        'challenges': challenges,
+        'next_day_tasks': next_day_tasks,
+    }
+
+
+def _sync_retail_daily_report_children(report, rows):
+    report.support_rows.all().delete()
+    report.campaign_rows.all().delete()
+    report.challenge_rows.all().delete()
+    report.next_day_tasks.all().delete()
+
+    support_objs = [RetailSupportActivity(report=report, **row) for row in rows['support_rows']]
+    campaign_objs = [RetailCampaignPerformance(report=report, **row) for row in rows['campaigns']]
+    challenge_objs = [RetailChallenge(report=report, **row) for row in rows['challenges']]
+    task_objs = [RetailNextDayTask(report=report, **row) for row in rows['next_day_tasks']]
+
+    if support_objs:
+        RetailSupportActivity.objects.bulk_create(support_objs)
+    if campaign_objs:
+        RetailCampaignPerformance.objects.bulk_create(campaign_objs)
+    if challenge_objs:
+        RetailChallenge.objects.bulk_create(challenge_objs)
+    if task_objs:
+        RetailNextDayTask.objects.bulk_create(task_objs)
+
+    report.recalculate_kpis(campaign_rows=campaign_objs)
+    report.save(
+        update_fields=[
+            'support_resolution_rate',
+            'reactivation_rate',
+            'field_visit_completion_rate',
+            'training_completion_rate',
+            'overall_productivity_score',
+            'updated_at',
+            'last_modified_at',
+        ]
+    )
+
+
+def _attach_files_to_retail_report(report, request, *, uploaded_by=None):
+    for uploaded_file in request.FILES.getlist('attachments'):
+        RetailReportAttachment.objects.create(
+            report=report,
+            file=uploaded_file,
+            uploaded_by=uploaded_by,
+            original_name=getattr(uploaded_file, 'name', '') or '',
+            file_size=getattr(uploaded_file, 'size', 0) or 0,
+            mime_type=getattr(uploaded_file, 'content_type', '') or '',
+        )
+
+
+def _filter_retail_daily_reports_queryset(request, base_qs):
+    preset, start_date, end_date = _crm_report_date_bounds(request)
+    status = (request.GET.get('status') or '').strip()
+    branch = (request.GET.get('branch') or '').strip()
+    staff_id = (request.GET.get('manager') or '').strip()
+    q = (request.GET.get('q') or '').strip()
+
+    qs = base_qs.filter(report_date__gte=start_date, report_date__lte=end_date)
+    if status:
+        qs = qs.filter(status=status)
+    if branch:
+        qs = qs.filter(branch_name__iexact=branch)
+    if staff_id.isdigit() and is_retail_daily_reporting_admin(request.user):
+        qs = qs.filter(retail_manager_id=int(staff_id))
+    if q:
+        qs = qs.filter(
+            Q(retail_manager__username__icontains=q)
+            | Q(retail_manager__email__icontains=q)
+            | Q(retail_manager__first_name__icontains=q)
+            | Q(retail_manager__last_name__icontains=q)
+            | Q(branch_name__icontains=q)
+            | Q(general_notes__icontains=q)
+        )
+    return qs.order_by('-report_date', '-updated_at'), {
+        'range': preset,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'status': status,
+        'branch': branch,
+        'manager': staff_id,
+        'q': q,
+    }
+
+
+def _retail_daily_report_export_rows(queryset):
+    rows = []
+    for report in queryset[:5000]:
+        rows.append({
+            'report_date': report.report_date.isoformat(),
+            'retail_manager': report.retail_manager.username or report.retail_manager.email or '',
+            'branch': report.branch_name,
+            'status': report.get_status_display(),
+            'shops_visited': report.shops_visited,
+            'agents_supported': report.agents_supported,
+            'cashiers_supported': report.cashiers_supported,
+            'support_calls_made': report.support_calls_made,
+            'support_calls_received': report.support_calls_received,
+            'pending_withdrawals_reviewed': report.pending_withdrawals_reviewed,
+            'withdrawals_resolved': report.withdrawals_resolved,
+            'dormant_accounts_contacted': report.dormant_accounts_contacted,
+            'dormant_accounts_reactivated': report.dormant_accounts_reactivated,
+            'new_agents_onboarded': report.new_agents_onboarded,
+            'training_sessions_conducted': report.training_sessions_conducted,
+            'total_stake_influenced': str(report.total_stake_influenced or Decimal('0.00')),
+            'estimated_revenue_influenced': str(report.estimated_revenue_influenced or Decimal('0.00')),
+            'overall_productivity_score': str(report.overall_productivity_score or Decimal('0.00')),
+            'submitted_at': report.submitted_at.isoformat(sep=' ', timespec='seconds') if report.submitted_at else '',
+            'reviewed_at': report.reviewed_at.isoformat(sep=' ', timespec='seconds') if report.reviewed_at else '',
+        })
+    return rows
+
+
+@user_passes_test_403(is_retail_daily_reporting_user)
+def retail_daily_reports_dashboard(request):
+    base_qs = _retail_daily_reports_queryset_for_user(request.user)
+    filtered_qs, filters = _filter_retail_daily_reports_queryset(request, base_qs)
+    page_obj = Paginator(filtered_qs, 20).get_page(request.GET.get('page') or 1)
+
+    aggregate_data = filtered_qs.aggregate(
+        avg_productivity=Coalesce(Avg('overall_productivity_score'), Value(0), output_field=DecimalField(max_digits=6, decimal_places=2)),
+        total_shops_visited=Coalesce(Sum('shops_visited'), Value(0)),
+        total_agents_supported=Coalesce(Sum('agents_supported'), Value(0)),
+        total_cashiers_supported=Coalesce(Sum('cashiers_supported'), Value(0)),
+        total_support_calls_made=Coalesce(Sum('support_calls_made'), Value(0)),
+        total_support_calls_received=Coalesce(Sum('support_calls_received'), Value(0)),
+        total_withdrawals_reviewed=Coalesce(Sum('pending_withdrawals_reviewed'), Value(0)),
+        total_withdrawals_resolved=Coalesce(Sum('withdrawals_resolved'), Value(0)),
+        total_dormant_contacted=Coalesce(Sum('dormant_accounts_contacted'), Value(0)),
+        total_dormant_reactivated=Coalesce(Sum('dormant_accounts_reactivated'), Value(0)),
+        total_trainings=Coalesce(Sum('training_sessions_conducted'), Value(0)),
+        total_agents_onboarded=Coalesce(Sum('new_agents_onboarded'), Value(0)),
+        total_issues_identified=Coalesce(Sum('shop_issues_identified'), Value(0)),
+        total_issues_resolved=Coalesce(Sum('shop_issues_resolved'), Value(0)),
+        total_stake=Coalesce(Sum('total_stake_influenced'), Value(0), output_field=DecimalField(max_digits=14, decimal_places=2)),
+        total_revenue=Coalesce(Sum('estimated_revenue_influenced'), Value(0), output_field=DecimalField(max_digits=14, decimal_places=2)),
+    )
+    reports_today_submitted = base_qs.filter(submitted_at__date=timezone.localdate()).count()
+    status_counts = {
+        'draft': filtered_qs.filter(status=RetailDailyReport.STATUS.DRAFT).count(),
+        'pending': filtered_qs.filter(status=RetailDailyReport.STATUS.SUBMITTED).count(),
+        'approved': filtered_qs.filter(status=RetailDailyReport.STATUS.APPROVED).count(),
+        'rejected': filtered_qs.filter(status=RetailDailyReport.STATUS.REJECTED).count(),
+        'returned': filtered_qs.filter(status=RetailDailyReport.STATUS.RETURNED).count(),
+    }
+
+    report_list = list(filtered_qs.prefetch_related('campaign_rows'))
+    daily_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0, 'shops': 0, 'agents': 0, 'cashiers': 0, 'resolved': 0, 'reviewed': 0, 'reactivated': 0, 'trainings': 0, 'revenue': Decimal('0.00')})
+    weekly_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0})
+    monthly_map = defaultdict(lambda: {'score_sum': Decimal('0.00'), 'count': 0})
+    channel_map = defaultdict(lambda: {'conversions': 0, 'revenue': Decimal('0.00')})
+    for report in report_list:
+        d_key = report.report_date.isoformat()
+        daily_map[d_key]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        daily_map[d_key]['count'] += 1
+        daily_map[d_key]['shops'] += report.shops_visited
+        daily_map[d_key]['agents'] += report.agents_supported
+        daily_map[d_key]['cashiers'] += report.cashiers_supported
+        daily_map[d_key]['resolved'] += report.withdrawals_resolved + report.agent_complaints_resolved + report.shop_issues_resolved
+        daily_map[d_key]['reviewed'] += report.pending_withdrawals_reviewed + report.agent_complaints_received + report.shop_issues_identified
+        daily_map[d_key]['reactivated'] += report.dormant_accounts_reactivated + report.inactive_shops_reactivated
+        daily_map[d_key]['trainings'] += report.training_sessions_conducted
+        daily_map[d_key]['revenue'] += report.estimated_revenue_influenced or Decimal('0.00')
+
+        week_start = report.report_date - timedelta(days=report.report_date.weekday())
+        weekly_map[week_start.isoformat()]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        weekly_map[week_start.isoformat()]['count'] += 1
+        month_key = report.report_date.strftime('%Y-%m')
+        monthly_map[month_key]['score_sum'] += report.overall_productivity_score or Decimal('0.00')
+        monthly_map[month_key]['count'] += 1
+
+        for campaign in report.campaign_rows.all():
+            channel_map[campaign.get_channel_display()]['conversions'] += campaign.conversions
+            channel_map[campaign.get_channel_display()]['revenue'] += campaign.revenue_generated or Decimal('0.00')
+
+    def _avg_payload(source):
+        labels = sorted(source.keys())
+        return {
+            'labels': labels,
+            'values': [
+                float((source[label]['score_sum'] / Decimal(str(source[label]['count'] or 1))).quantize(Decimal('0.01')))
+                for label in labels
+            ],
+        }
+
+    daily_labels = sorted(daily_map.keys())
+    charts = {
+        'daily_productivity': _avg_payload(daily_map),
+        'weekly_productivity': _avg_payload(weekly_map),
+        'monthly_productivity': _avg_payload(monthly_map),
+        'field_activity': {
+            'labels': daily_labels,
+            'shops': [daily_map[label]['shops'] for label in daily_labels],
+            'agents': [daily_map[label]['agents'] for label in daily_labels],
+            'cashiers': [daily_map[label]['cashiers'] for label in daily_labels],
+        },
+        'resolution_trend': {
+            'labels': daily_labels,
+            'reviewed': [daily_map[label]['reviewed'] for label in daily_labels],
+            'resolved': [daily_map[label]['resolved'] for label in daily_labels],
+        },
+        'reactivation_trend': {
+            'labels': daily_labels,
+            'reactivated': [daily_map[label]['reactivated'] for label in daily_labels],
+        },
+        'training_trend': {
+            'labels': daily_labels,
+            'trainings': [daily_map[label]['trainings'] for label in daily_labels],
+        },
+        'campaign_performance': {
+            'labels': list(channel_map.keys()),
+            'conversions': [channel_map[label]['conversions'] for label in channel_map.keys()],
+            'revenue': [float(channel_map[label]['revenue']) for label in channel_map.keys()],
+        },
+        'estimated_revenue': {
+            'labels': daily_labels,
+            'values': [float(daily_map[label]['revenue']) for label in daily_labels],
+        },
+    }
+
+    ranking_qs = list(
+        filtered_qs.values('retail_manager_id', 'retail_manager__email', 'retail_manager__username')
+        .annotate(avg_score=Avg('overall_productivity_score'), reports=Count('id'))
+        .order_by('-avg_score', 'retail_manager__email')
+    )
+    top_staff = ranking_qs[:5]
+    lowest_staff = list(reversed(ranking_qs[-5:])) if ranking_qs else []
+    charts['staff_productivity_ranking'] = {
+        'labels': [row['retail_manager__username'] or row['retail_manager__email'] or f"Retail #{row['retail_manager_id']}" for row in ranking_qs[:10]],
+        'values': [float(row['avg_score'] or 0) for row in ranking_qs[:10]],
+    }
+
+    branch_options = [value for value in base_qs.exclude(branch_name='').values_list('branch_name', flat=True).distinct().order_by('branch_name')]
+    manager_options = User.objects.filter(user_type='retail_manager').order_by('username', 'email') if is_retail_daily_reporting_admin(request.user) else User.objects.filter(pk=request.user.pk)
+    context = {
+        'filters': filters,
+        'reports_page': page_obj,
+        'branch_options': branch_options,
+        'manager_options': manager_options,
+        'status_choices': RetailDailyReport.STATUS.choices,
+        'is_admin_view': is_retail_daily_reporting_admin(request.user),
+        'cards': {
+            'submitted_today': reports_today_submitted,
+            'pending_reports': status_counts['pending'],
+            'approved_reports': status_counts['approved'],
+            'rejected_reports': status_counts['rejected'],
+            'draft_reports': status_counts['draft'],
+            'shops_visited': aggregate_data['total_shops_visited'],
+            'agents_supported': aggregate_data['total_agents_supported'],
+            'cashiers_supported': aggregate_data['total_cashiers_supported'],
+            'support_calls_made': aggregate_data['total_support_calls_made'],
+            'support_calls_received': aggregate_data['total_support_calls_received'],
+            'withdrawals_reviewed': aggregate_data['total_withdrawals_reviewed'],
+            'withdrawals_resolved': aggregate_data['total_withdrawals_resolved'],
+            'dormant_contacted': aggregate_data['total_dormant_contacted'],
+            'dormant_reactivated': aggregate_data['total_dormant_reactivated'],
+            'training_sessions': aggregate_data['total_trainings'],
+            'agents_onboarded': aggregate_data['total_agents_onboarded'],
+            'issues_identified': aggregate_data['total_issues_identified'],
+            'issues_resolved': aggregate_data['total_issues_resolved'],
+            'total_stake_influenced': aggregate_data['total_stake'],
+            'estimated_revenue_influenced': aggregate_data['total_revenue'],
+            'overall_productivity': aggregate_data['avg_productivity'],
+        },
+        'charts_json': json.dumps(charts),
+        'top_staff': top_staff,
+        'lowest_staff': lowest_staff,
+        'create_report_url': reverse('betting:retail_daily_report_create') if request.user.user_type == 'retail_manager' else '',
+        'current_query': request.GET.urlencode(),
+    }
+    return render(request, 'betting/retail_daily_reports_dashboard.html', context)
+
+
+@user_passes_test_403(lambda u: getattr(u, 'is_authenticated', False) and getattr(u, 'user_type', '') == 'retail_manager')
+def retail_daily_report_create(request):
+    return _retail_daily_report_form_view(request)
+
+
+@user_passes_test_403(lambda u: getattr(u, 'is_authenticated', False) and getattr(u, 'user_type', '') == 'retail_manager')
+def retail_daily_report_edit(request, report_id):
+    report = get_object_or_404(RetailDailyReport, pk=report_id, retail_manager=request.user)
+    return _retail_daily_report_form_view(request, report=report)
+
+
+def _retail_daily_report_form_view(request, report=None):
+    posted_rows = None
+    action = (request.POST.get('action') or '').strip().lower()
+    is_autosave = action == 'autosave'
+    if report and not report.is_editable_by_manager:
+        messages.error(request, 'This report can no longer be edited.')
+        return redirect('betting:retail_daily_report_detail', report.id)
+
+    if request.method == 'POST':
+        file_payload = None if is_autosave else request.FILES
+        form = RetailDailyReportForm(request.POST, file_payload, instance=report, actor=request.user)
+        posted_rows = _build_retail_dynamic_rows(request)
+        if form.is_valid():
+            child_rows = posted_rows
+            with db_transaction.atomic():
+                existing_status = report.status if report else ''
+                daily_report = form.save(commit=False)
+                is_new = not bool(daily_report.pk)
+                daily_report.retail_manager = request.user
+                daily_report.created_by = daily_report.created_by or request.user
+                daily_report.updated_by = request.user
+                daily_report.ip_address = get_client_ip(request)
+                daily_report.browser_information = _crm_report_browser_info(request)
+
+                if action == 'submit':
+                    daily_report.status = RetailDailyReport.STATUS.SUBMITTED
+                    daily_report.submitted_at = timezone.now()
+                elif not daily_report.pk:
+                    daily_report.status = RetailDailyReport.STATUS.DRAFT
+                elif daily_report.status == RetailDailyReport.STATUS.RETURNED:
+                    daily_report.status = RetailDailyReport.STATUS.RETURNED
+                else:
+                    daily_report.status = RetailDailyReport.STATUS.DRAFT
+
+                daily_report.save()
+                _sync_retail_daily_report_children(daily_report, child_rows)
+                if not is_autosave:
+                    _attach_files_to_retail_report(daily_report, request, uploaded_by=request.user)
+
+                if action == 'submit' and existing_status in ['', RetailDailyReport.STATUS.DRAFT, RetailDailyReport.STATUS.RETURNED]:
+                    _notify_retail_daily_report_submitted(daily_report)
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='retail_daily_report_submitted',
+                        target_user=daily_report.retail_manager,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+                elif is_new:
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='retail_daily_report_created',
+                        target_user=daily_report.retail_manager,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+                else:
+                    _log_crm_ops_action(
+                        request,
+                        module='daily_reporting',
+                        action='retail_daily_report_updated',
+                        target_user=daily_report.retail_manager,
+                        metadata={'report_id': daily_report.id, 'report_date': daily_report.report_date.isoformat()},
+                    )
+
+            if is_autosave:
+                return JsonResponse({
+                    'ok': True,
+                    'message': 'Draft autosaved.',
+                    'report_id': daily_report.id,
+                    'detail_url': reverse('betting:retail_daily_report_detail', args=[daily_report.id]),
+                })
+
+            if action == 'submit':
+                messages.success(request, 'Retail daily report submitted successfully.')
+            else:
+                messages.success(request, 'Retail daily report saved as draft.')
+            return redirect('betting:retail_daily_report_detail', daily_report.id)
+
+        if is_autosave:
+            return JsonResponse({'ok': False, 'errors': form.errors}, status=400)
+        messages.error(request, 'Unable to save retail daily report. Please review the form.')
+    else:
+        form = RetailDailyReportForm(instance=report, actor=request.user)
+
+    report = report or RetailDailyReport(report_date=timezone.localdate(), branch_name='')
+    context = {
+        'form': form,
+        'report': report,
+        'is_editing': bool(getattr(report, 'pk', None)),
+        'support_rows': posted_rows['support_rows'] if posted_rows is not None else (list(getattr(report, 'support_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'campaign_rows': posted_rows['campaigns'] if posted_rows is not None else (list(getattr(report, 'campaign_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'challenge_rows': posted_rows['challenges'] if posted_rows is not None else (list(getattr(report, 'challenge_rows', []).all()) if getattr(report, 'pk', None) else []),
+        'next_day_tasks': posted_rows['next_day_tasks'] if posted_rows is not None else (list(getattr(report, 'next_day_tasks', []).all()) if getattr(report, 'pk', None) else []),
+        'attachments': list(getattr(report, 'attachments', []).all()) if getattr(report, 'pk', None) else [],
+    }
+    return render(request, 'betting/retail_daily_report_form.html', context)
+
+
+@user_passes_test_403(is_retail_daily_reporting_user)
+def retail_daily_report_detail(request, report_id):
+    report = get_object_or_404(_retail_daily_reports_queryset_for_user(request.user), pk=report_id)
+    review_form = RetailAdminReviewForm()
+    context = {
+        'report': report,
+        'review_form': review_form,
+        'is_admin_view': is_retail_daily_reporting_admin(request.user),
+        'can_edit_report': request.user.user_type == 'retail_manager' and report.retail_manager_id == request.user.id and report.is_editable_by_manager,
+    }
+    return render(request, 'betting/retail_daily_report_detail.html', context)
+
+
+@require_POST
+@user_passes_test_403(is_retail_daily_reporting_admin)
+def retail_daily_report_action(request, report_id):
+    report = get_object_or_404(RetailDailyReport.objects.select_related('retail_manager'), pk=report_id)
+    action = (request.POST.get('action') or '').strip().lower()
+
+    if action == 'delete':
+        report_label = f"{report.retail_manager.username or report.retail_manager.email} - {report.report_date}"
+        _log_crm_ops_action(
+            request,
+            module='daily_reporting',
+            action='retail_daily_report_deleted',
+            target_user=report.retail_manager,
+            metadata={'report_id': report.id, 'report_date': report.report_date.isoformat()},
+        )
+        report.delete()
+        messages.success(request, f'Retail daily report deleted: {report_label}.')
+        return redirect('betting:retail_daily_reports_dashboard')
+
+    form = RetailAdminReviewForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, 'Unable to process review action. Please check the form and try again.')
+        return redirect('betting:retail_daily_report_detail', report.id)
+
+    action = form.cleaned_data['action']
+    comment = form.cleaned_data['comment']
+    now = timezone.now()
+    comment_action = 'comment'
+    notification_title = 'Retail Daily Report Comment Added'
+    notification_message = comment or 'An administrator added a comment to your retail daily report.'
+    audit_action = 'retail_daily_report_comment_added'
+
+    if action == 'approve':
+        report.status = RetailDailyReport.STATUS.APPROVED
+        report.reviewed_at = now
+        report.approved_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'approved_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'approved'
+        notification_title = 'Retail Daily Report Approved'
+        notification_message = comment or f'Your retail daily report for {report.report_date} has been approved.'
+        audit_action = 'retail_daily_report_approved'
+        messages.success(request, 'Retail daily report approved.')
+    elif action == 'reject':
+        report.status = RetailDailyReport.STATUS.REJECTED
+        report.reviewed_at = now
+        report.rejected_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'rejected_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'rejected'
+        notification_title = 'Retail Daily Report Rejected'
+        notification_message = comment or f'Your retail daily report for {report.report_date} has been rejected.'
+        audit_action = 'retail_daily_report_rejected'
+        messages.success(request, 'Retail daily report rejected.')
+    elif action == 'return':
+        report.status = RetailDailyReport.STATUS.RETURNED
+        report.reviewed_at = now
+        report.returned_at = now
+        report.reviewed_by = request.user
+        report.updated_by = request.user
+        report.save(update_fields=['status', 'reviewed_at', 'returned_at', 'reviewed_by', 'updated_by', 'updated_at', 'last_modified_at'])
+        comment_action = 'returned'
+        notification_title = 'Retail Daily Report Returned'
+        notification_message = comment or f'Your retail daily report for {report.report_date} was returned for correction.'
+        audit_action = 'retail_daily_report_returned'
+        messages.success(request, 'Retail daily report returned for correction.')
+    else:
+        messages.success(request, 'Comment added to retail daily report.')
+
+    RetailAdminComment.objects.create(
+        report=report,
+        author=request.user,
+        action=comment_action,
+        comment=comment,
+    )
+    _notify_retail_daily_report_manager(report, title=notification_title, message=notification_message)
+    _log_crm_ops_action(
+        request,
+        module='daily_reporting',
+        action=audit_action,
+        target_user=report.retail_manager,
+        metadata={'report_id': report.id, 'status': report.status, 'comment': comment},
+    )
+    return redirect('betting:retail_daily_report_detail', report.id)
+
+
+@user_passes_test_403(is_retail_daily_reporting_user)
+def retail_daily_report_export(request):
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    filtered_qs, filters = _filter_retail_daily_reports_queryset(request, _retail_daily_reports_queryset_for_user(request.user))
+    rows = _retail_daily_report_export_rows(filtered_qs)
+    if fmt == 'print':
+        return render(request, 'betting/retail_daily_reports_print.html', {'rows': rows, 'filters': filters})
+    return _export_simple_rows(rows=rows, title='retail_daily_reports', fmt=fmt)
 
 
 @user_passes_test_403(is_retail_manager)

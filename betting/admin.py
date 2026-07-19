@@ -3,7 +3,7 @@ import os
 import sys
 from django import forms
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField
+from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, OuterRef, Subquery
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.db import transaction as db_transaction
@@ -1790,6 +1790,7 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         'short_id',
         'user',
         'amount',
+        'current_won_amount_display',
         'bank_name',
         'account_number',
         'account_name',
@@ -1826,7 +1827,44 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.filter(status='pending').select_related('user')
+        won_amount_subquery = (
+            BetTicket.objects.filter(
+                user_id=OuterRef('user_id'),
+                status='won',
+                pk__in=Selection.objects.filter(
+                    betting_period__is_active=True,
+                ).values('bet_ticket_id'),
+            )
+            .order_by()
+            .values('user')
+            .annotate(
+                total=Coalesce(
+                    Sum('max_winning'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
+        return (
+            qs.filter(status='pending')
+            .select_related('user')
+            .annotate(
+                current_won_amount=Coalesce(
+                    Subquery(
+                        won_amount_subquery,
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    ),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+        )
+
+    def current_won_amount_display(self, obj):
+        return getattr(obj, 'current_won_amount', Decimal('0.00')) or Decimal('0.00')
+    current_won_amount_display.short_description = "Current Won Amount"
+    current_won_amount_display.admin_order_field = 'current_won_amount'
 
     def _is_reopen_insufficient_funds_error(self, exc):
         return str(exc) == "Insufficient funds to reopen withdrawal request."

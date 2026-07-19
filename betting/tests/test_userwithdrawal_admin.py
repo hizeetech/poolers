@@ -5,6 +5,7 @@ from django.contrib.admin.sites import AdminSite
 from django.test import RequestFactory
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from betting.admin import (
     ProcessedWithdrawalAdmin,
@@ -12,7 +13,7 @@ from betting.admin import (
     UserWithdrawalAdminForm,
     betting_admin_site,
 )
-from betting.models import ProcessedWithdrawal, User, UserWithdrawal, Wallet
+from betting.models import BetTicket, BettingPeriod, ProcessedWithdrawal, Selection, User, UserWithdrawal, Wallet
 
 
 class UserWithdrawalAdminTests(TestCase):
@@ -120,6 +121,124 @@ class UserWithdrawalAdminTests(TestCase):
                 "account_name",
             ),
         )
+
+    def test_userwithdrawal_admin_list_display_includes_current_won_amount_beside_amount(self):
+        self.assertEqual(
+            self.admin.list_display,
+            (
+                "short_id",
+                "user",
+                "amount",
+                "current_won_amount_display",
+                "bank_name",
+                "account_number",
+                "account_name",
+                "status",
+                "request_time",
+                "email_request_admin_sent_at",
+                "email_request_user_sent_at",
+                "email_approved_admin_sent_at",
+                "email_approved_user_sent_at",
+                "email_completed_admin_sent_at",
+                "email_completed_user_sent_at",
+            ),
+        )
+
+    def test_userwithdrawal_admin_queryset_annotates_current_won_amount_from_active_period_only(self):
+        withdrawal = self._create_withdrawal(status="pending")
+        today = timezone.localdate()
+        active_period = BettingPeriod.objects.create(
+            name="Current Withdrawal Period",
+            start_date=today,
+            end_date=today,
+            is_active=True,
+        )
+        inactive_period = BettingPeriod.objects.create(
+            name="Old Withdrawal Period",
+            start_date=today,
+            end_date=today,
+            is_active=False,
+        )
+        active_won_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("6.00"),
+            potential_winning=Decimal("600.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("600.00"),
+            status="won",
+            bet_type="single",
+        )
+        second_active_won_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("50.00"),
+            total_odd=Decimal("4.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("200.00"),
+            status="won",
+            bet_type="single",
+        )
+        inactive_won_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("80.00"),
+            total_odd=Decimal("5.00"),
+            potential_winning=Decimal("400.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("400.00"),
+            status="won",
+            bet_type="single",
+        )
+        pending_active_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("40.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("80.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("80.00"),
+            status="pending",
+            bet_type="single",
+        )
+        Selection.objects.create(
+            bet_ticket=active_won_ticket,
+            betting_period=active_period,
+            fixture_home_team="Team A",
+            fixture_away_team="Team B",
+            bet_type="home_win",
+            odd_selected=Decimal("6.00"),
+        )
+        Selection.objects.create(
+            bet_ticket=second_active_won_ticket,
+            betting_period=active_period,
+            fixture_home_team="Team C",
+            fixture_away_team="Team D",
+            bet_type="away_win",
+            odd_selected=Decimal("4.00"),
+        )
+        Selection.objects.create(
+            bet_ticket=inactive_won_ticket,
+            betting_period=inactive_period,
+            fixture_home_team="Team E",
+            fixture_away_team="Team F",
+            bet_type="draw",
+            odd_selected=Decimal("5.00"),
+        )
+        Selection.objects.create(
+            bet_ticket=pending_active_ticket,
+            betting_period=active_period,
+            fixture_home_team="Team G",
+            fixture_away_team="Team H",
+            bet_type="home_win",
+            odd_selected=Decimal("2.00"),
+        )
+
+        request = self.factory.get("/admin/betting/userwithdrawal/")
+        request.user = self.admin_user
+
+        annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
+
+        self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("800.00"))
+        self.assertEqual(self.admin.current_won_amount_display(annotated_withdrawal), Decimal("800.00"))
 
     def test_userwithdrawal_admin_form_blocks_reopen_with_insufficient_funds(self):
         Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))

@@ -1855,21 +1855,20 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
                 )
             )
 
-        current_period_ticket_ids = Selection.objects.filter(
-            Q(betting_period=current_period)
-            | Q(betting_period__isnull=True, fixture__betting_period=current_period)
-        ).values('bet_ticket_id')
         won_amount_subquery = (
-            BetTicket.objects.filter(
+            Transaction.objects.filter(
                 user_id=OuterRef('user_id'),
-                status='won',
-                pk__in=current_period_ticket_ids,
+                transaction_type='bet_payout',
+                status='completed',
+                is_successful=True,
+                timestamp__date__gte=current_period.start_date,
+                timestamp__date__lte=current_period.end_date,
             )
             .order_by()
             .values('user')
             .annotate(
                 total=Coalesce(
-                    Sum('max_winning'),
+                    Sum('amount'),
                     Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )

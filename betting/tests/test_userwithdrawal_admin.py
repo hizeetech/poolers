@@ -13,7 +13,7 @@ from betting.admin import (
     UserWithdrawalAdminForm,
     betting_admin_site,
 )
-from betting.models import BetTicket, BettingPeriod, Fixture, ProcessedWithdrawal, Selection, User, UserWithdrawal, Wallet
+from betting.models import BettingPeriod, ProcessedWithdrawal, Transaction, User, UserWithdrawal, Wallet
 
 
 class UserWithdrawalAdminTests(TestCase):
@@ -155,81 +155,45 @@ class UserWithdrawalAdminTests(TestCase):
         )
         inactive_period = BettingPeriod.objects.create(
             name="Old Withdrawal Period",
-            start_date=today,
-            end_date=today,
+            start_date=today - timezone.timedelta(days=7),
+            end_date=today - timezone.timedelta(days=1),
             is_active=False,
         )
-        active_won_ticket = BetTicket.objects.create(
+        Transaction.objects.create(
             user=self.withdrawal_user,
-            stake_amount=Decimal("100.00"),
-            total_odd=Decimal("6.00"),
-            potential_winning=Decimal("600.00"),
-            min_winning=Decimal("0.00"),
-            max_winning=Decimal("600.00"),
-            status="won",
-            bet_type="single",
+            transaction_type="bet_payout",
+            amount=Decimal("600.00"),
+            is_successful=True,
+            status="completed",
+            timestamp=timezone.now(),
         )
-        second_active_won_ticket = BetTicket.objects.create(
+        Transaction.objects.create(
             user=self.withdrawal_user,
-            stake_amount=Decimal("50.00"),
-            total_odd=Decimal("4.00"),
-            potential_winning=Decimal("200.00"),
-            min_winning=Decimal("0.00"),
-            max_winning=Decimal("200.00"),
-            status="won",
-            bet_type="single",
+            transaction_type="bet_payout",
+            amount=Decimal("200.00"),
+            is_successful=True,
+            status="completed",
+            timestamp=timezone.now(),
         )
-        inactive_won_ticket = BetTicket.objects.create(
+        old_tx = Transaction.objects.create(
             user=self.withdrawal_user,
-            stake_amount=Decimal("80.00"),
-            total_odd=Decimal("5.00"),
-            potential_winning=Decimal("400.00"),
-            min_winning=Decimal("0.00"),
-            max_winning=Decimal("400.00"),
-            status="won",
-            bet_type="single",
+            transaction_type="bet_payout",
+            amount=Decimal("400.00"),
+            is_successful=True,
+            status="completed",
+            timestamp=timezone.now(),
         )
-        pending_active_ticket = BetTicket.objects.create(
+        old_tx.timestamp = timezone.make_aware(
+            timezone.datetime.combine(inactive_period.start_date, timezone.datetime.min.time())
+        )
+        old_tx.save(update_fields=["timestamp"])
+        Transaction.objects.create(
             user=self.withdrawal_user,
-            stake_amount=Decimal("40.00"),
-            total_odd=Decimal("2.00"),
-            potential_winning=Decimal("80.00"),
-            min_winning=Decimal("0.00"),
-            max_winning=Decimal("80.00"),
-            status="pending",
-            bet_type="single",
-        )
-        Selection.objects.create(
-            bet_ticket=active_won_ticket,
-            betting_period=active_period,
-            fixture_home_team="Team A",
-            fixture_away_team="Team B",
-            bet_type="home_win",
-            odd_selected=Decimal("6.00"),
-        )
-        Selection.objects.create(
-            bet_ticket=second_active_won_ticket,
-            betting_period=active_period,
-            fixture_home_team="Team C",
-            fixture_away_team="Team D",
-            bet_type="away_win",
-            odd_selected=Decimal("4.00"),
-        )
-        Selection.objects.create(
-            bet_ticket=inactive_won_ticket,
-            betting_period=inactive_period,
-            fixture_home_team="Team E",
-            fixture_away_team="Team F",
-            bet_type="draw",
-            odd_selected=Decimal("5.00"),
-        )
-        Selection.objects.create(
-            bet_ticket=pending_active_ticket,
-            betting_period=active_period,
-            fixture_home_team="Team G",
-            fixture_away_team="Team H",
-            bet_type="home_win",
-            odd_selected=Decimal("2.00"),
+            transaction_type="bet_payout",
+            amount=Decimal("80.00"),
+            is_successful=False,
+            status="failed",
+            timestamp=timezone.now(),
         )
 
         request = self.factory.get("/admin/betting/userwithdrawal/")
@@ -240,48 +204,39 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("800.00"))
         self.assertEqual(self.admin.current_won_amount_display(annotated_withdrawal), Decimal("800.00"))
 
-    def test_userwithdrawal_admin_queryset_uses_fixture_betting_period_when_selection_period_is_null(self):
+    def test_userwithdrawal_admin_queryset_uses_bet_payout_transactions_in_current_period(self):
         withdrawal = self._create_withdrawal(status="pending")
         today = timezone.localdate()
         active_period = BettingPeriod.objects.create(
-            name="Current Withdrawal Fixture Period",
+            name="Current Withdrawal Payout Period",
             start_date=today,
             end_date=today,
             is_active=True,
         )
-        fixture = Fixture.objects.create(
-            betting_period=active_period,
-            serial_number=1,
-            home_team="Team A",
-            away_team="Team B",
-            match_date=today,
-            match_time=timezone.now().time(),
-            status="scheduled",
-            home_win_odd=Decimal("2.50"),
-            draw_odd=Decimal("3.00"),
-            away_win_odd=Decimal("2.80"),
-        )
-        won_ticket = BetTicket.objects.create(
+        payout_tx = Transaction.objects.create(
             user=self.withdrawal_user,
-            stake_amount=Decimal("100.00"),
-            total_odd=Decimal("9.00"),
-            potential_winning=Decimal("900.00"),
-            min_winning=Decimal("0.00"),
-            max_winning=Decimal("900.00"),
-            status="won",
-            bet_type="single",
+            transaction_type="bet_payout",
+            amount=Decimal("900.00"),
+            is_successful=True,
+            status="completed",
+            timestamp=timezone.now(),
         )
-        Selection.objects.create(
-            bet_ticket=won_ticket,
-            fixture=fixture,
-            betting_period=None,
-            fixture_home_team=fixture.home_team,
-            fixture_away_team=fixture.away_team,
-            fixture_match_date=fixture.match_date,
-            fixture_match_time=fixture.match_time,
-            bet_type="home_win",
-            odd_selected=Decimal("2.50"),
+        outside_period_tx = Transaction.objects.create(
+            user=self.withdrawal_user,
+            transaction_type="bet_payout",
+            amount=Decimal("300.00"),
+            is_successful=True,
+            status="completed",
+            timestamp=timezone.now(),
         )
+        payout_tx.timestamp = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
+        )
+        payout_tx.save(update_fields=["timestamp"])
+        outside_period_tx.timestamp = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date - timezone.timedelta(days=7), timezone.datetime.min.time())
+        )
+        outside_period_tx.save(update_fields=["timestamp"])
 
         request = self.factory.get("/admin/betting/userwithdrawal/")
         request.user = self.admin_user

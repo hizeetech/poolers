@@ -1825,15 +1825,45 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     list_select_related = ('user',)
     actions = ['resend_emails_backfill_email_timestamps']
 
+    def _get_current_betting_period(self):
+        ref_date = timezone.localdate()
+        current_period = (
+            BettingPeriod.objects.filter(
+                start_date__lte=ref_date,
+                end_date__gte=ref_date,
+                is_active=True,
+            )
+            .order_by('-start_date')
+            .first()
+        )
+        if current_period:
+            return current_period
+        return BettingPeriod.objects.filter(is_active=True).order_by('-start_date').first()
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
+        current_period = self._get_current_betting_period()
+        if not current_period:
+            return (
+                qs.filter(status='pending')
+                .select_related('user')
+                .annotate(
+                    current_won_amount=Value(
+                        Decimal('0.00'),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    )
+                )
+            )
+
+        current_period_ticket_ids = Selection.objects.filter(
+            Q(betting_period=current_period)
+            | Q(betting_period__isnull=True, fixture__betting_period=current_period)
+        ).values('bet_ticket_id')
         won_amount_subquery = (
             BetTicket.objects.filter(
                 user_id=OuterRef('user_id'),
                 status='won',
-                pk__in=Selection.objects.filter(
-                    betting_period__is_active=True,
-                ).values('bet_ticket_id'),
+                pk__in=current_period_ticket_ids,
             )
             .order_by()
             .values('user')

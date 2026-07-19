@@ -13,7 +13,7 @@ from betting.admin import (
     UserWithdrawalAdminForm,
     betting_admin_site,
 )
-from betting.models import BetTicket, BettingPeriod, ProcessedWithdrawal, Selection, User, UserWithdrawal, Wallet
+from betting.models import BetTicket, BettingPeriod, Fixture, ProcessedWithdrawal, Selection, User, UserWithdrawal, Wallet
 
 
 class UserWithdrawalAdminTests(TestCase):
@@ -239,6 +239,56 @@ class UserWithdrawalAdminTests(TestCase):
 
         self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("800.00"))
         self.assertEqual(self.admin.current_won_amount_display(annotated_withdrawal), Decimal("800.00"))
+
+    def test_userwithdrawal_admin_queryset_uses_fixture_betting_period_when_selection_period_is_null(self):
+        withdrawal = self._create_withdrawal(status="pending")
+        today = timezone.localdate()
+        active_period = BettingPeriod.objects.create(
+            name="Current Withdrawal Fixture Period",
+            start_date=today,
+            end_date=today,
+            is_active=True,
+        )
+        fixture = Fixture.objects.create(
+            betting_period=active_period,
+            serial_number=1,
+            home_team="Team A",
+            away_team="Team B",
+            match_date=today,
+            match_time=timezone.now().time(),
+            status="scheduled",
+            home_win_odd=Decimal("2.50"),
+            draw_odd=Decimal("3.00"),
+            away_win_odd=Decimal("2.80"),
+        )
+        won_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("9.00"),
+            potential_winning=Decimal("900.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("900.00"),
+            status="won",
+            bet_type="single",
+        )
+        Selection.objects.create(
+            bet_ticket=won_ticket,
+            fixture=fixture,
+            betting_period=None,
+            fixture_home_team=fixture.home_team,
+            fixture_away_team=fixture.away_team,
+            fixture_match_date=fixture.match_date,
+            fixture_match_time=fixture.match_time,
+            bet_type="home_win",
+            odd_selected=Decimal("2.50"),
+        )
+
+        request = self.factory.get("/admin/betting/userwithdrawal/")
+        request.user = self.admin_user
+
+        annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
+
+        self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("900.00"))
 
     def test_userwithdrawal_admin_form_blocks_reopen_with_insufficient_funds(self):
         Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))

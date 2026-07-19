@@ -1825,7 +1825,7 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     list_select_related = ('user',)
     actions = ['resend_emails_backfill_email_timestamps']
 
-    def _get_current_betting_period(self):
+    def _get_current_betting_period_window(self):
         ref_date = timezone.localdate()
         current_period = (
             BettingPeriod.objects.filter(
@@ -1837,38 +1837,34 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             .first()
         )
         if current_period:
-            return current_period
-        return BettingPeriod.objects.filter(is_active=True).order_by('-start_date').first()
+            return current_period.start_date, current_period.end_date
+
+        fallback_period = BettingPeriod.objects.filter(is_active=True).order_by('-start_date').first()
+        if fallback_period:
+            return fallback_period.start_date, fallback_period.end_date
+
+        weekday = ref_date.weekday()
+        days_since_tuesday = (weekday - 1) % 7
+        start_date = ref_date - timedelta(days=days_since_tuesday)
+        end_date = start_date + timedelta(days=6)
+        return start_date, end_date
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        current_period = self._get_current_betting_period()
-        if not current_period:
-            return (
-                qs.filter(status='pending')
-                .select_related('user')
-                .annotate(
-                    current_won_amount=Value(
-                        Decimal('0.00'),
-                        output_field=DecimalField(max_digits=12, decimal_places=2),
-                    )
-                )
-            )
+        start_date, end_date = self._get_current_betting_period_window()
 
         won_amount_subquery = (
-            Transaction.objects.filter(
+            BetTicket.objects.filter(
                 user_id=OuterRef('user_id'),
-                transaction_type='bet_payout',
-                status='completed',
-                is_successful=True,
-                timestamp__date__gte=current_period.start_date,
-                timestamp__date__lte=current_period.end_date,
+                status='won',
+                placed_at__date__gte=start_date,
+                placed_at__date__lte=end_date,
             )
             .order_by()
             .values('user')
             .annotate(
                 total=Coalesce(
-                    Sum('amount'),
+                    Sum('max_winning'),
                     Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )

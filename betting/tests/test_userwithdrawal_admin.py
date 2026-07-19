@@ -13,7 +13,7 @@ from betting.admin import (
     UserWithdrawalAdminForm,
     betting_admin_site,
 )
-from betting.models import BettingPeriod, ProcessedWithdrawal, Transaction, User, UserWithdrawal, Wallet
+from betting.models import BetTicket, BettingPeriod, ProcessedWithdrawal, User, UserWithdrawal, Wallet
 
 
 class UserWithdrawalAdminTests(TestCase):
@@ -159,42 +159,62 @@ class UserWithdrawalAdminTests(TestCase):
             end_date=today - timezone.timedelta(days=1),
             is_active=False,
         )
-        Transaction.objects.create(
+        current_ticket_one = BetTicket.objects.create(
             user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("600.00"),
-            is_successful=True,
-            status="completed",
-            timestamp=timezone.now(),
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("6.00"),
+            potential_winning=Decimal("600.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("600.00"),
+            status="won",
+            bet_type="single",
         )
-        Transaction.objects.create(
+        current_ticket_two = BetTicket.objects.create(
             user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("200.00"),
-            is_successful=True,
-            status="completed",
-            timestamp=timezone.now(),
+            stake_amount=Decimal("50.00"),
+            total_odd=Decimal("4.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("200.00"),
+            status="won",
+            bet_type="single",
         )
-        old_tx = Transaction.objects.create(
+        old_ticket = BetTicket.objects.create(
             user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("400.00"),
-            is_successful=True,
-            status="completed",
-            timestamp=timezone.now(),
+            stake_amount=Decimal("80.00"),
+            total_odd=Decimal("5.00"),
+            potential_winning=Decimal("400.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("400.00"),
+            status="won",
+            bet_type="single",
         )
-        old_tx.timestamp = timezone.make_aware(
+        pending_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("40.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("80.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("80.00"),
+            status="pending",
+            bet_type="single",
+        )
+        current_ticket_one.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
+        )
+        current_ticket_one.save(update_fields=["placed_at"])
+        current_ticket_two.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.end_date, timezone.datetime.min.time())
+        )
+        current_ticket_two.save(update_fields=["placed_at"])
+        old_ticket.placed_at = timezone.make_aware(
             timezone.datetime.combine(inactive_period.start_date, timezone.datetime.min.time())
         )
-        old_tx.save(update_fields=["timestamp"])
-        Transaction.objects.create(
-            user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("80.00"),
-            is_successful=False,
-            status="failed",
-            timestamp=timezone.now(),
+        old_ticket.save(update_fields=["placed_at"])
+        pending_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
         )
+        pending_ticket.save(update_fields=["placed_at"])
 
         request = self.factory.get("/admin/betting/userwithdrawal/")
         request.user = self.admin_user
@@ -204,39 +224,43 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("800.00"))
         self.assertEqual(self.admin.current_won_amount_display(annotated_withdrawal), Decimal("800.00"))
 
-    def test_userwithdrawal_admin_queryset_uses_bet_payout_transactions_in_current_period(self):
+    def test_userwithdrawal_admin_queryset_uses_won_tickets_in_current_period_window(self):
         withdrawal = self._create_withdrawal(status="pending")
         today = timezone.localdate()
         active_period = BettingPeriod.objects.create(
-            name="Current Withdrawal Payout Period",
+            name="Current Withdrawal Ticket Period",
             start_date=today,
             end_date=today,
             is_active=True,
         )
-        payout_tx = Transaction.objects.create(
+        won_ticket = BetTicket.objects.create(
             user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("900.00"),
-            is_successful=True,
-            status="completed",
-            timestamp=timezone.now(),
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("9.00"),
+            potential_winning=Decimal("900.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("900.00"),
+            status="won",
+            bet_type="single",
         )
-        outside_period_tx = Transaction.objects.create(
+        outside_period_ticket = BetTicket.objects.create(
             user=self.withdrawal_user,
-            transaction_type="bet_payout",
-            amount=Decimal("300.00"),
-            is_successful=True,
-            status="completed",
-            timestamp=timezone.now(),
+            stake_amount=Decimal("50.00"),
+            total_odd=Decimal("6.00"),
+            potential_winning=Decimal("300.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("300.00"),
+            status="won",
+            bet_type="single",
         )
-        payout_tx.timestamp = timezone.make_aware(
+        won_ticket.placed_at = timezone.make_aware(
             timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
         )
-        payout_tx.save(update_fields=["timestamp"])
-        outside_period_tx.timestamp = timezone.make_aware(
+        won_ticket.save(update_fields=["placed_at"])
+        outside_period_ticket.placed_at = timezone.make_aware(
             timezone.datetime.combine(active_period.start_date - timezone.timedelta(days=7), timezone.datetime.min.time())
         )
-        outside_period_tx.save(update_fields=["timestamp"])
+        outside_period_ticket.save(update_fields=["placed_at"])
 
         request = self.factory.get("/admin/betting/userwithdrawal/")
         request.user = self.admin_user
@@ -244,6 +268,49 @@ class UserWithdrawalAdminTests(TestCase):
         annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
 
         self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("900.00"))
+
+    def test_userwithdrawal_admin_queryset_falls_back_to_current_tuesday_to_monday_window(self):
+        withdrawal = self._create_withdrawal(status="pending")
+        today = timezone.localdate()
+        weekday = today.weekday()
+        days_since_tuesday = (weekday - 1) % 7
+        start_date = today - timezone.timedelta(days=days_since_tuesday)
+
+        current_week_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("70.00"),
+            total_odd=Decimal("10.00"),
+            potential_winning=Decimal("700.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("700.00"),
+            status="won",
+            bet_type="single",
+        )
+        old_week_ticket = BetTicket.objects.create(
+            user=self.withdrawal_user,
+            stake_amount=Decimal("30.00"),
+            total_odd=Decimal("5.00"),
+            potential_winning=Decimal("150.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("150.00"),
+            status="won",
+            bet_type="single",
+        )
+        current_week_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(start_date, timezone.datetime.min.time())
+        )
+        current_week_ticket.save(update_fields=["placed_at"])
+        old_week_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(start_date - timezone.timedelta(days=7), timezone.datetime.min.time())
+        )
+        old_week_ticket.save(update_fields=["placed_at"])
+
+        request = self.factory.get("/admin/betting/userwithdrawal/")
+        request.user = self.admin_user
+
+        annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
+
+        self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("700.00"))
 
     def test_userwithdrawal_admin_form_blocks_reopen_with_insufficient_funds(self):
         Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))

@@ -30,6 +30,12 @@ class UserWithdrawalAdminTests(TestCase):
             user_type="cashier",
             username="withdraw_user_cashier",
         )
+        self.agent_user = User.objects.create_user(
+            email="withdraw-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="withdraw_agent_user",
+        )
         self.admin_user = User.objects.create_user(
             email="withdraw-admin@test.com",
             password=self.password,
@@ -39,6 +45,7 @@ class UserWithdrawalAdminTests(TestCase):
             is_superuser=True,
         )
         Wallet.objects.create(user=self.withdrawal_user, balance=Decimal("5000.00"))
+        Wallet.objects.create(user=self.agent_user, balance=Decimal("5000.00"))
         Wallet.objects.create(user=self.admin_user, balance=Decimal("0.00"))
 
     def _create_withdrawal(self, *, status="pending"):
@@ -47,6 +54,16 @@ class UserWithdrawalAdminTests(TestCase):
             amount=Decimal("1000.00"),
             bank_name="Demo Bank",
             account_name="Demo User",
+            account_number="0123456789",
+            status=status,
+        )
+
+    def _create_agent_withdrawal(self, *, status="pending"):
+        return UserWithdrawal.objects.create(
+            user=self.agent_user,
+            amount=Decimal("1000.00"),
+            bank_name="Demo Bank",
+            account_name="Demo Agent",
             account_number="0123456789",
             status=status,
         )
@@ -311,6 +328,94 @@ class UserWithdrawalAdminTests(TestCase):
         annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
 
         self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("700.00"))
+
+    def test_agent_withdrawal_queryset_uses_mapped_cashiers_current_period_won_amount(self):
+        withdrawal = self._create_agent_withdrawal(status="pending")
+        today = timezone.localdate()
+        active_period = BettingPeriod.objects.create(
+            name="Current Agent Cashier Period",
+            start_date=today,
+            end_date=today,
+            is_active=True,
+        )
+        cashier_one = User.objects.create_user(
+            email="cashier-one@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="agent_cashier_one",
+            agent=self.agent_user,
+        )
+        cashier_two = User.objects.create_user(
+            email="cashier-two@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="agent_cashier_two",
+            agent=self.agent_user,
+        )
+        other_agent = User.objects.create_user(
+            email="other-agent@test.com",
+            password=self.password,
+            user_type="agent",
+            username="other_agent_user",
+        )
+        other_cashier = User.objects.create_user(
+            email="other-cashier@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="other_agent_cashier",
+            agent=other_agent,
+        )
+
+        cashier_one_ticket = BetTicket.objects.create(
+            user=cashier_one,
+            stake_amount=Decimal("100.00"),
+            total_odd=Decimal("6.00"),
+            potential_winning=Decimal("600.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("600.00"),
+            status="won",
+            bet_type="single",
+        )
+        cashier_two_ticket = BetTicket.objects.create(
+            user=cashier_two,
+            stake_amount=Decimal("50.00"),
+            total_odd=Decimal("4.00"),
+            potential_winning=Decimal("200.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("200.00"),
+            status="won",
+            bet_type="single",
+        )
+        other_cashier_ticket = BetTicket.objects.create(
+            user=other_cashier,
+            stake_amount=Decimal("90.00"),
+            total_odd=Decimal("9.00"),
+            potential_winning=Decimal("810.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("810.00"),
+            status="won",
+            bet_type="single",
+        )
+        cashier_one_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
+        )
+        cashier_one_ticket.save(update_fields=["placed_at"])
+        cashier_two_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.end_date, timezone.datetime.min.time())
+        )
+        cashier_two_ticket.save(update_fields=["placed_at"])
+        other_cashier_ticket.placed_at = timezone.make_aware(
+            timezone.datetime.combine(active_period.start_date, timezone.datetime.min.time())
+        )
+        other_cashier_ticket.save(update_fields=["placed_at"])
+
+        request = self.factory.get("/admin/betting/userwithdrawal/")
+        request.user = self.admin_user
+
+        annotated_withdrawal = self.admin.get_queryset(request).get(pk=withdrawal.pk)
+
+        self.assertEqual(annotated_withdrawal.current_won_amount, Decimal("800.00"))
+        self.assertEqual(self.admin.current_won_amount_display(annotated_withdrawal), Decimal("800.00"))
 
     def test_userwithdrawal_admin_form_blocks_reopen_with_insufficient_funds(self):
         Wallet.objects.filter(user=self.withdrawal_user).update(balance=Decimal("100.00"))

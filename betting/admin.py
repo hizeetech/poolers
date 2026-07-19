@@ -3,7 +3,7 @@ import os
 import sys
 from django import forms
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, OuterRef, Subquery
+from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, OuterRef, Subquery, Case, When
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.db import transaction as db_transaction
@@ -1853,7 +1853,7 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         qs = super().get_queryset(request)
         start_date, end_date = self._get_current_betting_period_window()
 
-        won_amount_subquery = (
+        direct_won_amount_subquery = (
             BetTicket.objects.filter(
                 user_id=OuterRef('user_id'),
                 status='won',
@@ -1871,16 +1871,49 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             )
             .values('total')[:1]
         )
+        agent_cashier_won_amount_subquery = (
+            BetTicket.objects.filter(
+                user__user_type='cashier',
+                user__agent_id=OuterRef('user_id'),
+                status='won',
+                placed_at__date__gte=start_date,
+                placed_at__date__lte=end_date,
+            )
+            .order_by()
+            .values('user__agent')
+            .annotate(
+                total=Coalesce(
+                    Sum('max_winning'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
         return (
             qs.filter(status='pending')
             .select_related('user')
             .annotate(
-                current_won_amount=Coalesce(
-                    Subquery(
-                        won_amount_subquery,
+                current_won_amount=Case(
+                    When(
+                        user__user_type='agent',
+                        then=Coalesce(
+                            Subquery(
+                                agent_cashier_won_amount_subquery,
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            ),
+                            Value(Decimal('0.00')),
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                    ),
+                    default=Coalesce(
+                        Subquery(
+                            direct_won_amount_subquery,
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                        Value(Decimal('0.00')),
                         output_field=DecimalField(max_digits=12, decimal_places=2),
                     ),
-                    Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )
             )

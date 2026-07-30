@@ -58,6 +58,7 @@ from .models import (
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
     PasswordResetRequest, State, FooterPage, FooterBadge,
     GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog,
+    CashOutSettings, BetTicketCashOut, CashOutAuditLog,
     PaymentGatewayDeposit,
     CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
@@ -116,6 +117,7 @@ class BettingAdminSite(admin.AdminSite):
     def get_app_list(self, request, app_label=None):
         app_list = super().get_app_list(request, app_label=app_label)
         processed_model = None
+        system_settings_models = []
         filtered_apps = []
 
         for app in app_list:
@@ -127,10 +129,24 @@ class BettingAdminSite(admin.AdminSite):
                         'name': 'Processed Withdrawals',
                     }
                     continue
+                if model.get('object_name') in {'SiteConfiguration', 'GlobalBettingSettings', 'SystemSetting', 'CashOutSettings'}:
+                    system_settings_models.append(model)
+                    continue
                 models.append(model)
 
             if models:
                 filtered_apps.append({**app, 'models': models})
+
+        if system_settings_models and app_label in (None, 'system_settings'):
+            filtered_apps.append(
+                {
+                    'name': 'System Settings',
+                    'app_label': 'system_settings',
+                    'app_url': system_settings_models[0].get('admin_url') or '',
+                    'has_module_perms': True,
+                    'models': system_settings_models,
+                }
+            )
 
         if processed_model and app_label in (None, 'updated_withdrawals'):
             filtered_apps.append(
@@ -803,7 +819,7 @@ class BetTicketAdmin(admin.ModelAdmin):
     change_list_template = "betting/admin/betticket_change_list.html"
     list_display = (
         'ticket_id', 'user', 'selection_count', 'stake_amount', 'display_total_odd', 'potential_winning',
-        'min_winning', 'max_winning', 'status', 'placed_at', 'deleted_by', 'deleted_at'
+        'min_winning', 'won_amount_display', 'status', 'placed_at', 'deleted_by', 'deleted_at'
     )
     list_filter = ('status', TicketSelectionCountFilter, 'placed_at', 'user')
     search_fields = ('ticket_id', 'id__startswith', 'user__email__icontains')
@@ -828,6 +844,16 @@ class BetTicketAdmin(admin.ModelAdmin):
 
     display_total_odd.short_description = 'Total odd'
     display_total_odd.admin_order_field = 'total_odd'
+
+    def won_amount_display(self, obj):
+        if obj.status == 'cashed_out':
+            return obj.cashout_amount
+        if obj.status == 'won':
+            return obj.max_winning
+        return None
+
+    won_amount_display.short_description = 'Won Amt'
+    won_amount_display.admin_order_field = 'cashout_amount'
 
     def selections_snapshot_preview(self, obj):
         snap = (getattr(obj, 'betting_limits_snapshot', None) or {}).get('selections_snapshot') or []
@@ -3354,6 +3380,120 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+
+class CashOutSettingsAdmin(admin.ModelAdmin):
+    fieldsets = (
+        ('General', {
+            'fields': (
+                'enable_cash_out',
+                'enable_cash_out_nap',
+                'enable_cash_out_permutation',
+                'enable_full_cash_out',
+                'enable_partial_cash_out',
+                'enable_pre_match_cash_out',
+                'disable_cash_out_during_live_events',
+                'company_margin_percent',
+                'risk_multiplier',
+                'minimum_stake_eligible',
+                'maximum_stake_eligible',
+                'minimum_cash_out_amount',
+                'maximum_cash_out_amount',
+            )
+        }),
+        ('Before Match Starts', {
+            'fields': (
+                'charge_type',
+                'fixed_charge_amount',
+                'percentage_charge',
+            )
+        }),
+        ('Control', {
+            'fields': ('manually_closed',)
+        }),
+        ('Audit', {
+            'fields': ('updated_by', 'created_at', 'updated_at')
+        }),
+    )
+    readonly_fields = ('created_at', 'updated_at')
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def has_add_permission(self, request):
+        if self.model.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class BetTicketCashOutAdmin(admin.ModelAdmin):
+    list_display = (
+        'processed_at',
+        'reference',
+        'ticket',
+        'user',
+        'agent',
+        'cashier',
+        'stake_amount',
+        'potential_win',
+        'cashout_amount',
+        'company_margin_percent',
+        'charge_type',
+        'charge_value',
+        'won_odds',
+        'remaining_odds',
+        'risk_discount',
+        'risk_multiplier_used',
+        'settled_count',
+        'winning_count',
+        'losing_count',
+        'pending_count',
+        'ticket_type',
+        'ticket_status',
+        'status',
+        'processed_by',
+    )
+    list_filter = (
+        'status',
+        'ticket_type',
+        'processed_at',
+    )
+    search_fields = (
+        'reference',
+        'ticket__ticket_id',
+        'user__email',
+        'user__username',
+        'agent__email',
+        'cashier__email',
+    )
+    readonly_fields = [f.name for f in BetTicketCashOut._meta.fields]
+    date_hierarchy = 'processed_at'
+    list_select_related = ('ticket', 'user', 'agent', 'cashier', 'processed_by')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+class CashOutAuditLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'action', 'ticket', 'cashout', 'actor', 'ip_address')
+    list_filter = ('action', 'created_at')
+    search_fields = ('ticket__ticket_id', 'cashout__reference', 'actor__email', 'message')
+    readonly_fields = [f.name for f in CashOutAuditLog._meta.fields]
+    date_hierarchy = 'created_at'
+    list_select_related = ('ticket', 'cashout', 'actor')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
 class CarouselImageAdmin(admin.ModelAdmin):
     list_display = ('id', 'title', 'is_active', 'order', 'created_at')
     list_editable = ('is_active', 'order')
@@ -3373,6 +3513,9 @@ betting_admin_site.register(CarouselImage, CarouselImageAdmin)
 betting_admin_site.register(PasswordResetRequest, PasswordResetRequestAdmin)
 betting_admin_site.register(State, StateAdmin)
 betting_admin_site.register(SiteConfiguration, SiteConfigurationAdmin)
+betting_admin_site.register(CashOutSettings, CashOutSettingsAdmin)
+betting_admin_site.register(BetTicketCashOut, BetTicketCashOutAdmin)
+betting_admin_site.register(CashOutAuditLog, CashOutAuditLogAdmin)
 
 
 class FooterPageAdminForm(forms.ModelForm):

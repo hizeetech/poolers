@@ -11125,7 +11125,35 @@ def admin_limit_rejections_report(request):
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
 def admin_ticket_details(request, ticket_id):
     ticket = get_object_or_404(BetTicket, id=ticket_id)
-    return render(request, 'betting/admin/ticket_detail.html', {'bet_ticket': ticket})
+    cashout_record = None
+    cashout_quote = None
+    cashout_settings = None
+    try:
+        from betting.models import BetTicketCashOut, CashOutSettings
+        from betting.services.cashout import build_cashout_quote
+
+        cashout_record = (
+            BetTicketCashOut.objects.filter(ticket=ticket)
+            .select_related('processed_by', 'agent', 'cashier', 'user')
+            .first()
+        )
+        cashout_settings = CashOutSettings.load()
+        cashout_quote = build_cashout_quote(ticket=ticket, settings_obj=cashout_settings)
+    except Exception:
+        cashout_record = None
+        cashout_quote = None
+        cashout_settings = None
+
+    return render(
+        request,
+        'betting/admin/ticket_detail.html',
+        {
+            'bet_ticket': ticket,
+            'cashout_record': cashout_record,
+            'cashout_quote': cashout_quote,
+            'cashout_settings': cashout_settings,
+        },
+    )
 
 
 @login_required
@@ -21501,6 +21529,122 @@ def log_ticket_reprint(request):
         return JsonResponse({'success': True})
     except BetTicket.DoesNotExist:
         return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+
+@login_required
+def ticket_cashout_quote(request, ticket_id):
+    if request.method != 'GET':
+        return JsonResponse({'success': False, 'message': 'Invalid method'}, status=405)
+
+    ticket_id = (ticket_id or '').strip().upper()
+    if not ticket_id:
+        return JsonResponse({'success': False, 'message': 'Ticket ID is required'}, status=400)
+
+    try:
+        ticket = BetTicket.objects.select_related('user').get(ticket_id=ticket_id)
+    except BetTicket.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+    if ticket.user_id != request.user.id:
+        return JsonResponse({'success': False, 'message': 'Unauthorized'}, status=403)
+
+    from betting.services.cashout import build_cashout_quote
+
+    quote = build_cashout_quote(ticket=ticket)
+    try:
+        from betting.models import CashOutAuditLog
+        CashOutAuditLog.objects.create(
+            ticket=ticket,
+            cashout=None,
+            actor=request.user,
+            action="CASHOUT_QUOTE",
+            message="Cash out quote requested",
+            ip_address=request.META.get('REMOTE_ADDR') or None,
+            user_agent=request.META.get('HTTP_USER_AGENT', '') or '',
+            metadata={
+                "eligible": bool(quote.eligible),
+                "reason": quote.reason,
+                "stake": str(getattr(ticket, 'stake_amount', '0.00')),
+                "potential_win": str(getattr(ticket, 'potential_winning', '0.00')),
+                "max_winning": str(getattr(ticket, 'max_winning', '0.00')),
+                "cashout_amount": str(quote.cashout_amount),
+                "won_odds": str(getattr(quote, 'won_odds', '0.000000')),
+                "remaining_odds": str(getattr(quote, 'remaining_odds', '0.000000')),
+                "risk_discount": str(getattr(quote, 'risk_discount', '0.000000')),
+                "risk_multiplier": str(getattr(quote, 'risk_multiplier', '0.0000')),
+                "company_margin_percent": str(getattr(quote, 'company_margin_percent', '0.00')),
+                "settled_count": int(getattr(quote, 'settled_count', 0) or 0),
+                "winning_count": int(getattr(quote, 'winning_count', 0) or 0),
+                "losing_count": int(getattr(quote, 'losing_count', 0) or 0),
+                "pending_count": int(getattr(quote, 'pending_count', 0) or 0),
+                "charge_type": str(getattr(quote, 'charge_type', '') or ''),
+                "charge_value": str(getattr(quote, 'charge_value', '0.00') or '0.00'),
+            },
+        )
+    except Exception:
+        pass
+    return JsonResponse(
+        {
+            'success': True,
+            'eligible': bool(quote.eligible),
+            'reason': quote.reason,
+            'cashout_amount': float(quote.cashout_amount),
+            'progress_percent': float(getattr(quote, 'progress_percent', 0) or 0),
+            'potential_win': float(quote.potential_win),
+            'settled_count': int(getattr(quote, 'settled_count', 0) or 0),
+            'winning_count': int(getattr(quote, 'winning_count', 0) or 0),
+            'losing_count': int(getattr(quote, 'losing_count', 0) or 0),
+            'pending_count': int(getattr(quote, 'pending_count', 0) or 0),
+            'charge_type': str(getattr(quote, 'charge_type', '') or ''),
+            'charge_value': float(getattr(quote, 'charge_value', 0) or 0),
+            'won_odds': float(getattr(quote, 'won_odds', 0) or 0),
+            'remaining_odds': float(getattr(quote, 'remaining_odds', 0) or 0),
+            'risk_discount': float(getattr(quote, 'risk_discount', 0) or 0),
+            'company_margin_percent': float(getattr(quote, 'company_margin_percent', 0) or 0),
+        }
+    )
+
+
+@login_required
+def ticket_cashout_execute(request, ticket_id):
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'message': 'Invalid method'}, status=405)
+
+    ticket_id = (ticket_id or '').strip().upper()
+    if not ticket_id:
+        return JsonResponse({'success': False, 'message': 'Ticket ID is required'}, status=400)
+
+    try:
+        ticket = BetTicket.objects.select_related('user').only('id', 'ticket_id', 'user_id').get(ticket_id=ticket_id)
+    except BetTicket.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+    if ticket.user_id != request.user.id:
+        return JsonResponse({'success': False, 'message': 'Unauthorized'}, status=403)
+
+    from betting.services.cashout import CashOutError, execute_cashout
+
+    try:
+        cashout = execute_cashout(
+            ticket_id=ticket.id,
+            actor=request.user,
+            ip_address=request.META.get('REMOTE_ADDR') or '',
+            user_agent=request.META.get('HTTP_USER_AGENT', '') or '',
+        )
+    except CashOutError as exc:
+        return JsonResponse({'success': False, 'message': str(exc)}, status=400)
+    except Exception:
+        return JsonResponse({'success': False, 'message': 'Cash Out failed. Please try again.'}, status=500)
+
+    wallet = Wallet.objects.filter(user=request.user).first()
+    return JsonResponse(
+        {
+            'success': True,
+            'reference': cashout.reference,
+            'cashout_amount': float(cashout.cashout_amount),
+            'wallet_balance': float(getattr(wallet, 'balance', 0) or 0),
+        }
+    )
 
 # WebAuthn Views
 

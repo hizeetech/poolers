@@ -21,8 +21,10 @@
     <td data-label="Min Pot. Win">₦{{ t.get_min_potential_winning|floatformat:2 }}</td>
     <td data-label="Max Pot. Win">₦{{ t.max_winning|floatformat:2 }}</td>
     <td data-label="Won Amt">
-        {% if t.status == 'won' or t.status == 'cashed_out' %}
+        {% if t.status == 'won' %}
             <span class="text-success fw-bold">₦{{ t.max_winning|floatformat:2 }}</span>
+        {% elif t.status == 'cashed_out' %}
+            <span class="text-success fw-bold">₦{{ t.cashout_amount|default_if_none:'0.00'|floatformat:2 }}</span>
         {% else %}
             <span class="text-muted">-</span>
         {% endif %}

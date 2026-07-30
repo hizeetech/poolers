@@ -59,6 +59,103 @@
         {% endif %}
     </div>
 
+    <h3 class="h4 mb-3 text-dark fw-semibold">Cash Out</h3>
+    <div class="card shadow-sm rounded-lg mb-4">
+        <div class="card-body">
+            {% if cashout_record %}
+            <div class="row g-2">
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Status</div>
+                    <div class="fw-semibold">CASHED OUT</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Reference</div>
+                    <div class="fw-semibold">{{ cashout_record.reference }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Amount</div>
+                    <div class="fw-semibold">₦{{ cashout_record.cashout_amount|floatformat:2 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Processed At</div>
+                    <div class="fw-semibold">{{ cashout_record.processed_at|date:"Y-m-d H:i" }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Processed By</div>
+                    <div class="fw-semibold">{{ cashout_record.processed_by.email|default:"-" }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Won Odds</div>
+                    <div class="fw-semibold">{{ cashout_record.won_odds|floatformat:6 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Remaining Odds</div>
+                    <div class="fw-semibold">{{ cashout_record.remaining_odds|floatformat:6 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Risk Discount</div>
+                    <div class="fw-semibold">{{ cashout_record.risk_discount|floatformat:6 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Company Margin</div>
+                    <div class="fw-semibold">{{ cashout_record.company_margin_percent|floatformat:2 }}%</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Charge</div>
+                    <div class="fw-semibold">{{ cashout_record.charge_type|default:"-" }} ₦{{ cashout_record.charge_value|floatformat:2 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Counts</div>
+                    <div class="fw-semibold">Settled {{ cashout_record.settled_count }} | Won {{ cashout_record.winning_count }} | Lost {{ cashout_record.losing_count }} | Pending {{ cashout_record.pending_count }}</div>
+                </div>
+            </div>
+            {% else %}
+                {% if cashout_quote %}
+                    {% if cashout_quote.eligible %}
+                    <div class="row g-2">
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Cash Out Available</div>
+                            <div class="fw-semibold text-success">YES</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Offer</div>
+                            <div class="fw-semibold">₦{{ cashout_quote.cashout_amount|floatformat:2 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Progress</div>
+                            <div class="fw-semibold">Settled {{ cashout_quote.settled_count }} | Won {{ cashout_quote.winning_count }} | Lost {{ cashout_quote.losing_count }} | Pending {{ cashout_quote.pending_count }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Won Odds</div>
+                            <div class="fw-semibold">{{ cashout_quote.won_odds|floatformat:6 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Remaining Odds</div>
+                            <div class="fw-semibold">{{ cashout_quote.remaining_odds|floatformat:6 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Risk Discount</div>
+                            <div class="fw-semibold">{{ cashout_quote.risk_discount|floatformat:6 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Company Margin</div>
+                            <div class="fw-semibold">{{ cashout_quote.company_margin_percent|floatformat:2 }}%</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Charge</div>
+                            <div class="fw-semibold">{% if cashout_quote.charge_type %}{{ cashout_quote.charge_type }} ₦{{ cashout_quote.charge_value|floatformat:2 }}{% else %}-{% endif %}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="text-muted">{{ cashout_quote.reason|default:"Cash Out is not available." }}</div>
+                    {% endif %}
+                {% else %}
+                <div class="text-muted">Cash Out data unavailable.</div>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
     <h3 class="h4 mb-3 text-dark fw-semibold">Selections</h3>
     {% if bet_ticket.selections.all %}
     <div class="table-responsive shadow-sm rounded-lg mb-4">

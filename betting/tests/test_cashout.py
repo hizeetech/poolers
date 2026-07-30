@@ -1,0 +1,322 @@
+from decimal import Decimal
+
+from datetime import timedelta
+
+from django.test import TestCase
+from django.utils import timezone
+
+from betting.models import (
+    BetTicket,
+    BetTicketCashOut,
+    BettingPeriod,
+    CashOutSettings,
+    Fixture,
+    Selection,
+    Transaction,
+    User,
+    Wallet,
+)
+from betting.services.cashout import CashOutError, build_cashout_quote, execute_cashout
+
+
+class CashOutTests(TestCase):
+    def setUp(self):
+        self.password = "password123"
+        self.user = User.objects.create_user(
+            email="cashout-user@test.com",
+            password=self.password,
+            user_type="cashier",
+            username="cashout_user",
+        )
+        Wallet.objects.create(user=self.user, balance=Decimal("0.00"))
+
+        CashOutSettings.objects.update_or_create(
+            pk=1,
+            defaults={
+                "enable_cash_out": True,
+                "enable_cash_out_nap": True,
+                "enable_cash_out_permutation": True,
+                "enable_full_cash_out": True,
+                "enable_partial_cash_out": False,
+                "enable_pre_match_cash_out": True,
+                "disable_cash_out_during_live_events": True,
+                "charge_type": CashOutSettings.CHARGE_TYPE.FIXED,
+                "fixed_charge_amount": Decimal("100.00"),
+                "percentage_charge": Decimal("0.00"),
+                "company_margin_percent": Decimal("10.00"),
+                "risk_multiplier": Decimal("0.0500"),
+                "minimum_stake_eligible": Decimal("0.00"),
+                "maximum_stake_eligible": Decimal("100000000.00"),
+                "minimum_cash_out_amount": Decimal("0.00"),
+                "maximum_cash_out_amount": Decimal("100000000.00"),
+                "manually_closed": False,
+            },
+        )
+
+        today = timezone.localdate()
+        self.period = BettingPeriod.objects.create(
+            name="CashOut Period",
+            start_date=today,
+            end_date=today,
+            is_active=True,
+        )
+
+    def _fixture(self, *, status="scheduled", home_score=None, away_score=None, serial=1):
+        today = timezone.localdate()
+        match_time = timezone.now().time()
+        if status == "scheduled":
+            match_time = (timezone.now() + timedelta(hours=2)).time()
+        return Fixture.objects.create(
+            betting_period=self.period,
+            serial_number=serial,
+            home_team=f"Home {serial}",
+            away_team=f"Away {serial}",
+            match_date=today,
+            match_time=match_time,
+            status=status,
+            is_active=True,
+            home_score=home_score,
+            away_score=away_score,
+            home_win_odd=Decimal("2.00"),
+            draw_odd=Decimal("3.00"),
+            away_win_odd=Decimal("2.50"),
+        )
+
+    def test_cashout_disabled_when_globally_disabled(self):
+        CashOutSettings.objects.filter(pk=1).update(enable_cash_out=False)
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("4000.00"),
+            min_winning=Decimal("4000.00"),
+            max_winning=Decimal("4000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertIn("disabled", quote.reason.lower())
+
+    def test_prematch_cashout_uses_stake_minus_fixed_charge(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("4000.00"),
+            min_winning=Decimal("4000.00"),
+            max_winning=Decimal("4000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertEqual(quote.cashout_amount, Decimal("1900.00"))
+        self.assertEqual(quote.charge_type, "fixed")
+        self.assertEqual(quote.charge_value, Decimal("100.00"))
+
+    def test_cashout_disabled_when_event_is_in_progress(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("8660.00"),
+            total_odd=Decimal("46.00"),
+            potential_winning=Decimal("400620.26"),
+            min_winning=Decimal("400620.26"),
+            max_winning=Decimal("408632.67"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="live", serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertIn("in progress", quote.reason.lower())
+
+    def test_cashout_disabled_when_min_cashout_exceeds_ticket_cap(self):
+        CashOutSettings.objects.filter(pk=1).update(minimum_cash_out_amount=Decimal("1000000.00"))
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("8660.00"),
+            total_odd=Decimal("46.00"),
+            potential_winning=Decimal("400620.26"),
+            min_winning=Decimal("400620.26"),
+            max_winning=Decimal("408632.67"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertEqual(quote.cashout_amount, Decimal("8560.00"))
+
+    def test_min_cashout_blocks_post_result_offers(self):
+        CashOutSettings.objects.filter(pk=1).update(minimum_cash_out_amount=Decimal("1000000.00"))
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("4000.00"),
+            min_winning=Decimal("4000.00"),
+            max_winning=Decimal("4000.00"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        f3 = self._fixture(status="scheduled", serial=3)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f3, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+
+    def test_nap_cashout_disabled_when_ticket_dead(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("4.00"),
+            potential_winning=Decimal("8000.00"),
+            min_winning=Decimal("8000.00"),
+            max_winning=Decimal("8000.00"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="finished", home_score=0, away_score=2, serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertIn("no longer available", quote.reason.lower())
+
+    def test_after_result_cashout_uses_won_odds_and_remaining_odds(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("13.93"),
+            potential_winning=Decimal("27852.00"),
+            min_winning=Decimal("27852.00"),
+            max_winning=Decimal("27852.00"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.30"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("4.22"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        won_odds = Decimal("3.30")
+        remaining_odds = Decimal("4.22")
+        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
+        expected = (Decimal("2000.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
+        self.assertEqual(quote.cashout_amount, expected)
+
+    def test_permutation_cashout_only_when_mathematically_alive(self):
+        k = 3
+        potential_win = Decimal("20000.00")
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("600.00"),
+            total_odd=Decimal("0.00"),
+            potential_winning=potential_win,
+            min_winning=Decimal("0.00"),
+            max_winning=potential_win,
+            status="pending",
+            bet_type="system",
+            system_min_count=k,
+            original_selections_count=5,
+        )
+
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="finished", home_score=2, away_score=1, serial=2)
+        f3 = self._fixture(status="finished", home_score=2, away_score=1, serial=3)
+        f4 = self._fixture(status="scheduled", serial=4)
+        f5 = self._fixture(status="scheduled", serial=5)
+
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f3, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f4, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f5, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        won_odds = Decimal("8.00")
+        remaining_odds = Decimal("1.00")
+        risk_discount = Decimal("1.000000")
+        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
+        self.assertEqual(quote.cashout_amount, expected)
+
+        f1.status = "finished"
+        f1.home_score = 0
+        f1.away_score = 2
+        f1.save()
+        quote_after_loss = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote_after_loss.eligible)
+        won_odds = Decimal("4.00")
+        remaining_odds = Decimal("2.00")
+        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
+        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
+        self.assertEqual(quote_after_loss.cashout_amount, expected)
+
+    def test_cashout_never_exceeds_potential_or_max_winning(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("2000.00"),
+            min_winning=Decimal("2000.00"),
+            max_winning=Decimal("1000.00"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertLessEqual(quote.cashout_amount, Decimal("2000.00"))
+        self.assertLessEqual(quote.cashout_amount, Decimal("1000.00"))
+
+    def test_execute_cashout_credits_wallet_and_is_idempotent(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("4000.00"),
+            min_winning=Decimal("4000.00"),
+            max_winning=Decimal("4000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        cashout = execute_cashout(ticket_id=ticket.id, actor=self.user, ip_address="127.0.0.1", user_agent="test")
+        ticket.refresh_from_db()
+        wallet = Wallet.objects.get(user=self.user)
+
+        self.assertEqual(ticket.status, "cashed_out")
+        self.assertTrue(BetTicketCashOut.objects.filter(ticket=ticket).exists())
+        self.assertEqual(wallet.balance, Decimal("1900.00"))
+        self.assertTrue(Transaction.objects.filter(transaction_type="bet_cashout", related_bet_ticket=ticket).exists())
+
+        with self.assertRaises(CashOutError):
+            execute_cashout(ticket_id=ticket.id, actor=self.user, ip_address="127.0.0.1", user_agent="test")

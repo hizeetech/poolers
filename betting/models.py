@@ -612,6 +612,91 @@ class GlobalBettingSettings(models.Model):
     def __str__(self):
         return "Global Betting Settings"
 
+
+class CashOutSettings(models.Model):
+    class CHARGE_TYPE(models.TextChoices):
+        FIXED = 'fixed', 'Fixed Amount'
+        PERCENTAGE = 'percentage', 'Percentage'
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+
+    enable_cash_out = models.BooleanField(default=False)
+    enable_cash_out_nap = models.BooleanField(default=True)
+    enable_cash_out_permutation = models.BooleanField(default=True)
+    enable_full_cash_out = models.BooleanField(default=True)
+    enable_partial_cash_out = models.BooleanField(default=False)
+    enable_pre_match_cash_out = models.BooleanField(default=True)
+    disable_cash_out_during_live_events = models.BooleanField(default=True)
+
+    charge_type = models.CharField(max_length=20, choices=CHARGE_TYPE.choices, default=CHARGE_TYPE.FIXED)
+    fixed_charge_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    percentage_charge = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+
+    company_margin_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('10.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    risk_multiplier = models.DecimalField(
+        max_digits=8,
+        decimal_places=4,
+        default=Decimal('0.0500'),
+        validators=[MinValueValidator(Decimal('0.0000'))],
+    )
+
+    minimum_stake_eligible = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    maximum_stake_eligible = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('100000000.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    minimum_cash_out_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    maximum_cash_out_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('100000000.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    manually_closed = models.BooleanField(default=False)
+
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_cashout_settings')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "Cash Out Settings"
+
 class AgentBettingLimitOverride(models.Model):
     agent = models.OneToOneField(User, on_delete=models.CASCADE, related_name='betting_limit_override', limit_choices_to={'user_type__in': ['agent', 'super_agent', 'master_agent']})
     is_active = models.BooleanField(default=True)
@@ -850,6 +935,7 @@ class Transaction(models.Model):
         ('withdrawal', 'Withdrawal'),
         ('bet_placement', 'Bet Placement'),
         ('bet_payout', 'Bet Payout'),
+        ('bet_cashout', 'Bet Cash Out'),
         ('commission_payout', 'Commission Payout'),
         ('commission_recall_debit', 'Commission Recall Debit'),
         ('commission_recall_credit', 'Commission Recall Credit'),
@@ -1249,6 +1335,17 @@ class BetTicket(models.Model):
     bonus_applied_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     payout_processed = models.BooleanField(default=False, db_index=True)
+
+    cashout_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    cashout_reference = models.CharField(max_length=120, blank=True, default="", db_index=True)
+    cashout_company_margin_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    cashout_original_odds = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True)
+    cashout_completed_odds = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True)
+    cashout_progress_percent = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    cashout_strategy = models.CharField(max_length=40, blank=True, default="")
+    cashout_processed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    cashout_processed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cashouts_processed')
+    cashout_settings_snapshot = models.JSONField(blank=True, default=dict)
 
     betting_limits_snapshot = models.JSONField(blank=True, default=dict)
     
@@ -1939,6 +2036,73 @@ class Result(Fixture):
         proxy = True
         verbose_name = "Result"
         verbose_name_plural = "Results"
+
+
+class BetTicketCashOut(models.Model):
+    class STATUS(models.TextChoices):
+        COMPLETED = 'completed', 'Completed'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reference = models.CharField(max_length=120, unique=True, db_index=True)
+    ticket = models.OneToOneField(BetTicket, on_delete=models.CASCADE, related_name='cashout')
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cashouts')
+    cashier = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cashouts_as_cashier')
+    agent = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cashouts_as_agent')
+
+    ticket_type = models.CharField(max_length=20, blank=True, default="")
+    ticket_status = models.CharField(max_length=20, blank=True, default="")
+
+    stake_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    potential_win = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    original_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))
+    completed_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))
+    progress_percent = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0000'))
+    company_margin_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    charge_type = models.CharField(max_length=20, blank=True, default="")
+    charge_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    settled_count = models.PositiveIntegerField(default=0)
+    winning_count = models.PositiveIntegerField(default=0)
+    losing_count = models.PositiveIntegerField(default=0)
+    pending_count = models.PositiveIntegerField(default=0)
+    offer_percent_of_potential = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    won_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))
+    remaining_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))
+    risk_discount = models.DecimalField(max_digits=8, decimal_places=6, default=Decimal('0.000000'))
+    risk_multiplier_used = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
+    cashout_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    calculation_strategy = models.CharField(max_length=40, blank=True, default="")
+    formula_version = models.CharField(max_length=20, blank=True, default="v1")
+    settings_snapshot = models.JSONField(blank=True, default=dict)
+
+    status = models.CharField(max_length=20, choices=STATUS.choices, default=STATUS.COMPLETED, db_index=True)
+    processed_at = models.DateTimeField(default=timezone.now, db_index=True)
+    processed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cashouts_processed_by')
+
+    class Meta:
+        ordering = ['-processed_at', '-id']
+
+    def __str__(self):
+        return f"CashOut {self.reference} - {getattr(self.ticket, 'ticket_id', '')}"
+
+
+class CashOutAuditLog(models.Model):
+    ticket = models.ForeignKey(BetTicket, on_delete=models.CASCADE, related_name='cashout_audit_logs')
+    cashout = models.ForeignKey(BetTicketCashOut, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='cashout_audit_actions')
+    action = models.CharField(max_length=80, db_index=True)
+    message = models.TextField(blank=True, default="")
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return f"CashOutAudit({getattr(self.ticket, 'ticket_id', '')}) {self.action}"
 
 
 class BonusRule(models.Model):

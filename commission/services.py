@@ -860,7 +860,9 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
     ).exclude(status__in=excluded_statuses)
     
     total_stake = (tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)).quantize(Decimal('0.01'))
-    total_winnings = (tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)).quantize(Decimal('0.01'))
+    won_winnings = tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)
+    cashed_out_winnings = tickets.filter(status='cashed_out').aggregate(Sum('cashout_amount'))['cashout_amount__sum'] or Decimal(0)
+    total_winnings = (won_winnings + cashed_out_winnings).quantize(Decimal('0.01'))
     ggr = (total_stake - total_winnings).quantize(Decimal('0.01'))
 
     from django.db.models import Count, IntegerField
@@ -884,7 +886,12 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
 
     for ticket in tickets_with_count:
         stake = (ticket.stake_amount or Decimal('0.00'))
-        winnings = (ticket.max_winning or Decimal('0.00')) if ticket.status == 'won' else Decimal('0.00')
+        if ticket.status == 'won':
+            winnings = (ticket.max_winning or Decimal('0.00'))
+        elif ticket.status == 'cashed_out':
+            winnings = (ticket.cashout_amount or Decimal('0.00'))
+        else:
+            winnings = Decimal('0.00')
         n = int(getattr(ticket, "num_selections", 0) or 0)
         if n <= 0:
             bt = (getattr(ticket, "bet_type", "") or "").strip().lower()
@@ -950,7 +957,12 @@ def calculate_weekly_agent_commission_data(agent, period, include_breakdown=Fals
                 continue
 
             stake = (ticket.stake_amount or Decimal("0.00"))
-            winnings = (ticket.max_winning or Decimal("0.00")) if ticket.status == "won" else Decimal("0.00")
+            if ticket.status == "won":
+                winnings = (ticket.max_winning or Decimal("0.00"))
+            elif ticket.status == "cashed_out":
+                winnings = (ticket.cashout_amount or Decimal("0.00"))
+            else:
+                winnings = Decimal("0.00")
             ticket_ggr = stake - winnings
             bucket_ggr_by_pct[pct] = bucket_ggr_by_pct.get(pct, Decimal("0.00")) + ticket_ggr
 
@@ -1052,7 +1064,9 @@ def calculate_monthly_network_commission_data(user, period):
         ).exclude(status__in=excluded_statuses)
     
     downline_stake = tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal(0)
-    downline_winnings = tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)
+    downline_won_winnings = tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal(0)
+    downline_cashed_out_winnings = tickets.filter(status='cashed_out').aggregate(Sum('cashout_amount'))['cashout_amount__sum'] or Decimal(0)
+    downline_winnings = downline_won_winnings + downline_cashed_out_winnings
 
     # 2. Commissions Paid to Downlines
     downline_commissions = Decimal(0)

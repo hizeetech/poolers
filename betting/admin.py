@@ -3391,7 +3391,6 @@ class CashOutSettingsAdmin(admin.ModelAdmin):
                 'enable_full_cash_out',
                 'enable_partial_cash_out',
                 'enable_pre_match_cash_out',
-                'disable_cash_out_during_live_events',
                 'company_margin_percent',
                 'risk_multiplier',
                 'minimum_stake_eligible',

@@ -626,7 +626,6 @@ class CashOutSettings(models.Model):
     enable_full_cash_out = models.BooleanField(default=True)
     enable_partial_cash_out = models.BooleanField(default=False)
     enable_pre_match_cash_out = models.BooleanField(default=True)
-    disable_cash_out_during_live_events = models.BooleanField(default=True)
 
     charge_type = models.CharField(max_length=20, choices=CHARGE_TYPE.choices, default=CHARGE_TYPE.FIXED)
     fixed_charge_amount = models.DecimalField(
@@ -1553,12 +1552,11 @@ class BetTicket(models.Model):
                 self.status = 'cancelled'
                 self.potential_winning = self.stake_amount 
                 self.max_winning = self.stake_amount
-                self.total_odd = Decimal('1.00')
                 self.bonus_base_amount = Decimal('0.00')
                 self.bonus_amount = Decimal('0.00')
                 self.bonus_is_final = True
                 self.bonus_applied_at = None
-                self.save(update_fields=['status', 'potential_winning', 'max_winning', 'total_odd', 'bonus_base_amount', 'bonus_amount', 'bonus_is_final', 'bonus_applied_at'])
+                self.save(update_fields=['status', 'potential_winning', 'max_winning', 'bonus_base_amount', 'bonus_amount', 'bonus_is_final', 'bonus_applied_at'])
                 
                 # Log cancellation
                 ActivityLog.objects.create(
@@ -1593,22 +1591,20 @@ class BetTicket(models.Model):
                         dp[j] = dp[j] + (dp[j - 1] * o)
 
                 self.potential_winning = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
-                self.total_odd = Decimal('0.00')
             else:
                 self.potential_winning = Decimal('0.00')
-                self.total_odd = Decimal('0.00')
 
         else: # Single or Multiple
-            new_total_odd = Decimal('1.00')
+            effective_total_odd = Decimal('1.00')
             for sel in all_selections:
                 fixture_status = getattr(sel.fixture, 'status', None)
                 if fixture_status in void_statuses:
-                    new_total_odd *= Decimal('1.00')
+                    effective_total_odd *= Decimal('1.00')
                 else:
-                    new_total_odd *= sel.odd_selected
-            
-            self.total_odd = new_total_odd.quantize(Decimal('0.01'))
-            self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
+                    effective_total_odd *= sel.odd_selected
+
+            effective_total_odd = effective_total_odd.quantize(Decimal('0.01'))
+            self.potential_winning = (self.stake_amount * effective_total_odd).quantize(Decimal('0.01'))
 
         bonus_amount = Decimal('0.00')
         if self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0 and self.status == 'pending':
@@ -1775,7 +1771,6 @@ class BetTicket(models.Model):
 
                 if len(odds) < k:
                     self.status = 'lost'
-                    self.total_odd = Decimal('0.00')
                     self.potential_winning = Decimal('0.00')
                 else:
                     dp = [Decimal('0.00')] * (k + 1)
@@ -1790,11 +1785,9 @@ class BetTicket(models.Model):
                     winning_amount = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
                     if winning_amount > 0:
                         self.status = 'won'
-                        self.total_odd = Decimal('0.00')
                         self.potential_winning = winning_amount
                     else:
                         self.status = 'lost'
-                        self.total_odd = Decimal('0.00')
                         self.potential_winning = Decimal('0.00')
 
             else:
@@ -1802,7 +1795,6 @@ class BetTicket(models.Model):
                     if s.is_winning_selection is False:
                         self.status = 'lost'
                         self.potential_winning = Decimal('0.00')
-                        self.total_odd = Decimal('0.00')
                         self.max_winning = Decimal('0.00')
                         self.bonus_base_amount = Decimal('0.00')
                         self.bonus_amount = Decimal('0.00')
@@ -1827,8 +1819,8 @@ class BetTicket(models.Model):
                         non_void_odds.append(s.odd_selected)
 
                 self.status = 'won'
-                self.total_odd = total_odd_settled.quantize(Decimal('0.01'))
-                self.potential_winning = (self.stake_amount * self.total_odd).quantize(Decimal('0.01'))
+                effective_total_odd = total_odd_settled.quantize(Decimal('0.01'))
+                self.potential_winning = (self.stake_amount * effective_total_odd).quantize(Decimal('0.01'))
 
             old_bonus = self.bonus_amount
             bonus_amount = Decimal('0.00')

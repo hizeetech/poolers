@@ -4342,7 +4342,10 @@ def place_bet(request):
                         projections = system_bet_payout_projections(odds_list, stake_amount_per_line, k)
                         potential_win = projections['max_potential_winning']
                         min_potential_win = projections['min_potential_winning']
-                        total_ticket_odd = Decimal('0.00')
+                        total_ticket_odd = Decimal('1.00')
+                        for sel in valid_selections:
+                            total_ticket_odd *= sel['odd']
+                        total_ticket_odd = total_ticket_odd.quantize(Decimal('0.01'))
                         max_line_odd = projections['max_line_odd']
                     else:
                         total_ticket_odd = Decimal('1.00')
@@ -11138,7 +11141,14 @@ def admin_ticket_details(request, ticket_id):
             .first()
         )
         cashout_settings = CashOutSettings.load()
-        cashout_quote = build_cashout_quote(ticket=ticket, settings_obj=cashout_settings)
+        cashout_quote = build_cashout_quote(
+            ticket=ticket,
+            settings_obj=cashout_settings,
+            actor=request.user,
+            ip_address=request.META.get('REMOTE_ADDR') or None,
+            user_agent=request.META.get('HTTP_USER_AGENT', '') or '',
+            source="admin",
+        )
     except Exception:
         cashout_record = None
         cashout_quote = None
@@ -21550,39 +21560,13 @@ def ticket_cashout_quote(request, ticket_id):
 
     from betting.services.cashout import build_cashout_quote
 
-    quote = build_cashout_quote(ticket=ticket)
-    try:
-        from betting.models import CashOutAuditLog
-        CashOutAuditLog.objects.create(
-            ticket=ticket,
-            cashout=None,
-            actor=request.user,
-            action="CASHOUT_QUOTE",
-            message="Cash out quote requested",
-            ip_address=request.META.get('REMOTE_ADDR') or None,
-            user_agent=request.META.get('HTTP_USER_AGENT', '') or '',
-            metadata={
-                "eligible": bool(quote.eligible),
-                "reason": quote.reason,
-                "stake": str(getattr(ticket, 'stake_amount', '0.00')),
-                "potential_win": str(getattr(ticket, 'potential_winning', '0.00')),
-                "max_winning": str(getattr(ticket, 'max_winning', '0.00')),
-                "cashout_amount": str(quote.cashout_amount),
-                "won_odds": str(getattr(quote, 'won_odds', '0.000000')),
-                "remaining_odds": str(getattr(quote, 'remaining_odds', '0.000000')),
-                "risk_discount": str(getattr(quote, 'risk_discount', '0.000000')),
-                "risk_multiplier": str(getattr(quote, 'risk_multiplier', '0.0000')),
-                "company_margin_percent": str(getattr(quote, 'company_margin_percent', '0.00')),
-                "settled_count": int(getattr(quote, 'settled_count', 0) or 0),
-                "winning_count": int(getattr(quote, 'winning_count', 0) or 0),
-                "losing_count": int(getattr(quote, 'losing_count', 0) or 0),
-                "pending_count": int(getattr(quote, 'pending_count', 0) or 0),
-                "charge_type": str(getattr(quote, 'charge_type', '') or ''),
-                "charge_value": str(getattr(quote, 'charge_value', '0.00') or '0.00'),
-            },
-        )
-    except Exception:
-        pass
+    quote = build_cashout_quote(
+        ticket=ticket,
+        actor=request.user,
+        ip_address=request.META.get('REMOTE_ADDR') or None,
+        user_agent=request.META.get('HTTP_USER_AGENT', '') or '',
+        source="player",
+    )
     return JsonResponse(
         {
             'success': True,

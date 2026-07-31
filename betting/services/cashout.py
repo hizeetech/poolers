@@ -228,7 +228,6 @@ def _cashout_settings_snapshot(settings_obj):
         "enable_full_cash_out": bool(getattr(settings_obj, "enable_full_cash_out", True)),
         "enable_partial_cash_out": bool(getattr(settings_obj, "enable_partial_cash_out", False)),
         "enable_pre_match_cash_out": bool(settings_obj.enable_pre_match_cash_out),
-        "disable_cash_out_during_live_events": bool(settings_obj.disable_cash_out_during_live_events),
         "charge_type": str(settings_obj.charge_type),
         "fixed_charge_amount": str(settings_obj.fixed_charge_amount),
         "percentage_charge": str(settings_obj.percentage_charge),
@@ -242,11 +241,54 @@ def _cashout_settings_snapshot(settings_obj):
     }
 
 
+def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None, user_agent="", source=""):
+    try:
+        settings_obj = settings_obj or CashOutSettings.load()
+        CashOutAuditLog.objects.create(
+            ticket=ticket,
+            cashout=None,
+            actor=actor if isinstance(actor, User) else None,
+            action="CASHOUT_QUOTE",
+            message="Cash out quote generated",
+            ip_address=ip_address or None,
+            user_agent=user_agent or "",
+            metadata={
+                "source": (source or "").strip(),
+                "eligible": bool(getattr(quote, "eligible", False)),
+                "reason": getattr(quote, "reason", ""),
+                "stake": str(getattr(ticket, "stake_amount", "0.00")),
+                "potential_win": str(getattr(ticket, "potential_winning", "0.00")),
+                "max_winning": str(getattr(ticket, "max_winning", "0.00")),
+                "cashout_amount": str(getattr(quote, "cashout_amount", ZERO)),
+                "original_odds": str(getattr(quote, "original_odds", ZERO)),
+                "completed_odds": str(getattr(quote, "completed_odds", ZERO)),
+                "remaining_odds": str(getattr(quote, "remaining_odds", ZERO)),
+                "progress_percent": str(getattr(quote, "progress_percent", ZERO)),
+                "risk_discount": str(getattr(quote, "risk_discount", ZERO)),
+                "risk_multiplier": str(getattr(quote, "risk_multiplier", ZERO)),
+                "company_margin_percent": str(getattr(quote, "company_margin_percent", ZERO)),
+                "settled_count": int(getattr(quote, "settled_count", 0) or 0),
+                "winning_count": int(getattr(quote, "winning_count", 0) or 0),
+                "losing_count": int(getattr(quote, "losing_count", 0) or 0),
+                "pending_count": int(getattr(quote, "pending_count", 0) or 0),
+                "charge_type": str(getattr(quote, "charge_type", "") or ""),
+                "charge_value": str(getattr(quote, "charge_value", ZERO)),
+                "settings": _cashout_settings_snapshot(settings_obj=settings_obj),
+            },
+        )
+    except Exception:
+        return
+
+
 def _cashout_disabled_reason(*, ticket, selections, settings_obj):
     if not settings_obj.enable_cash_out:
         return "Cash Out is currently disabled."
     if settings_obj.manually_closed:
         return "Cash Out has been closed by the administrator."
+    if not getattr(settings_obj, "enable_full_cash_out", True):
+        if getattr(settings_obj, "enable_partial_cash_out", False):
+            return "Partial Cash Out is enabled but is not available yet."
+        return "Cash Out is currently disabled."
     if ticket.is_voided:
         return "Cash Out is not available for voided tickets."
     if ticket.status == "cashed_out" or getattr(ticket, "cashout_id", None) or hasattr(ticket, "cashout"):
@@ -270,22 +312,64 @@ def _cashout_disabled_reason(*, ticket, selections, settings_obj):
     return ""
 
 
-def build_cashout_quote(*, ticket, settings_obj=None, now=None):
+def _compute_original_odds(*, ticket, selections):
+    try:
+        display_total = _safe_decimal(ticket.get_display_total_odd(), Decimal("0.00"))
+    except Exception:
+        display_total = Decimal("0.00")
+
+    if display_total > Decimal("0.00"):
+        try:
+            stored_total = _safe_decimal(getattr(ticket, "total_odd", None) or Decimal("0.00"), Decimal("0.00"))
+            if stored_total <= Decimal("0.00"):
+                ticket.total_odd = display_total.quantize(Decimal("0.01"))
+                ticket.save(update_fields=["total_odd", "last_updated"])
+        except Exception:
+            pass
+        return display_total.quantize(Decimal("0.000001"))
+
+    product = Decimal("1.000000")
+    for sel in selections:
+        product *= _safe_decimal(getattr(sel, "odd_selected", "1.00"), Decimal("1.00"))
+    product = _safe_decimal(product, Decimal("1.00")).quantize(Decimal("0.000001"))
+    try:
+        stored_total = _safe_decimal(getattr(ticket, "total_odd", None) or Decimal("0.00"), Decimal("0.00"))
+        if stored_total <= Decimal("0.00"):
+            ticket.total_odd = product.quantize(Decimal("0.01"))
+            ticket.save(update_fields=["total_odd", "last_updated"])
+    except Exception:
+        pass
+    return product
+
+
+def _progress_percent_from_odds(*, original_odds, completed_odds):
+    original_odds = _safe_decimal(original_odds, Decimal("0.00"))
+    completed_odds = _safe_decimal(completed_odds, Decimal("0.00"))
+    if original_odds <= Decimal("0.00") or completed_odds <= Decimal("0.00"):
+        return ZERO
+    return _quantize_ratio((completed_odds / original_odds) * Decimal("100.00"))
+
+
+
+def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_address=None, user_agent="", source=""):
     settings_obj = settings_obj or CashOutSettings.load()
     now = now or timezone.now()
     selections = list(ticket.selections.select_related("fixture").all())
+    original_odds = _compute_original_odds(ticket=ticket, selections=selections)
 
     reason = _cashout_disabled_reason(ticket=ticket, selections=selections, settings_obj=settings_obj)
     if reason:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason=reason,
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=_quantize_money(ticket.potential_winning),
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     potential_win = _quantize_money(ticket.potential_winning)
     maximum_win = _quantize_money(getattr(ticket, "max_winning", None) or potential_win)
@@ -295,12 +379,17 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
     max_cashout_setting = _quantize_money(settings_obj.maximum_cash_out_amount)
 
     started_not_finished = 0
+    any_started = False
     settled_count = 0
     winning_count = 0
     losing_count = 0
     pending_count = 0
     for sel in selections:
-        if _is_fixture_started(sel, now) and not _is_fixture_finished(sel):
+        started = _is_fixture_started(sel, now)
+        finished = _is_fixture_finished(sel)
+        if started:
+            any_started = True
+        if started and not finished:
             started_not_finished += 1
             continue
 
@@ -313,31 +402,16 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
                 losing_count += 1
             continue
 
-        if not _is_fixture_started(sel, now):
+        if not started:
             pending_count += 1
 
-    if started_not_finished > 0 and settings_obj.disable_cash_out_during_live_events:
-        return CashOutQuote(
-            eligible=False,
-            reason="Cash Out unavailable. One or more events are currently in progress.",
-            cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
-            progress_percent=ZERO,
-            potential_win=potential_win,
-            settled_count=settled_count,
-            winning_count=winning_count,
-            losing_count=losing_count,
-            pending_count=pending_count,
-        )
-
     if started_not_finished > 0:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
-            reason="Cash Out unavailable. Waiting for official result.",
+            reason="Cash Out is temporarily unavailable while event results are pending.",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -345,15 +419,17 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             losing_count=losing_count,
             pending_count=pending_count,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
-    if settled_count == 0:
+    if settled_count == 0 and not any_started:
         if not settings_obj.enable_pre_match_cash_out:
-            return CashOutQuote(
+            quote = CashOutQuote(
                 eligible=False,
                 reason="Cash Out is not available for this ticket.",
                 cashout_amount=ZERO,
-                original_odds=ZERO,
-                completed_odds=ZERO,
+                original_odds=original_odds,
+                completed_odds=Decimal("0.000000"),
                 progress_percent=ZERO,
                 potential_win=potential_win,
                 settled_count=settled_count,
@@ -361,6 +437,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
                 losing_count=losing_count,
                 pending_count=pending_count,
             )
+            _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+            return quote
 
         stake = _quantize_money(ticket.stake_amount)
         charge_type = str(settings_obj.charge_type)
@@ -371,6 +449,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
         else:
             charge_value = _quantize_money(settings_obj.fixed_charge_amount)
 
+        if charge_value <= ZERO:
+            min_charge = max(Decimal("10.00"), (stake * Decimal("0.01")).quantize(Decimal("0.01")))
+            if min_charge >= stake:
+                min_charge = (stake - Decimal("0.01")).quantize(Decimal("0.01"))
+            charge_value = _clamp(min_charge, ZERO, stake)
+
         cashout_amount = (stake - charge_value).quantize(Decimal("0.01"))
         if cashout_amount < ZERO:
             cashout_amount = ZERO
@@ -379,12 +463,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
         cashout_amount = min(cashout_amount, max_cashout_setting)
 
         if cashout_amount <= ZERO:
-            return CashOutQuote(
+            quote = CashOutQuote(
                 eligible=False,
                 reason="Cash Out is not available for this ticket.",
                 cashout_amount=ZERO,
-                original_odds=ZERO,
-                completed_odds=ZERO,
+                original_odds=original_odds,
+                completed_odds=Decimal("0.000000"),
                 progress_percent=ZERO,
                 potential_win=potential_win,
                 settled_count=settled_count,
@@ -394,13 +478,15 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
                 charge_type=charge_type,
                 charge_value=charge_value,
             )
+            _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+            return quote
 
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=True,
             reason="",
             cashout_amount=_quantize_money(cashout_amount),
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -411,6 +497,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             charge_value=charge_value,
             offer_percent_of_potential=ZERO,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     alive = _ticket_is_alive_by_state(
         ticket=ticket,
@@ -420,12 +508,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
         pending_count=pending_count,
     )
     if not alive:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason="Cash Out is no longer available because this ticket no longer qualifies.",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -433,14 +521,16 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             losing_count=losing_count,
             pending_count=pending_count,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     if pending_count <= 0:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason="Cash Out is not available because this ticket is already settled.",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -448,15 +538,17 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             losing_count=losing_count,
             pending_count=pending_count,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     max_cashout_allowed = min(ticket_cap, max_cashout_setting)
     if max_cashout_allowed <= ZERO or min_cashout_setting > max_cashout_allowed:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason=f"Cash Out is not available because the minimum cash out amount (₦{min_cashout_setting:,.2f}) is above this ticket's allowed maximum (₦{max_cashout_allowed:,.2f}).",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -464,6 +556,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             losing_count=losing_count,
             pending_count=pending_count,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     won_odds = Decimal("1.000000")
     pending_odds = []
@@ -500,15 +594,17 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
     secured_value = (stake * won_odds).quantize(Decimal("0.01"))
     cashout_amount = (secured_value * _safe_decimal(risk_discount, ZERO) * margin_factor).quantize(Decimal("0.01"))
     cashout_amount = min(cashout_amount, max_cashout_allowed)
+    completed_odds = _safe_decimal(won_odds, Decimal("1.00")).quantize(Decimal("0.000001"))
+    progress_percent = _progress_percent_from_odds(original_odds=original_odds, completed_odds=completed_odds)
 
     if cashout_amount < min_cashout_setting or cashout_amount <= ZERO:
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason=f"Cash Out is not available because the calculated amount (₦{cashout_amount:,.2f}) is below the minimum cash out amount (₦{min_cashout_setting:,.2f}).",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
-            progress_percent=_quantize_ratio(risk_discount * Decimal("100.00")),
+            original_odds=original_odds,
+            completed_odds=completed_odds,
+            progress_percent=progress_percent,
             potential_win=potential_win,
             settled_count=settled_count,
             winning_count=winning_count,
@@ -520,6 +616,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             company_margin_percent=margin_percent,
             risk_multiplier=risk_multiplier,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
     if cashout_amount > potential_win or cashout_amount > maximum_win or cashout_amount < ZERO:
         _log_invalid_quote(
@@ -541,12 +639,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
                 "pending_count": pending_count,
             },
         )
-        return CashOutQuote(
+        quote = CashOutQuote(
             eligible=False,
             reason="Cash Out is not available for this ticket.",
             cashout_amount=ZERO,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=completed_odds,
             progress_percent=ZERO,
             potential_win=potential_win,
             settled_count=settled_count,
@@ -559,14 +657,16 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
             company_margin_percent=margin_percent,
             risk_multiplier=risk_multiplier,
         )
+        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
 
-    return CashOutQuote(
+    quote = CashOutQuote(
         eligible=True,
         reason="",
         cashout_amount=_quantize_money(cashout_amount),
-        original_odds=ZERO,
-        completed_odds=ZERO,
-        progress_percent=_quantize_ratio(risk_discount * Decimal("100.00")),
+        original_odds=original_odds,
+        completed_odds=completed_odds,
+        progress_percent=progress_percent,
         potential_win=potential_win,
         settled_count=settled_count,
         winning_count=winning_count,
@@ -578,6 +678,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None):
         company_margin_percent=margin_percent,
         risk_multiplier=risk_multiplier,
     )
+    _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+    return quote
 
 
 def _build_cashout_reference(ticket):
@@ -591,6 +693,11 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
     now = timezone.now()
 
     with transaction.atomic():
+        if not getattr(settings_obj, "enable_full_cash_out", True):
+            if getattr(settings_obj, "enable_partial_cash_out", False):
+                raise CashOutError("Partial Cash Out is enabled but is not available yet.")
+            raise CashOutError("Cash Out is currently disabled.")
+
         ticket = (
             BetTicket.objects.select_for_update()
             .select_related("user")
@@ -606,7 +713,15 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
         if reason:
             raise CashOutError(reason)
 
-        quote = build_cashout_quote(ticket=ticket, settings_obj=settings_obj, now=now)
+        quote = build_cashout_quote(
+            ticket=ticket,
+            settings_obj=settings_obj,
+            now=now,
+            actor=actor,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            source="execute",
+        )
         if not quote.eligible:
             raise CashOutError(quote.reason or "Cash Out is not available.")
 
@@ -646,6 +761,8 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
             agent = cashier.agent
 
         settings_snapshot = _cashout_settings_snapshot(settings_obj)
+        original_odds = _safe_decimal(getattr(quote, "original_odds", ZERO), ZERO).quantize(Decimal("0.000001"))
+        completed_odds = _safe_decimal(getattr(quote, "completed_odds", ZERO), ZERO).quantize(Decimal("0.000001"))
         cashout = BetTicketCashOut.objects.create(
             reference=reference,
             ticket=ticket,
@@ -656,8 +773,8 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
             ticket_status=ticket.status,
             stake_amount=_quantize_money(ticket.stake_amount),
             potential_win=quote.potential_win,
-            original_odds=ZERO,
-            completed_odds=ZERO,
+            original_odds=original_odds,
+            completed_odds=completed_odds,
             progress_percent=_safe_decimal(quote.progress_percent, ZERO).quantize(Decimal("0.0001")),
             company_margin_percent=_safe_decimal(quote.company_margin_percent, ZERO).quantize(Decimal("0.01")),
             charge_type=str(quote.charge_type or ""),
@@ -683,8 +800,8 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
         ticket.cashout_amount = quote.cashout_amount
         ticket.cashout_reference = reference
         ticket.cashout_company_margin_percent = _safe_decimal(quote.company_margin_percent, ZERO).quantize(Decimal("0.01"))
-        ticket.cashout_original_odds = ZERO
-        ticket.cashout_completed_odds = ZERO
+        ticket.cashout_original_odds = original_odds
+        ticket.cashout_completed_odds = completed_odds
         ticket.cashout_progress_percent = _safe_decimal(quote.progress_percent, ZERO).quantize(Decimal("0.0001"))
         ticket.cashout_strategy = "odds_based"
         ticket.cashout_processed_at = now

@@ -39,7 +39,6 @@ class CashOutTests(TestCase):
                 "enable_full_cash_out": True,
                 "enable_partial_cash_out": False,
                 "enable_pre_match_cash_out": True,
-                "disable_cash_out_during_live_events": True,
                 "charge_type": CashOutSettings.CHARGE_TYPE.FIXED,
                 "fixed_charge_amount": Decimal("100.00"),
                 "percentage_charge": Decimal("0.00"),
@@ -63,15 +62,17 @@ class CashOutTests(TestCase):
 
     def _fixture(self, *, status="scheduled", home_score=None, away_score=None, serial=1):
         today = timezone.localdate()
+        match_date = today
         match_time = timezone.now().time()
         if status == "scheduled":
-            match_time = (timezone.now() + timedelta(hours=2)).time()
+            match_date = today + timedelta(days=1)
+            match_time = timezone.now().time()
         return Fixture.objects.create(
             betting_period=self.period,
             serial_number=serial,
             home_team=f"Home {serial}",
             away_team=f"Away {serial}",
-            match_date=today,
+            match_date=match_date,
             match_time=match_time,
             status=status,
             is_active=True,
@@ -120,6 +121,28 @@ class CashOutTests(TestCase):
         self.assertEqual(quote.cashout_amount, Decimal("1900.00"))
         self.assertEqual(quote.charge_type, "fixed")
         self.assertEqual(quote.charge_value, Decimal("100.00"))
+        self.assertEqual(quote.original_odds, Decimal("2.000000"))
+        self.assertEqual(quote.completed_odds, Decimal("0.000000"))
+
+    def test_prematch_cashout_with_zero_charge_deducts_minimum(self):
+        CashOutSettings.objects.filter(pk=1).update(fixed_charge_amount=Decimal("0.00"), percentage_charge=Decimal("0.00"))
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("500.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("1000.00"),
+            min_winning=Decimal("1000.00"),
+            max_winning=Decimal("1000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertLess(quote.cashout_amount, Decimal("500.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("490.00"))
 
     def test_cashout_disabled_when_event_is_in_progress(self):
         ticket = BetTicket.objects.create(
@@ -139,7 +162,27 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertFalse(quote.eligible)
-        self.assertIn("in progress", quote.reason.lower())
+        self.assertIn("temporarily unavailable", quote.reason.lower())
+
+    def test_cashout_disabled_when_event_is_started_but_not_settled(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("1000.00"),
+            total_odd=Decimal("4.00"),
+            potential_winning=Decimal("4000.00"),
+            min_winning=Decimal("4000.00"),
+            max_winning=Decimal("4000.00"),
+            status="pending",
+            bet_type="multiple",
+        )
+        f1 = self._fixture(status="live", serial=1)
+        f2 = self._fixture(status="scheduled", serial=2)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertIn("temporarily unavailable", quote.reason.lower())
 
     def test_cashout_disabled_when_min_cashout_exceeds_ticket_cap(self):
         CashOutSettings.objects.filter(pk=1).update(minimum_cash_out_amount=Decimal("1000000.00"))
@@ -225,6 +268,8 @@ class CashOutTests(TestCase):
         risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
         expected = (Decimal("2000.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
         self.assertEqual(quote.cashout_amount, expected)
+        self.assertEqual(quote.completed_odds, Decimal("3.300000"))
+        self.assertEqual(quote.original_odds, Decimal("13.930000"))
 
     def test_permutation_cashout_only_when_mathematically_alive(self):
         k = 3

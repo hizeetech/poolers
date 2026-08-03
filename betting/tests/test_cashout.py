@@ -243,7 +243,45 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertFalse(quote.eligible)
-        self.assertIn("no longer available", quote.reason.lower())
+        self.assertIn("losing selection", quote.reason.lower())
+
+    def test_permutation_cashout_eliminated_when_required_wins_not_achievable(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("1000.00"),
+            total_odd=Decimal("0.00"),
+            potential_winning=Decimal("10000.00"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("10000.00"),
+            status="pending",
+            bet_type="system",
+            system_min_count=6,
+            original_selections_count=7,
+        )
+
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="finished", home_score=2, away_score=1, serial=2)
+        f3 = self._fixture(status="finished", home_score=0, away_score=1, serial=3)
+        f4 = self._fixture(status="finished", home_score=0, away_score=1, serial=4)
+        f5 = self._fixture(status="finished", home_score=0, away_score=1, serial=5)
+        f6 = self._fixture(status="finished", home_score=0, away_score=1, serial=6)
+        f7 = self._fixture(status="scheduled", serial=7)
+
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f3, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f4, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f5, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f6, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f7, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("1.50"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertEqual(quote.cashout_amount, Decimal("0.00"))
+        self.assertIn("mathematically eliminated", quote.reason.lower())
+
+        with self.assertRaises(CashOutError):
+            execute_cashout(ticket_id=ticket.id, actor=self.user, ip_address="127.0.0.1", user_agent="test")
 
     def test_after_result_cashout_uses_won_odds_and_remaining_odds(self):
         ticket = BetTicket.objects.create(

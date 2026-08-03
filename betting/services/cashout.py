@@ -33,6 +33,8 @@ class CashOutQuote:
     winning_count: int = 0
     losing_count: int = 0
     pending_count: int = 0
+    required_wins: int = 0
+    maximum_possible_wins: int = 0
     charge_type: str = ""
     charge_value: Decimal = ZERO
     offer_percent_of_potential: Decimal = ZERO
@@ -121,6 +123,12 @@ def _is_fixture_finished(selection):
 
 
 def _selection_outcome(selection):
+    selection_result = getattr(selection, "is_winning_selection", None)
+    if selection_result is True:
+        return True, True
+    if selection_result is False:
+        return False, True
+
     fixture = getattr(selection, "fixture", None)
     if fixture is None:
         return None, False
@@ -244,6 +252,13 @@ def _cashout_settings_snapshot(settings_obj):
 def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None, user_agent="", source=""):
     try:
         settings_obj = settings_obj or CashOutSettings.load()
+        required_wins = 0
+        try:
+            if getattr(ticket, "bet_type", "") == "system":
+                required_wins = int(getattr(ticket, "system_min_count", None) or 0)
+        except Exception:
+            required_wins = 0
+
         CashOutAuditLog.objects.create(
             ticket=ticket,
             cashout=None,
@@ -256,6 +271,7 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "source": (source or "").strip(),
                 "eligible": bool(getattr(quote, "eligible", False)),
                 "reason": getattr(quote, "reason", ""),
+                "ticket_bet_type": str(getattr(ticket, "bet_type", "") or ""),
                 "stake": str(getattr(ticket, "stake_amount", "0.00")),
                 "potential_win": str(getattr(ticket, "potential_winning", "0.00")),
                 "max_winning": str(getattr(ticket, "max_winning", "0.00")),
@@ -271,6 +287,8 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "winning_count": int(getattr(quote, "winning_count", 0) or 0),
                 "losing_count": int(getattr(quote, "losing_count", 0) or 0),
                 "pending_count": int(getattr(quote, "pending_count", 0) or 0),
+                "required_wins": int(getattr(quote, "required_wins", 0) or required_wins or 0),
+                "maximum_possible_wins": int(getattr(quote, "maximum_possible_wins", 0) or 0),
                 "charge_type": str(getattr(quote, "charge_type", "") or ""),
                 "charge_value": str(getattr(quote, "charge_value", ZERO)),
                 "settings": _cashout_settings_snapshot(settings_obj=settings_obj),
@@ -356,6 +374,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
     now = now or timezone.now()
     selections = list(ticket.selections.select_related("fixture").all())
     original_odds = _compute_original_odds(ticket=ticket, selections=selections)
+    required_wins = 0
+    try:
+        if getattr(ticket, "bet_type", "") == "system":
+            required_wins = int(getattr(ticket, "system_min_count", None) or 0)
+    except Exception:
+        required_wins = 0
 
     reason = _cashout_disabled_reason(ticket=ticket, selections=selections, settings_obj=settings_obj)
     if reason:
@@ -367,6 +391,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=_quantize_money(ticket.potential_winning),
+            required_wins=required_wins,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -394,6 +419,9 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             continue
 
         outcome, is_settled = _selection_outcome(sel)
+        if finished and not is_settled:
+            started_not_finished += 1
+            continue
         if is_settled:
             settled_count += 1
             if outcome is True:
@@ -418,6 +446,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             winning_count=winning_count,
             losing_count=losing_count,
             pending_count=pending_count,
+            required_wins=required_wins,
+            maximum_possible_wins=int((winning_count or 0) + (pending_count or 0)),
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -477,6 +507,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 pending_count=pending_count,
                 charge_type=charge_type,
                 charge_value=charge_value,
+                required_wins=required_wins,
             )
             _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
             return quote
@@ -496,33 +527,69 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             charge_type=charge_type,
             charge_value=charge_value,
             offer_percent_of_potential=ZERO,
+            required_wins=required_wins,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
 
-    alive = _ticket_is_alive_by_state(
-        ticket=ticket,
-        selections=selections,
-        winning_count=winning_count,
-        losing_count=losing_count,
-        pending_count=pending_count,
-    )
-    if not alive:
-        quote = CashOutQuote(
-            eligible=False,
-            reason="Cash Out is no longer available because this ticket no longer qualifies.",
-            cashout_amount=ZERO,
-            original_odds=original_odds,
-            completed_odds=Decimal("0.000000"),
-            progress_percent=ZERO,
-            potential_win=potential_win,
-            settled_count=settled_count,
-            winning_count=winning_count,
-            losing_count=losing_count,
-            pending_count=pending_count,
-        )
-        _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
-        return quote
+    maximum_possible_wins = int((winning_count or 0) + (pending_count or 0))
+    if ticket.bet_type == "system":
+        if required_wins <= 0:
+            quote = CashOutQuote(
+                eligible=False,
+                reason="Cash Out is not available because this ticket configuration is invalid.",
+                cashout_amount=ZERO,
+                original_odds=original_odds,
+                completed_odds=Decimal("0.000000"),
+                progress_percent=ZERO,
+                potential_win=potential_win,
+                settled_count=settled_count,
+                winning_count=winning_count,
+                losing_count=losing_count,
+                pending_count=pending_count,
+                required_wins=required_wins,
+                maximum_possible_wins=maximum_possible_wins,
+            )
+            _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+            return quote
+
+        if maximum_possible_wins < required_wins:
+            quote = CashOutQuote(
+                eligible=False,
+                reason="Ticket is mathematically eliminated.",
+                cashout_amount=ZERO,
+                original_odds=original_odds,
+                completed_odds=Decimal("0.000000"),
+                progress_percent=ZERO,
+                potential_win=potential_win,
+                settled_count=settled_count,
+                winning_count=winning_count,
+                losing_count=losing_count,
+                pending_count=pending_count,
+                required_wins=required_wins,
+                maximum_possible_wins=maximum_possible_wins,
+            )
+            _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+            return quote
+    else:
+        if losing_count > 0:
+            quote = CashOutQuote(
+                eligible=False,
+                reason="Cash Out is not available because this ticket has a losing selection.",
+                cashout_amount=ZERO,
+                original_odds=original_odds,
+                completed_odds=Decimal("0.000000"),
+                progress_percent=ZERO,
+                potential_win=potential_win,
+                settled_count=settled_count,
+                winning_count=winning_count,
+                losing_count=losing_count,
+                pending_count=pending_count,
+                required_wins=required_wins,
+                maximum_possible_wins=maximum_possible_wins,
+            )
+            _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+            return quote
 
     if pending_count <= 0:
         quote = CashOutQuote(
@@ -537,8 +604,11 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             winning_count=winning_count,
             losing_count=losing_count,
             pending_count=pending_count,
+            required_wins=required_wins,
+            maximum_possible_wins=maximum_possible_wins,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
+        return quote
         return quote
 
     max_cashout_allowed = min(ticket_cap, max_cashout_setting)
@@ -555,6 +625,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             winning_count=winning_count,
             losing_count=losing_count,
             pending_count=pending_count,
+            required_wins=required_wins,
+            maximum_possible_wins=maximum_possible_wins,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -610,6 +682,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             winning_count=winning_count,
             losing_count=losing_count,
             pending_count=pending_count,
+            required_wins=required_wins,
+            maximum_possible_wins=maximum_possible_wins,
             won_odds=won_odds,
             remaining_odds=remaining_odds,
             risk_discount=risk_discount,
@@ -651,6 +725,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             winning_count=winning_count,
             losing_count=losing_count,
             pending_count=pending_count,
+            required_wins=required_wins,
+            maximum_possible_wins=maximum_possible_wins,
             won_odds=won_odds,
             remaining_odds=remaining_odds,
             risk_discount=risk_discount,
@@ -672,6 +748,8 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         winning_count=winning_count,
         losing_count=losing_count,
         pending_count=pending_count,
+        required_wins=required_wins,
+        maximum_possible_wins=maximum_possible_wins,
         won_odds=won_odds,
         remaining_odds=remaining_odds,
         risk_discount=risk_discount,
@@ -835,6 +913,9 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
             metadata={
                 "reference": reference,
                 "cashout_amount": str(quote.cashout_amount),
+                "ticket_bet_type": str(getattr(ticket, "bet_type", "") or ""),
+                "required_wins": int(getattr(quote, "required_wins", 0) or 0),
+                "maximum_possible_wins": int(getattr(quote, "maximum_possible_wins", 0) or 0),
                 "won_odds": str(_safe_decimal(quote.won_odds, Decimal("0.00"))),
                 "remaining_odds": str(_safe_decimal(quote.remaining_odds, Decimal("0.00"))),
                 "risk_discount": str(_safe_decimal(quote.risk_discount, Decimal("0.00"))),

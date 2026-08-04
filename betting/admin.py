@@ -58,7 +58,7 @@ from .models import (
     ProcessedWithdrawal, WebAuthnCredential, BiometricAuthLog, CarouselImage,
     PasswordResetRequest, State, FooterPage, FooterBadge,
     GlobalBettingSettings, AgentBettingLimitOverride, UserBettingLimitOverride, BettingLimitAuditLog,
-    CashOutSettings, BetTicketCashOut, CashOutAuditLog,
+    CashOutSettings, PaymentGatewaySettings, BetTicketCashOut, CashOutAuditLog,
     PaymentGatewayDeposit,
     CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
@@ -129,7 +129,7 @@ class BettingAdminSite(admin.AdminSite):
                         'name': 'Processed Withdrawals',
                     }
                     continue
-                if model.get('object_name') in {'SiteConfiguration', 'GlobalBettingSettings', 'SystemSetting', 'CashOutSettings'}:
+                if model.get('object_name') in {'SiteConfiguration', 'GlobalBettingSettings', 'SystemSetting', 'CashOutSettings', 'PaymentGatewaySettings'}:
                     system_settings_models.append(model)
                     continue
                 models.append(model)
@@ -3428,6 +3428,34 @@ class CashOutSettingsAdmin(admin.ModelAdmin):
         return False
 
 
+class PaymentGatewaySettingsAdmin(admin.ModelAdmin):
+    fieldsets = (
+        ('Payment Gateways', {
+            'fields': (
+                'enable_paystack',
+                'enable_monnify',
+                'enable_kora',
+            )
+        }),
+        ('Audit', {
+            'fields': ('updated_by', 'created_at', 'updated_at')
+        }),
+    )
+    readonly_fields = ('created_at', 'updated_at')
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def has_add_permission(self, request):
+        if self.model.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 class BetTicketCashOutAdmin(admin.ModelAdmin):
     list_display = (
         'processed_at',
@@ -3513,6 +3541,7 @@ betting_admin_site.register(PasswordResetRequest, PasswordResetRequestAdmin)
 betting_admin_site.register(State, StateAdmin)
 betting_admin_site.register(SiteConfiguration, SiteConfigurationAdmin)
 betting_admin_site.register(CashOutSettings, CashOutSettingsAdmin)
+betting_admin_site.register(PaymentGatewaySettings, PaymentGatewaySettingsAdmin)
 betting_admin_site.register(BetTicketCashOut, BetTicketCashOutAdmin)
 betting_admin_site.register(CashOutAuditLog, CashOutAuditLogAdmin)
 

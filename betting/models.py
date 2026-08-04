@@ -696,6 +696,40 @@ class CashOutSettings(models.Model):
     def __str__(self):
         return "Cash Out Settings"
 
+
+class PaymentGatewaySettings(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+
+    enable_paystack = models.BooleanField(default=True)
+    enable_monnify = models.BooleanField(default=True)
+    enable_kora = models.BooleanField(default=True)
+
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_payment_gateway_settings')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def is_enabled(self, gateway):
+        g = (gateway or "").strip().lower()
+        if g == "paystack":
+            return bool(self.enable_paystack)
+        if g == "monnify":
+            return bool(self.enable_monnify)
+        if g == "kora":
+            return bool(self.enable_kora)
+        return False
+
+    def __str__(self):
+        return "Payment Gateway Settings"
+
 class AgentBettingLimitOverride(models.Model):
     agent = models.OneToOneField(User, on_delete=models.CASCADE, related_name='betting_limit_override', limit_choices_to={'user_type__in': ['agent', 'super_agent', 'master_agent']})
     is_active = models.BooleanField(default=True)

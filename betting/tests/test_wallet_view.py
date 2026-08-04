@@ -6,7 +6,7 @@ from django.db import models
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
-from betting.models import Loan, LoanPendingCredit, SiteConfiguration, Transaction, User, Wallet, WalletLedgerEntry
+from betting.models import Loan, LoanPendingCredit, PaymentGatewaySettings, SiteConfiguration, Transaction, User, Wallet, WalletLedgerEntry
 from betting.services.loan_overdraft import (
     apply_repayment_and_credit_wallet,
     build_qualification_snapshot,
@@ -47,16 +47,24 @@ class WalletViewTest(TestCase):
         wallet = Wallet.objects.get(user=self.user)
         self.assertEqual(wallet.balance, Decimal('0.00'))
 
-    def test_wallet_view_hides_monnify_button(self):
+    def test_wallet_view_shows_monnify_button_when_enabled(self):
         self.client.login(username=self.user.username, password='testpassword')
 
         response = self.client.get(reverse('betting:wallet'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(
+        self.assertContains(
             response,
             'button type="submit" name="gateway" value="monnify"'
         )
+
+    def test_wallet_view_hides_monnify_button_when_disabled(self):
+        PaymentGatewaySettings.objects.update_or_create(pk=1, defaults={"enable_monnify": False})
+        self.client.login(username=self.user.username, password='testpassword')
+
+        response = self.client.get(reverse('betting:wallet'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'button type="submit" name="gateway" value="monnify"')
 
     def test_wallet_recent_transactions_can_filter_by_direction_and_type(self):
         Wallet.objects.get_or_create(user=self.user, defaults={"balance": Decimal("0.00")})

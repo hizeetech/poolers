@@ -177,25 +177,29 @@
                             <input type="number" name="amount" id="id_amount_deposit" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 5000" min="100" required>
                         </div>
                         <div class="row g-2 mb-3">
-                            <div class="col-md-6">
+                            {% if 'paystack' in enabled_gateways %}
+                            <div class="col-md-4">
                                 <button type="submit" name="gateway" value="paystack" id="paystack-button" class="btn btn-primary rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
                                     <i class="fas fa-credit-card me-2"></i> Paystack
                                 </button>
                             </div>
-                            {% comment %}
+                            {% endif %}
+                            {% if 'monnify' in enabled_gateways %}
                             <div class="col-md-4">
                                 <button type="submit" name="gateway" value="monnify" class="btn btn-dark rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center">
                                     <i class="fas fa-university me-2"></i> Monnify
                                 </button>
                             </div>
-                            {% endcomment %}
-                            <div class="col-md-6">
+                            {% endif %}
+                            {% if 'kora' in enabled_gateways %}
+                            <div class="col-md-4">
                                 <button type="submit" name="gateway" value="kora" class="btn btn-info rounded-pill px-4 py-2 w-100 d-flex align-items-center justify-content-center text-white">
                                     <i class="fas fa-bolt me-2"></i> Kora
                                 </button>
                             </div>
+                            {% endif %}
                         </div>
-                        <input type="hidden" name="gateway_hidden" id="gateway_hidden" value="paystack">
+                        <input type="hidden" name="gateway_hidden" id="gateway_hidden" value="{{ default_gateway }}">
                     </form>
                     <p class="text-center text-muted small mb-0 mt-3">Choose your preferred payment gateway</p>
                 </div>
@@ -843,7 +847,7 @@
                                // but we'll use a smarter approach below.
         
         const amount = document.getElementById('id_amount_deposit').value;
-        const gateway = e.submitter ? e.submitter.value : 'paystack';
+        const gateway = e.submitter ? e.submitter.value : (document.getElementById('gateway_hidden').value || 'paystack');
         
         if (!amount || parseFloat(amount) <= 0) {
             e.preventDefault();

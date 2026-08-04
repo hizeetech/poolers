@@ -107,6 +107,7 @@ from .models import (
     DashboardTask, CRMDailyReport, CRMComplaint, CRMCampaignPerformance, CRMChallenge, CRMNextDayTask,
     CRMAdminComment, CRMReportAttachment, RetailDailyReport, RetailSupportActivity,
     RetailCampaignPerformance, RetailChallenge, RetailNextDayTask, RetailAdminComment, RetailReportAttachment,
+    PaymentGatewaySettings,
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -5617,6 +5618,11 @@ def wallet_view(request):
 
     primary_outstanding_loan = active_loans.first()
 
+    gateway_settings = PaymentGatewaySettings.load()
+    gateway_order = ["paystack", "monnify", "kora"]
+    enabled_gateways = [g for g in gateway_order if gateway_settings.is_enabled(g)]
+    default_gateway = enabled_gateways[0] if enabled_gateways else "paystack"
+
     context = {
         'wallet': wallet,
         'recent_transactions': recent_transactions,
@@ -5650,6 +5656,9 @@ def wallet_view(request):
         'withdrawal_attempts': request.user.withdrawal_attempts,
         'withdrawal_lock_expires_at': withdrawal_lock_expires_at,
         'paystack_public_key': settings.PAYSTACK_PUBLIC_KEY,
+        'gateway_settings': gateway_settings,
+        'enabled_gateways': enabled_gateways,
+        'default_gateway': default_gateway,
         'min_operating_balance': Decimal('5000.00'),
         'can_withdraw_from_wallet': can_withdraw,
         'can_transfer_from_wallet': can_transfer_from_wallet,
@@ -5806,6 +5815,9 @@ def initiate_deposit(request):
                 gateway = (data.get('gateway') or 'paystack').strip().lower()
                 if gateway not in {'paystack', 'monnify', 'kora'}:
                     return JsonResponse({'status': 'error', 'message': 'Unsupported gateway.'}, status=400)
+                gateway_settings = PaymentGatewaySettings.load()
+                if not gateway_settings.is_enabled(gateway):
+                    return JsonResponse({'status': 'error', 'message': 'This payment gateway is currently unavailable.'}, status=403)
 
                 amount = _quantize_amount(data.get('amount', 0))
                 
@@ -5883,7 +5895,15 @@ def initiate_deposit(request):
                 return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
         # Handle Form Request (Traditional Redirect)
-        gateway = request.POST.get('gateway', 'paystack')
+        gateway = (request.POST.get('gateway') or request.POST.get('gateway_hidden') or 'paystack').strip().lower()
+        if gateway not in {'paystack', 'monnify', 'kora'}:
+            messages.error(request, "Unsupported payment gateway.")
+            return redirect('betting:wallet')
+        gateway_settings = PaymentGatewaySettings.load()
+        if not gateway_settings.is_enabled(gateway):
+            messages.error(request, "This payment gateway is currently unavailable.")
+            return redirect('betting:wallet')
+
         form = InitiateDepositForm(request.POST)
         if form.is_valid():
             amount = form.cleaned_data['amount']

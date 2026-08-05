@@ -30,6 +30,9 @@ class CashOutQuote:
     completed_odds: Decimal
     progress_percent: Decimal
     potential_win: Decimal
+    total_stake_amount: Decimal = ZERO
+    cash_stake_amount: Decimal = ZERO
+    bonus_stake_amount: Decimal = ZERO
     settled_count: int = 0
     winning_count: int = 0
     losing_count: int = 0
@@ -48,6 +51,12 @@ class CashOutQuote:
     risk_discount: Decimal = Decimal("0.000000")
     company_margin_percent: Decimal = Decimal("0.00")
     risk_multiplier: Decimal = Decimal("0.0000")
+    cash_out_scaling_factor: Decimal = Decimal("1.0000")
+    max_cash_out_cap_percent: Decimal = Decimal("0.00")
+    max_cash_out_cap_amount: Decimal = ZERO
+    cashout_before_scaling: Decimal = ZERO
+    cashout_after_scaling: Decimal = ZERO
+    risk_discount_exponent: Decimal = Decimal("1.0000")
 
 
 class CashOutError(Exception):
@@ -75,6 +84,36 @@ def _clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
+
+
+def _stake_split(ticket):
+    total_stake = _quantize_money(getattr(ticket, "stake_amount", ZERO))
+    cash_raw = getattr(ticket, "cash_stake_amount", None)
+    bonus_raw = getattr(ticket, "bonus_stake_amount", None)
+
+    if cash_raw is None and bonus_raw is None:
+        return total_stake, total_stake, ZERO
+
+    if cash_raw is None and bonus_raw is not None:
+        bonus_stake = _quantize_money(bonus_raw)
+        cash_stake = (total_stake - bonus_stake).quantize(Decimal("0.01"))
+        if cash_stake < ZERO:
+            cash_stake = ZERO
+        return total_stake, cash_stake, bonus_stake
+
+    cash_stake = _quantize_money(cash_raw)
+    if bonus_raw is None:
+        bonus_stake = (total_stake - cash_stake).quantize(Decimal("0.01"))
+        if bonus_stake < ZERO:
+            bonus_stake = ZERO
+        return total_stake, min(cash_stake, total_stake), bonus_stake
+
+    bonus_stake = _quantize_money(bonus_raw)
+    cash_stake = min(cash_stake, total_stake)
+    bonus_stake = min(bonus_stake, (total_stake - cash_stake).quantize(Decimal("0.01")))
+    if bonus_stake < ZERO:
+        bonus_stake = ZERO
+    return total_stake, cash_stake, bonus_stake
 
 
 def _system_progress_factor(*, winning_count, required_wins):
@@ -251,13 +290,22 @@ def _ticket_is_alive_by_state(*, ticket, selections, winning_count, losing_count
     return pending_count > 0
 
 
-def _risk_discount_from_remaining_odds(*, remaining_odds, risk_multiplier):
+def _risk_discount_from_remaining_odds(*, remaining_odds, risk_multiplier, exponent=None):
     remaining_odds = _safe_decimal(remaining_odds, Decimal("1.00"))
     if remaining_odds <= Decimal("1.00"):
         return Decimal("1.000000")
 
     rm = _clamp(_safe_decimal(risk_multiplier, Decimal("0.0500")), Decimal("0.0000"), Decimal("1000.0000"))
-    denom = Decimal("1.00") + (rm * (remaining_odds - Decimal("1.00")))
+    exp_val = _clamp(_safe_decimal(exponent, Decimal("1.0000")), Decimal("1.0000"), Decimal("10.0000"))
+    delta = remaining_odds - Decimal("1.00")
+    if delta <= Decimal("0.00"):
+        powered = Decimal("0.000000")
+    else:
+        with localcontext() as ctx:
+            ctx.prec = 40
+            powered = (delta.ln() * exp_val).exp()
+
+    denom = Decimal("1.00") + (rm * powered)
     if denom <= Decimal("0.00"):
         return Decimal("0.000000")
     discount = (Decimal("1.00") / denom).quantize(Decimal("0.000001"))
@@ -285,6 +333,10 @@ def _cashout_settings_snapshot(settings_obj):
         "percentage_charge": str(settings_obj.percentage_charge),
         "company_margin_percent": str(getattr(settings_obj, "company_margin_percent", "0.00")),
         "risk_multiplier": str(getattr(settings_obj, "risk_multiplier", "0.0000")),
+        "cash_out_scaling_factor": str(getattr(settings_obj, "cash_out_scaling_factor", "1.0000")),
+        "max_pre_match_cash_out_percent": str(getattr(settings_obj, "max_pre_match_cash_out_percent", "0.00")),
+        "max_in_progress_cash_out_percent": str(getattr(settings_obj, "max_in_progress_cash_out_percent", "0.00")),
+        "risk_discount_exponent": str(getattr(settings_obj, "risk_discount_exponent", "1.0000")),
         "minimum_stake_eligible": str(settings_obj.minimum_stake_eligible),
         "maximum_stake_eligible": str(settings_obj.maximum_stake_eligible),
         "minimum_cash_out_amount": str(settings_obj.minimum_cash_out_amount),
@@ -303,6 +355,8 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
         except Exception:
             required_wins = 0
 
+        total_stake_amount, cash_stake_amount, bonus_stake_amount = _stake_split(ticket)
+
         CashOutAuditLog.objects.create(
             ticket=ticket,
             cashout=None,
@@ -316,7 +370,10 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "eligible": bool(getattr(quote, "eligible", False)),
                 "reason": getattr(quote, "reason", ""),
                 "ticket_bet_type": str(getattr(ticket, "bet_type", "") or ""),
-                "stake": str(getattr(ticket, "stake_amount", "0.00")),
+                "stake_total": str(getattr(ticket, "stake_amount", "0.00")),
+                "stake_cash": str(cash_stake_amount),
+                "stake_bonus": str(bonus_stake_amount),
+                "cashout_basis": str(cash_stake_amount),
                 "potential_win": str(getattr(ticket, "potential_winning", "0.00")),
                 "max_winning": str(getattr(ticket, "max_winning", "0.00")),
                 "cashout_amount": str(getattr(quote, "cashout_amount", ZERO)),
@@ -326,7 +383,13 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "progress_percent": str(getattr(quote, "progress_percent", ZERO)),
                 "risk_discount": str(getattr(quote, "risk_discount", ZERO)),
                 "risk_multiplier": str(getattr(quote, "risk_multiplier", ZERO)),
+                "risk_discount_exponent": str(getattr(quote, "risk_discount_exponent", ZERO)),
                 "company_margin_percent": str(getattr(quote, "company_margin_percent", ZERO)),
+                "cash_out_scaling_factor": str(getattr(quote, "cash_out_scaling_factor", ZERO)),
+                "max_cash_out_cap_percent": str(getattr(quote, "max_cash_out_cap_percent", ZERO)),
+                "max_cash_out_cap_amount": str(getattr(quote, "max_cash_out_cap_amount", ZERO)),
+                "cashout_before_scaling": str(getattr(quote, "cashout_before_scaling", ZERO)),
+                "cashout_after_scaling": str(getattr(quote, "cashout_after_scaling", ZERO)),
                 "settled_count": int(getattr(quote, "settled_count", 0) or 0),
                 "winning_count": int(getattr(quote, "winning_count", 0) or 0),
                 "losing_count": int(getattr(quote, "losing_count", 0) or 0),
@@ -369,7 +432,11 @@ def _cashout_disabled_reason(*, ticket, selections, settings_obj):
     if _ticket_is_settled(ticket=ticket, selections=selections):
         return "Cash Out is not available because this ticket is already settled."
 
-    stake = _safe_decimal(ticket.stake_amount, ZERO)
+    total_stake, cash_stake, bonus_stake = _stake_split(ticket)
+    if cash_stake <= ZERO:
+        return "Cash Out is not available because this ticket was funded with bonus/promotional credits."
+
+    stake = _safe_decimal(cash_stake, ZERO)
     if stake < _safe_decimal(settings_obj.minimum_stake_eligible, ZERO):
         return "Cash Out is not available for this stake amount."
     if stake > _safe_decimal(settings_obj.maximum_stake_eligible, stake):
@@ -429,6 +496,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
     now = now or timezone.now()
     selections = list(ticket.selections.select_related("fixture").all())
     original_odds = _compute_original_odds(ticket=ticket, selections=selections)
+    total_stake_amount, cash_stake_amount, bonus_stake_amount = _stake_split(ticket)
     required_wins = 0
     try:
         if getattr(ticket, "bet_type", "") == "system":
@@ -446,6 +514,9 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=_quantize_money(ticket.potential_winning),
+            total_stake_amount=total_stake_amount,
+            cash_stake_amount=cash_stake_amount,
+            bonus_stake_amount=bonus_stake_amount,
             required_wins=required_wins,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
@@ -457,6 +528,26 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
 
     min_cashout_setting = _quantize_money(settings_obj.minimum_cash_out_amount)
     max_cashout_setting = _quantize_money(settings_obj.maximum_cash_out_amount)
+    cash_out_scaling_factor = _clamp(
+        _safe_decimal(getattr(settings_obj, "cash_out_scaling_factor", Decimal("1.0000")), Decimal("1.0000")),
+        Decimal("0.1000"),
+        Decimal("1.0000"),
+    ).quantize(Decimal("0.0001"))
+    max_pre_match_cash_out_percent = _clamp(
+        _safe_decimal(getattr(settings_obj, "max_pre_match_cash_out_percent", Decimal("100.00")), Decimal("100.00")),
+        ZERO,
+        Decimal("100.00"),
+    ).quantize(Decimal("0.01"))
+    max_in_progress_cash_out_percent = _clamp(
+        _safe_decimal(getattr(settings_obj, "max_in_progress_cash_out_percent", Decimal("100.00")), Decimal("100.00")),
+        ZERO,
+        Decimal("100.00"),
+    ).quantize(Decimal("0.01"))
+    risk_discount_exponent = _clamp(
+        _safe_decimal(getattr(settings_obj, "risk_discount_exponent", Decimal("1.0000")), Decimal("1.0000")),
+        Decimal("1.0000"),
+        Decimal("10.0000"),
+    ).quantize(Decimal("0.0001"))
 
     started_not_finished = 0
     any_started = False
@@ -497,6 +588,9 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
+            total_stake_amount=total_stake_amount,
+            cash_stake_amount=cash_stake_amount,
+            bonus_stake_amount=bonus_stake_amount,
             settled_count=settled_count,
             winning_count=winning_count,
             losing_count=losing_count,
@@ -521,11 +615,17 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 winning_count=winning_count,
                 losing_count=losing_count,
                 pending_count=pending_count,
+                cash_out_scaling_factor=cash_out_scaling_factor,
+                max_cash_out_cap_percent=max_pre_match_cash_out_percent,
+                max_cash_out_cap_amount=ZERO,
+                cashout_before_scaling=ZERO,
+                cashout_after_scaling=ZERO,
+                risk_discount_exponent=risk_discount_exponent,
             )
             _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
             return quote
 
-        stake = _quantize_money(ticket.stake_amount)
+        stake = _quantize_money(cash_stake_amount)
         charge_type = str(settings_obj.charge_type)
         charge_value = ZERO
         if charge_type == CashOutSettings.CHARGE_TYPE.PERCENTAGE:
@@ -544,8 +644,10 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         if cashout_amount < ZERO:
             cashout_amount = ZERO
 
-        cashout_amount = min(cashout_amount, stake)
-        cashout_amount = min(cashout_amount, max_cashout_setting)
+        cashout_before_scaling = _quantize_money(cashout_amount)
+        cashout_after_scaling = (cashout_before_scaling * cash_out_scaling_factor).quantize(Decimal("0.01"))
+        cap_amount = (stake * (max_pre_match_cash_out_percent / Decimal("100.00"))).quantize(Decimal("0.01"))
+        cashout_amount = min(cashout_after_scaling, stake, max_cashout_setting, cap_amount)
 
         if cashout_amount <= ZERO:
             quote = CashOutQuote(
@@ -563,6 +665,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 charge_type=charge_type,
                 charge_value=charge_value,
                 required_wins=required_wins,
+                cash_out_scaling_factor=cash_out_scaling_factor,
+                max_cash_out_cap_percent=max_pre_match_cash_out_percent,
+                max_cash_out_cap_amount=_quantize_money(cap_amount),
+                cashout_before_scaling=_quantize_money(cashout_before_scaling),
+                cashout_after_scaling=_quantize_money(cashout_after_scaling),
+                risk_discount_exponent=risk_discount_exponent,
             )
             _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
             return quote
@@ -575,6 +683,9 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             completed_odds=Decimal("0.000000"),
             progress_percent=ZERO,
             potential_win=potential_win,
+            total_stake_amount=total_stake_amount,
+            cash_stake_amount=cash_stake_amount,
+            bonus_stake_amount=bonus_stake_amount,
             settled_count=settled_count,
             winning_count=winning_count,
             losing_count=losing_count,
@@ -583,6 +694,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             charge_value=charge_value,
             offer_percent_of_potential=ZERO,
             required_wins=required_wins,
+            cash_out_scaling_factor=cash_out_scaling_factor,
+            max_cash_out_cap_percent=max_pre_match_cash_out_percent,
+            max_cash_out_cap_amount=_quantize_money(cap_amount),
+            cashout_before_scaling=_quantize_money(cashout_before_scaling),
+            cashout_after_scaling=_quantize_money(cashout_after_scaling),
+            risk_discount_exponent=risk_discount_exponent,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -720,7 +837,11 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
     remaining_odds = _safe_decimal(remaining_odds, Decimal("1.00")).quantize(Decimal("0.000001"))
 
     risk_multiplier = _safe_decimal(getattr(settings_obj, "risk_multiplier", Decimal("0.0500")), Decimal("0.0500"))
-    risk_discount = _risk_discount_from_remaining_odds(remaining_odds=remaining_odds, risk_multiplier=risk_multiplier)
+    risk_discount = _risk_discount_from_remaining_odds(
+        remaining_odds=remaining_odds,
+        risk_multiplier=risk_multiplier,
+        exponent=risk_discount_exponent,
+    )
 
     margin_percent = _clamp(_safe_decimal(getattr(settings_obj, "company_margin_percent", ZERO), ZERO), ZERO, Decimal("100.00"))
     margin_factor = (Decimal("1.00") - (margin_percent / Decimal("100.00")))
@@ -739,16 +860,19 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             remaining_needed=remaining_needed,
         )
 
-    stake = _quantize_money(ticket.stake_amount)
+    stake = _quantize_money(cash_stake_amount)
     secured_value = (stake * won_odds).quantize(Decimal("0.01"))
-    cashout_amount = (
+    cashout_before_scaling = (
         secured_value
         * _safe_decimal(risk_discount, ZERO)
         * _safe_decimal(system_progress_factor, Decimal("1.0000"))
         * _safe_decimal(system_paths_factor, Decimal("1.0000"))
         * margin_factor
     ).quantize(Decimal("0.01"))
-    cashout_amount = min(cashout_amount, max_cashout_allowed)
+    cashout_after_scaling = (cashout_before_scaling * cash_out_scaling_factor).quantize(Decimal("0.01"))
+    cap_amount = (stake * (max_in_progress_cash_out_percent / Decimal("100.00"))).quantize(Decimal("0.01"))
+    max_cashout_allowed = min(max_cashout_allowed, cap_amount)
+    cashout_amount = min(cashout_after_scaling, max_cashout_allowed)
     completed_odds = _safe_decimal(won_odds, Decimal("1.00")).quantize(Decimal("0.000001"))
     progress_percent = _progress_percent_from_odds(original_odds=original_odds, completed_odds=completed_odds)
 
@@ -776,6 +900,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             risk_discount=risk_discount,
             company_margin_percent=margin_percent,
             risk_multiplier=risk_multiplier,
+            cash_out_scaling_factor=cash_out_scaling_factor,
+            max_cash_out_cap_percent=max_in_progress_cash_out_percent,
+            max_cash_out_cap_amount=_quantize_money(cap_amount),
+            cashout_before_scaling=_quantize_money(cashout_before_scaling),
+            cashout_after_scaling=_quantize_money(cashout_after_scaling),
+            risk_discount_exponent=risk_discount_exponent,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -793,6 +923,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 "remaining_odds": str(remaining_odds),
                 "risk_discount": str(risk_discount),
                 "risk_multiplier": str(risk_multiplier),
+                "cash_out_scaling_factor": str(cash_out_scaling_factor),
+                "max_in_progress_cash_out_percent": str(max_in_progress_cash_out_percent),
+                "max_in_progress_cap_amount": str(cap_amount),
+                "cashout_before_scaling": str(cashout_before_scaling),
+                "cashout_after_scaling": str(cashout_after_scaling),
+                "risk_discount_exponent": str(risk_discount_exponent),
                 "company_margin_percent": str(margin_percent),
                 "settled_count": settled_count,
                 "winning_count": winning_count,
@@ -823,6 +959,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             risk_discount=risk_discount,
             company_margin_percent=margin_percent,
             risk_multiplier=risk_multiplier,
+            cash_out_scaling_factor=cash_out_scaling_factor,
+            max_cash_out_cap_percent=max_in_progress_cash_out_percent,
+            max_cash_out_cap_amount=_quantize_money(cap_amount),
+            cashout_before_scaling=_quantize_money(cashout_before_scaling),
+            cashout_after_scaling=_quantize_money(cashout_after_scaling),
+            risk_discount_exponent=risk_discount_exponent,
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -850,6 +992,12 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         risk_discount=risk_discount,
         company_margin_percent=margin_percent,
         risk_multiplier=risk_multiplier,
+        cash_out_scaling_factor=cash_out_scaling_factor,
+        max_cash_out_cap_percent=max_in_progress_cash_out_percent,
+        max_cash_out_cap_amount=_quantize_money(cap_amount),
+        cashout_before_scaling=_quantize_money(cashout_before_scaling),
+        cashout_after_scaling=_quantize_money(cashout_after_scaling),
+        risk_discount_exponent=risk_discount_exponent,
     )
     _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
     return quote
@@ -936,6 +1084,7 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
         settings_snapshot = _cashout_settings_snapshot(settings_obj)
         original_odds = _safe_decimal(getattr(quote, "original_odds", ZERO), ZERO).quantize(Decimal("0.000001"))
         completed_odds = _safe_decimal(getattr(quote, "completed_odds", ZERO), ZERO).quantize(Decimal("0.000001"))
+        total_stake_amount, cash_stake_amount, bonus_stake_amount = _stake_split(ticket)
         cashout = BetTicketCashOut.objects.create(
             reference=reference,
             ticket=ticket,
@@ -944,7 +1093,10 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
             agent=agent,
             ticket_type=ticket.bet_type,
             ticket_status=ticket.status,
-            stake_amount=_quantize_money(ticket.stake_amount),
+            stake_amount=total_stake_amount,
+            cash_stake_amount=cash_stake_amount,
+            bonus_stake_amount=bonus_stake_amount,
+            cashout_basis_amount=cash_stake_amount,
             potential_win=quote.potential_win,
             original_odds=original_odds,
             completed_odds=completed_odds,
@@ -1009,6 +1161,10 @@ def execute_cashout(*, ticket_id, actor, ip_address="", user_agent=""):
                 "reference": reference,
                 "cashout_amount": str(quote.cashout_amount),
                 "ticket_bet_type": str(getattr(ticket, "bet_type", "") or ""),
+                "stake_total": str(total_stake_amount),
+                "stake_cash": str(cash_stake_amount),
+                "stake_bonus": str(bonus_stake_amount),
+                "cashout_basis": str(cash_stake_amount),
                 "required_wins": int(getattr(quote, "required_wins", 0) or 0),
                 "maximum_possible_wins": int(getattr(quote, "maximum_possible_wins", 0) or 0),
                 "won_odds": str(_safe_decimal(quote.won_odds, Decimal("0.00"))),

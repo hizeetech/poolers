@@ -654,6 +654,31 @@ class CashOutSettings(models.Model):
         validators=[MinValueValidator(Decimal('0.0000'))],
     )
 
+    cash_out_scaling_factor = models.DecimalField(
+        max_digits=6,
+        decimal_places=4,
+        default=Decimal('0.4500'),
+        validators=[MinValueValidator(Decimal('0.0000'))],
+    )
+    max_pre_match_cash_out_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('90.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    max_in_progress_cash_out_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('60.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+    risk_discount_exponent = models.DecimalField(
+        max_digits=6,
+        decimal_places=4,
+        default=Decimal('1.7000'),
+        validators=[MinValueValidator(Decimal('0.0000'))],
+    )
+
     minimum_stake_eligible = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -823,6 +848,7 @@ class BettingLimitAuditLog(models.Model):
 class Wallet(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='wallet')
     balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, validators=[MinValueValidator(Decimal('0.00'))])
+    bonus_resident_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"), validators=[MinValueValidator(Decimal('0.00'))])
     last_updated = models.DateTimeField(auto_now=True)
 
     @staticmethod
@@ -900,8 +926,24 @@ class Wallet(models.Model):
             after = (before + amount_q).quantize(Decimal("0.01"))
             if after < Decimal("0.00") and not allow_negative:
                 raise ValueError("Wallet balance cannot be negative.")
+            bonus_before = Decimal(str(getattr(locked, "bonus_resident_amount", Decimal("0.00")) or Decimal("0.00"))).quantize(Decimal("0.01"))
+            bonus_after = bonus_before
+            if amount_q > Decimal("0.00"):
+                try:
+                    if transaction_obj and getattr(transaction_obj, "transaction_type", "") == "bonus":
+                        bonus_after = (bonus_before + amount_q).quantize(Decimal("0.01"))
+                except Exception:
+                    bonus_after = bonus_before
+            elif amount_q < Decimal("0.00"):
+                debit_abs = abs(amount_q).quantize(Decimal("0.01"))
+                cash_available = max(Decimal("0.00"), (before - bonus_before).quantize(Decimal("0.01")))
+                bonus_needed = max(Decimal("0.00"), (debit_abs - cash_available).quantize(Decimal("0.01")))
+                bonus_consumed = min(bonus_before, bonus_needed).quantize(Decimal("0.01"))
+                bonus_after = (bonus_before - bonus_consumed).quantize(Decimal("0.01"))
+
             locked.balance = after
-            locked.save(update_fields=["balance", "last_updated"])
+            locked.bonus_resident_amount = bonus_after
+            locked.save(update_fields=["balance", "bonus_resident_amount", "last_updated"])
 
             WalletLedgerEntry = apps.get_model("betting", "WalletLedgerEntry")
             WalletLedgerEntry.objects.create(
@@ -915,7 +957,11 @@ class Wallet(models.Model):
                 balance_after=after,
                 reference=(reference or "")[:120],
                 reason=(reason or "")[:255],
-                metadata=metadata or {},
+                metadata={
+                    **(metadata or {}),
+                    "bonus_resident_before": str(bonus_before),
+                    "bonus_resident_after": str(bonus_after),
+                },
             )
 
             metadata_map = metadata or {}
@@ -1353,6 +1399,8 @@ class BetTicket(models.Model):
     placed_ip = models.GenericIPAddressField(null=True, blank=True)
     
     stake_amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))], db_index=True)
+    cash_stake_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    bonus_stake_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     total_odd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     potential_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     min_winning = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
@@ -2081,6 +2129,9 @@ class BetTicketCashOut(models.Model):
     ticket_status = models.CharField(max_length=20, blank=True, default="")
 
     stake_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    cash_stake_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    bonus_stake_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    cashout_basis_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     potential_win = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     original_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))
     completed_odds = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('0.000000'))

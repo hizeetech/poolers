@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from datetime import timedelta
 
@@ -44,6 +44,10 @@ class CashOutTests(TestCase):
                 "percentage_charge": Decimal("0.00"),
                 "company_margin_percent": Decimal("10.00"),
                 "risk_multiplier": Decimal("0.0500"),
+                "cash_out_scaling_factor": Decimal("0.4500"),
+                "max_pre_match_cash_out_percent": Decimal("90.00"),
+                "max_in_progress_cash_out_percent": Decimal("60.00"),
+                "risk_discount_exponent": Decimal("1.7000"),
                 "minimum_stake_eligible": Decimal("0.00"),
                 "maximum_stake_eligible": Decimal("100000000.00"),
                 "minimum_cash_out_amount": Decimal("0.00"),
@@ -106,6 +110,8 @@ class CashOutTests(TestCase):
         ticket = BetTicket.objects.create(
             user=self.user,
             stake_amount=Decimal("2000.00"),
+            cash_stake_amount=Decimal("2000.00"),
+            bonus_stake_amount=Decimal("0.00"),
             total_odd=Decimal("2.00"),
             potential_winning=Decimal("4000.00"),
             min_winning=Decimal("4000.00"),
@@ -118,11 +124,51 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        self.assertEqual(quote.cashout_amount, Decimal("1900.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("855.00"))
         self.assertEqual(quote.charge_type, "fixed")
         self.assertEqual(quote.charge_value, Decimal("100.00"))
         self.assertEqual(quote.original_odds, Decimal("2.000000"))
         self.assertEqual(quote.completed_odds, Decimal("0.000000"))
+
+    def test_prematch_cashout_uses_cash_stake_only_when_ticket_mixed_cash_and_bonus(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("2500.00"),
+            cash_stake_amount=Decimal("2000.00"),
+            bonus_stake_amount=Decimal("500.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("5000.00"),
+            min_winning=Decimal("5000.00"),
+            max_winning=Decimal("5000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertEqual(quote.cashout_amount, Decimal("855.00"))
+
+    def test_cashout_ineligible_when_ticket_funded_entirely_by_bonus(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("1000.00"),
+            cash_stake_amount=Decimal("0.00"),
+            bonus_stake_amount=Decimal("1000.00"),
+            total_odd=Decimal("2.00"),
+            potential_winning=Decimal("2000.00"),
+            min_winning=Decimal("2000.00"),
+            max_winning=Decimal("2000.00"),
+            status="pending",
+            bet_type="single",
+        )
+        f1 = self._fixture(status="scheduled", serial=1)
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("2.00"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertFalse(quote.eligible)
+        self.assertEqual(quote.cashout_amount, Decimal("0.00"))
 
     def test_prematch_cashout_with_zero_charge_deducts_minimum(self):
         CashOutSettings.objects.filter(pk=1).update(fixed_charge_amount=Decimal("0.00"), percentage_charge=Decimal("0.00"))
@@ -142,7 +188,7 @@ class CashOutTests(TestCase):
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
         self.assertLess(quote.cashout_amount, Decimal("500.00"))
-        self.assertEqual(quote.cashout_amount, Decimal("490.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("220.50"))
 
     def test_cashout_disabled_when_event_is_in_progress(self):
         ticket = BetTicket.objects.create(
@@ -201,7 +247,7 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        self.assertEqual(quote.cashout_amount, Decimal("8560.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("3852.00"))
 
     def test_min_cashout_blocks_post_result_offers(self):
         CashOutSettings.objects.filter(pk=1).update(minimum_cash_out_amount=Decimal("1000000.00"))
@@ -303,9 +349,18 @@ class CashOutTests(TestCase):
         self.assertTrue(quote.eligible)
         won_odds = Decimal("3.30")
         remaining_odds = Decimal("4.22")
-        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
-        expected = (Decimal("2000.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
-        self.assertEqual(quote.cashout_amount, expected)
+        exponent = Decimal("1.7000")
+        with localcontext() as ctx:
+            ctx.prec = 40
+            powered = ((remaining_odds - Decimal("1.00")).ln() * exponent).exp()
+        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * powered))).quantize(Decimal("0.000001"))
+        expected_before_scaling = (Decimal("2000.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
+        expected_after_scaling = (expected_before_scaling * Decimal("0.4500")).quantize(Decimal("0.01"))
+        cap_amount = (Decimal("2000.00") * Decimal("0.60")).quantize(Decimal("0.01"))
+        expected_final = min(expected_after_scaling, cap_amount)
+        self.assertEqual(quote.cashout_before_scaling, expected_before_scaling)
+        self.assertEqual(quote.cashout_after_scaling, expected_after_scaling)
+        self.assertEqual(quote.cashout_amount, expected_final)
         self.assertEqual(quote.completed_odds, Decimal("3.300000"))
         self.assertEqual(quote.original_odds, Decimal("13.930000"))
 
@@ -339,11 +394,7 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        won_odds = Decimal("8.00")
-        remaining_odds = Decimal("1.00")
-        risk_discount = Decimal("1.000000")
-        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
-        self.assertEqual(quote.cashout_amount, expected)
+        self.assertEqual(quote.cashout_amount, Decimal("360.00"))
 
         f1.status = "finished"
         f1.home_score = 0
@@ -351,11 +402,7 @@ class CashOutTests(TestCase):
         f1.save()
         quote_after_loss = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote_after_loss.eligible)
-        won_odds = Decimal("4.00")
-        remaining_odds = Decimal("2.00")
-        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
-        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.6667") * Decimal("0.7500") * Decimal("0.90")).quantize(Decimal("0.01"))
-        self.assertEqual(quote_after_loss.cashout_amount, expected)
+        self.assertEqual(quote_after_loss.cashout_amount, Decimal("360.00"))
         self.assertEqual(quote_after_loss.system_progress_factor, Decimal("0.6667"))
         self.assertEqual(quote_after_loss.system_paths_factor, Decimal("0.7500"))
         self.assertEqual(quote_after_loss.system_winning_paths, 3)
@@ -398,14 +445,7 @@ class CashOutTests(TestCase):
         self.assertEqual(quote.system_paths_factor, Decimal("0.9375"))
         self.assertEqual(quote.system_winning_paths, 15)
         self.assertEqual(quote.system_total_paths, 16)
-
-        won_odds = Decimal("11.375000")
-        pending_product = Decimal("144.988200")
-        exponent = (Decimal("1") / Decimal("4")).quantize(Decimal("0.000001"))
-        remaining_odds = (pending_product.ln() * exponent).exp().quantize(Decimal("0.000001"))
-        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
-        expected = (Decimal("20000.00") * won_odds * risk_discount * Decimal("0.6667") * Decimal("0.9375") * Decimal("0.90")).quantize(Decimal("0.01"))
-        self.assertEqual(quote.cashout_amount, expected)
+        self.assertEqual(quote.cashout_amount, Decimal("12000.00"))
 
     def test_cashout_never_exceeds_potential_or_max_winning(self):
         ticket = BetTicket.objects.create(
@@ -448,7 +488,7 @@ class CashOutTests(TestCase):
 
         self.assertEqual(ticket.status, "cashed_out")
         self.assertTrue(BetTicketCashOut.objects.filter(ticket=ticket).exists())
-        self.assertEqual(wallet.balance, Decimal("1900.00"))
+        self.assertEqual(wallet.balance, Decimal("855.00"))
         self.assertTrue(Transaction.objects.filter(transaction_type="bet_cashout", related_bet_ticket=ticket).exists())
 
         with self.assertRaises(CashOutError):

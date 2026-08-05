@@ -16,6 +16,14 @@
             <p class="fs-5 text-dark">₦{{ bet_ticket.stake_amount|floatformat:2 }}</p>
         </div>
         <div class="col">
+            <p class="text-muted mb-0">Cash Stake:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.cash_stake_amount|default_if_none:bet_ticket.stake_amount|floatformat:2 }}</p>
+        </div>
+        <div class="col">
+            <p class="text-muted mb-0">Bonus Stake:</p>
+            <p class="fs-5 text-dark">₦{{ bet_ticket.bonus_stake_amount|default_if_none:"0.00"|floatformat:2 }}</p>
+        </div>
+        <div class="col">
             <p class="text-muted mb-0">Total Odd:</p>
             <p class="fs-5 text-dark">{{ bet_ticket.total_odd|floatformat:2 }}</p>
         </div>
@@ -105,6 +113,28 @@
                     <div class="fw-semibold">{{ cashout_record.charge_type|default:"-" }} ₦{{ cashout_record.charge_value|floatformat:2 }}</div>
                 </div>
                 <div class="col-12 col-md-4">
+                    <div class="text-muted small">Cash Out Basis</div>
+                    <div class="fw-semibold">₦{{ cashout_record.cashout_basis_amount|floatformat:2 }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Scaling Factor</div>
+                    <div class="fw-semibold">{{ cashout_record.settings_snapshot.cash_out_scaling_factor|default:"-" }}</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Max Cap %</div>
+                    <div class="fw-semibold">
+                        {% if cashout_record.settled_count == 0 %}
+                            {{ cashout_record.settings_snapshot.max_pre_match_cash_out_percent|default:"-" }}%
+                        {% else %}
+                            {{ cashout_record.settings_snapshot.max_in_progress_cash_out_percent|default:"-" }}%
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="text-muted small">Risk Exponent</div>
+                    <div class="fw-semibold">{{ cashout_record.settings_snapshot.risk_discount_exponent|default:"-" }}</div>
+                </div>
+                <div class="col-12 col-md-4">
                     <div class="text-muted small">Counts</div>
                     <div class="fw-semibold">Settled {{ cashout_record.settled_count }} | Won {{ cashout_record.winning_count }} | Lost {{ cashout_record.losing_count }} | Pending {{ cashout_record.pending_count }}</div>
                 </div>
@@ -144,6 +174,30 @@
                         <div class="col-12 col-md-4">
                             <div class="text-muted small">Charge</div>
                             <div class="fw-semibold">{% if cashout_quote.charge_type %}{{ cashout_quote.charge_type }} ₦{{ cashout_quote.charge_value|floatformat:2 }}{% else %}-{% endif %}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Cash Out Basis</div>
+                            <div class="fw-semibold">₦{{ cashout_quote.cash_stake_amount|floatformat:2 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Scaling Factor</div>
+                            <div class="fw-semibold">{{ cashout_quote.cash_out_scaling_factor|floatformat:4 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Max Cap</div>
+                            <div class="fw-semibold">{{ cashout_quote.max_cash_out_cap_percent|floatformat:2 }}% (₦{{ cashout_quote.max_cash_out_cap_amount|floatformat:2 }})</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Before Scaling</div>
+                            <div class="fw-semibold">₦{{ cashout_quote.cashout_before_scaling|floatformat:2 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">After Scaling</div>
+                            <div class="fw-semibold">₦{{ cashout_quote.cashout_after_scaling|floatformat:2 }}</div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="text-muted small">Risk Exponent</div>
+                            <div class="fw-semibold">{{ cashout_quote.risk_discount_exponent|floatformat:4 }}</div>
                         </div>
                     </div>
                     {% else %}

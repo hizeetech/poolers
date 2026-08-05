@@ -354,8 +354,58 @@ class CashOutTests(TestCase):
         won_odds = Decimal("4.00")
         remaining_odds = Decimal("2.00")
         risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
-        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.90")).quantize(Decimal("0.01"))
+        expected = (Decimal("600.00") * won_odds * risk_discount * Decimal("0.6667") * Decimal("0.7500") * Decimal("0.90")).quantize(Decimal("0.01"))
         self.assertEqual(quote_after_loss.cashout_amount, expected)
+        self.assertEqual(quote_after_loss.system_progress_factor, Decimal("0.6667"))
+        self.assertEqual(quote_after_loss.system_paths_factor, Decimal("0.7500"))
+        self.assertEqual(quote_after_loss.system_winning_paths, 3)
+        self.assertEqual(quote_after_loss.system_total_paths, 4)
+
+    def test_system_cashout_applies_system_progress_factor_before_k_met(self):
+        ticket = BetTicket.objects.create(
+            user=self.user,
+            stake_amount=Decimal("20000.00"),
+            total_odd=Decimal("1649.24"),
+            potential_winning=Decimal("816829.78"),
+            min_winning=Decimal("0.00"),
+            max_winning=Decimal("816829.78"),
+            status="pending",
+            bet_type="system",
+            system_min_count=3,
+            original_selections_count=6,
+        )
+
+        f1 = self._fixture(status="finished", home_score=2, away_score=1, serial=1)
+        f2 = self._fixture(status="finished", home_score=2, away_score=1, serial=2)
+        f3 = self._fixture(status="scheduled", serial=3)
+        f4 = self._fixture(status="scheduled", serial=4)
+        f5 = self._fixture(status="scheduled", serial=5)
+        f6 = self._fixture(status="scheduled", serial=6)
+
+        Selection.objects.create(bet_ticket=ticket, fixture=f1, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f2, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.25"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f3, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.33"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f4, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("4.00"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f5, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.50"))
+        Selection.objects.create(bet_ticket=ticket, fixture=f6, betting_period=self.period, bet_type="home_win", odd_selected=Decimal("3.11"))
+
+        quote = build_cashout_quote(ticket=ticket)
+        self.assertTrue(quote.eligible)
+        self.assertEqual(quote.required_wins, 3)
+        self.assertEqual(quote.winning_count, 2)
+        self.assertEqual(quote.pending_count, 4)
+        self.assertEqual(quote.system_progress_factor, Decimal("0.6667"))
+        self.assertEqual(quote.system_paths_factor, Decimal("0.9375"))
+        self.assertEqual(quote.system_winning_paths, 15)
+        self.assertEqual(quote.system_total_paths, 16)
+
+        won_odds = Decimal("11.375000")
+        pending_product = Decimal("144.988200")
+        exponent = (Decimal("1") / Decimal("4")).quantize(Decimal("0.000001"))
+        remaining_odds = (pending_product.ln() * exponent).exp().quantize(Decimal("0.000001"))
+        risk_discount = (Decimal("1.00") / (Decimal("1.00") + (Decimal("0.0500") * (remaining_odds - Decimal("1.00"))))).quantize(Decimal("0.000001"))
+        expected = (Decimal("20000.00") * won_odds * risk_discount * Decimal("0.6667") * Decimal("0.9375") * Decimal("0.90")).quantize(Decimal("0.01"))
+        self.assertEqual(quote.cashout_amount, expected)
 
     def test_cashout_never_exceeds_potential_or_max_winning(self):
         ticket = BetTicket.objects.create(

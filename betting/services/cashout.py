@@ -1,7 +1,8 @@
 import hashlib
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, localcontext
+from math import comb
 
 from django.db import transaction
 from django.utils import timezone
@@ -35,6 +36,10 @@ class CashOutQuote:
     pending_count: int = 0
     required_wins: int = 0
     maximum_possible_wins: int = 0
+    system_progress_factor: Decimal = Decimal("1.0000")
+    system_paths_factor: Decimal = Decimal("1.0000")
+    system_winning_paths: int = 0
+    system_total_paths: int = 0
     charge_type: str = ""
     charge_value: Decimal = ZERO
     offer_percent_of_potential: Decimal = ZERO
@@ -70,6 +75,45 @@ def _clamp(value, min_value, max_value):
     if value > max_value:
         return max_value
     return value
+
+
+def _system_progress_factor(*, winning_count, required_wins):
+    try:
+        required_wins = int(required_wins or 0)
+        winning_count = int(winning_count or 0)
+    except Exception:
+        required_wins = 0
+        winning_count = 0
+
+    if required_wins <= 0:
+        return Decimal("1.0000")
+
+    progress_ratio = Decimal(str(winning_count)) / Decimal(str(required_wins))
+    return _clamp(_quantize_ratio(progress_ratio), Decimal("0.1000"), Decimal("1.0000"))
+
+
+def _system_paths_factor(*, pending_count, remaining_needed):
+    try:
+        pending_count = int(pending_count or 0)
+        remaining_needed = int(remaining_needed or 0)
+    except Exception:
+        pending_count = 0
+        remaining_needed = 0
+
+    if remaining_needed <= 0:
+        return Decimal("1.0000"), 1, 1
+    if pending_count <= 0:
+        return Decimal("0.0000"), 0, 0
+    if remaining_needed > pending_count:
+        return Decimal("0.0000"), 0, 0
+
+    total_paths = 1 << pending_count
+    losing_paths = 0
+    for i in range(0, remaining_needed):
+        losing_paths += comb(pending_count, i)
+    winning_paths = max(0, total_paths - losing_paths)
+    factor = _clamp(_quantize_ratio(Decimal(str(winning_paths)) / Decimal(str(total_paths))), Decimal("0.0000"), Decimal("1.0000"))
+    return factor, winning_paths, total_paths
 
 
 def _log_invalid_quote(*, ticket, settings_obj, metadata):
@@ -289,6 +333,17 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "pending_count": int(getattr(quote, "pending_count", 0) or 0),
                 "required_wins": int(getattr(quote, "required_wins", 0) or required_wins or 0),
                 "maximum_possible_wins": int(getattr(quote, "maximum_possible_wins", 0) or 0),
+                "system_progress_factor": str(getattr(quote, "system_progress_factor", Decimal("1.0000"))),
+                "system_progress_ratio": str(
+                    _quantize_ratio(
+                        (Decimal(str(int(getattr(quote, "winning_count", 0) or 0))) / Decimal(str(int(getattr(quote, "required_wins", 0) or required_wins or 0))))
+                        if int(getattr(quote, "required_wins", 0) or required_wins or 0) > 0
+                        else Decimal("0.0000")
+                    )
+                ),
+                "system_paths_factor": str(getattr(quote, "system_paths_factor", Decimal("1.0000"))),
+                "system_winning_paths": int(getattr(quote, "system_winning_paths", 0) or 0),
+                "system_total_paths": int(getattr(quote, "system_total_paths", 0) or 0),
                 "charge_type": str(getattr(quote, "charge_type", "") or ""),
                 "charge_value": str(getattr(quote, "charge_value", ZERO)),
                 "settings": _cashout_settings_snapshot(settings_obj=settings_obj),
@@ -643,13 +698,21 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
     won_odds = _safe_decimal(won_odds, Decimal("1.00")).quantize(Decimal("0.000001"))
 
     remaining_odds = Decimal("1.000000")
-    if ticket.bet_type == "system" and ticket.system_min_count:
-        k = int(ticket.system_min_count or 0)
-        remaining_needed = max(0, k - int(winning_count or 0))
-        pending_sorted = sorted(pending_odds)
-        if remaining_needed > 0:
-            for odd in pending_sorted[:remaining_needed]:
-                remaining_odds *= odd
+    if ticket.bet_type == "system" and required_wins:
+        remaining_needed = max(0, int(required_wins or 0) - int(winning_count or 0))
+        if remaining_needed <= 0:
+            remaining_odds = Decimal("1.000000")
+        elif not pending_odds:
+            remaining_odds = Decimal("1.000000")
+        else:
+            pending_product = Decimal("1.000000")
+            for odd in pending_odds:
+                pending_product *= odd
+
+            exponent = (Decimal(str(remaining_needed)) / Decimal(str(len(pending_odds)))).quantize(Decimal("0.000001"))
+            with localcontext() as ctx:
+                ctx.prec = 40
+                remaining_odds = (pending_product.ln() * exponent).exp()
     else:
         for odd in pending_odds:
             remaining_odds *= odd
@@ -662,9 +725,29 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
     margin_percent = _clamp(_safe_decimal(getattr(settings_obj, "company_margin_percent", ZERO), ZERO), ZERO, Decimal("100.00"))
     margin_factor = (Decimal("1.00") - (margin_percent / Decimal("100.00")))
 
+    system_progress_factor = Decimal("1.0000")
+    if ticket.bet_type == "system" and required_wins:
+        system_progress_factor = _system_progress_factor(winning_count=winning_count, required_wins=required_wins)
+
+    system_paths_factor = Decimal("1.0000")
+    system_winning_paths = 0
+    system_total_paths = 0
+    if ticket.bet_type == "system" and required_wins:
+        remaining_needed = max(0, int(required_wins or 0) - int(winning_count or 0))
+        system_paths_factor, system_winning_paths, system_total_paths = _system_paths_factor(
+            pending_count=len(pending_odds),
+            remaining_needed=remaining_needed,
+        )
+
     stake = _quantize_money(ticket.stake_amount)
     secured_value = (stake * won_odds).quantize(Decimal("0.01"))
-    cashout_amount = (secured_value * _safe_decimal(risk_discount, ZERO) * margin_factor).quantize(Decimal("0.01"))
+    cashout_amount = (
+        secured_value
+        * _safe_decimal(risk_discount, ZERO)
+        * _safe_decimal(system_progress_factor, Decimal("1.0000"))
+        * _safe_decimal(system_paths_factor, Decimal("1.0000"))
+        * margin_factor
+    ).quantize(Decimal("0.01"))
     cashout_amount = min(cashout_amount, max_cashout_allowed)
     completed_odds = _safe_decimal(won_odds, Decimal("1.00")).quantize(Decimal("0.000001"))
     progress_percent = _progress_percent_from_odds(original_odds=original_odds, completed_odds=completed_odds)
@@ -684,6 +767,10 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             pending_count=pending_count,
             required_wins=required_wins,
             maximum_possible_wins=maximum_possible_wins,
+            system_progress_factor=system_progress_factor,
+            system_paths_factor=system_paths_factor,
+            system_winning_paths=system_winning_paths,
+            system_total_paths=system_total_paths,
             won_odds=won_odds,
             remaining_odds=remaining_odds,
             risk_discount=risk_discount,
@@ -727,6 +814,10 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             pending_count=pending_count,
             required_wins=required_wins,
             maximum_possible_wins=maximum_possible_wins,
+            system_progress_factor=system_progress_factor,
+            system_paths_factor=system_paths_factor,
+            system_winning_paths=system_winning_paths,
+            system_total_paths=system_total_paths,
             won_odds=won_odds,
             remaining_odds=remaining_odds,
             risk_discount=risk_discount,
@@ -750,6 +841,10 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         pending_count=pending_count,
         required_wins=required_wins,
         maximum_possible_wins=maximum_possible_wins,
+        system_progress_factor=system_progress_factor,
+        system_paths_factor=system_paths_factor,
+        system_winning_paths=system_winning_paths,
+        system_total_paths=system_total_paths,
         won_odds=won_odds,
         remaining_odds=remaining_odds,
         risk_discount=risk_discount,

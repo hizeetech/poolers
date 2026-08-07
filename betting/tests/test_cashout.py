@@ -124,11 +124,15 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        self.assertEqual(quote.cashout_amount, Decimal("855.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("1900.00"))
         self.assertEqual(quote.charge_type, "fixed")
         self.assertEqual(quote.charge_value, Decimal("100.00"))
         self.assertEqual(quote.original_odds, Decimal("2.000000"))
         self.assertEqual(quote.completed_odds, Decimal("0.000000"))
+        self.assertEqual(quote.pricing_phase, "before_match")
+        self.assertEqual(quote.cash_out_scaling_factor, Decimal("1.0000"))
+        self.assertEqual(quote.risk_discount, Decimal("0.000000"))
+        self.assertEqual(quote.company_margin_percent, Decimal("0.00"))
 
     def test_prematch_cashout_uses_cash_stake_only_when_ticket_mixed_cash_and_bonus(self):
         ticket = BetTicket.objects.create(
@@ -148,7 +152,8 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        self.assertEqual(quote.cashout_amount, Decimal("855.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("1900.00"))
+        self.assertEqual(quote.pricing_phase, "before_match")
 
     def test_cashout_ineligible_when_ticket_funded_entirely_by_bonus(self):
         ticket = BetTicket.objects.create(
@@ -188,7 +193,8 @@ class CashOutTests(TestCase):
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
         self.assertLess(quote.cashout_amount, Decimal("500.00"))
-        self.assertEqual(quote.cashout_amount, Decimal("220.50"))
+        self.assertEqual(quote.cashout_amount, Decimal("490.00"))
+        self.assertEqual(quote.pricing_phase, "before_match")
 
     def test_cashout_disabled_when_event_is_in_progress(self):
         ticket = BetTicket.objects.create(
@@ -247,7 +253,8 @@ class CashOutTests(TestCase):
 
         quote = build_cashout_quote(ticket=ticket)
         self.assertTrue(quote.eligible)
-        self.assertEqual(quote.cashout_amount, Decimal("3852.00"))
+        self.assertEqual(quote.cashout_amount, Decimal("8560.00"))
+        self.assertEqual(quote.pricing_phase, "before_match")
 
     def test_min_cashout_blocks_post_result_offers(self):
         CashOutSettings.objects.filter(pk=1).update(minimum_cash_out_amount=Decimal("1000000.00"))
@@ -488,7 +495,7 @@ class CashOutTests(TestCase):
 
         self.assertEqual(ticket.status, "cashed_out")
         self.assertTrue(BetTicketCashOut.objects.filter(ticket=ticket).exists())
-        self.assertEqual(wallet.balance, Decimal("855.00"))
+        self.assertEqual(wallet.balance, Decimal("1900.00"))
         self.assertTrue(Transaction.objects.filter(transaction_type="bet_cashout", related_bet_ticket=ticket).exists())
 
         with self.assertRaises(CashOutError):

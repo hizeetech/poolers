@@ -57,6 +57,7 @@ class CashOutQuote:
     cashout_before_scaling: Decimal = ZERO
     cashout_after_scaling: Decimal = ZERO
     risk_discount_exponent: Decimal = Decimal("1.0000")
+    pricing_phase: str = ""
 
 
 class CashOutError(Exception):
@@ -409,6 +410,7 @@ def _log_quote(*, ticket, quote, settings_obj=None, actor=None, ip_address=None,
                 "system_total_paths": int(getattr(quote, "system_total_paths", 0) or 0),
                 "charge_type": str(getattr(quote, "charge_type", "") or ""),
                 "charge_value": str(getattr(quote, "charge_value", ZERO)),
+                "pricing_phase": str(getattr(quote, "pricing_phase", "") or ""),
                 "settings": _cashout_settings_snapshot(settings_obj=settings_obj),
             },
         )
@@ -615,12 +617,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 winning_count=winning_count,
                 losing_count=losing_count,
                 pending_count=pending_count,
-                cash_out_scaling_factor=cash_out_scaling_factor,
-                max_cash_out_cap_percent=max_pre_match_cash_out_percent,
-                max_cash_out_cap_amount=ZERO,
-                cashout_before_scaling=ZERO,
-                cashout_after_scaling=ZERO,
-                risk_discount_exponent=risk_discount_exponent,
+                pricing_phase="before_match",
             )
             _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
             return quote
@@ -644,10 +641,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         if cashout_amount < ZERO:
             cashout_amount = ZERO
 
-        cashout_before_scaling = _quantize_money(cashout_amount)
-        cashout_after_scaling = (cashout_before_scaling * cash_out_scaling_factor).quantize(Decimal("0.01"))
-        cap_amount = (stake * (max_pre_match_cash_out_percent / Decimal("100.00"))).quantize(Decimal("0.01"))
-        cashout_amount = min(cashout_after_scaling, stake, max_cashout_setting, cap_amount)
+        cashout_amount = min(cashout_amount, stake, max_cashout_setting)
 
         if cashout_amount <= ZERO:
             quote = CashOutQuote(
@@ -665,12 +659,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
                 charge_type=charge_type,
                 charge_value=charge_value,
                 required_wins=required_wins,
-                cash_out_scaling_factor=cash_out_scaling_factor,
-                max_cash_out_cap_percent=max_pre_match_cash_out_percent,
-                max_cash_out_cap_amount=_quantize_money(cap_amount),
-                cashout_before_scaling=_quantize_money(cashout_before_scaling),
-                cashout_after_scaling=_quantize_money(cashout_after_scaling),
-                risk_discount_exponent=risk_discount_exponent,
+                pricing_phase="before_match",
             )
             _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
             return quote
@@ -694,12 +683,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             charge_value=charge_value,
             offer_percent_of_potential=ZERO,
             required_wins=required_wins,
-            cash_out_scaling_factor=cash_out_scaling_factor,
-            max_cash_out_cap_percent=max_pre_match_cash_out_percent,
-            max_cash_out_cap_amount=_quantize_money(cap_amount),
-            cashout_before_scaling=_quantize_money(cashout_before_scaling),
-            cashout_after_scaling=_quantize_money(cashout_after_scaling),
-            risk_discount_exponent=risk_discount_exponent,
+            pricing_phase="before_match",
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -906,6 +890,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             cashout_before_scaling=_quantize_money(cashout_before_scaling),
             cashout_after_scaling=_quantize_money(cashout_after_scaling),
             risk_discount_exponent=risk_discount_exponent,
+            pricing_phase="progressive",
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -965,6 +950,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
             cashout_before_scaling=_quantize_money(cashout_before_scaling),
             cashout_after_scaling=_quantize_money(cashout_after_scaling),
             risk_discount_exponent=risk_discount_exponent,
+            pricing_phase="progressive",
         )
         _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
         return quote
@@ -998,6 +984,7 @@ def build_cashout_quote(*, ticket, settings_obj=None, now=None, actor=None, ip_a
         cashout_before_scaling=_quantize_money(cashout_before_scaling),
         cashout_after_scaling=_quantize_money(cashout_after_scaling),
         risk_discount_exponent=risk_discount_exponent,
+        pricing_phase="progressive",
     )
     _log_quote(ticket=ticket, quote=quote, settings_obj=settings_obj, actor=actor, ip_address=ip_address, user_agent=user_agent, source=source)
     return quote

@@ -108,6 +108,7 @@ from .models import (
     CRMAdminComment, CRMReportAttachment, RetailDailyReport, RetailSupportActivity,
     RetailCampaignPerformance, RetailChallenge, RetailNextDayTask, RetailAdminComment, RetailReportAttachment,
     PaymentGatewaySettings,
+    FixtureOddsEditorAssignment, FixtureOddsChangeProposal,
 )
 from commission.models import CommissionPeriod, WeeklyAgentCommission, MonthlyNetworkCommission
 from pending_registration.models import PendingAgentRegistration
@@ -3649,6 +3650,8 @@ def fixtures_view(request, period_id=None):
             'allow_single': r['allow_single'],
         })
 
+    site_config = SiteConfiguration.load()
+
     context = {
         'fixtures': fixtures,
         'current_betting_period': current_betting_period,
@@ -3658,6 +3661,7 @@ def fixtures_view(request, period_id=None):
         'bet_ticket_form': BetTicketForm(), # For placing single bets on fixture page
         'can_place_bet': can_user_place_bet(request.user),
         'bonus_rules_json': json.dumps(bonus_rules_data),
+        'show_double_chance_odds': bool(getattr(site_config, 'show_double_chance_odds', False)),
     }
     return render(request, 'betting/fixtures.html', context)
 
@@ -3666,10 +3670,12 @@ def fixtures_list_partial(request, period_id=None):
     Returns only the HTML for the fixtures list, used for AJAX polling.
     """
     fixtures, current_betting_period = _get_fixtures_data(period_id)
-    
+    site_config = SiteConfiguration.load()
+
     context = {
         'fixtures': fixtures,
         'current_betting_period': current_betting_period,
+        'show_double_chance_odds': bool(getattr(site_config, 'show_double_chance_odds', False)),
     }
     return render(request, 'betting/includes/fixtures_list.html', context)
 
@@ -4551,6 +4557,15 @@ def place_bet(request):
                     if user_wallet.balance < total_stake:
                         return fail_response(f'Insufficient balance. Required: ₦{total_stake:.2f}, Available: ₦{user_wallet.balance:.2f}')
 
+                    bonus_resident = Decimal(str(getattr(user_wallet, "bonus_resident_amount", Decimal("0.00")) or Decimal("0.00"))).quantize(Decimal("0.01"))
+                    cash_available = (Decimal(str(user_wallet.balance or Decimal("0.00"))).quantize(Decimal("0.01")) - bonus_resident).quantize(Decimal("0.01"))
+                    if cash_available < Decimal("0.00"):
+                        cash_available = Decimal("0.00")
+                    cash_stake_amount = min(Decimal(str(total_stake)).quantize(Decimal("0.01")), cash_available).quantize(Decimal("0.01"))
+                    bonus_stake_amount = (Decimal(str(total_stake)).quantize(Decimal("0.01")) - cash_stake_amount).quantize(Decimal("0.01"))
+                    if bonus_stake_amount < Decimal("0.00"):
+                        bonus_stake_amount = Decimal("0.00")
+
                     # Create Single BetTicket
                     ip = get_client_ip(request)
                     bonus_rule_obj = BonusRule.objects.filter(id=rule_dict['id']).first() if rule_dict else None
@@ -4576,6 +4591,8 @@ def place_bet(request):
                     bet_ticket = BetTicket.objects.create(
                         user=request.user,
                         stake_amount=total_stake, # Total stake for the ticket
+                        cash_stake_amount=cash_stake_amount,
+                        bonus_stake_amount=bonus_stake_amount,
                         total_odd=total_ticket_odd,
                         potential_winning=potential_win,
                         min_winning=min_winning,
@@ -15672,6 +15689,24 @@ def _crm_report_notification_link(report):
     return reverse('betting:crm_daily_report_detail', args=[report.id])
 
 
+def _get_admin_notification_email_target():
+    raw = (
+        os.getenv('ADMIN_NOTIFICATION_EMAIL')
+        or getattr(settings, 'ADMIN_NOTIFICATION_EMAIL', None)
+        or os.getenv('DEPOSIT_ADMIN_NOTIFICATION_EMAIL')
+        or settings.DEFAULT_FROM_EMAIL
+        or settings.EMAIL_HOST_USER
+    )
+    if not raw:
+        return None
+    out = []
+    for part in str(raw).split(','):
+        e = part.strip()
+        if e and '@' in e:
+            out.append(e)
+    return out
+
+
 def _notify_crm_daily_report_submitted(report):
     message = f"{report.staff.get_full_name() or report.staff.email} submitted CRM report for {report.report_date}."
     for admin_user in _crm_reporting_admin_queryset().iterator():
@@ -15682,6 +15717,65 @@ def _notify_crm_daily_report_submitted(report):
             message=message,
             data={'url': _crm_report_notification_link(report), 'report_id': report.id},
         )
+
+    admin_targets = _get_admin_notification_email_target()
+    from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+    if admin_targets and from_email:
+        staff_name = report.staff.get_full_name() or report.staff.email or report.staff.username or f"user#{report.staff_id}"
+        branch = getattr(report, 'branch_name', '') or ''
+        summary_total_sales = getattr(report, 'total_sales_amount', None)
+        summary_total_withdrawals = getattr(report, 'total_withdrawals_amount', None)
+        customers_served = getattr(report, 'customers_served_count', None)
+        detail_url = _crm_report_notification_link(report)
+        try:
+            host = None
+            if settings.ALLOWED_HOSTS and len(settings.ALLOWED_HOSTS) > 0:
+                host = settings.ALLOWED_HOSTS[0]
+                if host == '*':
+                    host = None
+            if host:
+                detail_url = f"https://{host}{detail_url}"
+        except Exception:
+            pass
+
+        subject = f"[DAILY REPORT] CRM #{report.id} {report.report_date} — {staff_name}"
+        lines = [
+            f"CRM Daily Report has been submitted and is pending admin review:",
+            "",
+            f"Report ID:       #{report.id}",
+            f"Report Date:     {report.report_date}",
+            f"Submitted At:    {report.submitted_at or timezone.now()}",
+            f"CRM Staff:       {staff_name} (email: {report.staff.email or 'n/a'})",
+        ]
+        if branch:
+            lines.append(f"Branch:          {branch}")
+        if customers_served is not None:
+            lines.append(f"Customers Served:{customers_served}")
+        if summary_total_sales is not None:
+            lines.append(f"Total Sales:     ₦{summary_total_sales}")
+        if summary_total_withdrawals is not None:
+            lines.append(f"Total Withdrawals: ₦{summary_total_withdrawals}")
+        lines.extend([
+            f"Report Status:   {report.get_status_display() if hasattr(report, 'get_status_display') else getattr(report, 'status', '')}",
+            f"Row Counts:      complaints={getattr(report, 'complaint_rows', None) and report.complaint_rows.count() or 0}, "
+            f"campaigns={getattr(report, 'campaign_rows', None) and report.campaign_rows.count() or 0}, "
+            f"challenges={getattr(report, 'challenge_rows', None) and report.challenge_rows.count() or 0}",
+            "",
+            "Open report in admin:",
+            detail_url,
+            "",
+            "-- PoolBetting Admin Bot",
+        ])
+        try:
+            send_mail(
+                subject=subject,
+                message="\n".join(lines),
+                from_email=from_email,
+                recipient_list=admin_targets,
+                fail_silently=True,
+            )
+        except Exception:
+            pass
 
 
 def _notify_crm_daily_report_staff(report, *, title, message):
@@ -16407,6 +16501,71 @@ def _notify_retail_daily_report_submitted(report):
             message=message,
             data={'url': _retail_report_notification_link(report), 'report_id': report.id},
         )
+
+    admin_targets = _get_admin_notification_email_target()
+    from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+    if admin_targets and from_email:
+        rm_name = (report.retail_manager.get_full_name()
+                   or report.retail_manager.email
+                   or report.retail_manager.username
+                   or f"user#{report.retail_manager_id}")
+        branch = getattr(report, 'shop_name', None) or getattr(report, 'branch_name', '') or ''
+        total_sales = getattr(report, 'total_sales', None)
+        total_withdrawals = getattr(report, 'total_withdrawals', None)
+        total_tickets = getattr(report, 'total_tickets_count', None)
+        total_revenue = getattr(report, 'net_revenue', None) or getattr(report, 'gross_revenue', None)
+        detail_url = _retail_report_notification_link(report)
+        try:
+            host = None
+            if settings.ALLOWED_HOSTS and len(settings.ALLOWED_HOSTS) > 0:
+                host = settings.ALLOWED_HOSTS[0]
+                if host == '*':
+                    host = None
+            if host:
+                detail_url = f"https://{host}{detail_url}"
+        except Exception:
+            pass
+
+        subject = f"[DAILY REPORT] RETAIL #{report.id} {report.report_date} — {rm_name}"
+        lines = [
+            "Retail Daily Report has been submitted and is pending admin review:",
+            "",
+            f"Report ID:       #{report.id}",
+            f"Report Date:     {report.report_date}",
+            f"Submitted At:    {report.submitted_at or timezone.now()}",
+            f"Retail Manager:  {rm_name} (email: {report.retail_manager.email or 'n/a'})",
+        ]
+        if branch:
+            lines.append(f"Shop/Branch:     {branch}")
+        if total_tickets is not None:
+            lines.append(f"Total Tickets:   {total_tickets}")
+        if total_sales is not None:
+            lines.append(f"Total Sales:     ₦{total_sales}")
+        if total_withdrawals is not None:
+            lines.append(f"Total Withdrawals: ₦{total_withdrawals}")
+        if total_revenue is not None:
+            lines.append(f"Net Revenue:     ₦{total_revenue}")
+        lines.extend([
+            f"Report Status:   {report.get_status_display() if hasattr(report, 'get_status_display') else getattr(report, 'status', '')}",
+            f"Row Counts:      support={getattr(report, 'support_rows', None) and report.support_rows.count() or 0}, "
+            f"campaigns={getattr(report, 'campaign_rows', None) and report.campaign_rows.count() or 0}, "
+            f"challenges={getattr(report, 'challenge_rows', None) and report.challenge_rows.count() or 0}",
+            "",
+            "Open report in admin:",
+            detail_url,
+            "",
+            "-- PoolBetting Admin Bot",
+        ])
+        try:
+            send_mail(
+                subject=subject,
+                message="\n".join(lines),
+                from_email=from_email,
+                recipient_list=admin_targets,
+                fail_silently=True,
+            )
+        except Exception:
+            pass
 
 
 def _notify_retail_daily_report_manager(report, *, title, message):
@@ -22108,3 +22267,231 @@ def webauthn_login_complete(request):
                  pass
                  
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+
+
+# ------------------------------------------------------------------------------
+# Fixture Odds Change Proposal Workflow (Retail Manager / CRM designated users)
+# ------------------------------------------------------------------------------
+
+def can_edit_fixture_odds(user):
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser or user.user_type == 'admin':
+        return True
+    if user.user_type not in ('retail_manager', 'crm'):
+        return False
+    try:
+        assignment = getattr(user, 'fixture_odds_editor_assignment', None)
+        return bool(assignment and assignment.can_edit_odds)
+    except Exception:
+        return False
+
+
+def is_fixture_odds_editor_or_admin(user):
+    return can_edit_fixture_odds(user)
+
+
+@login_required
+@user_passes_test_403(is_fixture_odds_editor_or_admin)
+def odds_editor_fixtures_table(request):
+    from django.core.paginator import Paginator
+
+    q = (request.GET.get('q') or '').strip()
+    status = (request.GET.get('status') or '').strip().lower()
+    period_id_raw = request.GET.get('period_id') or ''
+
+    active_periods = BettingPeriod.objects.filter(is_active=True).order_by('-end_date')[:6]
+    all_periods = BettingPeriod.objects.all().order_by('-end_date')[:12]
+
+    qs = Fixture.objects.all().select_related('betting_period').order_by('serial_number')
+
+    if period_id_raw and str(period_id_raw).isdigit():
+        qs = qs.filter(betting_period_id=int(period_id_raw))
+    elif active_periods:
+        qs = qs.filter(betting_period__in=list(active_periods))
+
+    if q:
+        qs = qs.filter(
+            Q(serial_number__icontains=q)
+            | Q(home_team__icontains=q)
+            | Q(away_team__icontains=q)
+        )
+
+    if status == 'scheduled':
+        qs = qs.filter(status='scheduled')
+    elif status == 'active':
+        qs = qs.filter(status__in=('scheduled', 'live'))
+    elif status == 'finished':
+        qs = qs.filter(status='finished')
+    elif status == 'cancelled':
+        qs = qs.filter(status='cancelled')
+
+    fixture_ids_subset = qs.values_list('id', flat=True)
+    pending_proposal_ids = {}
+    if fixture_ids_subset:
+        pending_proposals = FixtureOddsChangeProposal.objects.filter(
+            fixture_id__in=list(fixture_ids_subset),
+            status=FixtureOddsChangeProposal.STATUS_PENDING,
+        ).order_by('-created_at')
+        for p in pending_proposals:
+            if p.fixture_id not in pending_proposal_ids:
+                pending_proposal_ids[p.fixture_id] = p.id
+
+    page_obj = Paginator(qs, 50).get_page(request.GET.get('page') or 1)
+
+    pending_count = FixtureOddsChangeProposal.objects.filter(
+        proposer=request.user,
+        status=FixtureOddsChangeProposal.STATUS_PENDING,
+    ).count()
+    approved_count = FixtureOddsChangeProposal.objects.filter(
+        proposer=request.user,
+        status=FixtureOddsChangeProposal.STATUS_APPROVED,
+    ).count()
+    rejected_count = FixtureOddsChangeProposal.objects.filter(
+        proposer=request.user,
+        status=FixtureOddsChangeProposal.STATUS_REJECTED,
+    ).count()
+
+    context = {
+        'fixtures_page': page_obj,
+        'fixtures': list(page_obj.object_list),
+        'active_periods': active_periods,
+        'all_periods': all_periods,
+        'selected_period_id': int(period_id_raw) if str(period_id_raw).isdigit() else None,
+        'filters_q': q,
+        'filters_status': status,
+        'pending_proposal_ids': pending_proposal_ids,
+        'page_obj': page_obj,
+        'stats_pending': pending_count,
+        'stats_approved': approved_count,
+        'stats_rejected': rejected_count,
+        'base_url': request.path,
+        'can_edit_any': bool(request.user.is_superuser or request.user.user_type == 'admin' or (
+            getattr(request.user, 'fixture_odds_editor_assignment', None)
+            and request.user.fixture_odds_editor_assignment.can_edit_odds
+        )),
+    }
+    return render(request, 'betting/odds_editor/fixtures_table.html', context)
+
+
+@login_required
+@user_passes_test_403(is_fixture_odds_editor_or_admin)
+def odds_editor_edit_fixture(request, fixture_id):
+    from decimal import Decimal, InvalidOperation
+
+    fixture = get_object_or_404(Fixture.objects.select_related('betting_period').all(), pk=fixture_id)
+
+    existing_pending = FixtureOddsChangeProposal.objects.filter(
+        fixture=fixture,
+        status=FixtureOddsChangeProposal.STATUS_PENDING,
+    ).order_by('-created_at').first()
+
+    if request.method == 'POST':
+        raw_vals = {}
+        for field in FixtureOddsChangeProposal.SIX_ODD_FIELDS:
+            raw = request.POST.get(field, '') or ''
+            if not raw.strip():
+                raw_vals[field] = None
+                continue
+            try:
+                raw_vals[field] = Decimal(str(raw).strip()).quantize(Decimal('0.01'))
+            except (InvalidOperation, ValueError, Exception):
+                messages.error(request, f"Invalid value for {field.replace('_odd','').replace('_',' ').title()}: {raw!r}")
+                return redirect('betting:odds_editor_edit_fixture', fixture_id=fixture.id)
+
+        has_any_change = any(
+            raw_vals[field] is not None and raw_vals[field] != getattr(fixture, field, None)
+            for field in FixtureOddsChangeProposal.SIX_ODD_FIELDS
+        )
+        if not has_any_change:
+            messages.warning(request, 'No odds values were changed. Update at least one odd to submit a proposal.')
+            return redirect('betting:odds_editor_edit_fixture', fixture_id=fixture.id)
+
+        proposal = FixtureOddsChangeProposal.build_from_fixture(
+            fixture=fixture,
+            proposer=request.user,
+            proposed_vals=raw_vals,
+            proposer_notes=(request.POST.get('proposer_notes') or '').strip() or '',
+        )
+        proposal.save()
+
+        try:
+            from django.conf import settings
+
+            targets = list(proposal.admin_email_targets or [])
+            if targets:
+                from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', '') or getattr(settings, 'EMAIL_HOST_USER', '') or 'no-reply@localhost'
+                subject = f"[ACTION REQUIRED] Fixture Odds Proposal #{proposal.id} — {fixture.home_team} vs {fixture.away_team}"
+                change_list_lines = []
+                for field in proposal.changed_odd_fields:
+                    label = field.replace('_odd', '').replace('_', ' ').title()
+                    cur = getattr(proposal, f'current_{field}') or 'â€”'
+                    new = getattr(proposal, f'proposed_{field}') or 'â€”'
+                    change_list_lines.append(f"  â€¢ {label}: {cur}  â†’  {new}")
+                message = (
+                    f"Fixture odds change proposal #{proposal.id} has been submitted and is pending your approval.\n\n"
+                    f"Fixture: #{fixture.serial_number or fixture.id} â€” {fixture.home_team} vs {fixture.away_team}\n"
+                    f"Betting Period: {fixture.betting_period or '-'}\n"
+                    f"Match Date: {fixture.match_date or '-'}\n"
+                    f"Match Time: {fixture.match_time or '-'}\n"
+                    f"Submitted by: {request.user.get_full_name() or request.user.email} ({request.user.user_type})\n"
+                    f"Submitted at: {proposal.created_at}\n\n"
+                    f"Proposed changes:\n{chr(10).join(change_list_lines) or '  (none flagged)'}\n\n"
+                    f"Notes from proposer:\n{proposal.proposer_notes or '(none)'}\n\n"
+                    f"Please review in the Django Admin under Betting > Fixture Odds Change Proposals:\n"
+                    f"Pending status = {proposal.status.upper()}"
+                )
+                if from_email:
+                    send_mail(subject, message, from_email, targets, fail_silently=True)
+        except Exception:
+            pass
+
+        messages.success(request, f"Proposal #{proposal.id} submitted for admin approval. Admin has been notified via email.")
+        return redirect('betting:odds_editor_fixtures_table')
+
+    context = {
+        'fixture': fixture,
+        'existing_pending': existing_pending,
+        'six_odd_fields': list(FixtureOddsChangeProposal.SIX_ODD_FIELDS),
+        'field_labels': {
+            'home_win_odd': 'Home Win (1)',
+            'draw_odd': 'Draw (X)',
+            'away_win_odd': 'Away Win (2)',
+            'home_or_draw_odd': 'Home or Draw (1X)',
+            'either_team_win_odd': 'Either Team Win (12)',
+            'away_or_draw_odd': 'Away or Draw (X2)',
+        },
+    }
+    return render(request, 'betting/odds_editor/fixture_edit.html', context)
+
+
+def admin_fixture_odds_proposal_counts_json(request):
+    if not (request.user.is_authenticated and (request.user.is_superuser or (getattr(request.user, 'user_type', '') == 'admin'))):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    try:
+        pending_q = FixtureOddsChangeProposal.objects.filter(status=FixtureOddsChangeProposal.STATUS_PENDING)
+        approved_q = FixtureOddsChangeProposal.objects.filter(status=FixtureOddsChangeProposal.STATUS_APPROVED)
+        rejected_q = FixtureOddsChangeProposal.objects.filter(status=FixtureOddsChangeProposal.STATUS_REJECTED)
+        pending = pending_q.count()
+        approved = approved_q.count()
+        rejected = rejected_q.count()
+        latest_pending_fixture_serial = None
+        latest_pending_proposal_id = None
+        if pending:
+            latest = pending_q.order_by('-created_at').only('id', 'fixture_serial_number').first()
+            if latest:
+                latest_pending_proposal_id = latest.id
+                latest_pending_fixture_serial = latest.fixture_serial_number
+        total = pending + approved + rejected
+        return JsonResponse({
+            'ok': True,
+            'pending': pending,
+            'approved': approved,
+            'rejected': rejected,
+            'total': total,
+            'latest_pending_proposal_id': latest_pending_proposal_id,
+            'latest_pending_fixture_serial': latest_pending_fixture_serial,
+            'ts': timezone.now().isoformat(),
+        })
+    except Exception as exc:
+        return JsonResponse({'ok': False, 'error': str(exc)}, status=500)

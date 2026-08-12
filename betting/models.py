@@ -136,7 +136,12 @@ class SiteConfiguration(models.Model):
         default=time(15, 0),
         help_text="Time when overdraft repayment is due.",
     )
-    
+
+    show_double_chance_odds = models.BooleanField(
+        default=False,
+        help_text="If enabled, Double Chance odds (1X / 12 / X2) are shown on the frontend fixtures page in a collapsible 'More Markets' sub-row below the 1X2 row.",
+    )
+
     def save(self, *args, **kwargs):
         previous_values = None
         if self.pk:
@@ -1346,6 +1351,211 @@ class PopularPick(models.Model):
             'under_3_5': 'Under 3.5',
         }
         return display_map.get(self.bet_type, self.bet_type.replace('_', ' ').title())
+
+
+class FixtureOddsEditorAssignment(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="fixture_odds_editor_assignment",
+        limit_choices_to=models.Q(user_type__in=["retail_manager", "crm"]) | models.Q(is_staff=True),
+        help_text="Retail Manager or CRM user designated by admin to submit fixture odds change proposals.",
+    )
+    can_edit_odds = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="If ticked, this user may submit fixture odds change proposals (6 main markets only) for admin approval.",
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fixture_odds_editor_assignments_made",
+        limit_choices_to=models.Q(user_type="admin") | models.Q(is_superuser=True),
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ("-updated_at",)
+        verbose_name = "Fixture Odds Editor Assignment"
+        verbose_name_plural = "Fixture Odds Editor Assignments"
+
+    def __str__(self):
+        status = "active" if self.can_edit_odds else "revoked"
+        return f"{self.user} [{status}]"
+
+
+class FixtureOddsChangeProposal(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending Admin Approval"),
+        (STATUS_APPROVED, "Approved & Published"),
+        (STATUS_REJECTED, "Rejected"),
+    )
+    SIX_ODD_FIELDS = (
+        "home_win_odd",
+        "draw_odd",
+        "away_win_odd",
+        "home_or_draw_odd",
+        "either_team_win_odd",
+        "away_or_draw_odd",
+    )
+
+    fixture = models.ForeignKey(Fixture, on_delete=models.CASCADE, related_name="odds_change_proposals")
+    betting_period = models.ForeignKey(
+        "BettingPeriod",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="odds_change_proposals",
+        db_index=True,
+    )
+    fixture_serial_number = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    fixture_match_date = models.DateField(null=True, blank=True, db_index=True)
+    fixture_home_team = models.CharField(max_length=255, blank=True, default="")
+    fixture_away_team = models.CharField(max_length=255, blank=True, default="")
+
+    current_home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    current_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    current_away_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    current_home_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    current_either_team_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    current_away_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    proposed_home_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    proposed_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    proposed_away_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    proposed_home_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    proposed_either_team_win_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    proposed_away_or_draw_odd = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    proposer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="odds_change_proposals_submitted",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    proposer_notes = models.TextField(blank=True, default="")
+    admin_notes = models.TextField(blank=True, default="")
+
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="odds_change_proposals_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="odds_change_proposals_rejected",
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="focp_status_created_at_idx"),
+            models.Index(fields=["fixture", "status"], name="focp_fixture_status_idx"),
+        ]
+        verbose_name = "Fixture Odds Change Proposal"
+        verbose_name_plural = "Fixture Odds Change Proposals"
+
+    def __str__(self):
+        return f"#{self.id} {self.status.upper()} — Fixture #{self.fixture_serial_number or self.fixture_id}"
+
+    @classmethod
+    def build_from_fixture(cls, fixture, proposer, proposed_vals, proposer_notes=""):
+        from decimal import Decimal
+        kwargs = {
+            "fixture": fixture,
+            "betting_period": fixture.betting_period,
+            "fixture_serial_number": str(getattr(fixture, "serial_number", "") or ""),
+            "fixture_match_date": getattr(fixture, "match_date", None),
+            "fixture_home_team": str(getattr(fixture, "home_team", "") or ""),
+            "fixture_away_team": str(getattr(fixture, "away_team", "") or ""),
+            "proposer": proposer,
+            "proposer_notes": (proposer_notes or "").strip(),
+        }
+
+        def _quant(v):
+            if v is None:
+                return None
+            try:
+                return Decimal(str(v)).quantize(Decimal("0.01"))
+            except Exception:
+                return None
+
+        for field in cls.SIX_ODD_FIELDS:
+            kwargs[f"current_{field}"] = _quant(getattr(fixture, field, None))
+            kwargs[f"proposed_{field}"] = _quant(proposed_vals.get(field))
+        return cls(**kwargs)
+
+    @property
+    def changed_odd_fields(self):
+        out = []
+        for field in self.SIX_ODD_FIELDS:
+            cur = getattr(self, f"current_{field}")
+            new = getattr(self, f"proposed_{field}")
+            if cur != new:
+                out.append(field)
+        return tuple(out)
+
+    def apply_to_fixture(self):
+        if self.status != self.STATUS_APPROVED or self.fixture_id is None:
+            return False
+        update_fields = []
+        for field in self.SIX_ODD_FIELDS:
+            val = getattr(self, f"proposed_{field}")
+            if val is not None:
+                setattr(self.fixture, field, val)
+                update_fields.append(field)
+        if update_fields:
+            self.fixture.save(update_fields=update_fields)
+        return bool(update_fields)
+
+    @property
+    def admin_email_targets(self):
+        from django.conf import settings
+        import os as _os
+        targets = list(getattr(settings, "WITHDRAWAL_ADMIN_EMAILS", []) or [])
+
+        raw_admin_email = (
+            _os.getenv('ADMIN_NOTIFICATION_EMAIL')
+            or getattr(settings, 'ADMIN_NOTIFICATION_EMAIL', None)
+            or _os.getenv('DEPOSIT_ADMIN_NOTIFICATION_EMAIL')
+        )
+        if raw_admin_email:
+            for part in str(raw_admin_email).split(','):
+                e = part.strip()
+                if e and e not in targets:
+                    targets.append(e)
+
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            admins = list(User.objects.filter(
+                models.Q(user_type="admin") | models.Q(is_superuser=True),
+                is_active=True,
+            ).exclude(email__isnull=True).exclude(email="").values_list("email", flat=True).distinct())
+            for a in admins:
+                if a and a not in targets:
+                    targets.append(a)
+        except Exception:
+            pass
+        return [e.strip() for e in targets if e and "@" in str(e).strip()]
+
 
 class Selection(models.Model):
     bet_ticket = models.ForeignKey('BetTicket', on_delete=models.CASCADE, related_name='selections')

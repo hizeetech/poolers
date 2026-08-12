@@ -1,0 +1,69 @@
+{% extends "admin/base_site.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="module" style="padding: 24px; background:#fff; border-radius:12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+    <h2 style="margin-top:0;">
+        {% if is_reject %}❌ Reject Proposal #{{ proposal.id }}{% else %}✅ Approve Proposal #{{ proposal.id }}{% endif %}
+    </h2>
+    <p style="color:#6c757d;">
+        <strong>Fixture:</strong> #{{ proposal.fixture_serial_number|default:proposal.fixture_id }} &mdash;
+        {{ proposal.fixture_home_team }} vs {{ proposal.fixture_away_team }}
+        {% if proposal.betting_period %} &middot; <em>{{ proposal.betting_period }}</em>{% endif %}
+    </p>
+    <p style="color:#6c757d; margin-top:-8px;">
+        <strong>Proposed by:</strong> {{ proposal.proposer.get_full_name|default:proposal.proposer.email }} ({{ proposal.proposer.user_type }})
+        &nbsp;&nbsp; <strong>Submitted:</strong> {{ proposal.created_at|date:"D, d M Y H:i" }}
+    </p>
+    {% if proposal.proposer_notes %}
+    <div class="alert alert-secondary" style="padding: 10px 14px; border-radius:8px; background:#f8f9fa; border-left: 4px solid #6c757d;">
+        <strong>Proposer notes:</strong> {{ proposal.proposer_notes|linebreaks }}
+    </div>
+    {% endif %}
+
+    <div class="row" style="display:flex; gap:12px; flex-wrap:wrap; margin:20px 0;">
+        <div class="col" style="flex:1 1 400px; min-width:320px; padding:14px; border: 1px solid #e5e7eb; border-radius: 10px;">
+            <h4 style="margin-top:0;">Current Published Odds</h4>
+            <ul style="padding-left:16px; margin:4px 0;">
+                <li>Home Win (1) &nbsp;→&nbsp; <strong>{% firstof proposal.current_home_win_odd "—" %}</strong></li>
+                <li>Draw (X) &nbsp;→&nbsp; <strong>{% firstof proposal.current_draw_odd "—" %}</strong></li>
+                <li>Away Win (2) &nbsp;→&nbsp; <strong>{% firstof proposal.current_away_win_odd "—" %}</strong></li>
+                <li>Home or Draw (1X) &nbsp;→&nbsp; <strong>{% firstof proposal.current_home_or_draw_odd "—" %}</strong></li>
+                <li>Either Team Win (12) &nbsp;→&nbsp; <strong>{% firstof proposal.current_either_team_win_odd "—" %}</strong></li>
+                <li>Away or Draw (X2) &nbsp;→&nbsp; <strong>{% firstof proposal.current_away_or_draw_odd "—" %}</strong></li>
+            </ul>
+        </div>
+        <div class="col" style="flex:1 1 400px; min-width:320px; padding:14px; border: 2px solid {% if is_reject %}#dc3545{% else %}#28a745{% endif %}; border-radius: 10px; background:{% if is_reject %}#fff5f5{% else %}#f0fff4{% endif %};">
+            <h4 style="margin-top:0; color:{% if is_reject %}#dc3545{% else %}#28a745{% endif %};">Proposed New Odds</h4>
+            <ul style="padding-left:16px; margin:4px 0;">
+                <li>Home Win (1) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_home_win_odd "—" %}</strong></li>
+                <li>Draw (X) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_draw_odd "—" %}</strong></li>
+                <li>Away Win (2) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_away_win_odd "—" %}</strong></li>
+                <li>Home or Draw (1X) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_home_or_draw_odd "—" %}</strong></li>
+                <li>Either Team Win (12) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_either_team_win_odd "—" %}</strong></li>
+                <li>Away or Draw (X2) &nbsp;→&nbsp; <strong>{% firstof proposal.proposed_away_or_draw_odd "—" %}</strong></li>
+            </ul>
+        </div>
+    </div>
+
+    <form method="POST" style="margin-top:18px;">
+        {% csrf_token %}
+        <div class="form-row field-admin_notes">
+            <div>
+                <label class="required" for="id_admin_notes">Admin Notes (optional):</label>
+                <div class="flex-container">
+                    <textarea id="id_admin_notes" name="admin_notes" rows="3" cols="80"
+                              placeholder="Optional internal notes for this decision (e.g. why rejected or approved)"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="submit-row" style="margin-top:18px;">
+            <input type="submit"
+                   value="{% if is_reject %}Confirm Rejection{% else %}Confirm &amp; Publish to Fixture{% endif %}"
+                   class="button default"
+                   style="padding:10px 22px; background:{% if is_reject %}#dc3545{% else %}#28a745{% endif %}; border-color:{% if is_reject %}#dc3545{% else %}#28a745{% endif %}; color:white; border-radius:6px; cursor:pointer;" />
+            <a href="../../" class="button" style="margin-left:8px;">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock content %}

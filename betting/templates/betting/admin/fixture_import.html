@@ -31,17 +31,37 @@
     <fieldset class="module aligned">
         <h2>Upload Excel File</h2>
         <div class="description">
-            <p>Upload an Excel file (.xlsx, .xls) with the following columns:</p>
+            <p>The importer <strong>auto-detects</strong> which of the two formats below you are uploading (based on column headers and total column count). Both formats share columns A&ndash;D (Serial / Home / Ignored / Away).</p>
+
+            <h3 style="margin-top: 14px;">Format 1 &mdash; Draw Only (legacy, 7 columns A&ndash;G)</h3>
             <ul>
                 <li><strong>Column A:</strong> Serial Number</li>
                 <li><strong>Column B:</strong> Home Team</li>
-                <li><strong>Column C:</strong> (Ignored)</li>
+                <li><strong>Column C:</strong> (Ignored, e.g. &ldquo;vs&rdquo;)</li>
                 <li><strong>Column D:</strong> Away Team</li>
                 <li><strong>Column E:</strong> Draw Odd</li>
                 <li><strong>Column F:</strong> Match Date (dd/mm/yy)</li>
                 <li><strong>Column G:</strong> Match Time (HH:MM)</li>
             </ul>
-            <p style="margin-top: 10px;"><a href="sample/" class="button" style="padding: 5px 10px;">Download Sample Template</a></p>
+
+            <h3 style="margin-top: 14px;">Format 2 &mdash; Complete 1X2 + Double Chance (12 columns A&ndash;L)</h3>
+            <ul>
+                <li><strong>Column A:</strong> Serial Number</li>
+                <li><strong>Column B:</strong> Home Team</li>
+                <li><strong>Column C:</strong> (Ignored, e.g. &ldquo;vs&rdquo;)</li>
+                <li><strong>Column D:</strong> Away Team</li>
+                <li><strong>Column E:</strong> Home Win Odd (1)</li>
+                <li><strong>Column F:</strong> Draw Odd (X)</li>
+                <li><strong>Column G:</strong> Away Win Odd (2)</li>
+                <li><strong>Column H:</strong> Home or Draw (1X)</li>
+                <li><strong>Column I:</strong> Either Team Win (12)</li>
+                <li><strong>Column J:</strong> Away or Draw (X2)</li>
+                <li><strong>Column K:</strong> Match Date (dd/mm/yy)</li>
+                <li><strong>Column L:</strong> Match Time (HH:MM)</li>
+            </ul>
+
+            <p style="margin-top: 12px;"><em>Header row tips:</em> Friendly labels like &ldquo;Home Win Odd&rdquo;, &ldquo;1X&rdquo;, &ldquo;Either Team Win (12)&rdquo;, &ldquo;Match Date&rdquo; are recognised automatically. If no header labels are present, the importer falls back to the positional layouts above.</p>
+            <p style="margin-top: 10px;"><a href="sample/" class="button" style="padding: 5px 10px;">Download Sample Template (Format 2 &mdash; all 6 odds)</a></p>
         </div>
         {% for field in form %}
         <div class="form-row">

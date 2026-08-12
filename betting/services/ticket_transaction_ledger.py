@@ -7,7 +7,7 @@ from betting.models import TicketTransactionLedger, Transaction, WalletLedgerEnt
 
 
 ZERO = Decimal("0.00")
-LEGACY_DIRECT_TRANSACTION_TYPES = {"bet_payout", "ticket_deletion_refund", "ticket_cancellation_refund"}
+LEGACY_DIRECT_TRANSACTION_TYPES = {"bet_payout", "bet_cashout", "ticket_deletion_refund", "ticket_cancellation_refund"}
 
 
 def _quantize(value):
@@ -58,6 +58,8 @@ def classify_ticket_transaction(*, tx=None, metadata=None):
         return "Ticket Voided", "Ticket Void"
     if raw_type == "bet_payout":
         return "Winning Settlement", "Ticket Settlement"
+    if raw_type == "bet_cashout":
+        return "Cash Out", "Cash Out"
     if raw_type == "deposit":
         return "Deposit", _gateway_label(tx)
     if raw_type == "withdrawal":

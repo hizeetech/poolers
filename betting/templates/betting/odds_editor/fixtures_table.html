@@ -1,0 +1,195 @@
+{% extends 'betting/base.html' %}
+{% load static humanize %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-4 gap-2">
+        <div>
+            <h2 class="mb-1">📊 Fixture Odds Table</h2>
+            <p class="text-muted mb-0" style="font-size:0.92rem;">
+                Browse all fixtures and submit odds change proposals for admin approval.
+            </p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <div class="badge bg-warning text-dark rounded-pill px-3 py-2">⏳ My Pending: {{ stats_pending }}</div>
+            <div class="badge bg-success text-white rounded-pill px-3 py-2">✅ Approved: {{ stats_approved }}</div>
+            <div class="badge bg-danger text-white rounded-pill px-3 py-2">❌ Rejected: {{ stats_rejected }}</div>
+        </div>
+    </div>
+
+    {% if not can_edit_any %}
+    <div class="alert alert-warning">
+        You do not currently have permission to edit fixture odds. Please contact your admin to be added as a
+        <strong>Fixture Odds Editor</strong> in the Django Admin (Betting → Fixture Odds Editor Assignments).
+    </div>
+    {% endif %}
+
+    <div class="card mb-4 shadow-sm">
+        <div class="card-body">
+            <form method="GET" action="{{ base_url }}" class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label small mb-1" for="id_period_id">Betting Period</label>
+                    <select id="id_period_id" name="period_id" class="form-select form-select-sm">
+                        <option value="">All (or active periods)</option>
+                        {% for p in all_periods %}
+                        <option value="{{ p.id }}" {% if selected_period_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1" for="id_status">Fixture Status</label>
+                    <select id="id_status" name="status" class="form-select form-select-sm">
+                        <option value="">Any</option>
+                        <option value="active" {% if filters_status == "active" %}selected{% endif %}>Scheduled / Live</option>
+                        <option value="scheduled" {% if filters_status == "scheduled" %}selected{% endif %}>Scheduled only</option>
+                        <option value="finished" {% if filters_status == "finished" %}selected{% endif %}>Finished</option>
+                        <option value="cancelled" {% if filters_status == "cancelled" %}selected{% endif %}>Cancelled</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small mb-1" for="id_q">Search (serial # / teams)</label>
+                    <input type="text" id="id_q" name="q" value="{{ filters_q }}" placeholder="e.g. Arsenal, 12, Chelsea vs..." class="form-control form-control-sm" />
+                </div>
+                <div class="col-md-2 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm w-100">🔎 Search</button>
+                    <a href="{{ base_url }}" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="table-responsive" style="background:#fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);">
+        <table class="table table-hover align-middle mb-0" style="font-size: 0.9rem;">
+            <thead class="table-light">
+                <tr>
+                    <th style="min-width:60px;">#</th>
+                    <th style="min-width:260px;">Matchup</th>
+                    <th style="min-width:140px;">Date / Time</th>
+                    <th style="min-width:70px;" class="text-center">H</th>
+                    <th style="min-width:70px;" class="text-center">D</th>
+                    <th style="min-width:70px;" class="text-center">A</th>
+                    <th style="min-width:70px;" class="text-center">1X</th>
+                    <th style="min-width:70px;" class="text-center">12</th>
+                    <th style="min-width:70px;" class="text-center">X2</th>
+                    <th style="min-width:100px;" class="text-center">Status</th>
+                    <th style="min-width:170px;" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in fixtures %}
+                <tr>
+                    <td class="fw-bold text-secondary">#{{ f.serial_number }}</td>
+                    <td>
+                        <div class="fw-medium">{{ f.home_team }} <span class="text-muted small">vs</span> {{ f.away_team }}</div>
+                        {% if f.betting_period %}
+                        <div class="small text-muted">{{ f.betting_period.name }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div>{{ f.match_date|date:"D, d M Y" }}</div>
+                        <div class="text-muted small">{{ f.match_time|time:"H:i" }}</div>
+                    </td>
+                    <td class="text-center">
+                        {% if f.home_win_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.home_win_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.draw_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.draw_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.away_win_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.away_win_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.home_or_draw_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.home_or_draw_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.either_team_win_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.either_team_win_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.away_or_draw_odd %}
+                        <span class="badge bg-light text-dark border rounded-pill px-2 py-1">{{ f.away_or_draw_odd|floatformat:2 }}</span>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if f.status == "scheduled" %}
+                        <span class="badge bg-info text-dark rounded-pill">Scheduled</span>
+                        {% elif f.status == "live" %}
+                        <span class="badge bg-primary rounded-pill">Live</span>
+                        {% elif f.status == "finished" %}
+                        <span class="badge bg-success rounded-pill">Finished</span>
+                        {% elif f.status == "cancelled" %}
+                        <span class="badge bg-secondary rounded-pill">Cancelled</span>
+                        {% elif f.status == "postponed" %}
+                        <span class="badge bg-warning text-dark rounded-pill">Postponed</span>
+                        {% else %}
+                        <span class="badge bg-light text-dark border rounded-pill">{{ f.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if f.id in pending_proposal_ids %}
+                        <a href="javascript:void(0)" class="btn btn-sm btn-outline-warning disabled" title="A pending proposal exists for this fixture">
+                            ⏳ Proposal Pending
+                        </a>
+                        {% else %}
+                        <a href="{% url 'betting:odds_editor_edit_fixture' fixture_id=f.id %}"
+                           class="btn btn-sm {% if can_edit_any %}btn-primary{% else %}btn-outline-secondary disabled{% endif %}">
+                            ✏️ Edit Odds
+                        </a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="11" class="text-center py-4 text-muted">
+                        No fixtures match the current filters.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj and page_obj.has_other_pages %}
+    <nav class="mt-4 d-flex justify-content-center">
+        <ul class="pagination">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if filters_q %}&q={{ filters_q|urlencode }}{% endif %}{% if filters_status %}&status={{ filters_status }}{% endif %}{% if selected_period_id %}&period_id={{ selected_period_id }}{% endif %}">&laquo;</a>
+            </li>
+            {% endif %}
+            {% for p in page_obj.paginator.page_range %}
+            <li class="page-item {% if p == page_obj.number %}active{% endif %}">
+                <a class="page-link" href="?page={{ p }}{% if filters_q %}&q={{ filters_q|urlencode }}{% endif %}{% if filters_status %}&status={{ filters_status }}{% endif %}{% if selected_period_id %}&period_id={{ selected_period_id }}{% endif %}">{{ p }}</a>
+            </li>
+            {% endfor %}
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if filters_q %}&q={{ filters_q|urlencode }}{% endif %}{% if filters_status %}&status={{ filters_status }}{% endif %}{% if selected_period_id %}&period_id={{ selected_period_id }}{% endif %}">&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock content %}

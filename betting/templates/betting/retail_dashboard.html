@@ -66,6 +66,9 @@
       </form>
       <a class="btn btn-sm btn-success" href="{% url 'betting:commission_management' %}">Commission Management</a>
       <a class="btn btn-sm btn-outline-primary" href="{% url 'betting:retail_daily_reports_dashboard' %}">Retail Daily Reports</a>
+      {% if user.is_superuser or user.user_type == 'admin' or user.fixture_odds_editor_assignment and user.fixture_odds_editor_assignment.can_edit_odds %}
+      <a class="btn btn-sm btn-outline-info" href="{% url 'betting:odds_editor_fixtures_table' %}">⚽ Fixture Odds</a>
+      {% endif %}
       <button id="rmRegisterAgentBtn" type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#rmRegisterAgentModal">
         Register Agent
       </button>

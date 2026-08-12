@@ -1262,14 +1262,33 @@
         
         setInterval(async () => {
             try {
+                const container = document.getElementById('fixtures-container');
+                const openFixtureIdsSet = new Set();
+                if (container) {
+                    const openDetails = container.querySelectorAll('details.fixture-more-markets[open]');
+                    for (const d of openDetails) {
+                        const fid = d.getAttribute('data-fixture-id');
+                        if (fid) { openFixtureIdsSet.add(String(fid)); }
+                    }
+                }
+
                 const [fixturesResp, picksResp] = await Promise.all([
                     fetch(pollUrl),
                     fetch(picksUrl, { headers: { 'Accept': 'application/json' } }),
                 ]);
 
-                if (fixturesResp.ok) {
+                if (fixturesResp.ok && container) {
                     const html = await fixturesResp.text();
-                    document.getElementById('fixtures-container').innerHTML = html;
+                    container.innerHTML = html;
+
+                    const allDetails = container.querySelectorAll('details.fixture-more-markets');
+                    for (const d of allDetails) {
+                        const fid = d.getAttribute('data-fixture-id');
+                        if (fid && openFixtureIdsSet.has(String(fid))) {
+                            d.open = true;
+                        }
+                    }
+
                     rebuildSmartPickFromFixtures();
                 }
 

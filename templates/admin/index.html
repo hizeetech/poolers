@@ -171,6 +171,16 @@
             .admin-sidebar-section-item.is-collapsed {
                 display: none !important;
             }
+            @keyframes foPulse {
+                0%   { transform: scale(1); filter: brightness(1); }
+                25%  { transform: scale(1.45); filter: brightness(2.2); box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.8); }
+                50%  { transform: scale(1.25); }
+                100% { transform: scale(1); filter: brightness(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+            }
+            .fo-pulse {
+                animation: foPulse 1.5s ease-out 1;
+                transform-origin: center;
+            }
         </style>
 
         <div class="card card-outline card-light mb-3">
@@ -266,6 +276,50 @@
                             <div class="admin-quick-link-text">Jump straight to fixture records and match management</div>
                         </a>
                     </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{{ fixture_odds_pending_admin_url|default:'#' }}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%); color: #212529;">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-start" style="gap: 10px;">
+                                    <div>
+                                        <div class="admin-quick-link-icon"><i class="fas fa-clock"></i></div>
+                                        <div class="admin-quick-link-title">
+                                            ⏳ Fixture Odds — PENDING
+                                        </div>
+                                    </div>
+                                    <span id="fo-pending-badge" class="badge badge-light" style="font-size: 12px; min-width: 34px; background: #fff; color: #212529;">{{ fixture_odds_pending_count|default:0 }}</span>
+                                </div>
+                            </div>
+                            <div class="admin-quick-link-text"><span id="fo-pending-text">Pending proposals awaiting your review &amp; approval</span></div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{{ fixture_odds_approved_admin_url|default:'#' }}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #198754 0%, #115c39 100%);">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-start" style="gap: 10px;">
+                                    <div>
+                                        <div class="admin-quick-link-icon"><i class="fas fa-check-circle"></i></div>
+                                        <div class="admin-quick-link-title">✅ Fixture Odds — APPROVED</div>
+                                    </div>
+                                    <span id="fo-approved-badge" class="badge badge-light" style="font-size: 12px; min-width: 34px;">{{ fixture_odds_approved_count|default:0 }}</span>
+                                </div>
+                            </div>
+                            <div class="admin-quick-link-text"><span id="fo-approved-text">Approved &amp; published to live fixtures page frontend</span></div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="{{ fixture_odds_rejected_admin_url|default:'#' }}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #dc3545 0%, #b02a37 100%);">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-start" style="gap: 10px;">
+                                    <div>
+                                        <div class="admin-quick-link-icon"><i class="fas fa-ban"></i></div>
+                                        <div class="admin-quick-link-title">❌ Fixture Odds — REJECTED</div>
+                                    </div>
+                                    <span id="fo-rejected-badge" class="badge badge-light" style="font-size: 12px; min-width: 34px;">{{ fixture_odds_rejected_count|default:0 }}</span>
+                                </div>
+                            </div>
+                            <div class="admin-quick-link-text"><span id="fo-rejected-text">Rejected proposals with admin notes</span></div>
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -303,6 +357,69 @@
                                 <div class="title">Admin Dashboard</div>
                             </div>
                             <div class="text">Open the full admin dashboard summary for CRM approvals and other reports.</div>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card {% if fixture_odds_pending_count %}card-outline card-warning{% else %}card-outline card-secondary{% endif %} mb-3" id="fixture-odds-summary-card">
+            <div class="card-body">
+                <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-3">
+                    <div>
+                        <div class="text-muted small text-uppercase">Fixture Odds Change Proposals <small class="text-muted fw-normal ms-2" id="fixture-odds-live-badge"><i class="fas fa-circle-notch fa-spin"></i> live updating</small></div>
+                        <div class="d-flex align-items-center flex-wrap" style="gap:14px;">
+                            <div>
+                                <div class="h3 mb-0 d-inline align-middle" id="fo-pending-big">{{ fixture_odds_pending_count|default:0 }}</div>
+                                <span class="admin-status-pill is-pending ms-2" id="fo-pending-pill"><i class="fas fa-clock"></i> Pending</span>
+                            </div>
+                            <div>
+                                <div class="h5 mb-0 d-inline align-middle text-success" id="fo-approved-big">{{ fixture_odds_approved_count|default:0 }}</div>
+                                <span class="badge bg-success ms-2" id="fo-approved-pill"><i class="fas fa-check"></i> Approved</span>
+                            </div>
+                            <div>
+                                <div class="h5 mb-0 d-inline align-middle text-danger" id="fo-rejected-big">{{ fixture_odds_rejected_count|default:0 }}</div>
+                                <span class="badge bg-danger ms-2" id="fo-rejected-pill"><i class="fas fa-ban"></i> Rejected</span>
+                            </div>
+                        </div>
+                        <div class="small text-muted mt-1">Edits saved by designated Retail Managers / CRMs. When you Approve &amp; Publish, the 6 odds are written to the live Fixture and appear on the frontend fixtures page.</div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-12 col-sm-6 col-xl-3 mb-2 mb-sm-0">
+                        <a href="{{ fixture_odds_pending_admin_url|default:'#' }}" class="admin-quick-action-card text-white" style="background: linear-gradient(135deg, {% if fixture_odds_pending_count %}#ffc107 0%, #e0a800 100%{% else %}#17a2b8 0%, #138496 100%{% endif %}); color: {% if not fixture_odds_pending_count %}#fff{% else %}#212529{% endif %};">
+                            <div>
+                                <div class="icon"><i class="fas fa-list-check"></i></div>
+                                <div class="title">Review Pending Proposals</div>
+                            </div>
+                            <div class="text">Click to approve or reject each fixture odds change (with notes).</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-2 mb-sm-0">
+                        <a href="{{ fixture_odds_changelist_admin_url|default:'#' }}" class="admin-quick-action-card text-white" style="background: linear-gradient(135deg, #6c757d 0%, #495057 100%);">
+                            <div>
+                                <div class="icon"><i class="fas fa-folder-open"></i></div>
+                                <div class="title">All Proposals</div>
+                            </div>
+                            <div class="text">Open the full proposal list with bulk Approve/Publish &amp; Reject actions.</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3 mb-2 mb-sm-0">
+                        <a href="{{ fixture_odds_editor_assignments_admin_url|default:'#' }}" class="admin-quick-action-card text-white" style="background: linear-gradient(135deg, #0d6efd 0%, #084298 100%);">
+                            <div>
+                                <div class="icon"><i class="fas fa-user-shield"></i></div>
+                                <div class="title">Editor Assignments</div>
+                            </div>
+                            <div class="text">Designate which Retail Manager / CRM users can edit fixture odds.</div>
+                        </a>
+                    </div>
+                    <div class="col-12 col-sm-6 col-xl-3">
+                        <a href="{% url 'betting:odds_editor_fixtures_table' %}" class="admin-quick-action-card text-white" style="background: linear-gradient(135deg, #20c997 0%, #0f9d7a 100%);">
+                            <div>
+                                <div class="icon"><i class="fas fa-table"></i></div>
+                                <div class="title">Open Editor Table</div>
+                            </div>
+                            <div class="text">Try the Retail/CRM fixtures table yourself (admins can also submit proposals).</div>
                         </a>
                     </div>
                 </div>
@@ -459,6 +576,122 @@
                         }
                     });
                 });
+
+                (function fixtureOddsLiveCounters() {
+                    var elIds = [
+                        'fo-pending-badge', 'fo-pending-big', 'fo-pending-text', 'fo-pending-pill',
+                        'fo-approved-badge', 'fo-approved-big', 'fo-approved-text', 'fo-approved-pill',
+                        'fo-rejected-badge', 'fo-rejected-big', 'fo-rejected-text', 'fo-rejected-pill',
+                        'fixture-odds-summary-card', 'fixture-odds-live-badge'
+                    ];
+                    var any = false;
+                    for (var i = 0; i < elIds.length; i++) {
+                        if (document.getElementById(elIds[i])) { any = true; break; }
+                    }
+                    if (!any) return;
+
+                    var COUNTS_API_URL = "{% url 'betting:admin_fixture_odds_proposal_counts_json' %}";
+                    var POLL_INTERVAL_MS = 3000;
+                    var prev = { pending: null, approved: null, rejected: null };
+                    var pollNum = 0;
+
+                    function setBadgeText(id, val) {
+                        var el = document.getElementById(id);
+                        if (el) el.textContent = String(val);
+                    }
+
+                    function addFlash(elId, cls) {
+                        var el = document.getElementById(elId);
+                        if (!el) return;
+                        el.classList.remove(cls);
+                        void el.offsetWidth;
+                        el.classList.add(cls);
+                        setTimeout(function () {
+                            el.classList.remove(cls);
+                        }, 1500);
+                    }
+
+                    function updateCardOutline(pending) {
+                        var card = document.getElementById('fixture-odds-summary-card');
+                        if (!card) return;
+                        card.classList.remove('card-outline', 'card-warning', 'card-secondary');
+                        card.classList.add('card-outline');
+                        card.classList.add(pending > 0 ? 'card-warning' : 'card-secondary');
+                    }
+
+                    function setLiveBadge(state, msg) {
+                        var b = document.getElementById('fixture-odds-live-badge');
+                        if (!b) return;
+                        if (state === 'ok') {
+                            b.innerHTML = '<i class="fas fa-check-circle text-success"></i> live updated ' + (msg || '');
+                        } else if (state === 'flash') {
+                            b.innerHTML = '<i class="fas fa-circle-notch fa-spin text-warning"></i> ' + (msg || 'updating...');
+                        } else if (state === 'err') {
+                            b.innerHTML = '<i class="fas fa-exclamation-triangle text-danger"></i> ' + (msg || 'poll error');
+                        }
+                    }
+
+                    function doPoll() {
+                        pollNum++;
+                        var req;
+                        try {
+                            if (window.fetch) {
+                                req = fetch(COUNTS_API_URL, { credentials: 'same-origin', cache: 'no-store' })
+                                    .then(function (r) { return r.json(); });
+                            } else {
+                                var d = $.Deferred();
+                                $.ajax({ url: COUNTS_API_URL, dataType: 'json', cache: false })
+                                    .done(function (x) { d.resolve(x); })
+                                    .fail(function () { d.reject(); });
+                                req = d.promise();
+                            }
+                        } catch (e) {
+                            setLiveBadge('err', 'poll unavailable');
+                            return;
+                        }
+
+                        req.then(function (data) {
+                            if (!data || !data.ok) {
+                                setLiveBadge('err', 'bad response');
+                                return;
+                            }
+                            if (pollNum === 1) {
+                                prev.pending = data.pending;
+                                prev.approved = data.approved;
+                                prev.rejected = data.rejected;
+                            }
+                            if (prev.pending !== data.pending) {
+                                setBadgeText('fo-pending-badge', data.pending);
+                                setBadgeText('fo-pending-big', data.pending);
+                                if (prev.pending !== null) addFlash('fo-pending-badge', 'fo-pulse');
+                                prev.pending = data.pending;
+                            }
+                            if (prev.approved !== data.approved) {
+                                setBadgeText('fo-approved-badge', data.approved);
+                                setBadgeText('fo-approved-big', data.approved);
+                                if (prev.approved !== null) addFlash('fo-approved-badge', 'fo-pulse');
+                                prev.approved = data.approved;
+                            }
+                            if (prev.rejected !== data.rejected) {
+                                setBadgeText('fo-rejected-badge', data.rejected);
+                                setBadgeText('fo-rejected-big', data.rejected);
+                                if (prev.rejected !== null) addFlash('fo-rejected-badge', 'fo-pulse');
+                                prev.rejected = data.rejected;
+                            }
+                            updateCardOutline(data.pending);
+                            setLiveBadge('ok', data.latest_pending_proposal_id
+                                ? '(latest #' + data.latest_pending_proposal_id
+                                + (data.latest_pending_fixture_serial ? ' serial ' + data.latest_pending_fixture_serial : '')
+                                + ')'
+                                : '');
+                        }).catch(function () {
+                            setLiveBadge('err', 'network error');
+                        });
+                    }
+
+                    setInterval(doPoll, POLL_INTERVAL_MS);
+                    setTimeout(doPoll, 300);
+                })();
             });
         </script>
 

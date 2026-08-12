@@ -138,6 +138,11 @@ urlpatterns = [
     path('retail/player/<int:user_id>/', views.retail_player_detail, name='retail_player_detail'),
     path('retail/export/', views.retail_export, name='retail_export'),
 
+    # Fixture Odds Editor (Retail Manager / CRM designated users + admins)
+    path('odds-editor/fixtures/', views.odds_editor_fixtures_table, name='odds_editor_fixtures_table'),
+    path('odds-editor/fixture/<int:fixture_id>/edit/', views.odds_editor_edit_fixture, name='odds_editor_edit_fixture'),
+    path('admin-api/fixture-odds-proposal-counts/', views.admin_fixture_odds_proposal_counts_json, name='admin_fixture_odds_proposal_counts_json'),
+
     # Finance URLs
     path('finance/dashboard/', views.finance_dashboard, name='finance_dashboard'),
     path('finance/commission-recall/', views.commission_recall_dashboard, name='commission_recall_dashboard'),

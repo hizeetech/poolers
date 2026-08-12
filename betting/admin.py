@@ -10,9 +10,11 @@ from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.contrib import messages
 from decimal import Decimal
-from django.urls import path, reverse 
+from django.urls import path, reverse
 from django.shortcuts import redirect, render, get_object_or_404
-from django.utils.html import format_html 
+from django.utils.html import format_html, mark_safe
+from django.http import HttpResponse, HttpResponseRedirect
+from django.template.response import TemplateResponse
 from django_ckeditor_5.widgets import CKEditor5Widget
 from django.core.mail import send_mail
 from django.utils.crypto import get_random_string
@@ -71,6 +73,7 @@ from .models import (
     CRMDailyReport, CRMComplaint, CRMCampaignPerformance, CRMChallenge, CRMNextDayTask, CRMAdminComment, CRMReportAttachment,
     RetailDailyReport, RetailSupportActivity, RetailCampaignPerformance, RetailChallenge, RetailNextDayTask, RetailAdminComment, RetailReportAttachment,
     OverdraftWallet, OverdraftWalletLedgerEntry, LoanRepayment, LoanAuditLog,
+    FixtureOddsEditorAssignment, FixtureOddsChangeProposal,
 )
 from . import signals
 from .services.ticket_results import recalculate_tickets_for_fixture_sync
@@ -102,6 +105,21 @@ class BettingAdminSite(admin.AdminSite):
         except Exception:
             pending_agent_registration_count = 0
 
+        try:
+            fixture_odds_pending_count = FixtureOddsChangeProposal.objects.filter(
+                status=FixtureOddsChangeProposal.STATUS_PENDING,
+            ).count()
+            fixture_odds_approved_count = FixtureOddsChangeProposal.objects.filter(
+                status=FixtureOddsChangeProposal.STATUS_APPROVED,
+            ).count()
+            fixture_odds_rejected_count = FixtureOddsChangeProposal.objects.filter(
+                status=FixtureOddsChangeProposal.STATUS_REJECTED,
+            ).count()
+        except Exception:
+            fixture_odds_pending_count = 0
+            fixture_odds_approved_count = 0
+            fixture_odds_rejected_count = 0
+
         extra_context.update({
             'pending_user_withdrawal_count': pending_user_withdrawal_count,
             'pending_user_withdrawal_admin_url': reverse(f'{self.name}:betting_userwithdrawal_changelist'),
@@ -111,6 +129,14 @@ class BettingAdminSite(admin.AdminSite):
             'crm_wallet_dashboard_url': reverse(f'{self.name}:dashboard'),
             'pending_agent_registration_count': pending_agent_registration_count,
             'pending_agent_registration_admin_url': reverse(f'{self.name}:pending_registration_pendingagentregistration_changelist'),
+            'fixture_odds_pending_count': fixture_odds_pending_count,
+            'fixture_odds_approved_count': fixture_odds_approved_count,
+            'fixture_odds_rejected_count': fixture_odds_rejected_count,
+            'fixture_odds_pending_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist') + '?status__exact=pending',
+            'fixture_odds_approved_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist') + '?status__exact=approved',
+            'fixture_odds_rejected_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist') + '?status__exact=rejected',
+            'fixture_odds_changelist_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist'),
+            'fixture_odds_editor_assignments_admin_url': reverse(f'{self.name}:betting_fixtureoddseditorassignment_changelist'),
         })
         return super().index(request, extra_context)
 
@@ -1160,24 +1186,27 @@ class FixtureAdmin(admin.ModelAdmin):
         import io
         import pandas as pd
         from django.http import HttpResponse
-        
-        # Create a DataFrame with sample data matching the required structure
-        # Columns: Serial, Home, Ignored, Away, Draw Odd, Date, Time
+
         data = {
             'Serial Number': [1, 2, 3],
             'Home Team': ['Arsenal', 'Chelsea', 'Liverpool'],
             'Ignored (C)': ['', '', ''],
             'Away Team': ['Man Utd', 'Tottenham', 'Man City'],
+            'Home Win Odd': [1.85, 2.10, 1.60],
             'Draw Odd': [3.50, 3.20, 3.10],
+            'Away Win Odd': [4.20, 3.40, 5.50],
+            'Home or Draw (1X)': [1.20, 1.30, 1.15],
+            'Either Team Win (12)': [1.45, 1.38, 1.40],
+            'Away or Draw (X2)': [1.90, 2.05, 2.30],
             'Match Date': ['01/02/26', '01/02/26', '01/02/26'],
-            'Match Time': ['14:00', '16:00', '18:30']
+            'Match Time': ['14:00', '16:00', '18:30'],
         }
         df = pd.DataFrame(data)
-        
+
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False)
-            
+
         buffer.seek(0)
         response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         response['Content-Disposition'] = 'attachment; filename=fixture_import_template.xlsx'
@@ -1190,39 +1219,141 @@ class FixtureAdmin(admin.ModelAdmin):
             if form.is_valid():
                 excel_file = request.FILES["excel_file"]
                 betting_period = form.cleaned_data["betting_period"]
-                
+
                 try:
-                    # Read Excel: Columns A, B, D, E, F, G -> Indices 0, 1, 3, 4, 5, 6
-                    # Do not force dtype=str for all columns because Excel dates may come as datetime objects or serials.
-                    # We'll parse dates/times explicitly below and always treat slash/dot/hyphen dates as day/month/year.
-                    df = pd.read_excel(excel_file, usecols=[0, 1, 3, 4, 5, 6])
-                    df.columns = ['serial_number', 'home_team', 'away_team', 'draw_odd', 'match_date', 'match_time']
-                    
+                    raw_df = pd.read_excel(excel_file)
+                    raw_columns = [str(c).strip().lower() if not pd.isna(c) else '' for c in raw_df.columns.tolist()]
+                    num_cols = len(raw_columns)
+
+                    header_keywords_complete = {
+                        'home_win': ['home win odd', 'home win', 'home_win_odd', 'homewin'],
+                        'away_win': ['away win odd', 'away win', 'away_win_odd', 'awaywin'],
+                        'home_or_draw': ['home or draw', 'home or draw (1x)', '1x', 'home_or_draw'],
+                        'either_team_win': ['either team win', 'either team win (12)', '12', 'either_team_win', 'anybody wins'],
+                        'away_or_draw': ['away or draw', 'away or draw (x2)', 'x2', 'away_or_draw'],
+                    }
+
+                    detected = {
+                        'home_win': None,
+                        'draw': None,
+                        'away_win': None,
+                        'home_or_draw': None,
+                        'either_team_win': None,
+                        'away_or_draw': None,
+                        'match_date': None,
+                        'match_time': None,
+                    }
+
+                    for idx, col in enumerate(raw_columns):
+                        col_clean = col
+                        for key, patterns in header_keywords_complete.items():
+                            if any(p in col_clean for p in patterns):
+                                if detected[key] is None:
+                                    detected[key] = idx
+                        if 'draw' in col_clean and 'odd' in col_clean and detected['draw'] is None:
+                            if 'home' not in col_clean and 'away' not in col_clean:
+                                detected['draw'] = idx
+                        if col_clean in ('draw odd', 'draw') and detected['draw'] is None:
+                            detected['draw'] = idx
+                        if any(w in col_clean for w in ['match date', 'date']) and detected['match_date'] is None:
+                            detected['match_date'] = idx
+                        if any(w in col_clean for w in ['match time', 'time']) and detected['match_time'] is None:
+                            detected['match_time'] = idx
+
+                    has_1x2_header = detected['home_win'] is not None or detected['away_win'] is not None
+                    has_dc_header = any(detected[k] is not None for k in ['home_or_draw', 'either_team_win', 'away_or_draw'])
+
+                    if detected['draw'] is None:
+                        if num_cols == 7:
+                            detected['draw'] = 4
+                            detected['match_date'] = 5
+                            detected['match_time'] = 6
+                        elif num_cols == 12:
+                            detected['draw'] = 5 if detected['draw'] is None else detected['draw']
+                            if detected['home_win'] is None:
+                                detected['home_win'] = 4
+                            if detected['away_win'] is None:
+                                detected['away_win'] = 6
+                            if detected['home_or_draw'] is None:
+                                detected['home_or_draw'] = 7
+                            if detected['either_team_win'] is None:
+                                detected['either_team_win'] = 8
+                            if detected['away_or_draw'] is None:
+                                detected['away_or_draw'] = 9
+                            if detected['match_date'] is None:
+                                detected['match_date'] = 10
+                            if detected['match_time'] is None:
+                                detected['match_time'] = 11
+
+                    if detected['match_date'] is None or detected['match_time'] is None:
+                        if num_cols >= 12:
+                            detected['match_date'] = 10
+                            detected['match_time'] = 11
+                        elif num_cols >= 7:
+                            detected['match_date'] = 5
+                            detected['match_time'] = 6
+
+                    is_complete_format = (
+                        has_1x2_header
+                        or has_dc_header
+                        or num_cols >= 12
+                        or (detected['home_win'] is not None and detected['away_win'] is not None)
+                    )
+
                     success_count = 0
                     updated_count = 0
                     skip_count = 0
                     errors = []
                     created_fixture_ids = []
                     updated_fixture_ids = []
-                    
-                    for index, row in df.iterrows():
+
+                    def _safe_cell(row, idx):
+                        if idx is None:
+                            return None
+                        if idx < 0 or idx >= len(row):
+                            return None
+                        val = row.iloc[idx]
+                        if pd.isna(val):
+                            return None
+                        return val
+
+                    def _to_decimal_or_none(val):
+                        if val is None:
+                            return None
+                        if isinstance(val, (int, float)):
+                            try:
+                                from decimal import Decimal
+                                return Decimal(str(val)).quantize(Decimal('0.01'))
+                            except Exception:
+                                return None
+                        s = str(val).strip()
+                        if not s or s.lower() in ['nan', 'none', 'null', '-']:
+                            return None
                         try:
-                            # Skip empty rows
-                            if pd.isna(row['serial_number']) and pd.isna(row['home_team']):
-                                continue
-                                
-                            # Validation
-                            if pd.isna(row['serial_number']) or pd.isna(row['home_team']) or pd.isna(row['away_team']):
-                                raise ValueError("Missing required fields (Serial, Home, Away)")
-                            
-                            # Skip header rows that might be interpreted as data
-                            if str(row['serial_number']).strip().lower() in ['serial', 'serial number', 'serial_number']:
+                            from decimal import Decimal
+                            return Decimal(s).quantize(Decimal('0.01'))
+                        except Exception:
+                            return None
+
+                    for index, row in raw_df.iterrows():
+                        try:
+                            serial_raw = _safe_cell(row, 0)
+                            home_raw = _safe_cell(row, 1)
+                            if serial_raw is None and home_raw is None:
                                 continue
 
-                            serial = str(row['serial_number']).split('.')[0]
-                            home = str(row['home_team']).strip()
-                            away = str(row['away_team']).strip()
-                            
+                            if serial_raw is not None:
+                                s_test = str(serial_raw).strip().lower()
+                                if s_test in ['serial', 'serial number', 'serial_number', 's/n', 'no', '#']:
+                                    continue
+
+                            if serial_raw is None or home_raw is None or _safe_cell(row, 3) is None:
+                                raise ValueError("Missing required fields (Serial, Home, Away)")
+
+                            serial = str(serial_raw).split('.')[0]
+                            home = str(home_raw).strip()
+                            away = str(_safe_cell(row, 3)).strip()
+
                             def _parse_excel_date(v):
                                 if v is None or pd.isna(v):
                                     raise ValueError("Date is missing")
@@ -1270,24 +1401,19 @@ class FixtureAdmin(admin.ModelAdmin):
                                     raise ValueError(f"Date {parsed} is outside the selected betting period ({betting_period.start_date} to {betting_period.end_date}).")
                                 return parsed
 
-                            match_date = _parse_excel_date(row['match_date'])
-                                
-                            # Parse Time
-                            match_time = row['match_time']
+                            match_date = _parse_excel_date(_safe_cell(row, detected['match_date']))
+
+                            match_time = _safe_cell(row, detected['match_time'])
                             try:
-                                if pd.notna(match_time):
-                                    # If it's already a time object (datetime.time)
-                                    if isinstance(match_time, time): # Check exact type
+                                if match_time is not None:
+                                    if isinstance(match_time, time):
                                         pass
-                                    # If it's a datetime object (pd.Timestamp or datetime.datetime)
                                     elif hasattr(match_time, 'time'):
                                         match_time = match_time.time()
-                                    # If it's a string, try parsing multiple formats
                                     elif isinstance(match_time, str):
                                         try:
                                             match_time = datetime.strptime(match_time, '%H:%M').time()
                                         except ValueError:
-                                            # Try with seconds
                                             match_time = datetime.strptime(match_time, '%H:%M:%S').time()
                                     else:
                                         raise ValueError(f"Unknown time type: {type(match_time)}")
@@ -1296,45 +1422,61 @@ class FixtureAdmin(admin.ModelAdmin):
                             except Exception as e:
                                 raise ValueError(f"Invalid time format: {match_time}")
 
+                            odd_vals = {
+                                'home_win_odd': _to_decimal_or_none(_safe_cell(row, detected['home_win'])) if is_complete_format else None,
+                                'draw_odd': _to_decimal_or_none(_safe_cell(row, detected['draw'])),
+                                'away_win_odd': _to_decimal_or_none(_safe_cell(row, detected['away_win'])) if is_complete_format else None,
+                                'home_or_draw_odd': _to_decimal_or_none(_safe_cell(row, detected['home_or_draw'])) if is_complete_format else None,
+                                'either_team_win_odd': _to_decimal_or_none(_safe_cell(row, detected['either_team_win'])) if is_complete_format else None,
+                                'away_or_draw_odd': _to_decimal_or_none(_safe_cell(row, detected['away_or_draw'])) if is_complete_format else None,
+                            }
+
                             existing_fixture = Fixture.objects.filter(serial_number=serial, betting_period=betting_period).first()
                             if existing_fixture:
                                 existing_fixture.home_team = home
                                 existing_fixture.away_team = away
-                                existing_fixture.draw_odd = row['draw_odd'] if not pd.isna(row['draw_odd']) else None
                                 existing_fixture.match_date = match_date
                                 existing_fixture.match_time = match_time
+                                update_fields = ['home_team', 'away_team', 'match_date', 'match_time']
+                                for k, v in odd_vals.items():
+                                    if v is not None:
+                                        setattr(existing_fixture, k, v)
+                                        update_fields.append(k)
                                 if not existing_fixture.status:
                                     existing_fixture.status = 'scheduled'
+                                    update_fields.append('status')
                                 existing_fixture.is_active = True
-                                existing_fixture.save(update_fields=['home_team', 'away_team', 'draw_odd', 'match_date', 'match_time', 'status', 'is_active'])
+                                update_fields.append('is_active')
+                                existing_fixture.save(update_fields=list(set(update_fields)))
                                 updated_fixture_ids.append(existing_fixture.id)
                                 updated_count += 1
                                 continue
-                                
-                            # Check duplicates (Teams + Date + Time)
+
                             if Fixture.objects.filter(betting_period=betting_period, home_team__iexact=home, away_team__iexact=away, match_date=match_date, match_time=match_time).exists():
                                 skip_count += 1
                                 errors.append(f"Row {index + 2}: Duplicate Fixture {home} vs {away}")
                                 continue
 
-                            # Create Fixture
-                            created_fixture = Fixture.objects.create(
-                                betting_period=betting_period,
-                                serial_number=serial,
-                                home_team=home,
-                                away_team=away,
-                                draw_odd=row['draw_odd'] if not pd.isna(row['draw_odd']) else None,
-                                match_date=match_date,
-                                match_time=match_time,
-                                status='scheduled',
-                                is_active=True
-                            )
+                            create_kwargs = {
+                                'betting_period': betting_period,
+                                'serial_number': serial,
+                                'home_team': home,
+                                'away_team': away,
+                                'match_date': match_date,
+                                'match_time': match_time,
+                                'status': 'scheduled',
+                                'is_active': True,
+                            }
+                            for k, v in odd_vals.items():
+                                if v is not None:
+                                    create_kwargs[k] = v
+                            created_fixture = Fixture.objects.create(**create_kwargs)
                             created_fixture_ids.append(created_fixture.id)
                             success_count += 1
-                            
+
                         except Exception as e:
                             errors.append(f"Row {index + 2}: {str(e)}")
-                            
+
                     try:
                         if created_fixture_ids:
                             from django.db.models import Q
@@ -1362,21 +1504,22 @@ class FixtureAdmin(admin.ModelAdmin):
                     except Exception:
                         pass
 
-                    messages.success(request, f"Upload Complete: {success_count} added, {updated_count} updated, {skip_count} skipped.")
+                    format_label = "Complete (6 odds)" if is_complete_format else "Draw-only"
+                    messages.success(request, f"Upload Complete [{format_label} format auto-detected]: {success_count} added, {updated_count} updated, {skip_count} skipped.")
                     if errors:
                         error_msg = " | ".join(errors[:10])
                         if len(errors) > 10:
                             error_msg += f" ... and {len(errors)-10} more."
                         messages.warning(request, f"Issues encountered: {error_msg}")
-                        
+
                     return redirect('..')
-                    
+
                 except Exception as e:
                     messages.error(request, f"Critical Error processing file: {str(e)}")
-                    
+
         else:
             form = FixtureUploadForm()
-            
+
         context = {
             'form': form,
             'title': 'Upload Fixtures',
@@ -2967,6 +3110,312 @@ betting_admin_site.register(TicketVoidRequest, TicketVoidRequestAdmin)
 betting_admin_site.register(TicketVoidAuditLog, TicketVoidAuditLogAdmin)
 betting_admin_site.register(CashierVoidPermission, CashierVoidPermissionAdmin)
 
+
+class FixtureOddsEditorAssignmentAdmin(admin.ModelAdmin):
+    list_display = ("user", "user_type_display", "can_edit_odds", "assigned_by", "assigned_at", "updated_at")
+    list_filter = ("can_edit_odds", ("assigned_at", admin.DateFieldListFilter))
+    search_fields = ("user__email", "user__first_name", "user__last_name", "user__username", "notes")
+    raw_id_fields = ("user", "assigned_by")
+    autocomplete_fields = ("user",)
+    fieldsets = (
+        (None, {"fields": ("user", "can_edit_odds", "assigned_by", "notes")}),
+    )
+    list_select_related = ("user", "assigned_by")
+
+    def user_type_display(self, obj):
+        return dict(User.USER_TYPE_CHOICES).get(getattr(obj.user, "user_type", ""), obj.user.user_type if obj.user else "")
+    user_type_display.short_description = "User Type"
+    user_type_display.admin_order_field = "user__user_type"
+
+    def save_model(self, request, obj, form, change):
+        if not change or not obj.assigned_by_id:
+            if request.user.is_superuser or request.user.user_type == "admin":
+                obj.assigned_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def has_add_permission(self, request):
+        return bool(request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == "admin"))
+
+    def has_change_permission(self, request, obj=None):
+        return bool(request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == "admin"))
+
+    def has_delete_permission(self, request, obj=None):
+        return bool(request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == "admin"))
+
+
+@admin.action(description="✅ Approve selected proposals (publish odds)")
+def approve_selected_proposals(modeladmin, request, queryset):
+    from django.utils import timezone
+
+    approved = 0
+    skipped = 0
+    qs = queryset.filter(status=FixtureOddsChangeProposal.STATUS_PENDING).select_related("fixture")
+    for proposal in qs:
+        proposal.status = FixtureOddsChangeProposal.STATUS_APPROVED
+        proposal.approved_by = request.user
+        proposal.approved_at = timezone.now()
+        if not proposal.admin_notes:
+            proposal.admin_notes = f"Bulk approved by {request.user}."
+        proposal.save()
+        proposal.apply_to_fixture()
+        approved += 1
+    skipped = queryset.count() - approved
+    if approved:
+        messages.success(request, f"Approved and published {approved} proposal(s).")
+    if skipped:
+        messages.warning(request, f"Skipped {skipped} proposal(s) that were not pending.")
+
+
+@admin.action(description="❌ Reject selected proposals")
+def reject_selected_proposals(modeladmin, request, queryset):
+    from django.utils import timezone
+
+    rejected = 0
+    skipped = 0
+    qs = queryset.filter(status=FixtureOddsChangeProposal.STATUS_PENDING)
+    for proposal in qs:
+        proposal.status = FixtureOddsChangeProposal.STATUS_REJECTED
+        proposal.rejected_by = request.user
+        proposal.rejected_at = timezone.now()
+        if not proposal.admin_notes:
+            proposal.admin_notes = f"Bulk rejected by {request.user}."
+        proposal.save()
+        rejected += 1
+    skipped = queryset.count() - rejected
+    if rejected:
+        messages.success(request, f"Rejected {rejected} proposal(s).")
+    if skipped:
+        messages.warning(request, f"Skipped {skipped} proposal(s) that were not pending.")
+
+
+class FixtureOddsChangeProposalAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "fixture_serial_number",
+        "matchup",
+        "betting_period",
+        "status_badge",
+        "changes_count",
+        "proposer",
+        "created_at",
+        "approved_at",
+    )
+    list_filter = (
+        ("status", admin.AllValuesFieldListFilter),
+        ("created_at", admin.DateFieldListFilter),
+        ("fixture_match_date", admin.DateFieldListFilter),
+        ("betting_period", admin.RelatedOnlyFieldListFilter),
+    )
+    search_fields = (
+        "fixture_serial_number",
+        "fixture_home_team",
+        "fixture_away_team",
+        "proposer__email",
+        "proposer__first_name",
+        "proposer__last_name",
+        "proposer__username",
+        "proposer_notes",
+        "admin_notes",
+    )
+    actions = [approve_selected_proposals, reject_selected_proposals]
+    readonly_fields = (
+        "status",
+        "fixture",
+        "betting_period",
+        "fixture_serial_number",
+        "fixture_match_date",
+        "fixture_home_team",
+        "fixture_away_team",
+        "proposer",
+        "proposer_notes",
+        "current_home_win_odd",
+        "current_draw_odd",
+        "current_away_win_odd",
+        "current_home_or_draw_odd",
+        "current_either_team_win_odd",
+        "current_away_or_draw_odd",
+        "proposed_home_win_odd",
+        "proposed_draw_odd",
+        "proposed_away_win_odd",
+        "proposed_home_or_draw_odd",
+        "proposed_either_team_win_odd",
+        "proposed_away_or_draw_odd",
+        "approved_by",
+        "approved_at",
+        "rejected_by",
+        "rejected_at",
+        "created_at",
+        "updated_at",
+    )
+    fieldsets = (
+        ("Overview", {"fields": (
+            "status", "fixture", "betting_period", "fixture_serial_number", "fixture_match_date",
+            "fixture_home_team", "fixture_away_team", "proposer", "created_at", "updated_at",
+        )}),
+        ("Odds Comparison — 1X2", {"fields": (
+            "current_home_win_odd", "proposed_home_win_odd",
+            "current_draw_odd", "proposed_draw_odd",
+            "current_away_win_odd", "proposed_away_win_odd",
+        )}),
+        ("Odds Comparison — Double Chance", {"fields": (
+            "current_home_or_draw_odd", "proposed_home_or_draw_odd",
+            "current_either_team_win_odd", "proposed_either_team_win_odd",
+            "current_away_or_draw_odd", "proposed_away_or_draw_odd",
+        )}),
+        ("Review", {"fields": ("proposer_notes", "admin_notes", "approved_by", "approved_at", "rejected_by", "rejected_at")}),
+    )
+    list_select_related = ("fixture", "betting_period", "proposer", "approved_by", "rejected_by")
+    raw_id_fields = ("fixture", "betting_period", "proposer", "approved_by", "rejected_by")
+
+    def matchup(self, obj):
+        return f"{obj.fixture_home_team} vs {obj.fixture_away_team}"
+    matchup.short_description = "Matchup"
+
+    def status_badge(self, obj):
+        status = obj.status or ""
+        if status == FixtureOddsChangeProposal.STATUS_APPROVED:
+            return mark_safe(f'<span style="background:#28a745;color:#fff;padding:2px 8px;border-radius:999px;">APPROVED</span>')
+        if status == FixtureOddsChangeProposal.STATUS_REJECTED:
+            return mark_safe(f'<span style="background:#dc3545;color:#fff;padding:2px 8px;border-radius:999px;">REJECTED</span>')
+        return mark_safe(f'<span style="background:#ffc107;color:#212529;padding:2px 8px;border-radius:999px;">PENDING</span>')
+    status_badge.short_description = "Status"
+    status_badge.admin_order_field = "status"
+
+    def changes_count(self, obj):
+        try:
+            return len(tuple(obj.changed_odd_fields or ()))
+        except Exception:
+            return 0
+    changes_count.short_description = "Changes"
+
+    def _is_admin(self, request):
+        return bool(request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == "admin"))
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        if not self._is_admin(request):
+            return False
+        if obj is None:
+            return True
+        return True
+
+    def has_delete_permission(self, request, obj=None):
+        return self._is_admin(request)
+
+    def get_readonly_fields(self, request, obj=None):
+        if not self._is_admin(request):
+            return [f.name for f in self.model._meta.get_fields()]
+        if obj is None:
+            return list(self.readonly_fields)
+        if obj.status == FixtureOddsChangeProposal.STATUS_PENDING:
+            return [f for f in list(self.readonly_fields) if f != "admin_notes"]
+        return list(self.readonly_fields)
+
+    def save_model(self, request, obj, form, change):
+        from django.utils import timezone
+        if self._is_admin(request) and change and obj.pk and "admin_notes" in form.changed_data:
+            super().save_model(request, obj, form, change)
+            return
+        super().save_model(request, obj, form, change)
+
+    def get_urls(self):
+        from django.urls import path
+        original = super().get_urls()
+        extra = [
+            path(
+                "<int:proposal_id>/approve/",
+                self.admin_site.admin_view(self.approve_single_view),
+                name="betting_fixtureoddschangeproposal_approve",
+            ),
+            path(
+                "<int:proposal_id>/reject/",
+                self.admin_site.admin_view(self.reject_single_view),
+                name="betting_fixtureoddschangeproposal_reject",
+            ),
+        ]
+        return extra + original
+
+    def _single_action_gate(self, request, proposal_id):
+        if not self._is_admin(request):
+            return HttpResponse("Permission denied", status=403), None
+        try:
+            proposal = FixtureOddsChangeProposal.objects.select_related("fixture").get(pk=proposal_id)
+        except FixtureOddsChangeProposal.DoesNotExist:
+            return HttpResponseRedirect(".."), None
+        if proposal.status != FixtureOddsChangeProposal.STATUS_PENDING:
+            messages.warning(request, f"Proposal #{proposal_id} is not pending.")
+            return HttpResponseRedirect(".."), None
+        return None, proposal
+
+    def approve_single_view(self, request, proposal_id):
+        from django.utils import timezone
+        err, proposal = self._single_action_gate(request, proposal_id)
+        if err is not None:
+            return err
+        if request.method == "POST":
+            admin_notes = request.POST.get("admin_notes", "").strip()
+            proposal.status = FixtureOddsChangeProposal.STATUS_APPROVED
+            proposal.approved_by = request.user
+            proposal.approved_at = timezone.now()
+            proposal.admin_notes = admin_notes
+            proposal.save()
+            proposal.apply_to_fixture()
+            messages.success(request, f"Proposal #{proposal_id} approved and published to fixture #{proposal.fixture_serial_number or proposal.fixture_id}.")
+            return HttpResponseRedirect("../../")
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Approve Proposal #{proposal_id}",
+            "opts": self.model._meta,
+            "proposal": proposal,
+            "action_url": request.path,
+        }
+        return TemplateResponse(request, "betting/admin/fixture_odds_proposal_action.html", context)
+
+    def reject_single_view(self, request, proposal_id):
+        from django.utils import timezone
+        err, proposal = self._single_action_gate(request, proposal_id)
+        if err is not None:
+            return err
+        if request.method == "POST":
+            admin_notes = request.POST.get("admin_notes", "").strip()
+            proposal.status = FixtureOddsChangeProposal.STATUS_REJECTED
+            proposal.rejected_by = request.user
+            proposal.rejected_at = timezone.now()
+            proposal.admin_notes = admin_notes
+            proposal.save()
+            messages.success(request, f"Proposal #{proposal_id} rejected.")
+            return HttpResponseRedirect("../../")
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Reject Proposal #{proposal_id}",
+            "opts": self.model._meta,
+            "proposal": proposal,
+            "action_url": request.path,
+            "is_reject": True,
+        }
+        return TemplateResponse(request, "betting/admin/fixture_odds_proposal_action.html", context)
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        try:
+            obj = self.model.objects.get(pk=object_id)
+        except Exception:
+            obj = None
+        if obj and self._is_admin(request) and obj.status == FixtureOddsChangeProposal.STATUS_PENDING:
+            try:
+                approve_url = reverse("admin:betting_fixtureoddschangeproposal_approve", args=[obj.pk])
+                reject_url = reverse("admin:betting_fixtureoddschangeproposal_reject", args=[obj.pk])
+                extra_context["odds_proposal_action_urls"] = {"approve": approve_url, "reject": reject_url}
+            except Exception:
+                pass
+        return super().change_view(request, object_id, form_url=form_url, extra_context=extra_context)
+
+
+betting_admin_site.register(FixtureOddsEditorAssignment, FixtureOddsEditorAssignmentAdmin)
+betting_admin_site.register(FixtureOddsChangeProposal, FixtureOddsChangeProposalAdmin)
+
 from risk.models import (
     RiskEngineSettings,
     FixtureRiskState,
@@ -3358,6 +3807,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('Bet Permission Settings', {
             'fields': ('allow_single_bet', 'allow_double_bet', 'allow_multiple_bet'),
             'description': 'Configure which types of bets are allowed based on the number of selections.'
+        }),
+        ('Frontend Fixture Display', {
+            'fields': ('show_double_chance_odds',),
+            'description': 'Control visibility of Double Chance (1X / 12 / X2) odds on the public fixtures page. When ON, DC odds appear in a collapsible More Markets sub-row beneath the 1X2 row. When OFF, only 1X2 odds are shown.',
         }),
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')

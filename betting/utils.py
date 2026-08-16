@@ -148,7 +148,17 @@ def select_bonus_rule(bet_type, selection_count, odds):
     else:
         flag = 'allow_acca'
 
-    odds_list = [Decimal(str(o)) for o in (odds or [])]
+    odds_list = []
+    for o in (odds or []):
+        try:
+            if o is None or o == '':
+                odds_list.append(Decimal('0.00'))
+            elif isinstance(o, Decimal):
+                odds_list.append(o)
+            else:
+                odds_list.append(Decimal(str(o)))
+        except Exception:
+            odds_list.append(Decimal('0.00'))
     for rule in get_active_bonus_rules_cached():
         if not rule.get(flag):
             continue

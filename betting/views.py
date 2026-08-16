@@ -3596,9 +3596,25 @@ def calculate_bonus_amount(potential_winning, stake_amount, selections, bet_type
     odds = []
     for s in selections:
         if isinstance(s, dict):
-            odds.append(s.get('odd', Decimal('0.00')))
+            try:
+                odd_val = s.get('odd')
+                if odd_val is None or odd_val == '':
+                    odd_val = Decimal('0.00')
+                elif not isinstance(odd_val, Decimal):
+                    odd_val = Decimal(str(odd_val))
+                odds.append(odd_val)
+            except Exception:
+                odds.append(Decimal('0.00'))
         elif hasattr(s, 'odd_selected'):
-            odds.append(s.odd_selected)
+            try:
+                odd_val = getattr(s, 'odd_selected', None)
+                if odd_val is None:
+                    odd_val = Decimal('0.00')
+                elif not isinstance(odd_val, Decimal):
+                    odd_val = Decimal(str(odd_val))
+                odds.append(odd_val)
+            except Exception:
+                odds.append(Decimal('0.00'))
         else:
             odds.append(Decimal('0.00'))
 
@@ -4297,6 +4313,17 @@ def place_bet(request):
                         else:
                             return fail_response(f'Invalid outcome for {fixture.home_team} vs {fixture.away_team}')
 
+                        if odd is None or odd == '':
+                            return fail_response(
+                                f"Odds are not yet published for outcome '{outcome.replace('_', ' ').title()}' "
+                                f"on {fixture.home_team} vs {fixture.away_team}. Please try a different market."
+                            )
+                        try:
+                            if not isinstance(odd, Decimal):
+                                odd = Decimal(str(odd)).quantize(Decimal('0.01'))
+                        except Exception:
+                            return fail_response(f"Invalid odds value for {fixture.home_team} vs {fixture.away_team} ({outcome}).")
+
                         market_key = market_key_for_bet_type(outcome)
                         selection_key = selection_key_for_bet_type(outcome)
                         if risk_is_suspended(fixture.id, market_key, selection_key):
@@ -4894,6 +4921,20 @@ def place_bet(request):
                         odd = fixture.btts_no_odd
                     else:
                         messages.error(request, 'Invalid outcome selected.')
+                        return redirect('betting:fixtures')
+
+                    if odd is None or odd == '':
+                        messages.error(
+                            request,
+                            f"Odds are not yet published for outcome '{selected_outcome.replace('_', ' ').title()}' "
+                            f"on {fixture.home_team} vs {fixture.away_team}. Please try a different market."
+                        )
+                        return redirect('betting:fixtures')
+                    try:
+                        if not isinstance(odd, Decimal):
+                            odd = Decimal(str(odd)).quantize(Decimal('0.01'))
+                    except Exception:
+                        messages.error(request, 'Invalid odds value for the selected outcome.')
                         return redirect('betting:fixtures')
 
                     # Check if user has sufficient balance

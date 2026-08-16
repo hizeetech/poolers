@@ -1863,6 +1863,17 @@ class BetTicket(models.Model):
         old_potential = self.potential_winning
         old_max = self.max_winning
 
+        def _safe_odd(sel, fallback=Decimal('1.00')):
+            try:
+                v = getattr(sel, 'odd_selected', None)
+                if v is None or v == '':
+                    return fallback
+                if isinstance(v, Decimal):
+                    return v
+                return Decimal(str(v)).quantize(Decimal('0.01'))
+            except Exception:
+                return fallback
+
         # 2. Recalculate based on Ticket Type
         if self.bet_type == 'system' and self.system_min_count:
             k = self.system_min_count
@@ -1876,7 +1887,7 @@ class BetTicket(models.Model):
                 count = 0
                 for sel in all_selections:
                     fixture_status = getattr(sel.fixture, 'status', None)
-                    o = Decimal('1.00') if fixture_status in void_statuses else sel.odd_selected
+                    o = Decimal('1.00') if fixture_status in void_statuses else _safe_odd(sel)
                     count += 1
                     upper = min(k, count)
                     for j in range(upper, 0, -1):
@@ -1893,7 +1904,7 @@ class BetTicket(models.Model):
                 if fixture_status in void_statuses:
                     effective_total_odd *= Decimal('1.00')
                 else:
-                    effective_total_odd *= sel.odd_selected
+                    effective_total_odd *= _safe_odd(sel)
 
             effective_total_odd = effective_total_odd.quantize(Decimal('0.01'))
             self.potential_winning = (self.stake_amount * effective_total_odd).quantize(Decimal('0.01'))

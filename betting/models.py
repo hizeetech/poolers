@@ -1058,6 +1058,15 @@ class Transaction(models.Model):
 
     class Meta:
         ordering = ['-timestamp']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['related_bet_ticket'],
+                condition=models.Q(transaction_type='bet_payout', status='completed'),
+                name='unique_completed_bet_payout_per_ticket',
+                violation_error_code='duplicate_bet_payout',
+                violation_error_message='A completed bet payout already exists for this ticket.',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.transaction_type} - {self.user.email} - {self.amount} ({self.status})"
@@ -1983,248 +1992,288 @@ class BetTicket(models.Model):
         return self.selections.filter(fixture__status__in=['finished', 'settled']).exists()
 
     def check_and_update_status(self):
-        if self.status == 'pending':
-            void_statuses = ['cancelled', 'postponed', 'abandoned', 'no_result']
-            selections = list(self.selections.select_related('fixture').all())
+        # --- Idempotency early returns: prevent any double-processing / double-payout ---
+        if self.status != 'pending':
+            # Already won/lost/cashed_out/voided — nothing to do.
+            # (Prevents admin "reprocess" action / parallel workers / signal storms from
+            #  re-entering the won payout block on already-processed tickets.)
+            return
+        if self.payout_processed:
+            return
+        void_statuses = ['cancelled', 'postponed', 'abandoned', 'no_result']
+        selections = list(self.selections.select_related('fixture').all())
 
-            all_fixtures_settled = True
-            to_update = []
+        all_fixtures_settled = True
+        to_update = []
 
-            for selection in selections:
-                fixture = selection.fixture
-                new_value = selection.is_winning_selection
-                if fixture is None:
-                    all_fixtures_settled = False
-                    continue
+        for selection in selections:
+            fixture = selection.fixture
+            new_value = selection.is_winning_selection
+            if fixture is None:
+                all_fixtures_settled = False
+                continue
 
-                if fixture.status in void_statuses:
-                    new_value = None
-                elif fixture.status not in ['settled', 'finished']:
-                    all_fixtures_settled = False
-                    continue
-                elif fixture.home_score is None or fixture.away_score is None:
-                    all_fixtures_settled = False
-                    continue
+            if fixture.status in void_statuses:
+                new_value = None
+            elif fixture.status not in ['settled', 'finished']:
+                all_fixtures_settled = False
+                continue
+            elif fixture.home_score is None or fixture.away_score is None:
+                all_fixtures_settled = False
+                continue
+            else:
+                total_goals = fixture.home_score + fixture.away_score
+                if selection.bet_type == 'home_win':
+                    new_value = fixture.home_score > fixture.away_score
+                elif selection.bet_type == 'draw':
+                    new_value = fixture.home_score == fixture.away_score
+                elif selection.bet_type == 'away_win':
+                    new_value = fixture.home_score < fixture.away_score
+                elif selection.bet_type == 'home_or_draw':
+                    new_value = fixture.home_score >= fixture.away_score
+                elif selection.bet_type == 'either_team_win':
+                    new_value = fixture.home_score != fixture.away_score
+                elif selection.bet_type == 'away_or_draw':
+                    new_value = fixture.home_score <= fixture.away_score
+                elif selection.bet_type == 'over_1_5':
+                    new_value = total_goals > Decimal('1.5')
+                elif selection.bet_type == 'under_1_5':
+                    new_value = total_goals <= Decimal('1.5')
+                elif selection.bet_type == 'over_2_5':
+                    new_value = total_goals > Decimal('2.5')
+                elif selection.bet_type == 'under_2_5':
+                    new_value = total_goals <= Decimal('2.5')
+                elif selection.bet_type == 'over_3_5':
+                    new_value = total_goals > Decimal('3.5')
+                elif selection.bet_type == 'under_3_5':
+                    new_value = total_goals <= Decimal('3.5')
+                elif selection.bet_type == 'btts_yes':
+                    new_value = fixture.home_score > 0 and fixture.away_score > 0
+                elif selection.bet_type == 'btts_no':
+                    new_value = fixture.home_score == 0 or fixture.away_score == 0
+                elif selection.bet_type == 'home_dnb':
+                    new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score > fixture.away_score)
+                elif selection.bet_type == 'away_dnb':
+                    new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score < fixture.away_score)
                 else:
-                    total_goals = fixture.home_score + fixture.away_score
-                    if selection.bet_type == 'home_win':
-                        new_value = fixture.home_score > fixture.away_score
-                    elif selection.bet_type == 'draw':
-                        new_value = fixture.home_score == fixture.away_score
-                    elif selection.bet_type == 'away_win':
-                        new_value = fixture.home_score < fixture.away_score
-                    elif selection.bet_type == 'home_or_draw':
-                        new_value = fixture.home_score >= fixture.away_score
-                    elif selection.bet_type == 'either_team_win':
-                        new_value = fixture.home_score != fixture.away_score
-                    elif selection.bet_type == 'away_or_draw':
-                        new_value = fixture.home_score <= fixture.away_score
-                    elif selection.bet_type == 'over_1_5':
-                        new_value = total_goals > Decimal('1.5')
-                    elif selection.bet_type == 'under_1_5':
-                        new_value = total_goals <= Decimal('1.5')
-                    elif selection.bet_type == 'over_2_5':
-                        new_value = total_goals > Decimal('2.5')
-                    elif selection.bet_type == 'under_2_5':
-                        new_value = total_goals <= Decimal('2.5')
-                    elif selection.bet_type == 'over_3_5':
-                        new_value = total_goals > Decimal('3.5')
-                    elif selection.bet_type == 'under_3_5':
-                        new_value = total_goals <= Decimal('3.5')
-                    elif selection.bet_type == 'btts_yes':
-                        new_value = fixture.home_score > 0 and fixture.away_score > 0
-                    elif selection.bet_type == 'btts_no':
-                        new_value = fixture.home_score == 0 or fixture.away_score == 0
-                    elif selection.bet_type == 'home_dnb':
-                        new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score > fixture.away_score)
-                    elif selection.bet_type == 'away_dnb':
-                        new_value = None if fixture.home_score == fixture.away_score else (fixture.home_score < fixture.away_score)
-                    else:
-                        new_value = False
+                    new_value = False
 
-                if selection.is_winning_selection != new_value:
-                    selection.is_winning_selection = new_value
-                    to_update.append(selection)
+            if selection.is_winning_selection != new_value:
+                selection.is_winning_selection = new_value
+                to_update.append(selection)
 
-            if to_update:
-                Selection.objects.bulk_update(to_update, ['is_winning_selection'])
+        if to_update:
+            Selection.objects.bulk_update(to_update, ['is_winning_selection'])
 
-            if self.bet_type == 'system' and self.system_min_count:
-                if not all_fixtures_settled:
-                    return
+        if self.bet_type == 'system' and self.system_min_count:
+            if not all_fixtures_settled:
+                return
 
-                n = len(selections)
-                k = int(self.system_min_count or 0)
-                if not k or n < k:
-                    return
+            n = len(selections)
+            k = int(self.system_min_count or 0)
+            if not k or n < k:
+                return
 
-                num_lines = math.comb(n, k)
-                stake_per_line = (self.stake_amount / Decimal(num_lines)) if num_lines else Decimal('0.00')
+            num_lines = math.comb(n, k)
+            stake_per_line = (self.stake_amount / Decimal(num_lines)) if num_lines else Decimal('0.00')
 
-                void_count = 0
-                odds = []
-                for s in selections:
-                    if s.is_winning_selection is False:
-                        continue
-                    if s.is_winning_selection is None:
-                        void_count += 1
-                        odds.append(Decimal('1.00'))
-                    else:
-                        odds.append(s.odd_selected)
+            void_count = 0
+            odds = []
+            for s in selections:
+                if s.is_winning_selection is False:
+                    continue
+                if s.is_winning_selection is None:
+                    void_count += 1
+                    odds.append(Decimal('1.00'))
+                else:
+                    odds.append(s.odd_selected)
 
-                if len(odds) < k:
+            if len(odds) < k:
+                self.status = 'lost'
+                self.potential_winning = Decimal('0.00')
+            else:
+                dp = [Decimal('0.00')] * (k + 1)
+                dp[0] = Decimal('1.00')
+                count = 0
+                for o in odds:
+                    count += 1
+                    upper = min(k, count)
+                    for j in range(upper, 0, -1):
+                        dp[j] = dp[j] + (dp[j - 1] * o)
+
+                winning_amount = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
+                if winning_amount > 0:
+                    self.status = 'won'
+                    self.potential_winning = winning_amount
+                else:
                     self.status = 'lost'
                     self.potential_winning = Decimal('0.00')
-                else:
-                    dp = [Decimal('0.00')] * (k + 1)
-                    dp[0] = Decimal('1.00')
-                    count = 0
-                    for o in odds:
-                        count += 1
-                        upper = min(k, count)
-                        for j in range(upper, 0, -1):
-                            dp[j] = dp[j] + (dp[j - 1] * o)
 
-                    winning_amount = (stake_per_line * dp[k]).quantize(Decimal('0.01'))
-                    if winning_amount > 0:
-                        self.status = 'won'
-                        self.potential_winning = winning_amount
-                    else:
-                        self.status = 'lost'
-                        self.potential_winning = Decimal('0.00')
-
-            else:
-                for s in selections:
-                    if s.is_winning_selection is False:
-                        self.status = 'lost'
-                        self.potential_winning = Decimal('0.00')
-                        self.max_winning = Decimal('0.00')
-                        self.bonus_base_amount = Decimal('0.00')
-                        self.bonus_amount = Decimal('0.00')
-                        self.bonus_is_final = True
-                        self.bonus_applied_at = None
-                        self.save()
-                        return
-
-                if not all_fixtures_settled:
+        else:
+            for s in selections:
+                if s.is_winning_selection is False:
+                    self.status = 'lost'
+                    self.potential_winning = Decimal('0.00')
+                    self.max_winning = Decimal('0.00')
+                    self.bonus_base_amount = Decimal('0.00')
+                    self.bonus_amount = Decimal('0.00')
+                    self.bonus_is_final = True
+                    self.bonus_applied_at = None
+                    self.save()
                     return
 
-                total_odd_settled = Decimal('1.00')
-                void_count = 0
-                non_void_odds = []
+            if not all_fixtures_settled:
+                return
 
-                for s in selections:
-                    if s.is_winning_selection is None:
-                        void_count += 1
-                        total_odd_settled *= Decimal('1.00')
-                    else:
-                        total_odd_settled *= s.odd_selected
-                        non_void_odds.append(s.odd_selected)
+            total_odd_settled = Decimal('1.00')
+            void_count = 0
+            non_void_odds = []
 
-                self.status = 'won'
-                effective_total_odd = total_odd_settled.quantize(Decimal('0.01'))
-                self.potential_winning = (self.stake_amount * effective_total_odd).quantize(Decimal('0.01'))
+            for s in selections:
+                if s.is_winning_selection is None:
+                    void_count += 1
+                    total_odd_settled *= Decimal('1.00')
+                else:
+                    total_odd_settled *= s.odd_selected
+                    non_void_odds.append(s.odd_selected)
 
-            old_bonus = self.bonus_amount
-            bonus_amount = Decimal('0.00')
-            bonus_base_amount = Decimal('0.00')
+            self.status = 'won'
+            effective_total_odd = total_odd_settled.quantize(Decimal('0.01'))
+            self.potential_winning = (self.stake_amount * effective_total_odd).quantize(Decimal('0.01'))
 
-            if self.status == 'won' and self.status != 'cashed_out' and self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0:
-                rule = self.bonus_rule
-                if rule:
-                    current_void_count = sum(1 for s in selections if s.is_winning_selection is None)
-                    effective_count = self.original_selections_count or len(selections)
-                    effective_count = max(0, int(effective_count) - int(current_void_count))
+        old_bonus = self.bonus_amount
+        bonus_amount = Decimal('0.00')
+        bonus_base_amount = Decimal('0.00')
 
-                    qualifies = effective_count >= rule.min_selections and (rule.max_selections is None or effective_count <= rule.max_selections)
+        if self.status == 'won' and self.status != 'cashed_out' and self.bonus_rule_id and self.bonus_percentage_applied and self.bonus_percentage_applied > 0:
+            rule = self.bonus_rule
+            if rule:
+                current_void_count = sum(1 for s in selections if s.is_winning_selection is None)
+                effective_count = self.original_selections_count or len(selections)
+                effective_count = max(0, int(effective_count) - int(current_void_count))
 
-                    odds_to_check = [s.odd_selected for s in selections if s.is_winning_selection is not None]
-                    odds_ok = True if not odds_to_check else (min(odds_to_check) >= rule.min_odd_per_selection)
+                qualifies = effective_count >= rule.min_selections and (rule.max_selections is None or effective_count <= rule.max_selections)
 
-                    if qualifies and odds_ok:
-                        bonus_base_amount = self.potential_winning
-                        if (self.bonus_base or rule.bonus_base) == 'net':
-                            bonus_base_amount = self.potential_winning - self.stake_amount
-                            if bonus_base_amount < 0:
-                                bonus_base_amount = Decimal('0.00')
+                odds_to_check = [s.odd_selected for s in selections if s.is_winning_selection is not None]
+                odds_ok = True if not odds_to_check else (min(odds_to_check) >= rule.min_odd_per_selection)
 
-                        bonus_amount = (bonus_base_amount * self.bonus_percentage_applied).quantize(Decimal('0.01'))
-                        if rule.max_bonus_cap is not None:
-                            bonus_amount = min(bonus_amount, rule.max_bonus_cap)
+                if qualifies and odds_ok:
+                    bonus_base_amount = self.potential_winning
+                    if (self.bonus_base or rule.bonus_base) == 'net':
+                        bonus_base_amount = self.potential_winning - self.stake_amount
+                        if bonus_base_amount < 0:
+                            bonus_base_amount = Decimal('0.00')
 
-            self.bonus_base_amount = bonus_base_amount
-            self.bonus_amount = bonus_amount
-            self.bonus_is_final = True
-            if bonus_amount > 0:
-                if not self.bonus_applied_at:
-                    self.bonus_applied_at = timezone.now()
-            else:
-                self.bonus_applied_at = None
+                    bonus_amount = (bonus_base_amount * self.bonus_percentage_applied).quantize(Decimal('0.01'))
+                    if rule.max_bonus_cap is not None:
+                        bonus_amount = min(bonus_amount, rule.max_bonus_cap)
 
-            self.max_winning = (self.potential_winning + bonus_amount).quantize(Decimal('0.01'))
+        self.bonus_base_amount = bonus_base_amount
+        self.bonus_amount = bonus_amount
+        self.bonus_is_final = True
+        if bonus_amount > 0:
+            if not self.bonus_applied_at:
+                self.bonus_applied_at = timezone.now()
+        else:
+            self.bonus_applied_at = None
 
+        self.max_winning = (self.potential_winning + bonus_amount).quantize(Decimal('0.01'))
+
+        snapshot_limit = None
+        try:
+            snapshot_limit = self.betting_limits_snapshot.get('max_winning')
+        except Exception:
             snapshot_limit = None
-            try:
-                snapshot_limit = self.betting_limits_snapshot.get('max_winning')
-            except Exception:
-                snapshot_limit = None
 
-            if snapshot_limit is not None:
+        if snapshot_limit is not None:
+            try:
+                self.max_winning = min(self.max_winning, Decimal(str(snapshot_limit)))
+            except Exception:
+                pass
+        else:
+            max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
+            if max_winning_setting and max_winning_setting.value:
                 try:
-                    self.max_winning = min(self.max_winning, Decimal(str(snapshot_limit)))
+                    limit = Decimal(max_winning_setting.value)
+                    self.max_winning = min(self.max_winning, limit)
                 except Exception:
                     pass
-            else:
-                max_winning_setting = SystemSetting.objects.filter(key='max_winning_per_ticket').first()
-                if max_winning_setting and max_winning_setting.value:
-                    try:
-                        limit = Decimal(max_winning_setting.value)
-                        self.max_winning = min(self.max_winning, limit)
-                    except Exception:
-                        pass
 
-            self.save()
+        self.save()
 
-            if bonus_amount > 0 and (not old_bonus or old_bonus != bonus_amount):
-                ActivityLog.objects.create(
-                    user=self.user,
-                    action_type='BONUS_APPLIED',
-                    action=f"Bonus applied on ticket {self.ticket_id}. Base: {bonus_base_amount} Pct: {self.bonus_percentage_applied} Bonus: {bonus_amount} Final: {self.max_winning}",
-                    affected_object=f"BetTicket: {self.ticket_id}",
-                    ip_address=self.placed_ip
-                )
+        if bonus_amount > 0 and (not old_bonus or old_bonus != bonus_amount):
+            ActivityLog.objects.create(
+                user=self.user,
+                action_type='BONUS_APPLIED',
+                action=f"Bonus applied on ticket {self.ticket_id}. Base: {bonus_base_amount} Pct: {self.bonus_percentage_applied} Bonus: {bonus_amount} Final: {self.max_winning}",
+                affected_object=f"BetTicket: {self.ticket_id}",
+                ip_address=self.placed_ip
+            )
 
-            if self.status == 'won':
-                with transaction.atomic():
-                    locked_ticket = BetTicket.objects.select_for_update().get(pk=self.pk)
-                    if locked_ticket.payout_processed or locked_ticket.status != 'won':
-                        return
-                    wallet = Wallet.objects.select_for_update().get(user=self.user)
+        if self.status == 'won':
+            from django.db import IntegrityError, transaction as db_transaction
+            PAYOUT_TX_TYPE = 'bet_payout'
+            PAYOUT_TX_STATUS = 'completed'
+
+            with db_transaction.atomic():
+                locked_ticket = BetTicket.objects.select_for_update().get(pk=self.pk)
+
+                existing_payouts = Transaction.objects.filter(
+                    related_bet_ticket=locked_ticket,
+                    transaction_type=PAYOUT_TX_TYPE,
+                    status=PAYOUT_TX_STATUS,
+                    is_successful=True,
+                ).count()
+                if existing_payouts >= 1:
+                    if not locked_ticket.payout_processed:
+                        locked_ticket.payout_processed = True
+                        locked_ticket.save(update_fields=['payout_processed'])
+                    return
+
+                if locked_ticket.payout_processed or locked_ticket.status != 'won':
+                    return
+
+                wallet = Wallet.objects.select_for_update().get(user=self.user)
+
+                payout_amount = locked_ticket.max_winning
+
+                try:
                     payout_tx = Transaction.objects.create(
                         user=self.user,
                         initiating_user=None,
-                        transaction_type='bet_payout',
-                        amount=locked_ticket.max_winning,
+                        target_user=self.user,
+                        transaction_type=PAYOUT_TX_TYPE,
+                        amount=payout_amount,
                         is_successful=True,
-                        status='completed',
+                        status=PAYOUT_TX_STATUS,
                         description=f"Winnings for ticket {locked_ticket.ticket_id}",
                         related_bet_ticket=locked_ticket,
                         timestamp=timezone.now()
                     )
-                    wallet.apply_delta(
-                        amount=locked_ticket.max_winning,
-                        actor=None,
-                        transaction_obj=payout_tx,
-                        reference=str(locked_ticket.ticket_id),
-                        reason=payout_tx.description,
-                        metadata={
-                            "ticket_id": locked_ticket.ticket_id,
-                            "source": "ticket_settlement",
-                        },
-                    )
+                except IntegrityError as e:
+                    code = getattr(getattr(e, '__cause__', None), 'pgcode', None) if 'pgcode' in dir(getattr(e,'__cause__',None)) else None
+                    violation = (code == '23505') or ('unique_completed_bet_payout_per_ticket' in str(e))
+                    if violation:
+                        if not locked_ticket.payout_processed:
+                            locked_ticket.payout_processed = True
+                            locked_ticket.save(update_fields=['payout_processed'])
+                        return
+                    raise
 
-                    locked_ticket.payout_processed = True
-                    locked_ticket.save(update_fields=['payout_processed'])
+                wallet.apply_delta(
+                    amount=payout_amount,
+                    actor=None,
+                    transaction_obj=payout_tx,
+                    reference=str(locked_ticket.ticket_id),
+                    reason=payout_tx.description,
+                    metadata={
+                        "ticket_id": locked_ticket.ticket_id,
+                        "source": "ticket_settlement",
+                    },
+                )
+
+                locked_ticket.payout_processed = True
+                locked_ticket.save(update_fields=['payout_processed'])
 
     def _get_active_result_side_effect_transactions(self):
         return list(

@@ -1959,7 +1959,9 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         'short_id',
         'user',
         'amount',
+        'previous_won_amount_display',
         'current_won_amount_display',
+        'current_approved_withdrawal_total_display',
         'bank_name',
         'account_number',
         'account_name',
@@ -2006,28 +2008,49 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             .first()
         )
         if current_period:
-            return current_period.start_date, current_period.end_date
+            return current_period.start_date, current_period.end_date, current_period
 
         fallback_period = BettingPeriod.objects.filter(is_active=True).order_by('-start_date').first()
         if fallback_period:
-            return fallback_period.start_date, fallback_period.end_date
+            return fallback_period.start_date, fallback_period.end_date, fallback_period
 
         weekday = ref_date.weekday()
         days_since_tuesday = (weekday - 1) % 7
         start_date = ref_date - timedelta(days=days_since_tuesday)
         end_date = start_date + timedelta(days=6)
-        return start_date, end_date
+        return start_date, end_date, None
+
+    def _get_previous_betting_period_window(self):
+        ref_date = timezone.localdate()
+        current_start, current_end, current_period = self._get_current_betting_period_window()
+
+        if current_period is not None:
+            previous_period = (
+                BettingPeriod.objects.filter(
+                    is_active=True,
+                    start_date__lt=current_period.start_date,
+                )
+                .order_by('-start_date')
+                .first()
+            )
+            if previous_period:
+                return previous_period.start_date, previous_period.end_date
+
+        fallback_prev_start = current_start - timedelta(days=7)
+        fallback_prev_end = current_end - timedelta(days=7)
+        return fallback_prev_start, fallback_prev_end
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        start_date, end_date = self._get_current_betting_period_window()
+        current_start, current_end, _current_period = self._get_current_betting_period_window()
+        previous_start, previous_end = self._get_previous_betting_period_window()
 
-        direct_won_amount_subquery = (
+        previous_direct_won_subquery = (
             BetTicket.objects.filter(
                 user_id=OuterRef('user_id'),
                 status='won',
-                placed_at__date__gte=start_date,
-                placed_at__date__lte=end_date,
+                placed_at__date__gte=previous_start,
+                placed_at__date__lte=previous_end,
             )
             .order_by()
             .values('user')
@@ -2040,13 +2063,13 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             )
             .values('total')[:1]
         )
-        agent_cashier_won_amount_subquery = (
+        previous_agent_cashier_won_subquery = (
             BetTicket.objects.filter(
                 user__user_type='cashier',
                 user__agent_id=OuterRef('user_id'),
                 status='won',
-                placed_at__date__gte=start_date,
-                placed_at__date__lte=end_date,
+                placed_at__date__gte=previous_start,
+                placed_at__date__lte=previous_end,
             )
             .order_by()
             .values('user__agent')
@@ -2059,16 +2082,92 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             )
             .values('total')[:1]
         )
+
+        current_direct_won_subquery = (
+            BetTicket.objects.filter(
+                user_id=OuterRef('user_id'),
+                status='won',
+                placed_at__date__gte=current_start,
+                placed_at__date__lte=current_end,
+            )
+            .order_by()
+            .values('user')
+            .annotate(
+                total=Coalesce(
+                    Sum('max_winning'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
+        current_agent_cashier_won_subquery = (
+            BetTicket.objects.filter(
+                user__user_type='cashier',
+                user__agent_id=OuterRef('user_id'),
+                status='won',
+                placed_at__date__gte=current_start,
+                placed_at__date__lte=current_end,
+            )
+            .order_by()
+            .values('user__agent')
+            .annotate(
+                total=Coalesce(
+                    Sum('max_winning'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
+
+        current_direct_approved_withdrawal_subquery = (
+            UserWithdrawal.objects.filter(
+                user_id=OuterRef('user_id'),
+                status='approved',
+                request_time__date__gte=current_start,
+                request_time__date__lte=current_end,
+            )
+            .order_by()
+            .values('user')
+            .annotate(
+                total=Coalesce(
+                    Sum('amount'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
+        current_agent_cashier_approved_withdrawal_subquery = (
+            UserWithdrawal.objects.filter(
+                user__user_type='cashier',
+                user__agent_id=OuterRef('user_id'),
+                status='approved',
+                request_time__date__gte=current_start,
+                request_time__date__lte=current_end,
+            )
+            .order_by()
+            .values('user__agent')
+            .annotate(
+                total=Coalesce(
+                    Sum('amount'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
         return (
             qs.filter(status='pending')
             .select_related('user')
             .annotate(
-                current_won_amount=Case(
+                previous_won_amount=Case(
                     When(
                         user__user_type='agent',
                         then=Coalesce(
                             Subquery(
-                                agent_cashier_won_amount_subquery,
+                                previous_agent_cashier_won_subquery,
                                 output_field=DecimalField(max_digits=12, decimal_places=2),
                             ),
                             Value(Decimal('0.00')),
@@ -2077,14 +2176,69 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
                     ),
                     default=Coalesce(
                         Subquery(
-                            direct_won_amount_subquery,
+                            previous_direct_won_subquery,
                             output_field=DecimalField(max_digits=12, decimal_places=2),
                         ),
                         Value(Decimal('0.00')),
                         output_field=DecimalField(max_digits=12, decimal_places=2),
                     ),
                     output_field=DecimalField(max_digits=12, decimal_places=2),
-                )
+                ),
+                current_won_amount=Case(
+                    When(
+                        user__user_type='agent',
+                        then=Coalesce(
+                            Subquery(
+                                current_agent_cashier_won_subquery,
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            ),
+                            Value(Decimal('0.00')),
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                    ),
+                    default=Coalesce(
+                        Subquery(
+                            current_direct_won_subquery,
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                        Value(Decimal('0.00')),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    ),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
+                current_approved_withdrawal_total=Case(
+                    When(
+                        user__user_type='agent',
+                        then=(
+                            Coalesce(
+                                Subquery(
+                                    current_direct_approved_withdrawal_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                            +
+                            Coalesce(
+                                Subquery(
+                                    current_agent_cashier_approved_withdrawal_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                        ),
+                    ),
+                    default=Coalesce(
+                        Subquery(
+                            current_direct_approved_withdrawal_subquery,
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                        Value(Decimal('0.00')),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    ),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
             )
         )
 
@@ -2092,6 +2246,17 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         return getattr(obj, 'current_won_amount', Decimal('0.00')) or Decimal('0.00')
     current_won_amount_display.short_description = "Current Won Amount"
     current_won_amount_display.admin_order_field = 'current_won_amount'
+
+    def previous_won_amount_display(self, obj):
+        return getattr(obj, 'previous_won_amount', Decimal('0.00')) or Decimal('0.00')
+    previous_won_amount_display.short_description = "Previous Won Amount"
+    previous_won_amount_display.admin_order_field = 'previous_won_amount'
+
+    def current_approved_withdrawal_total_display(self, obj):
+        total = getattr(obj, 'current_approved_withdrawal_total', Decimal('0.00')) or Decimal('0.00')
+        return total
+    current_approved_withdrawal_total_display.short_description = "Approved Total Withdrawal (Current Period)"
+    current_approved_withdrawal_total_display.admin_order_field = 'current_approved_withdrawal_total'
 
     def _is_reopen_insufficient_funds_error(self, exc):
         return str(exc) == "Insufficient funds to reopen withdrawal request."

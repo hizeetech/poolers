@@ -1958,8 +1958,10 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     list_display = (
         'short_id',
         'user',
+        'user_username_display',
         'amount',
         'previous_won_amount_display',
+        'previous_approved_withdrawal_total_display',
         'current_won_amount_display',
         'current_approved_withdrawal_total_display',
         'bank_name',
@@ -2158,6 +2160,44 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             )
             .values('total')[:1]
         )
+
+        previous_direct_approved_withdrawal_subquery = (
+            UserWithdrawal.objects.filter(
+                user_id=OuterRef('user_id'),
+                status='approved',
+                request_time__date__gte=previous_start,
+                request_time__date__lte=previous_end,
+            )
+            .order_by()
+            .values('user')
+            .annotate(
+                total=Coalesce(
+                    Sum('amount'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
+        previous_agent_cashier_approved_withdrawal_subquery = (
+            UserWithdrawal.objects.filter(
+                user__user_type='cashier',
+                user__agent_id=OuterRef('user_id'),
+                status='approved',
+                request_time__date__gte=previous_start,
+                request_time__date__lte=previous_end,
+            )
+            .order_by()
+            .values('user__agent')
+            .annotate(
+                total=Coalesce(
+                    Sum('amount'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .values('total')[:1]
+        )
         return (
             qs.filter(status='pending')
             .select_related('user')
@@ -2177,6 +2217,39 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
                     default=Coalesce(
                         Subquery(
                             previous_direct_won_subquery,
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                        Value(Decimal('0.00')),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    ),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
+                previous_approved_withdrawal_total=Case(
+                    When(
+                        user__user_type='agent',
+                        then=(
+                            Coalesce(
+                                Subquery(
+                                    previous_direct_approved_withdrawal_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                            +
+                            Coalesce(
+                                Subquery(
+                                    previous_agent_cashier_approved_withdrawal_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                        ),
+                    ),
+                    default=Coalesce(
+                        Subquery(
+                            previous_direct_approved_withdrawal_subquery,
                             output_field=DecimalField(max_digits=12, decimal_places=2),
                         ),
                         Value(Decimal('0.00')),
@@ -2251,6 +2324,20 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         return getattr(obj, 'previous_won_amount', Decimal('0.00')) or Decimal('0.00')
     previous_won_amount_display.short_description = "Previous Won Amount"
     previous_won_amount_display.admin_order_field = 'previous_won_amount'
+
+    def user_username_display(self, obj):
+        user = getattr(obj, 'user', None)
+        if user is None:
+            return ""
+        return getattr(user, 'username', "") or ""
+    user_username_display.short_description = "Username"
+    user_username_display.admin_order_field = 'user__username'
+
+    def previous_approved_withdrawal_total_display(self, obj):
+        total = getattr(obj, 'previous_approved_withdrawal_total', Decimal('0.00')) or Decimal('0.00')
+        return total
+    previous_approved_withdrawal_total_display.short_description = "Approved Total Withdrawal (Previous Period)"
+    previous_approved_withdrawal_total_display.admin_order_field = 'previous_approved_withdrawal_total'
 
     def current_approved_withdrawal_total_display(self, obj):
         total = getattr(obj, 'current_approved_withdrawal_total', Decimal('0.00')) or Decimal('0.00')

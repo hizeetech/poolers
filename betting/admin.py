@@ -7,7 +7,6 @@ from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, O
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.db import transaction as db_transaction
-from betting.services.ticket_results import recalculate_tickets_for_fixture_sync
 from django.db.utils import OperationalError, ProgrammingError
 from django.contrib import messages
 from decimal import Decimal
@@ -77,7 +76,7 @@ from .models import (
     FixtureOddsEditorAssignment, FixtureOddsChangeProposal,
 )
 from . import signals
-from .services.ticket_results import recalculate_tickets_for_fixture_sync
+from .tasks import recalculate_tickets_for_fixture
 
 
 # --- Custom Admin Site Definition ---
@@ -1600,7 +1599,7 @@ class ResultAdmin(admin.ModelAdmin):
         if obj.home_score is not None and obj.away_score is not None and obj.status in ('scheduled', 'live'):
             obj.status = 'finished'
         super().save_model(request, obj, form, change)
-        recalculate_tickets_for_fixture_sync(obj.id)
+        recalculate_tickets_for_fixture.delay(obj.id)
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
         extra_context = extra_context or {}
@@ -1643,20 +1642,13 @@ class ResultAdmin(admin.ModelAdmin):
             return redirect(change_url)
 
         affected_count = self._affected_tickets_queryset(obj).count()
-        result = recalculate_tickets_for_fixture_sync(obj.pk)
-        if result and result.get("error"):
-            self.message_user(
-                request,
-                (
-                    "Unable to reprocess affected tickets because the correction would require reversing "
-                    f"more settled winnings/refunds than the current wallet balance allows. Details: {result['error']}"
-                ),
-                level=messages.ERROR,
-            )
-            return redirect(change_url)
+        recalculate_tickets_for_fixture.delay(obj.pk)
         self.message_user(
             request,
-            f"Reprocessed {affected_count} affected ticket(s) for result {obj.serial_number}.",
+            (
+                f"Queued reprocessing of {affected_count} affected ticket(s) for result {obj.serial_number}. "
+                "Processing is running in background. Please check ticket statuses in 1-2 minutes."
+            ),
             level=messages.SUCCESS,
         )
         return redirect(change_url)

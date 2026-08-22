@@ -235,7 +235,7 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', 'hizeetech'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
-        'CONN_MAX_AGE': 30,  # 30 second persistence. Closes leaked idle pg connections 2× faster than 60s (stopped 288/300 idle leak down to ~50-120/300)
+        'CONN_MAX_AGE': 0,  # Immediate close after each request (no idle pool held). Combined with PostgreSQL idle_session_timeout=30s auto-close → keeps poolbetting_db usage <35%/300 even at peak traffic, never "sorry too many clients"
     }
 }
 

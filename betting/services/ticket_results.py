@@ -2,6 +2,7 @@ import logging
 from itertools import islice
 
 from django.db import transaction
+from django.db import close_old_connections
 from django.db.models import Q
 
 from betting.models import BetTicket, Fixture, Selection
@@ -89,6 +90,7 @@ def recalculate_tickets_for_fixture_sync(fixture_id):
                         ticket_id,
                         fixture_id,
                     )
+            close_old_connections()
 
         logger.info(
             "Completed recalculation for %s tickets for fixture %s (processed=%s failed=%s)",
@@ -99,6 +101,7 @@ def recalculate_tickets_for_fixture_sync(fixture_id):
         )
         if affected_ticket_ids:
             refresh_weekly_commissions_for_ticket_ids_sync(affected_ticket_ids)
+            close_old_connections()
         return {
             "error": None,
             "affected_ticket_ids": affected_ticket_ids,

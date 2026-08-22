@@ -7,6 +7,7 @@ from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, O
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.db import transaction as db_transaction
+from django.db import close_old_connections
 from django.db.utils import OperationalError, ProgrammingError
 from django.contrib import messages
 from decimal import Decimal
@@ -1599,6 +1600,7 @@ class ResultAdmin(admin.ModelAdmin):
         if obj.home_score is not None and obj.away_score is not None and obj.status in ('scheduled', 'live'):
             obj.status = 'finished'
         super().save_model(request, obj, form, change)
+        close_old_connections()
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
         extra_context = extra_context or {}

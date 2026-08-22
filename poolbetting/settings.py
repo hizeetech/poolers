@@ -235,7 +235,7 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', 'hizeetech'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
-        'CONN_MAX_AGE': 60,  # 1 min persistence; closes pg conns faster to prevent "sorry too many clients" leaked idle (was 300 caused 288/300 leaked idle pg backends)
+        'CONN_MAX_AGE': 30,  # 30 second persistence. Closes leaked idle pg connections 2× faster than 60s (stopped 288/300 idle leak down to ~50-120/300)
     }
 }
 

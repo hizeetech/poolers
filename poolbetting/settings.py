@@ -19,6 +19,20 @@ load_dotenv(override=False)
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Ensure Django logs directory exists on ALL environments (laptop, dev, prod).
+# Without this, LOGGING RotatingFileHandler crashes Django setup with
+# FileNotFoundError: logs/django_errors.log whenever the dir is missing.
+_LOG_DIR = BASE_DIR / "logs"
+try:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # If perms forbid creation (e.g. read-only FS in tests), fall back to /tmp
+    # so Django still starts.  Prod server always has write access to BASE_DIR.
+    import tempfile
+    _LOG_DIR = Path(tempfile.gettempdir()) / "poolbetting_logs"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = _LOG_DIR
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -134,6 +148,7 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'betting.middleware.EnsureRemoteAddrMiddleware',
+    'poolbetting.views.json_error_server_middleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'betting.middleware.LowBalanceDepositReminderMiddleware',
@@ -432,34 +447,62 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'simple'
         },
-        # You can add a file handler for production if needed
-        # 'file': {
-        #     'level': 'INFO',
-        #     'class': 'logging.handlers.RotatingFileHandler',
-        #     'filename': BASE_DIR / 'logs' / 'django.log',
-        #     'maxBytes': 1024*1024*5, # 5 MB
-        #     'backupCount': 5,
-        #     'formatter': 'verbose',
-        # },
+        # 5 MB rotating file handler for Django request/view errors (500s, 403s, tracebacks)
+        # Output: LOG_DIR/django_errors.log  (matches our permanent /var/www/shop/logs dir)
+        'django_error_file': {
+            'level': 'ERROR',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'django_errors.log',
+            'maxBytes': 5 * 1024 * 1024,  # 5 MB per file
+            'backupCount': 10,            # keep last 10 rotated files (50 MB total cap)
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
+        'django_info_file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'django.log',
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB per file
+            'backupCount': 5,
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
     },
     'loggers': {
         'django': {
-            'handlers': ['console'],
-            'level': 'INFO', # Set to INFO for Django's own logs
+            'handlers': ['console', 'django_info_file'],
+            'level': 'INFO',
             'propagate': False,
         },
-        'celery': {
+        # Most important: django.request logs every 500/403/404 WITH TRACEBACK
+        'django.request': {
+            'handlers': ['console', 'django_error_file'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        'django.security': {
+            'handlers': ['console', 'django_error_file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'django.server': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
         },
+        'celery': {
+            'handlers': ['console', 'django_info_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
         'betting': { # Custom logger for your app
-            'handlers': ['console'],
-            'level': 'DEBUG', # Set to DEBUG to see your custom debug messages
+            'handlers': ['console', 'django_info_file', 'django_error_file'],
+            'level': 'DEBUG',
             'propagate': False,
         },
     },
 }
+
 
 # Rest of settings continued
 
@@ -468,6 +511,13 @@ WEBAUTHN_RP_ID = 'localhost'
 WEBAUTHN_RP_NAME = 'Pool Betting'
 
 # --- SECURITY HARDENING CONFIGURATION ---
+
+# Global CSRF_FAILURE_VIEW replacement: returns JSON 403 for AJAX/JSON clients,
+# normal HTML 403 for browser clients.  Eliminates the frontend toast
+# "Server Error: The server returned an unexpected response (HTML)" when a
+# stale CSRF token triggers a Django CsrfViewMiddleware 403 HTML page for
+# JSON requests like Place Bet.
+CSRF_FAILURE_VIEW = "poolbetting.views.csrf_failure"
 
 # 1. SSL/HTTPS Security
 # Ensure these are True in Production (Env var control recommended)

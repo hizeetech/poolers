@@ -411,6 +411,18 @@ def crm_can_approve_withdrawals(user):
         return True
     return user.crm_role in ['ops', 'supervisor']
 
+def _is_global_withdrawals_enabled():
+    from betting.models import SystemSetting
+    v = SystemSetting.get_setting('GLOBAL_WITHDRAWALS_ENABLED', '1')
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on', 'enabled')
+
+def _global_withdrawals_disabled_message():
+    from betting.models import SystemSetting
+    custom = SystemSetting.get_setting('GLOBAL_WITHDRAWALS_MESSAGE', None)
+    if custom and str(custom).strip():
+        return str(custom).strip()
+    return "Withdrawals temporarily suspended by platform administration during duplicate-settlement reconciliation. Please check back later or contact support."
+
 def crm_can_suspend_users(user):
     if not is_crm_user(user):
         return False
@@ -5720,6 +5732,8 @@ def wallet_view(request):
         'min_operating_balance': Decimal('5000.00'),
         'can_withdraw_from_wallet': can_withdraw,
         'can_transfer_from_wallet': can_transfer_from_wallet,
+        'global_withdrawals_enabled': _is_global_withdrawals_enabled(),
+        'global_withdrawals_disabled_message': _global_withdrawals_disabled_message(),
     }
     return render(request, 'betting/wallet.html', context)
 
@@ -6805,6 +6819,14 @@ def monnify_webhook(request):
 @db_transaction.atomic
 def withdraw_funds(request):
     expects_json = request.headers.get('Content-Type', '').startswith('application/json')
+    is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
+    # Global kill-switch for withdrawals (admin toggle via SystemSetting):
+    if not _is_global_withdrawals_enabled() and not is_admin_or_super:
+        msg = _global_withdrawals_disabled_message()
+        if expects_json:
+            return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'message': msg}, status=423)
+        messages.error(request, msg)
+        return redirect('betting:wallet')
     allowed_user_types = {'master_agent', 'super_agent', 'agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm'}
     if request.user.user_type not in allowed_user_types:
         if expects_json:
@@ -6991,6 +7013,11 @@ def _is_withdrawal_pin_verified_recent(request, max_age_seconds=300):
 def verify_withdrawal_pin(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
+
+    # Global kill-switch (skip pin verify if withdrawals globally disabled):
+    is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
+    if not _is_global_withdrawals_enabled() and not is_admin_or_super:
+        return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'message': _global_withdrawals_disabled_message()}, status=423)
 
     if request.headers.get('Content-Type', '').startswith('application/json'):
         try:
@@ -23684,3 +23711,53 @@ def admin_agent_family_settlement_report(request):
         'summary': summary,
     }
     return render(request, 'betting/admin/agent_family_settlement_report.html', context)
+
+
+def _set_global_withdrawals_enabled(enabled_bool, *, actor_user):
+    from betting.models import SystemSetting
+    SystemSetting.objects.update_or_create(
+        key='GLOBAL_WITHDRAWALS_ENABLED',
+        defaults={
+            'value': ('1' if enabled_bool else '0'),
+            'description': 'Globally enable or disable all new withdrawal requests from frontend + admin add. Pending withdrawals in queue still process normally.',
+        }
+    )
+    try:
+        from betting.models import ActivityLog
+        ActivityLog.objects.create(
+            user_id=actor_user.pk,
+            action_type='GLOBAL_WITHDRAWALS_{}'.format('ENABLED' if enabled_bool else 'DISABLED'),
+            metadata={
+                'GLOBAL_WITHDRAWALS_ENABLED': ('1' if enabled_bool else '0'),
+                'admin_username': getattr(actor_user, 'username', None),
+            }
+        )
+    except Exception:
+        pass
+    return enabled_bool
+
+
+@never_cache
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_toggle_global_withdrawals(request):
+    """Quick one-click toggle from admin dashboard to suspend/resume withdrawals."""
+    from django.http import HttpResponseBadRequest
+    enabled_next_str = (request.POST.get('enabled') or request.GET.get('enabled') or '').strip().lower()
+    next_url = (request.POST.get('next') or request.GET.get('next') or '').strip() or reverse('betting_admin:index')
+    if not next_url.startswith('/'):
+        next_url = reverse('betting_admin:index')
+    if enabled_next_str in ('0', 'false', 'no', 'off', 'disable', 'disabled', 'suspend'):
+        enabled_next = False
+    elif enabled_next_str in ('1', 'true', 'yes', 'on', 'enable', 'enabled', 'resume'):
+        enabled_next = True
+    else:
+        # Toggle current value if no explicit arg given:
+        enabled_next = not _is_global_withdrawals_enabled()
+    _set_global_withdrawals_enabled(enabled_next, actor_user=request.user)
+    messages.success(
+        request,
+        f"✅ Global withdrawals have been {'ENABLED' if enabled_next else 'DISABLED'} successfully."
+        + (" All new withdrawal requests will now be blocked and users see the red suspension banner." if not enabled_next else " Users can now submit withdrawals normally."),
+    )
+    return redirect(next_url)

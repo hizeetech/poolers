@@ -139,6 +139,9 @@ class BettingAdminSite(admin.AdminSite):
             'fixture_odds_editor_assignments_admin_url': reverse(f'{self.name}:betting_fixtureoddseditorassignment_changelist'),
             'excess_settlement_admin_url': reverse(f'{self.name}:admin_excess_settlement_report'),
             'agent_family_settlement_admin_url': reverse(f'{self.name}:admin_agent_family_settlement_report'),
+            'global_withdrawals_enabled': views._is_global_withdrawals_enabled(),
+            'global_withdrawals_disabled_message': views._global_withdrawals_disabled_message(),
+            'global_withdrawals_toggle_url': reverse(f'{self.name}:admin_toggle_global_withdrawals'),
         })
         return super().index(request, extra_context)
 
@@ -261,6 +264,7 @@ class BettingAdminSite(admin.AdminSite):
 
             path('reports/excess-settlements/', self.admin_view(views.admin_excess_settlement_report), name='admin_excess_settlement_report'),
             path('reports/agent-family-settlement/', self.admin_view(views.admin_agent_family_settlement_report), name='admin_agent_family_settlement_report'),
+            path('settings/toggle-global-withdrawals/', self.admin_view(views.admin_toggle_global_withdrawals), name='admin_toggle_global_withdrawals'),
 
             path('reports/wallet/', self.admin_view(views.admin_wallet_report), name='admin_wallet_report'),
             path('reports/sales-winnings/', self.admin_view(views.admin_sales_winnings_report), name='admin_sales_winnings_report'),
@@ -1919,6 +1923,18 @@ class UserWithdrawalAdminForm(forms.ModelForm):
         cleaned_data = super().clean()
 
         if not self.instance.pk:
+            # Admin creating a new withdrawal manually: respect global kill-switch (unless admin/finance doing it on purpose)
+            try:
+                from betting.views import _is_global_withdrawals_enabled, _global_withdrawals_disabled_message
+                if not _is_global_withdrawals_enabled():
+                    # Allow finance/admin ONLY if explicitly set via cleaned_data (in future: add checkbox override); for now, block all on create
+                    user = getattr(self, 'current_admin_user', None) or getattr(getattr(getattr(self, 'cleaned_data', None), 'user', None), None)
+                    user_type = getattr(user, 'user_type', None) if user else None
+                    is_super = getattr(user, 'is_superuser', False) if user else False
+                    if not is_super and user_type not in ('admin','finance'):
+                        raise forms.ValidationError(_global_withdrawals_disabled_message())
+            except Exception:
+                pass
             return cleaned_data
 
         new_status = (cleaned_data.get("status") or "").strip()

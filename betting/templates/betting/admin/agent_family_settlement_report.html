@@ -1,0 +1,324 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+    <h2 class="h3 mb-0 text-dark fw-semibold">
+      <i class="bi bi-file-earmark-person-fill text-primary me-2"></i>{{ report_title }}
+    </h2>
+    <div class="d-flex flex-wrap gap-2">
+      {% if agent_obj and rows %}
+      <a href="{{ excel_url }}" class="btn btn-outline-success me-1">
+        <i class="bi bi-file-earmark-excel me-1"></i> Download Excel (.xlsx)
+      </a>
+      <a href="{{ pdf_url }}" class="btn btn-outline-danger" target="_blank">
+        <i class="bi bi-file-earmark-pdf me-1"></i> Download PDF (to send to Agent)
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-4 p-4">
+    <form method="GET" action="{% url 'betting_admin:admin_agent_family_settlement_report' %}" class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small text-muted mb-1"><i class="bi bi-person-fill me-1"></i> Choose Agent (shows agent + all his cashiers combined)</label>
+        <select name="agent_id" class="form-select" onchange="this.form.submit()">
+          <option value="">-- pick agent by username --</option>
+          {% for a in agents_dropdown %}
+            <option value="{{ a.id }}" {% if agent_id_str == a.id|stringformat:"s" %}selected{% endif %}>
+              [{{ a.get_user_type_display }}] {{ a.username }} {% if a.email %}({{ a.email }}){% endif %}
+              {% if a.first_name or a.last_name %} — {{ a.first_name }} {{ a.last_name }}{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small text-muted mb-1">…or type Agent username / email (exact)</label>
+        <div class="input-group">
+          <input type="text" name="agent_username" value="{{ agent_username_q }}" placeholder="@agentname or agent@email.com" class="form-control">
+          <button type="submit" class="btn btn-outline-primary">Lookup</button>
+        </div>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted mb-1">Start Date</label>
+        <input type="date" name="start_date" value="{{ start_date_filter }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted mb-1">End Date</label>
+        <input type="date" name="end_date" value="{{ end_date_filter }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Betting Period (optional)</label>
+        <select name="betting_period" class="form-select form-select-sm">
+          <option value="">All periods</option>
+          {% for p in betting_periods %}
+            <option value="{{ p.id }}" {% if current_period_filter == p.id|stringformat:"s" %}selected{% endif %}>
+              {{ p.name }} ({{ p.start_date|date:"Y-m-d" }} → {{ p.end_date|date:"Y-m-d" }})
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3 form-check form-switch align-self-end mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="include_all_switch" name="include_all" value="1" {% if include_all %}checked{% endif %} onchange="this.form.submit()">
+        <label class="form-check-label small text-muted" for="include_all_switch">Show ALL tickets touched (even fully reversed, excess=0)</label>
+      </div>
+      <div class="col-12 col-md-auto ms-md-auto">
+        <button type="submit" class="btn btn-primary btn-sm px-4 py-2 rounded-pill">Apply Filters</button>
+        <a href="{% url 'betting_admin:admin_agent_family_settlement_report' %}" class="btn btn-outline-secondary btn-sm px-4 py-2 rounded-pill ms-1">Reset</a>
+      </div>
+    </form>
+  </div>
+
+  {% if not agent_obj %}
+  <div class="alert alert-info border-0 shadow-sm mt-4">
+    <i class="bi bi-info-circle-fill me-2"></i>
+    Pick an agent from the dropdown above (or type username/email) to load the full statement for that agent and all their cashiers combined.
+  </div>
+  {% else %}
+
+  <div class="card border-0 shadow-sm mb-4 border-start border-primary border-4">
+    <div class="card-body p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <h4 class="mb-0">Agent Family Statement</h4>
+            <span class="badge bg-primary">{{ agent_obj.get_user_type_display }} · @{{ agent_obj.username }}</span>
+            {% if agent_obj.email %}
+            <span class="small text-muted">{{ agent_obj.email }}</span>
+            {% endif %}
+            {% if agent_obj.first_name or agent_obj.last_name %}
+            <span class="small text-muted">— {{ agent_obj.first_name }} {{ agent_obj.last_name }}</span>
+            {% endif %}
+            {% if agent_obj.phone_number %}
+            <span class="small text-muted">· 📞 {{ agent_obj.phone_number }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <div class="p-3 bg-light rounded">
+            <div class="small text-muted mb-1">Statement Date Range</div>
+            <div class="fw-semibold">
+              {% if start_date_filter or end_date_filter %}
+                {{ start_date_filter|default:"(start)" }}  →  {{ end_date_filter|default:"(today)" }}
+              {% else %}
+                All history (no date filter)
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="p-3 bg-light rounded">
+            <div class="small text-muted mb-1">Family members (Agent + all cashiers under him)</div>
+            <div class="d-flex flex-wrap gap-2 mt-1">
+              {% for u in family_users %}
+                <span class="badge rounded-pill {% if u.user_type == 'cashier' %}bg-info{% else %}bg-primary{% endif %}">
+                  {{ u.get_user_type_display }} · @{{ u.username|default:u.email }}
+                  <span class="ms-1 opacity-75">bal ₦{{ u._cached_wallet_balance|floatformat:2|default:"0.00" }}</span>
+                </span>
+              {% empty %}
+                <span class="text-muted">no members?</span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {% if summary %}
+      <div class="row g-3">
+        <div class="col-6 col-md-3">
+          <div class="card border-0 shadow-sm p-3 border-start border-success border-4 h-100">
+            <div class="small text-muted">Total Winnings Credited to Family</div>
+            <div class="fs-5 fw-bold text-success mt-1">₦{{ summary.grand_total_payout_credited|floatformat:2|default:"0.00" }}</div>
+            <div class="small text-muted mt-1">All bet_payout transactions combined.</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card border-0 shadow-sm p-3 border-start border-primary border-4 h-100">
+            <div class="small text-muted">Total Reversals Debited from Family</div>
+            <div class="fs-5 fw-bold text-primary mt-1">₦{{ summary.grand_total_reversal_debited|floatformat:2|default:"0.00" }}</div>
+            <div class="small text-muted mt-1">All bet_payout_reversal transactions (including auto-reversal done today).</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card border-0 shadow-sm p-3 border-start border-danger border-4 h-100">
+            <div class="small text-muted">NET EXCESS STILL OWED BY FAMILY</div>
+            <div class="fs-5 fw-bold text-danger mt-1">₦{{ summary.grand_net_excess|floatformat:2|default:"0.00" }}</div>
+            <div class="small text-muted mt-1">Total Credited − Total Reversed = Net still unpaid by agent family.</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card border-0 shadow-sm p-3 border-start border-warning border-4 h-100">
+            <div class="small text-muted">Tickets / Stakes / Rows</div>
+            <div class="small mt-1">
+              <div>Unique tickets: <b>{{ summary.grand_tickets_affected }}</b></div>
+              <div>Tickets still with excess (>0): <b class="text-danger">{{ summary.grand_tickets_with_excess }}</b></div>
+              <div>Total stake (all tickets): <b>₦{{ summary.grand_stake_total|floatformat:2|default:"0.00" }}</b></div>
+              <div>Rows (user × ticket): <b>{{ summary.grand_rows }}</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if rows %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-light border-0 py-3 px-4">
+      <h5 class="h6 mb-0"><i class="bi bi-table me-1"></i> Per-Ticket / Per-Family-Member Details</h5>
+      <div class="small text-muted mt-1">
+        Every row = one family member's (agent or cashier) single ticket. Expand the row to see the chronological WIN CREDIT / REVERSAL DEBIT log with exact timestamps and admin-name initiator for proof to the agent that they were not cheated by reversal, but were credited multiple times on same single ticket winning (N-excess red/orange badges).
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle bg-white mb-0" id="agentFamTbl">
+        <thead class="table-dark">
+          <tr>
+            <th style="width:28px;"></th>
+            <th>Family Member</th>
+            <th>Role</th>
+            <th>Ticket ID</th>
+            <th class="text-end">Stake</th>
+            <th class="text-center">#Times<br>Credited</th>
+            <th class="text-center">#Times<br>Reversed</th>
+            <th class="text-center">Excess Settled<br>(N times extra)</th>
+            <th class="text-end">Total Amount<br>Credited as Win</th>
+            <th class="text-end">Total Amount<br>Reversed Back</th>
+            <th class="text-end">NET EXCESS<br>Still Owed</th>
+            <th style="width:110px;">Last Credit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% with n_excess=r.payout_count|add:"-1" %}
+          {% with excess_amount=r.excess_won %}
+          {% if excess_amount > 0 and r.payout_count >= 2 %}
+          <tr class="table-warning">
+          {% elif excess_amount > 0 %}
+          <tr class="table-info">
+          {% else %}
+          <tr>
+          {% endif %}
+            <td>
+              {% if r.tx_log %}
+              <button class="btn btn-sm btn-outline-light text-secondary p-1" type="button"
+                      data-bs-toggle="collapse" data-bs-target="#txlog-{{ r.user_id }}-{{ r.ticket_id }}"
+                      aria-expanded="false" aria-controls="txlog-{{ r.user_id }}-{{ r.ticket_id }}">
+                <i class="bi bi-chevron-double-down"></i>
+              </button>
+              {% endif %}
+            </td>
+            <td>
+              <div class="fw-semibold">@{{ r.username }}</div>
+              <div class="small text-muted">{{ r.email }}</div>
+              <div class="small text-muted mt-1">Current wallet bal: <b>₦{{ r.wallet_balance|floatformat:2|default:"0.00" }}</b></div>
+            </td>
+            <td><span class="badge rounded-pill {% if r.user_type == 'agent' %}bg-primary{% else %}bg-info{% endif %}">{{ r.user_type_display }}</span></td>
+            <td><code>{{ r.ticket_id_str }}</code></td>
+            <td class="text-end">₦{{ r.stake_amount|floatformat:2 }}</td>
+            <td class="text-center"><span class="badge bg-success">{{ r.payout_count }}</span></td>
+            <td class="text-center"><span class="badge bg-danger">{{ r.reversal_count }}</span></td>
+            <td class="text-center">
+              {% if excess_amount > 0 %}
+                {% with ne=r.payout_count|add:"-1" %}
+                  {% if ne >= 2 or r.payout_count > r.reversal_count|add:1 %}
+                    <span class="badge bg-danger px-2 py-1">N × {{ r.payout_count|add:r.reversal_count|divisibleby:2|yesno:"0,0" }} excess</span>
+                  {% else %}
+                    {% with nex=r.payout_count|add:"0" %}{% with rrc=r.reversal_count|add:0 %}
+                      {% if nex > rrc %}
+                      <span class="badge bg-warning text-dark px-2 py-1">N × {{ nex|add:"-1"|default:nex }} extra</span>
+                      {% else %}
+                      <span class="badge bg-success">settled OK</span>
+                      {% endif %}
+                    {% endwith %}{% endwith %}
+                  {% endif %}
+                {% endwith %}
+              {% else %}
+                <span class="badge bg-success">settled OK</span>
+              {% endif %}
+            </td>
+            <td class="text-end text-success fw-semibold">₦{{ r.total_payout|floatformat:2 }}</td>
+            <td class="text-end text-primary fw-semibold">₦{{ r.total_reversal|floatformat:2 }}</td>
+            <td class="text-end fw-bold {% if excess_amount > 0 %}text-danger{% else %}text-success{% endif %}">
+              ₦{{ excess_amount|floatformat:2 }}
+            </td>
+            <td class="small">
+              <div>{% if r.last_settled_at %}{{ r.last_settled_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}</div>
+              <div class="text-muted">{% if r.first_settled_at %}first {{ r.first_settled_at|date:"d/m/Y H:i" }}{% endif %}</div>
+            </td>
+          </tr>
+          {% if r.tx_log %}
+          <tr class="collapse" id="txlog-{{ r.user_id }}-{{ r.ticket_id }}">
+            <td colspan="12" style="padding:0;border:none;">
+              <div class="p-3 bg-light border-top border-bottom">
+                <h6 class="small fw-bold mb-2"><i class="bi bi-clock-history me-1"></i>Chronological transaction log for this ticket (within the date range filter above):</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm table-striped bg-white border rounded overflow-hidden">
+                    <thead class="table-secondary">
+                      <tr>
+                        <th style="width:160px;">Date &amp; Time</th>
+                        <th style="width:130px;">Type</th>
+                        <th style="width:140px;" class="text-end">Amount</th>
+                        <th style="width:180px;">Initiated By</th>
+                        <th>Note / Description (shows admin name &amp; reason for reversals)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for tx in r.tx_log %}
+                      <tr>
+                        <td class="small">{{ tx.0|date:"Y-m-d H:i:s" }}</td>
+                        <td>
+                          {% if tx.1 == 'bet_payout' %}
+                            <span class="badge bg-success">WIN CREDIT</span>
+                          {% elif tx.1 == 'bet_payout_reversal' %}
+                            <span class="badge bg-danger">REVERSAL DEBIT</span>
+                          {% else %}
+                            {{ tx.1 }}
+                          {% endif %}
+                        </td>
+                        <td class="text-end {% if tx.1 == 'bet_payout' %}text-success fw-semibold{% else %}text-danger fw-semibold{% endif %}">
+                          {% if tx.1 == 'bet_payout_reversal' %}−{% endif %}₦{{ tx.2|floatformat:2 }}
+                        </td>
+                        <td class="small"><code>{{ tx.3 }}</code></td>
+                        <td class="small text-muted">{{ tx.4 }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+          {% endwith %}
+          {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="alert alert-info border-0 shadow-sm mb-5 small" style="line-height:1.7;">
+    <h6 class="alert-heading fw-bold mb-2"><i class="bi bi-info-circle-fill me-1"></i>How to explain this to the agent (so he knows he was not cheated):</h6>
+    <div class="mb-1"><b>1.</b> If a ticket row has a red/orange <b>N × K extra</b> badge, this means the single winning ticket was paid out more times than it was reversed (the multiple-settlement bug that has now been fixed).</div>
+    <div class="mb-1"><b>2.</b> Click the small <b>▼</b> icon to expand the chronological log. The agent will see GREEN rows (money IN to family wallet = <b>WIN CREDIT</b>) and RED rows (money OUT from family wallet = <b>REVERSAL DEBIT</b>), with exact timestamps and the admin username that performed any reversal action (fully auditable).</div>
+    <div class="mb-1"><b>3.</b> The NET EXCESS = Total Credits (green) minus Total Reversals (red) → the exact amount still owed back by the agent family. Any reversals done by the Bulk Auto Reverse tool today will show up as RED rows with the admin's username and a descriptive note like: <i>"Admin AUTO-REVERSAL of excess duplicate settlement for ticket XXX. Family-pool deduction: Agent @X deducted ₦Y. Cashier @Z deducted ₦W."</i></div>
+  </div>
+
+  {% else %}
+
+  <div class="alert alert-success border-0 shadow-sm mt-3">
+    <i class="bi bi-check-circle-fill me-2"></i>
+    No duplicate settlement rows for this agent family match the current date / period filters. Try broadening the date range or untick "Show ALL tickets touched".
+  </div>
+  {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}

@@ -23117,3 +23117,540 @@ def admin_excess_settlement_report(request):
         'export_csv_url': export_csv_url,
     }
     return render(request, 'betting/admin/excess_settlement_report.html', context)
+
+
+def _get_agent_family_member_ids(agent_user):
+    """Return sorted list of int IDs: agent + all cashiers under this agent (and sibling cashiers same parent if agent-user himself is cashier).
+
+    If agent_user is super_agent/master_agent, also includes: immediate agents under them + all cashier children of those agents.
+    """
+    ids = {int(agent_user.id)}
+    from betting.models import User as BUser
+    try:
+        ut = (getattr(agent_user, 'user_type', '') or '').strip()
+    except Exception:
+        ut = ''
+    try:
+        if ut == 'agent':
+            ids.update(set(BUser.objects.filter(user_type='cashier', agent_id=agent_user.id).values_list('id', flat=True)))
+        elif ut == 'cashier':
+            parent_agent_id = getattr(agent_user, 'agent_id', None)
+            if parent_agent_id:
+                ids.add(int(parent_agent_id))
+                ids.update(set(BUser.objects.filter(user_type='cashier', agent_id=int(parent_agent_id)).values_list('id', flat=True)))
+        elif ut in ('super_agent', 'master_agent'):
+            downline_agent_q = Q(user_type='agent')
+            if ut == 'super_agent':
+                downline_agent_q &= Q(super_agent_id=agent_user.id)
+            else:
+                downline_agent_q &= Q(master_agent_id=agent_user.id)
+            child_agent_ids = set(BUser.objects.filter(downline_agent_q).values_list('id', flat=True))
+            ids.update(child_agent_ids)
+            all_downline_users = Q(agent_id__in=list(child_agent_ids), user_type__in=('cashier',))
+            ids.update(set(BUser.objects.filter(all_downline_users).values_list('id', flat=True)))
+    except Exception:
+        pass
+    return sorted(int(x) for x in ids if x)
+
+
+def _agent_family_audit_rows(*, agent_user, start_date=None, end_date=None, betting_period_id=None,
+                             include_non_excess_tickets=False):
+    """Build shareable audit statement rows for a given agent-family user set + date filter + optional betting_period.
+
+    Returns dict: {
+        'family_users': [list of BUser objects with wallet balance],
+        'grouped_rows': [
+            {  # one row per (family_member_user, ticket_id)
+                'user_id','ticket_id','username','email','user_type_display','ticket_id_str','stake_amount',
+                'payout_count','reversal_count','total_payout','total_reversal','excess_won','first_settled_at','last_settled_at',
+                'wallet_balance',
+                # chronological list (optional html expand)
+                'tx_log': [ (timestamp, tx_type, amount, initiating_user_str, note) ]
+            }
+        ],
+        'family_summary': {
+            'grand_total_payout_credited','grand_total_reversal_debited','grand_net_excess',
+            'grand_tickets_affected','grand_tickets_with_excess','grand_stake_total',
+        }
+    }
+    """
+    from betting.models import BetTicket, BettingPeriod, Wallet, Transaction, User as BUser
+
+    family_member_ids = _get_agent_family_member_ids(agent_user)
+    users_map = {
+        u.pk: u for u in BUser.objects.filter(pk__in=family_member_ids).only(
+            'pk', 'username', 'email', 'user_type', 'first_name', 'last_name', 'phone_number',
+            'agent_id', 'super_agent_id', 'master_agent_id',
+        )
+    }
+    family_users_sorted = sorted(users_map.values(), key=lambda u: (
+        {'master_agent': 0, 'super_agent': 1, 'agent': 2, 'cashier': 3}.get(u.user_type, 9),
+        u.username or u.email or '',
+    ))
+    wallets_map = {
+        w.user_id: Decimal(str(w.balance or Decimal('0.00'))).quantize(Decimal('0.01'))
+        for w in Wallet.objects.filter(user_id__in=family_member_ids).only('user_id', 'balance')
+    }
+
+    qs = Transaction.objects.filter(
+        user_id__in=family_member_ids,
+        related_bet_ticket__isnull=False,
+        transaction_type__in=['bet_payout', 'bet_payout_reversal'],
+    )
+    if start_date:
+        qs = qs.filter(timestamp__date__gte=start_date)
+    if end_date:
+        qs = qs.filter(timestamp__date__lte=end_date)
+    if betting_period_id:
+        period_ticket_ids = set(
+            BetTicket.objects.filter(selections__fixture__betting_period_id=int(betting_period_id)).values_list('id', flat=True).distinct()
+        )
+        qs = qs.filter(related_bet_ticket_id__in=period_ticket_ids)
+
+    grouped = list(
+        qs.values('user_id', 'related_bet_ticket_id').annotate(
+            payout_count=Count('id', filter=Q(transaction_type='bet_payout')),
+            reversal_count=Count('id', filter=Q(transaction_type='bet_payout_reversal')),
+            total_payout=Coalesce(Sum('amount', filter=Q(transaction_type='bet_payout')), Value(Decimal('0.00')), output_field=DecimalField()),
+            total_reversal=Coalesce(Sum('amount', filter=Q(transaction_type='bet_payout_reversal')), Value(Decimal('0.00')), output_field=DecimalField()),
+            first_settled_at=Min('timestamp', filter=Q(transaction_type='bet_payout')),
+            last_settled_at=Max('timestamp', filter=Q(transaction_type='bet_payout')),
+        ).annotate(excess_won=F('total_payout') - F('total_reversal'))
+    )
+    if not include_non_excess_tickets:
+        grouped = [g for g in grouped if (Decimal(str(g.get('excess_won') or 0)) > Decimal('0.00'))]
+    else:
+        grouped = list(grouped)
+
+    ticket_ids = sorted({int(g['related_bet_ticket_id']) for g in grouped})
+    tickets_map = {
+        t.pk: t for t in BetTicket.objects.filter(pk__in=ticket_ids).only('pk', 'ticket_id', 'stake_amount', 'status', 'placed_at')
+    }
+
+    rows = []
+    for g in grouped:
+        uid = int(g['user_id'])
+        tid = int(g['related_bet_ticket_id'])
+        user = users_map.get(uid)
+        ticket = tickets_map.get(tid)
+        if user is None or ticket is None:
+            continue
+        tp = Decimal(str(g['total_payout'] or Decimal('0.00'))).quantize(Decimal('0.01'))
+        tr = Decimal(str(g['total_reversal'] or Decimal('0.00'))).quantize(Decimal('0.01'))
+        excess = (tp - tr).quantize(Decimal('0.01'))
+        if (not include_non_excess_tickets) and excess <= Decimal('0.00'):
+            continue
+        stake = Decimal(str(ticket.stake_amount or Decimal('0.00'))).quantize(Decimal('0.01'))
+        tx_log = []
+        try:
+            tx_log_qs = Transaction.objects.filter(
+                user_id=uid, related_bet_ticket_id=tid,
+                transaction_type__in=['bet_payout', 'bet_payout_reversal']
+            )
+            if start_date:
+                tx_log_qs = tx_log_qs.filter(timestamp__date__gte=start_date)
+            if end_date:
+                tx_log_qs = tx_log_qs.filter(timestamp__date__lte=end_date)
+            tx_log_qs = tx_log_qs.select_related('initiating_user').order_by('timestamp')
+            for tx in tx_log_qs:
+                actor = getattr(tx, 'initiating_user', None)
+                actor_str = f"@{actor.username}" if (actor and getattr(actor, 'username', '')) else (
+                    (actor.email if actor else '') or (f"u{tx.initiating_user_id}" if getattr(tx, 'initiating_user_id', None) else 'system')
+                )
+                note = (getattr(tx, 'description', '') or '').strip()
+                tx_log.append((tx.timestamp, tx.transaction_type, Decimal(str(tx.amount or 0)), actor_str, note))
+        except Exception:
+            pass
+        rows.append({
+            'user_id': uid,
+            'ticket_id': tid,
+            'username': (user.username or ''),
+            'email': (user.email or ''),
+            'user_type_display': user.get_user_type_display(),
+            'user_type': user.user_type,
+            'ticket_id_str': (ticket.ticket_id or ''),
+            'stake_amount': stake,
+            'payout_count': int(g.get('payout_count') or 0),
+            'reversal_count': int(g.get('reversal_count') or 0),
+            'total_payout': tp,
+            'total_reversal': tr,
+            'excess_won': excess,
+            'first_settled_at': g.get('first_settled_at'),
+            'last_settled_at': g.get('last_settled_at'),
+            'wallet_balance': wallets_map.get(uid, Decimal('0.00')),
+            'tx_log': tx_log,
+        })
+    rows.sort(key=lambda r: (
+        {'master_agent': 0, 'super_agent': 1, 'agent': 2, 'cashier': 3}.get(r['user_type'], 9),
+        r['username'] or r['email'] or '',
+        -(r['excess_won'] if r['excess_won'] > 0 else r['total_payout']),
+        r['ticket_id_str'] or '',
+    ))
+
+    family_summary = {
+        'grand_total_payout_credited': sum((r['total_payout'] for r in rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'grand_total_reversal_debited': sum((r['total_reversal'] for r in rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'grand_net_excess': sum((max(r['excess_won'], Decimal('0.00')) for r in rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'grand_tickets_affected': len({r['ticket_id'] for r in rows}),
+        'grand_tickets_with_excess': sum((1 for r in rows if r['excess_won'] > Decimal('0.00')), 0),
+        'grand_stake_total': sum((r['stake_amount'] for r in rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'grand_rows': len(rows),
+    }
+    fu_with_wallets = []
+    for u in family_users_sorted:
+        u._cached_wallet_balance = wallets_map.get(u.id, Decimal('0.00'))
+        fu_with_wallets.append(u)
+    return {
+        'family_users': fu_with_wallets,
+        'grouped_rows': rows,
+        'family_summary': family_summary,
+    }
+
+
+@never_cache
+@ensure_csrf_cookie
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_agent_family_settlement_report(request):
+    """Shareable agent-family settlement audit report. Filter by AGENT username + date/BettingPeriod.
+
+    Generates: browser view (table: per-cashier, per-ticket N credited, N reversed, exact amounts, chronological tx log),
+    Excel (.xlsx) download, PDF download (agent-facing shareable statement: explains every duplicate credit + every reversal).
+    """
+    from betting.models import BetTicket, BettingPeriod, Wallet, Transaction, User as BUser
+    from decimal import Decimal as _Dec  # local alias unused; keeps consistency
+    import csv as _csv_mod  # noqa: F401
+
+    report_title = "Agent Family Settlement Audit (Shareable with Agent)"
+
+    agent_id_str = request.GET.get('agent_id') or ''
+    agent_username_q = (request.GET.get('agent_username') or '').strip()
+    start_date_str = request.GET.get('start_date') or ''
+    end_date_str = request.GET.get('end_date') or ''
+    period_id_str = request.GET.get('betting_period') or ''
+    fmt = (request.GET.get('format') or request.GET.get('download') or '').strip().lower()
+    include_all = (request.GET.get('include_all') or '') == '1'
+
+    start_date = end_date = None
+    try:
+        if start_date_str:
+            start_date = date.fromisoformat(start_date_str)
+    except Exception:
+        start_date = None
+    try:
+        if end_date_str:
+            end_date = date.fromisoformat(end_date_str)
+    except Exception:
+        end_date = None
+    betting_period_id = None
+    try:
+        if period_id_str:
+            betting_period_id = int(period_id_str)
+    except Exception:
+        betting_period_id = None
+    agent_obj = None
+    try:
+        if agent_id_str:
+            agent_obj = BUser.objects.filter(pk=int(agent_id_str), user_type__in=['agent', 'super_agent', 'master_agent', 'cashier']).first()
+        elif agent_username_q:
+            agent_obj = BUser.objects.filter(
+                Q(username__iexact=agent_username_q) | Q(email__iexact=agent_username_q)
+            ).filter(user_type__in=['agent', 'super_agent', 'master_agent', 'cashier']).first()
+    except Exception:
+        agent_obj = None
+
+    agents_dropdown = list(
+        BUser.objects.filter(user_type__in=['agent', 'super_agent', 'master_agent']).only(
+            'pk', 'username', 'email', 'user_type', 'first_name', 'last_name'
+        ).order_by('user_type', 'username', 'email')
+    )
+    periods = list(BettingPeriod.objects.all().order_by('-start_date').only('id', 'name', 'start_date', 'end_date'))
+
+    data = None
+    summary = None
+    rows = []
+    family_users = []
+    if agent_obj is not None:
+        data = _agent_family_audit_rows(
+            agent_user=agent_obj,
+            start_date=start_date,
+            end_date=end_date,
+            betting_period_id=betting_period_id,
+            include_non_excess_tickets=include_all,
+        )
+        family_users = data['family_users']
+        rows = data['grouped_rows']
+        summary = data['family_summary']
+
+    if fmt in ('xlsx', 'excel') and agent_obj is not None:
+        import io as _io
+        import pandas as pd  # proven pattern L20295–20305
+        excel_rows = []
+        for r in rows:
+            excel_rows.append({
+                'Family Member Username': r['username'],
+                'Family Member Email': r['email'],
+                'Role': r['user_type_display'],
+                'Ticket ID': r['ticket_id_str'],
+                'Ticket Stake (NGN)': f"{r['stake_amount']:.2f}",
+                '#Times Credited (bet_payout)': r['payout_count'],
+                '#Times Reversed (bet_payout_reversal)': r['reversal_count'],
+                'Duplicate Settlements (N excess)': max(r['payout_count'] - r['reversal_count'], 0) if r['excess_won'] > 0 else 0,
+                'Total Amount Credited as Winnings (NGN)': f"{r['total_payout']:.2f}",
+                'Total Amount Reversed Back (NGN)': f"{r['total_reversal']:.2f}",
+                'Net Excess Still Owed (NGN)': f"{max(r['excess_won'], Decimal('0.00')):.2f}",
+                'First Credit Date': r['first_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['first_settled_at'] else '',
+                'Last Credit Date': r['last_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['last_settled_at'] else '',
+                'User Wallet Balance Now': f"{r['wallet_balance']:.2f}",
+            })
+        summary_row_1 = {
+            'Family Member Username': '',
+            'Family Member Email': '',
+            'Role': '====== FAMILY GRAND TOTALS ======',
+            'Ticket ID': '',
+            'Ticket Stake (NGN)': f"{(summary['grand_stake_total'] if summary else 0):.2f}",
+            '#Times Credited (bet_payout)': '',
+            '#Times Reversed (bet_payout_reversal)': '',
+            'Duplicate Settlements (N excess)': (summary['grand_tickets_with_excess'] if summary else 0),
+            'Total Amount Credited as Winnings (NGN)': f"{(summary['grand_total_payout_credited'] if summary else 0):.2f}",
+            'Total Amount Reversed Back (NGN)': f"{(summary['grand_total_reversal_debited'] if summary else 0):.2f}",
+            'Net Excess Still Owed (NGN)': f"{(summary['grand_net_excess'] if summary else 0):.2f}",
+            'First Credit Date': '',
+            'Last Credit Date': '',
+            'User Wallet Balance Now': '',
+        }
+        excel_rows.append(summary_row_1)
+        output = _io.BytesIO()
+        df = pd.DataFrame(excel_rows)
+        sheet = (agent_obj.username or agent_obj.email or f"agent{agent_obj.id}")[:31] or "AgentAudit"
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet)
+        output.seek(0)
+        fname_base = f"agent_settlement_{(agent_obj.username or f'user{agent_obj.id}')}_{start_date_str or 'all'}_{end_date_str or 'all'}"
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{fname_base}.xlsx"'
+        return response
+
+    if fmt == 'pdf' and agent_obj is not None:
+        from weasyprint import HTML  # proven pattern already used L550 / L20308
+        def esc(s):
+            return (str(s or '')
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;'))
+
+        def money_html(d):
+            try:
+                dd = Decimal(str(d or 0)).quantize(Decimal('0.01'))
+            except Exception:
+                dd = Decimal('0.00')
+            sign = '<span style="color:#b91c1c;">-' if dd < 0 else '<span>'
+            return f"{sign}₦{abs(dd):,.2f}</span>"
+
+        family_usernames_list_html = ', '.join([
+            f"<b>{esc(u.get_user_type_display())}</b> @{esc(u.username or u.email or u.id)} "
+            f"&nbsp;<span style='color:#6b7280;'>(bal {money_html(getattr(u,'_cached_wallet_balance',Decimal('0')))})</span>"
+            for u in family_users
+        ])
+        period_display = ''
+        if betting_period_id:
+            try:
+                bp = BettingPeriod.objects.filter(pk=int(betting_period_id)).only('name','start_date','end_date').first()
+                period_display = f"Betting Period: {esc(bp.name)} ({bp.start_date} to {bp.end_date})" if bp else ''
+            except Exception:
+                period_display = ''
+        date_range_display = (
+            f"{esc(start_date.isoformat())} → {esc(end_date.isoformat())}"
+            if start_date and end_date else (
+                f"From {esc(start_date.isoformat())}" if start_date else (
+                    f"Up to {esc(end_date.isoformat())}" if end_date else "All history"
+                )
+            )
+        )
+
+        rows_html = []
+        for r in rows:
+            excess_amount = max(r['excess_won'], Decimal('0.00'))
+            n_excess = max(r['payout_count'] - r['reversal_count'], 0) if excess_amount > 0 else 0
+            badge_excess = (
+                f"<span style='display:inline-block;padding:2px 8px;border-radius:999px;"
+                f"font-size:10px;font-weight:700;color:white;background:"
+                f"{'#b91c1c' if n_excess >= 2 else '#d97706'};'>N × {int(n_excess)} excess</span>"
+            ) if excess_amount > 0 else ''
+            tx_rows_html = []
+            for (tstamp, ttype, amt, actor, note) in (r.get('tx_log') or [])[:15]:
+                amt_s = money_html(amt if ttype == 'bet_payout' else -amt)
+                ttype_s = (
+                    "<span style='color:#047857;font-weight:600;'>WIN CREDIT</span>"
+                    if ttype == 'bet_payout' else
+                    "<span style='color:#b91c1c;font-weight:600;'>REVERSAL DEBIT</span>"
+                )
+                date_s = tstamp.strftime('%Y-%m-%d %H:%M:%S') if tstamp else ''
+                tx_rows_html.append(
+                    f"<tr><td style='width:140px;'>{esc(date_s)}</td>"
+                    f"<td style='width:120px;'>{ttype_s}</td>"
+                    f"<td style='text-align:right;width:110px;'>{amt_s}</td>"
+                    f"<td>{esc(actor)}</td>"
+                    f"<td style='color:#6b7280;'>{esc(note)}</td></tr>"
+                )
+            tx_block_html = ''
+            if tx_rows_html:
+                tx_block_html = (
+                    '<tr><td colspan="10" style="padding:0 !important;border:none;">'
+                    '<div style="padding:10px 16px;background:#fafafa;border-top:1px dashed #d1d5db;">'
+                    '<div style="font-weight:600;margin:4px 0 6px 0;color:#111;">Chronological transaction log for this ticket (within filtered date range):</div>'
+                    '<table style="width:100%;border-collapse:collapse;font-size:10px;">'
+                    '<thead><tr style="background:#f3f4f6;">'
+                    '<th style="text-align:left;padding:4px;">Date</th>'
+                    '<th style="text-align:left;padding:4px;">Type</th>'
+                    '<th style="text-align:right;padding:4px;">Amount</th>'
+                    '<th style="text-align:left;padding:4px;">Initiated By</th>'
+                    '<th style="text-align:left;padding:4px;">Note / Description</th>'
+                    '</tr></thead>'
+                    f"<tbody>{''.join(tx_rows_html)}</tbody></table>"
+                    '</div></td></tr>'
+                )
+            rows_html.append(
+                f"<tr>"
+                f"<td>{esc(r['username'])}</td>"
+                f"<td><span style='font-weight:600;color:#1d4ed8;'>{esc(r['user_type_display'])}</span></td>"
+                f"<td style='font-family:monospace;'>{esc(r['ticket_id_str'])}</td>"
+                f"<td style='text-align:right;'>{money_html(r['stake_amount'])}</td>"
+                f"<td style='text-align:center;'>{int(r['payout_count'])}</td>"
+                f"<td style='text-align:center;'>{int(r['reversal_count'])}</td>"
+                f"<td style='text-align:center;'>{badge_excess}</td>"
+                f"<td style='text-align:right;'>{money_html(r['total_payout'])}</td>"
+                f"<td style='text-align:right;'>{money_html(r['total_reversal'])}</td>"
+                f"<td style='text-align:right;font-weight:700;color:#b91c1c;'>{money_html(excess_amount)}</td>"
+                f"</tr>{tx_block_html}"
+            )
+
+        summary_html = f"""
+        <div style="margin:18px 0 14px 0; padding:16px; border:1px solid #e5e7eb; border-radius:8px; background:#f8fafc;">
+          <div style="font-size:14px; font-weight:700; margin-bottom:10px; color:#0f172a;">FAMILY SUMMARY (Agent + All Cashiers under him)</div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 22px;font-size:13px;">
+            <div><span style="color:#6b7280;">Total Stake:</span> <b style="float:right;">{money_html(summary['grand_stake_total'] if summary else 0)}</b></div>
+            <div><span style="color:#6b7280;">Ticket/User rows:</span> <b style="float:right;">{summary['grand_rows'] if summary else 0}</b></div>
+            <div><span style="color:#6b7280;">Unique tickets affected:</span> <b style="float:right;">{summary['grand_tickets_affected'] if summary else 0}</b></div>
+            <div><span style="color:#6b7280;">Tickets still with excess (N):</span> <b style="float:right;">{summary['grand_tickets_with_excess'] if summary else 0}</b></div>
+            <div style="grid-column:span 2; padding-top:6px; border-top:1px dashed #d1d5db;">
+              <span style="color:#16a34a;">Total winnings credited to family:</span>
+              <b style="float:right;">{money_html(summary['grand_total_payout_credited'] if summary else 0)}</b>
+            </div>
+            <div style="grid-column:span 2;">
+              <span style="color:#2563eb;">Total reversals debited from family:</span>
+              <b style="float:right;">{money_html(summary['grand_total_reversal_debited'] if summary else 0)}</b>
+            </div>
+            <div style="grid-column:span 2; padding-top:6px; border-top:2px solid #ef4444;">
+              <span style="color:#b91c1c;font-weight:700;">NET EXCESS STILL OWED BY FAMILY:</span>
+              <b style="float:right; font-size:15px; color:#b91c1c;">{money_html(summary['grand_net_excess'] if summary else 0)}</b>
+            </div>
+          </div>
+        </div>
+        """
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <title>Agent Settlement Audit - @{esc(agent_obj.username or agent_obj.email or agent_obj.id)}</title>
+            <style>
+              body {{ font-family: Arial, sans-serif; font-size: 11px; color:#111827; padding:16px; }}
+              h1 {{ margin:0 0 4px 0; font-size:20px; }}
+              h2 {{ margin:24px 0 8px 0; font-size:15px; }}
+              .meta {{ color:#6b7280; line-height:1.6; margin-bottom:10px; }}
+              .box {{ border:1px solid #d1d5db; border-radius:6px; padding:10px 14px; background:#fff; margin-bottom:12px; }}
+              table {{ width:100%; border-collapse: collapse; }}
+              th, td {{ border:1px solid #e5e7eb; padding:6px 8px; vertical-align: top; }}
+              th {{ background:#f3f4f6; text-align: left; font-weight:700; font-size:11px; }}
+              tr.excess-row td {{ background:#fff7ed; }}
+              .footer-note {{ color:#6b7280; font-size:10px; margin-top:30px; line-height:1.6; border-top:1px solid #e5e7eb; padding-top:10px; }}
+            </style>
+          </head>
+          <body>
+            <h1><span style="color:#b91c1c;">▌</span> Agent Family Settlement Audit Statement</h1>
+            <div class="meta">
+              <div><b>Agent:</b> @{esc(agent_obj.username or agent_obj.email or agent_obj.id)} &nbsp;
+                <b>Role:</b> {esc(agent_obj.get_user_type_display())} &nbsp;
+                <b>Name:</b> {esc((agent_obj.first_name or '') + ' ' + (agent_obj.last_name or ''))} &nbsp;
+                <b>Phone:</b> {esc(getattr(agent_obj, 'phone_number', '') or '')}
+              </div>
+              <div><b>Statement period:</b> {esc(date_range_display)}</div>
+              <div>{esc(period_display)}</div>
+              <div><b>Family members in this statement (Agent + all mapped cashiers):</b><br>{family_usernames_list_html}</div>
+            </div>
+            {summary_html}
+            <h2>Per-Ticket / Per-Family-Member Details</h2>
+            <div class="box" style="overflow-x:auto;">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:14%;">Family Member</th>
+                    <th style="width:10%;">Role</th>
+                    <th style="width:12%;">Ticket ID</th>
+                    <th style="width:9%;text-align:right;">Stake</th>
+                    <th style="width:7%;text-align:center;">#Credits</th>
+                    <th style="width:7%;text-align:center;">#Reversals</th>
+                    <th style="width:8%;text-align:center;">Excess N</th>
+                    <th style="width:11%;text-align:right;">Total Credited</th>
+                    <th style="width:11%;text-align:right;">Total Reversed</th>
+                    <th style="width:11%;text-align:right;">Net Still Owed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {''.join(rows_html) if rows_html else '<tr><td colspan="10" style="text-align:center;padding:30px;color:#6b7280;">No duplicate settlement rows match the current filters for this agent family.</td></tr>'}
+                </tbody>
+              </table>
+            </div>
+            <div class="footer-note">
+              <div><b>Legend:</b> Every time you see <b>N × 2 excess / N × 3+ excess</b> red badge on a ticket, it means that single winning ticket was credited as a win to the family multiple times on different Result admin save clicks before the hotfix was deployed.</div>
+              <div>Green "WIN CREDIT" lines in the log = money IN to the user wallet. Red "REVERSAL DEBIT" lines in the log = money taken BACK as a reversal (either automatic via the backfill code path, or manual/admin bulk reversals done today). Final NET excess still owed = Total Credited minus Total Reversed. This is the exact amount that the platform is owed back by this agent family.</div>
+              <div>Report generated at: {esc(timezone.now().strftime('%Y-%m-%d %H:%M:%S'))} (server time UTC)</div>
+            </div>
+          </body>
+        </html>
+        """
+        try:
+            pdf_bytes = HTML(string=html, base_url=request.build_absolute_uri('/')).write_pdf()
+        except Exception:
+            pdf_bytes = HTML(string=html).write_pdf()
+        fname_base = f"agent_settlement_{(agent_obj.username or f'user{agent_obj.id}')}_{start_date_str or 'all'}_{end_date_str or 'all'}"
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{fname_base}.pdf"'
+        return response
+
+    get_copy = request.GET.copy()
+    for kk in ('format', 'download', 'page'):
+        if kk in get_copy:
+            del get_copy[kk]
+    base_qs = get_copy.urlencode()
+    excel_qs = get_copy.copy(); excel_qs['format'] = 'xlsx'
+    excel_url = reverse('betting_admin:admin_agent_family_settlement_report') + '?' + excel_qs.urlencode()
+    pdf_qs = get_copy.copy(); pdf_qs['format'] = 'pdf'
+    pdf_url = reverse('betting_admin:admin_agent_family_settlement_report') + '?' + pdf_qs.urlencode()
+
+    context = {
+        'report_title': report_title,
+        'agent_obj': agent_obj,
+        'agent_id_str': agent_id_str,
+        'agent_username_q': agent_username_q,
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+        'current_period_filter': betting_period_id or '',
+        'include_all': include_all,
+        'agents_dropdown': agents_dropdown,
+        'betting_periods': periods,
+        'base_qs': base_qs,
+        'excel_url': excel_url,
+        'pdf_url': pdf_url,
+        'family_users': family_users,
+        'rows': rows,
+        'summary': summary,
+    }
+    return render(request, 'betting/admin/agent_family_settlement_report.html', context)

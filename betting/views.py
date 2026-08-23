@@ -22763,7 +22763,12 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
         if user is None or ticket is None:
             continue
 
-        excess_won = Decimal(str(r['owed_back'])).quantize(Decimal('0.01'))
+        payout_count_v = max(int(r['payout_count'] or 0), 0)
+        reversal_count_v = max(int(r['reversal_count'] or 0), 0)
+        total_payout_v = Decimal(str(r.get('total_payout') or Decimal('0.00')))
+        per_payout_avg = (total_payout_v / payout_count_v).quantize(Decimal('0.01')) if payout_count_v >= 1 else Decimal('0.00')
+        excess_won_old_formula = Decimal(str(r['owed_back'])).quantize(Decimal('0.01'))
+        excess_won = max(Decimal('0.00'), excess_won_old_formula - per_payout_avg).quantize(Decimal('0.01'))
         stake = Decimal(str(ticket.stake_amount or Decimal('0.00'))).quantize(Decimal('0.01'))
         bal = wallets.get(uid, Decimal('0.00')).quantize(Decimal('0.01'))
         can_auto = bal >= excess_won
@@ -22783,7 +22788,7 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
             label = (fu.username if fu else '') or f"u{wallet_uid}"
             role_label = (fu.get_user_type_display() if fu else '') or 'user'
             split_summary_html_parts.append((role_label, f"@{label}", f"₦{deduct_amt:,.2f}"))
-        excess_count = max(int(r['payout_count'] or 0) - int(r['reversal_count'] or 0), 1)
+        excess_count = max(payout_count_v - reversal_count_v - 1, 0)
 
         raw_rows.append({
             'user_id': uid,
@@ -22886,13 +22891,16 @@ def admin_excess_settlement_report(request):
                         user_id=uid, related_bet_ticket_id=tid,
                         transaction_type__in=['bet_payout', 'bet_payout_reversal'],
                     )
+                    payout_count_v = rows_q.filter(transaction_type='bet_payout').count()
                     payout_total = rows_q.filter(transaction_type='bet_payout').aggregate(
                         s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
                     )['s'] or Decimal('0.00')
                     tx_reversed = rows_q.filter(transaction_type='bet_payout_reversal').aggregate(
                         s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
                     )['s'] or Decimal('0.00')
-                    owed = (Decimal(str(payout_total)) - Decimal(str(tx_reversed))).quantize(Decimal('0.01'))
+                    per_payout_avg_row = (Decimal(str(payout_total)) / payout_count_v).quantize(Decimal('0.01')) if payout_count_v >= 1 else Decimal('0.00')
+                    owed_raw = (Decimal(str(payout_total)) - Decimal(str(tx_reversed)) - per_payout_avg_row).quantize(Decimal('0.01'))
+                    owed = max(Decimal('0.00'), owed_raw).quantize(Decimal('0.01'))
                     if owed <= Decimal('0.00'):
                         skipped += 1
                         continue

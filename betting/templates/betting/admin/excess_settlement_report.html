@@ -1,0 +1,260 @@
+{% extends 'betting/admin/base.html' %}
+{% load static %}
+
+{% block title %}{{ report_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+    <h2 class="h3 mb-0 text-dark fw-semibold">
+      <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>{{ report_title }}
+      <span class="badge bg-secondary ms-2">{{ total_rows }} rows</span>
+    </h2>
+    <div>
+      <a href="{{ export_csv_url }}" class="btn btn-outline-success me-2">
+        <i class="bi bi-filetype-csv me-1"></i> Export CSV
+      </a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="card border-0 shadow-sm p-3 h-100 border-start border-danger border-4">
+        <div class="small text-muted">Total Excess Owed Back</div>
+        <div class="fs-4 fw-bold text-danger">₦{{ summary.total_owed|floatformat:2|default:"0.00" }}</div>
+        <div class="small text-muted mt-1">Across {{ summary.total_users }} users</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card border-0 shadow-sm p-3 h-100 border-start border-success border-4">
+        <div class="small text-muted">Can Auto Reverse Now (balance ≥ excess)</div>
+        <div class="fs-4 fw-bold text-success">{{ summary.total_can_auto }}</div>
+        <div class="small text-muted mt-1">₦{{ summary.total_can_auto_amount|floatformat:2|default:"0.00" }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card border-0 shadow-sm p-3 h-100 border-start border-warning border-4">
+        <div class="small text-muted">Manual Reverse Needed (no balance left)</div>
+        <div class="fs-4 fw-bold text-warning">{{ summary.total_manual_needed }}</div>
+        <div class="small text-muted mt-1">₦{{ summary.total_manual_amount|floatformat:2|default:"0.00" }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card border-0 shadow-sm p-3 h-100 border-start border-info border-4">
+        <div class="small text-muted">Total Stake Affected</div>
+        <div class="fs-4 fw-bold text-info">₦{{ summary.total_stake|floatformat:2|default:"0.00" }}</div>
+        <div class="small text-muted mt-1">{{ summary.total_rows }} ticket/user rows</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-4 p-4">
+    <form method="GET" action="{% url 'betting_admin:admin_excess_settlement_report' %}" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Start Date</label>
+        <input type="date" name="start_date" value="{{ start_date_filter }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">End Date</label>
+        <input type="date" name="end_date" value="{{ end_date_filter }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Betting Period</label>
+        <select name="betting_period" class="form-select form-select-sm">
+          <option value="">All Periods</option>
+          {% for p in betting_periods %}
+            <option value="{{ p.id }}" {% if current_period_filter == p.id|stringformat:"s" %}selected{% endif %}>
+              {{ p.name }} ({{ p.start_date|date:"Y-m-d" }} to {{ p.end_date|date:"Y-m-d" }})
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Reverse Status Filter</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="all" {% if current_status_filter == 'all' %}selected{% endif %}>All (Auto + Manual)</option>
+          <option value="auto" {% if current_status_filter == 'auto' %}selected{% endif %}>Auto Reverse Eligible Only</option>
+          <option value="manual" {% if current_status_filter == 'manual' %}selected{% endif %}>Manual Reverse Only</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-auto ms-md-auto">
+        <button type="submit" class="btn btn-primary btn-sm px-4 py-2 rounded-pill">Apply Filters</button>
+        <a href="{% url 'betting_admin:admin_excess_settlement_report' %}" class="btn btn-outline-secondary btn-sm px-4 py-2 rounded-pill ms-1">Reset</a>
+      </div>
+    </form>
+  </div>
+
+  {% if rows %}
+  <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirmBulk(this);">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="reverse_bulk">
+
+    <div class="card border-0 shadow-sm mb-4 p-3 bg-light d-flex flex-wrap gap-2 align-items-center">
+      <div class="form-check me-3">
+        <input id="selectAllTop" type="checkbox" class="form-check-input" onchange="toggleAll(this, '.row-check')">
+        <label for="selectAllTop" class="form-check-label fw-semibold small">Select all on page (Auto-reversible rows only)</label>
+      </div>
+      <button type="submit" class="btn btn-success btn-sm px-4 py-2 rounded-pill">
+        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected
+      </button>
+      <button type="submit" name="dry_run" value="1" class="btn btn-outline-success btn-sm px-4 py-2 rounded-pill ms-2">
+        <i class="bi bi-clipboard-check me-1"></i> Dry Run Only (no changes)
+      </button>
+      <small class="text-muted ms-auto">
+        Auto-reverse is applied ONLY for rows where <b>wallet balance ≥ excess won</b>. All others are skipped automatically to avoid negative wallet balances.
+      </small>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-hover table-striped bg-white rounded overflow-hidden shadow-sm align-middle" id="excessTbl">
+        <thead class="table-dark">
+          <tr>
+            <th style="width:36px;"></th>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Ticket ID</th>
+            <th class="text-end">Stake</th>
+            <th class="text-end">Excess Won (Not Reversed)</th>
+            <th class="text-center">Payouts / Reversals</th>
+            <th class="text-center">Excess<br>Settled (N)</th>
+            <th>Date &amp; Time (Last)</th>
+            <th class="text-end">Current Wallet Balance</th>
+            <th>Status</th>
+            <th class="text-end">After Reverse Wallet Remain</th>
+            <th class="text-center" style="width:150px;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr class="{% if not r.can_auto_reverse %}table-warning{% endif %}">
+            <td>
+              {% if r.can_auto_reverse %}
+              <input class="form-check-input row-check" type="checkbox" name="selected_keys" value="{{ r.row_key }}">
+              {% else %}
+              <span class="small text-muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="fw-semibold">@{{ r.username }}</div>
+              <div class="small text-muted">{{ r.email }}</div>
+            </td>
+            <td>
+              <span class="badge rounded-pill {% if r.user_type == 'agent' %}bg-primary{% else %}bg-info{% endif %}">{{ r.user_type_display }}</span>
+            </td>
+            <td>
+              <code>{{ r.ticket_id_str }}</code>
+            </td>
+            <td class="text-end">₦{{ r.stake_amount|floatformat:2 }}</td>
+            <td class="text-end">
+              <span class="fw-bold text-danger">₦{{ r.excess_won|floatformat:2 }}</span>
+            </td>
+            <td class="text-center">
+              <span class="badge bg-success">{{ r.payout_count }}</span>
+              <span class="mx-1 text-muted">/</span>
+              <span class="badge bg-danger">{{ r.reversal_count }}</span>
+            </td>
+            <td class="text-center">
+              <span class="badge bg-{% if r.excess_count >= 2 %}danger{% else %}warning{% endif %}">{{ r.excess_count }}</span>
+            </td>
+            <td class="small">
+              <div>Last: {{ r.last_settled_at|date:"Y-m-d H:i"|default:"—" }}</div>
+              <div class="text-muted">First: {{ r.first_settled_at|date:"Y-m-d H:i"|default:"—" }}</div>
+            </td>
+            <td class="text-end">
+              <span class="fw-semibold">₦{{ r.wallet_balance|floatformat:2 }}</span>
+            </td>
+            <td>
+              {% if r.can_auto_reverse %}
+                <span class="badge bg-success">Auto Reverse OK</span>
+              {% else %}
+                <span class="badge bg-warning text-dark">Manual Reverse Needed</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              {% if r.can_auto_reverse %}
+                ₦{{ r.remaining_in_wallet|floatformat:2 }}
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              {% if r.can_auto_reverse %}
+              <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirm('Confirm auto-reverse ₦{{ r.excess_won|floatformat:2 }} for @{{ r.username }} ticket {{ r.ticket_id_str }}? Balance will be ₦{{ r.remaining_in_wallet|floatformat:2 }}.');" class="d-inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="reverse_one">
+                <input type="hidden" name="user_id" value="{{ r.user_id }}">
+                <input type="hidden" name="ticket_id" value="{{ r.ticket_id }}">
+                <button class="btn btn-sm btn-outline-success rounded-pill px-3">
+                  <i class="bi bi-arrow-counterclockwise"></i> Auto Reverse
+                </button>
+              </form>
+              {% else %}
+                <small class="text-muted d-block">User has withdrawn excess</small>
+                <small class="d-block text-muted"><i>Reconcile manually</i></small>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card border-0 shadow-sm mt-4 p-3 bg-light d-flex flex-wrap gap-2 align-items-center">
+      <div class="form-check me-3">
+        <input id="selectAllBot" type="checkbox" class="form-check-input" onchange="toggleAll(this, '.row-check')">
+        <label for="selectAllBot" class="form-check-label fw-semibold small">Select all on page (Auto-reversible rows only)</label>
+      </div>
+      <button type="submit" class="btn btn-success btn-sm px-4 py-2 rounded-pill">
+        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected
+      </button>
+      <button type="submit" name="dry_run" value="1" class="btn btn-outline-success btn-sm px-4 py-2 rounded-pill ms-2">
+        <i class="bi bi-clipboard-check me-1"></i> Dry Run Only
+      </button>
+      <small class="text-muted ms-auto">
+        Auto-reverse is applied ONLY for rows where <b>wallet balance ≥ excess won</b>. All others are skipped automatically to avoid negative wallet balances.
+      </small>
+    </div>
+  </form>
+
+  <nav class="mt-4">
+    <ul class="pagination pagination-sm justify-content-center">
+      {% if rows.has_previous %}
+        <li class="page-item"><a class="page-link" href="?{% if base_qs %}{{ base_qs }}&{% endif %}page=1">&laquo; First</a></li>
+        <li class="page-item"><a class="page-link" href="?{% if base_qs %}{{ base_qs }}&{% endif %}page={{ rows.previous_page_number }}">Prev</a></li>
+      {% endif %}
+      <li class="page-item active"><span class="page-link">Page {{ rows.number }} / {{ rows.paginator.num_pages }}</span></li>
+      {% if rows.has_next %}
+        <li class="page-item"><a class="page-link" href="?{% if base_qs %}{{ base_qs }}&{% endif %}page={{ rows.next_page_number }}">Next</a></li>
+        <li class="page-item"><a class="page-link" href="?{% if base_qs %}{{ base_qs }}&{% endif %}page={{ rows.paginator.num_pages }}">Last &raquo;</a></li>
+      {% endif %}
+    </ul>
+  </nav>
+
+  {% else %}
+  <div class="alert alert-success border-0 shadow-sm mt-4">
+    <i class="bi bi-check-circle-fill me-2"></i>
+    No excess settlement rows found matching current filters.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+function toggleAll(src, selector) {
+  var els = document.querySelectorAll(selector);
+  for (var i = 0; i < els.length; i++) {
+    if (els[i].disabled) continue;
+    els[i].checked = src.checked;
+  }
+  document.getElementById('selectAllTop').checked = src.checked;
+  document.getElementById('selectAllBot').checked = src.checked;
+}
+function confirmBulk(f) {
+  var count = f.querySelectorAll('input.row-check:checked').length;
+  if (count === 0) {
+    alert('Please select at least one eligible row first.');
+    return false;
+  }
+  return confirm('Confirm BULK auto-reverse of ' + count + ' selected row(s)? Only rows with wallet balance >= excess amount will be processed; all others are skipped safely (no negative balance ever).');
+}
+</script>
+{% endblock %}

@@ -137,6 +137,7 @@ class BettingAdminSite(admin.AdminSite):
             'fixture_odds_rejected_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist') + '?status__exact=rejected',
             'fixture_odds_changelist_admin_url': reverse(f'{self.name}:betting_fixtureoddschangeproposal_changelist'),
             'fixture_odds_editor_assignments_admin_url': reverse(f'{self.name}:betting_fixtureoddseditorassignment_changelist'),
+            'excess_settlement_admin_url': reverse(f'{self.name}:admin_excess_settlement_report'),
         })
         return super().index(request, extra_context)
 
@@ -256,6 +257,8 @@ class BettingAdminSite(admin.AdminSite):
             ),
             path('ops/celery-health/', self.admin_view(views.admin_celery_health), name='admin_celery_health'),
             path('reports/limits/rejections/', self.admin_view(views.admin_limit_rejections_report), name='admin_limit_rejections_report'),
+
+            path('reports/excess-settlements/', self.admin_view(views.admin_excess_settlement_report), name='admin_excess_settlement_report'),
 
             path('reports/wallet/', self.admin_view(views.admin_wallet_report), name='admin_wallet_report'),
             path('reports/sales-winnings/', self.admin_view(views.admin_sales_winnings_report), name='admin_sales_winnings_report'),

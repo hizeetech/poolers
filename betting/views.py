@@ -18,7 +18,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from django.conf import settings
 from django.apps import apps
-from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Prefetch, CharField, Avg
+from django.db.models import Sum, Q, Case, When, F, DecimalField, Value, IntegerField, Count, OuterRef, Subquery, Max, Min, Prefetch, CharField, Avg
 from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db import transaction as db_transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -22536,3 +22536,361 @@ def admin_fixture_odds_proposal_counts_json(request):
         })
     except Exception as exc:
         return JsonResponse({'ok': False, 'error': str(exc)}, status=500)
+
+
+def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_period_id=None, status_filter='all'):
+    """Pure-ORM helper used by the admin excess settlement report + CSV export."""
+    from betting.models import BetTicket, BettingPeriod, Wallet, Transaction, User as BUser
+
+    payout_qs = Transaction.objects.filter(
+        related_bet_ticket__isnull=False,
+        transaction_type__in=['bet_payout', 'bet_payout_reversal'],
+    )
+    if start_date:
+        payout_qs = payout_qs.filter(timestamp__date__gte=start_date)
+    if end_date:
+        payout_qs = payout_qs.filter(timestamp__date__lte=end_date)
+
+    grouped = list(
+        payout_qs
+        .values('user_id', 'related_bet_ticket_id')
+        .annotate(
+            payout_count=Count('id', filter=Q(transaction_type='bet_payout')),
+            reversal_count=Count('id', filter=Q(transaction_type='bet_payout_reversal')),
+            total_payout=Coalesce(
+                Sum('amount', filter=Q(transaction_type='bet_payout')),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(),
+            ),
+            total_reversal=Coalesce(
+                Sum('amount', filter=Q(transaction_type='bet_payout_reversal')),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(),
+            ),
+            first_settled_at=Min('timestamp', filter=Q(transaction_type='bet_payout')),
+            last_settled_at=Max('timestamp', filter=Q(transaction_type='bet_payout')),
+        )
+        .annotate(owed_back=F('total_payout') - F('total_reversal'))
+        .filter(owed_back__gt=0)
+    )
+
+    if betting_period_id:
+        period_ticket_ids = set(
+            BetTicket.objects.filter(
+                selections__fixture__betting_period_id=betting_period_id,
+            ).values_list('id', flat=True).distinct()
+        )
+        grouped = [r for r in grouped if r['related_bet_ticket_id'] in period_ticket_ids]
+
+    user_ids = sorted({r['user_id'] for r in grouped})
+    ticket_ids = sorted({r['related_bet_ticket_id'] for r in grouped})
+
+    users = {
+        u.pk: u for u in BUser.objects.filter(pk__in=user_ids).only(
+            'pk', 'username', 'email', 'user_type', 'first_name', 'last_name'
+        )
+    }
+    tickets = {
+        t.pk: t for t in BetTicket.objects.filter(pk__in=ticket_ids).only(
+            'pk', 'ticket_id', 'stake_amount', 'status', 'placed_at'
+        )
+    }
+    wallets = {
+        w.user_id: Decimal(str(w.balance or Decimal('0.00')))
+        for w in Wallet.objects.filter(user_id__in=user_ids).only('user_id', 'balance')
+    }
+
+    raw_rows = []
+    for r in grouped:
+        uid = r['user_id']
+        tid = r['related_bet_ticket_id']
+        user = users.get(uid)
+        ticket = tickets.get(tid)
+        if user is None or ticket is None:
+            continue
+
+        excess_won = Decimal(str(r['owed_back'])).quantize(Decimal('0.01'))
+        stake = Decimal(str(ticket.stake_amount or Decimal('0.00'))).quantize(Decimal('0.01'))
+        bal = wallets.get(uid, Decimal('0.00')).quantize(Decimal('0.01'))
+        can_auto = bal >= excess_won
+        excess_count = max(int(r['payout_count'] or 0) - int(r['reversal_count'] or 0), 1)
+
+        raw_rows.append({
+            'user_id': uid,
+            'ticket_id': tid,
+            'user': user,
+            'ticket': ticket,
+            'username': user.username or '',
+            'email': user.email or '',
+            'user_type_display': user.get_user_type_display(),
+            'user_type': user.user_type,
+            'ticket_id_str': ticket.ticket_id,
+            'stake_amount': stake,
+            'excess_won': excess_won,
+            'payout_count': int(r['payout_count'] or 0),
+            'reversal_count': int(r['reversal_count'] or 0),
+            'excess_count': excess_count,
+            'first_settled_at': r['first_settled_at'],
+            'last_settled_at': r['last_settled_at'],
+            'wallet_balance': bal,
+            'can_auto_reverse': can_auto,
+            'remaining_in_wallet': max(bal - excess_won, Decimal('0.00')).quantize(Decimal('0.01')),
+            'row_key': f"{uid}_{tid}",
+        })
+
+    ac_rows = [r for r in raw_rows if r['user_type'] in ('agent', 'cashier')]
+    if status_filter == 'auto':
+        ac_rows = [r for r in ac_rows if r['can_auto_reverse']]
+    elif status_filter == 'manual':
+        ac_rows = [r for r in ac_rows if not r['can_auto_reverse']]
+    ac_rows.sort(key=lambda r: (-r['excess_won'], r['user_id'], r['ticket_id_str']))
+
+    summary = {
+        'total_rows': len(ac_rows),
+        'total_owed': sum((r['excess_won'] for r in ac_rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'total_can_auto': sum((1 for r in ac_rows if r['can_auto_reverse']), 0),
+        'total_manual_needed': sum((1 for r in ac_rows if not r['can_auto_reverse']), 0),
+        'total_can_auto_amount': sum((r['excess_won'] for r in ac_rows if r['can_auto_reverse']), Decimal('0.00')).quantize(Decimal('0.01')),
+        'total_manual_amount': sum((r['excess_won'] for r in ac_rows if not r['can_auto_reverse']), Decimal('0.00')).quantize(Decimal('0.01')),
+        'total_stake': sum((r['stake_amount'] for r in ac_rows), Decimal('0.00')).quantize(Decimal('0.01')),
+        'total_users': len({r['user_id'] for r in ac_rows}),
+    }
+    return summary, ac_rows
+
+
+@never_cache
+@ensure_csrf_cookie
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
+def admin_excess_settlement_report(request):
+    from betting.models import BetTicket, BettingPeriod, Wallet, Transaction, User as BUser
+
+    report_title = "Excess Bet Settlements Report"
+    start_date_str = request.GET.get('start_date') or ''
+    end_date_str = request.GET.get('end_date') or ''
+    period_id_str = request.GET.get('betting_period') or ''
+    status_filter = request.GET.get('status') or 'all'
+    if status_filter not in ('all', 'auto', 'manual'):
+        status_filter = 'all'
+
+    start_date = end_date = None
+    try:
+        if start_date_str:
+            start_date = date.fromisoformat(start_date_str)
+    except Exception:
+        start_date = None
+    try:
+        if end_date_str:
+            end_date = date.fromisoformat(end_date_str)
+    except Exception:
+        end_date = None
+    betting_period_id = None
+    try:
+        if period_id_str:
+            betting_period_id = int(period_id_str)
+    except Exception:
+        betting_period_id = None
+
+    if request.method == 'POST':
+        action = request.POST.get('action') or ''
+        redirect_to = request.get_full_path()
+        dry_run = request.POST.get('dry_run') == '1'
+
+        def _key(k):
+            parts = str(k).split('_')
+            try:
+                return int(parts[0]), int(parts[1])
+            except Exception:
+                return None, None
+
+        selected_keys = []
+        if action == 'reverse_bulk':
+            for k in request.POST.getlist('selected_keys'):
+                u, t = _key(k)
+                if u and t:
+                    selected_keys.append((u, t))
+        elif action == 'reverse_one':
+            u_str = request.POST.get('user_id') or ''
+            t_str = request.POST.get('ticket_id') or ''
+            try:
+                selected_keys.append((int(u_str), int(t_str)))
+            except Exception:
+                selected_keys = []
+
+        if not selected_keys:
+            messages.error(request, "Please select at least one row to auto reverse.")
+            return redirect(redirect_to)
+
+        try:
+            with db_transaction.atomic():
+                actor = request.user
+                processed = 0
+                skipped = 0
+                reversed_total = Decimal('0.00')
+                failures = []
+
+                for (uid, tid) in selected_keys:
+                    try:
+                        user = BUser.objects.select_for_update().get(pk=uid)
+                        ticket = BetTicket.objects.select_for_update().get(pk=tid)
+                        wallet = Wallet.objects.select_for_update().get(user=user)
+
+                        rows_q = Transaction.objects.filter(
+                            user_id=uid, related_bet_ticket_id=tid,
+                            transaction_type__in=['bet_payout', 'bet_payout_reversal'],
+                        )
+                        payout_total = rows_q.filter(transaction_type='bet_payout').aggregate(
+                            s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
+                        )['s'] or Decimal('0.00')
+                        tx_reversed = rows_q.filter(transaction_type='bet_payout_reversal').aggregate(
+                            s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
+                        )['s'] or Decimal('0.00')
+                        owed = (Decimal(str(payout_total)) - Decimal(str(tx_reversed))).quantize(Decimal('0.01'))
+                        if owed <= Decimal('0.00'):
+                            skipped += 1
+                            continue
+
+                        bal = Decimal(str(wallet.balance or Decimal('0.00'))).quantize(Decimal('0.01'))
+                        if bal < owed:
+                            failures.append(
+                                f"@{user.username or user.email} tkt {ticket.ticket_id}: owes ₦{owed:,.2f}, wallet ₦{bal:,.2f} (SKIP)"
+                            )
+                            skipped += 1
+                            continue
+
+                        if dry_run:
+                            processed += 1
+                            reversed_total += owed
+                            continue
+
+                        reversal_tx = Transaction.objects.create(
+                            user=user,
+                            initiating_user=actor,
+                            target_user=user,
+                            transaction_type='bet_payout_reversal',
+                            amount=owed,
+                            is_successful=True,
+                            status='completed',
+                            description=(
+                                f"Admin AUTO-REVERSAL of excess duplicate settlement for ticket {ticket.ticket_id}. "
+                                f"System paid ₦{owed:,.2f} more than previously reversed."
+                            ),
+                            related_bet_ticket=ticket,
+                            timestamp=timezone.now(),
+                        )
+                        wallet.apply_delta(
+                            amount=-owed,
+                            actor=actor,
+                            transaction_obj=reversal_tx,
+                            reference=str(ticket.ticket_id),
+                            reason=reversal_tx.description,
+                            metadata={
+                                'source': 'excess_settlement_auto_reverse',
+                                'ticket_id': ticket.ticket_id,
+                                'user_id': user.id,
+                                'reversal_tx_id': str(reversal_tx.id),
+                            },
+                        )
+                        processed += 1
+                        reversed_total += owed
+                        log_admin_activity(
+                            request,
+                            (
+                                f"Auto reversed excess duplicate settlement ₦{owed:,.2f} "
+                                f"for user {user.email}/{user.username} ticket {ticket.ticket_id}"
+                            ),
+                            action_type="EXCESS_SETTLEMENT_AUTO_REVERSE",
+                            affected_object=f"Ticket {ticket.ticket_id}",
+                        )
+                    except Exception as e:
+                        skipped += 1
+                        failures.append(f"u={uid} t={tid}: {e}")
+
+                totals_msg = (
+                    f"{'[DRY RUN] ' if dry_run else ''}"
+                    f"Processed {processed} rows, reversed ₦{reversed_total:,.2f}. "
+                    f"Skipped/insufficient: {skipped}."
+                )
+                if failures:
+                    messages.warning(
+                        request,
+                        totals_msg + f" First 5 failures: {' | '.join(failures[:5])}{' ...' if len(failures) > 5 else ''}"
+                    )
+                else:
+                    messages.success(request, totals_msg)
+        except Exception as e:
+            messages.error(request, f"Auto reverse error: {e}")
+
+        return redirect(redirect_to)
+
+    summary, rows = _get_excess_settlement_rows(
+        start_date=start_date,
+        end_date=end_date,
+        betting_period_id=betting_period_id,
+        status_filter=status_filter,
+    )
+
+    page_number = request.GET.get('page') or '1'
+    paginator = Paginator(rows, 50)
+    try:
+        page_rows = paginator.page(int(page_number))
+    except (PageNotAnInteger, ValueError):
+        page_rows = paginator.page(1)
+    except EmptyPage:
+        page_rows = paginator.page(paginator.num_pages)
+
+    if request.GET.get('export') == 'csv':
+        import csv
+        resp = HttpResponse(content_type='text/csv; charset=utf-8')
+        fname = 'excess_settlements_%s.csv' % (timezone.now().strftime('%Y%m%d_%H%M%S'),)
+        resp['Content-Disposition'] = 'attachment; filename=%s' % (fname,)
+        w = csv.writer(resp)
+        w.writerow([
+            'Username', 'Email', 'User Type', 'Ticket ID',
+            'Stake Amount (NGN)', 'Excess Won Not Reversed (NGN)',
+            'Payout Count', 'Reversal Count', 'Excess Settlements Count',
+            'First Settled At', 'Last Settled At',
+            'Current Wallet Balance (NGN)',
+            'Can Auto Reverse (balance >= excess)',
+            'Wallet Remaining After Reversal (NGN)',
+            'User ID', 'Ticket PK',
+        ])
+        for r in rows:
+            w.writerow([
+                r['username'], r['email'], r['user_type_display'], r['ticket_id_str'],
+                f"{r['stake_amount']:.2f}", f"{r['excess_won']:.2f}",
+                r['payout_count'], r['reversal_count'], r['excess_count'],
+                r['first_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['first_settled_at'] else '',
+                r['last_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['last_settled_at'] else '',
+                f"{r['wallet_balance']:.2f}",
+                'YES' if r['can_auto_reverse'] else 'NO',
+                f"{r['remaining_in_wallet']:.2f}",
+                r['user_id'], r['ticket_id'],
+            ])
+        return resp
+
+    periods = list(BettingPeriod.objects.all().order_by('-start_date').only('id', 'name', 'start_date', 'end_date'))
+    get_copy = request.GET.copy()
+    if 'page' in get_copy:
+        del get_copy['page']
+    if 'export' in get_copy:
+        del get_copy['export']
+    base_qs = get_copy.urlencode()
+    csv_qs = get_copy.copy()
+    csv_qs['export'] = 'csv'
+    export_csv_url = reverse('betting_admin:admin_excess_settlement_report') + '?' + csv_qs.urlencode()
+
+    context = {
+        'report_title': report_title,
+        'summary': summary,
+        'rows': page_rows,
+        'total_rows': summary['total_rows'],
+        'start_date_filter': start_date_str,
+        'end_date_filter': end_date_str,
+        'current_period_filter': betting_period_id or '',
+        'current_status_filter': status_filter,
+        'betting_periods': periods,
+        'base_qs': base_qs,
+        'export_csv_url': export_csv_url,
+    }
+    return render(request, 'betting/admin/excess_settlement_report.html', context)

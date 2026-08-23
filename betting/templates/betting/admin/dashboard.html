@@ -69,6 +69,30 @@
                 </div>
             </div>
         </div>
+
+        <div class="col">
+            <div class="card h-100 border-0 shadow-sm bg-danger-subtle text-danger-emphasis">
+                <div class="card-body">
+                    <h3 class="card-title h5 mb-2 fw-medium">Excess Settlements</h3>
+                    <p class="card-text fs-5 fw-semibold text-danger mb-1">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i> Duplicate Payout Recovery
+                    </p>
+                    <p class="card-text fs-6 text-muted">Agent + Cashier users with duplicate bet payout winnings that weren't fully reversed.</p>
+                    <p class="card-text fs-6 text-muted">Filter by date, betting period, or auto-reverse eligible (wallet balance still covers excess amount).</p>
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <a href="{% url 'betting_admin:admin_excess_settlement_report' %}" class="btn btn-sm btn-outline-danger">
+                            <i class="bi bi-table me-1"></i> Open Report
+                        </a>
+                        <a href="{% url 'betting_admin:admin_excess_settlement_report' %}?status=auto" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i> Auto-Reverse Eligible
+                        </a>
+                        <a href="{% url 'betting_admin:admin_excess_settlement_report' %}?status=manual" class="btn btn-sm btn-outline-warning">
+                            <i class="bi bi-person-raised-hand me-1"></i> Manual-Review List
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {% include 'betting/includes/ticket_transactions_widget.html' with widget=ticket_transactions_widget widget_title='Admin Ticket Transactions Preview' %}

@@ -1642,7 +1642,7 @@ class ResultAdmin(admin.ModelAdmin):
             return redirect(change_url)
 
         affected_count = self._affected_tickets_queryset(obj).count()
-        recalculate_tickets_for_fixture.delay(obj.pk)
+        recalculate_tickets_for_fixture.delay(obj.pk, include_correction_backfill=True)
         self.message_user(
             request,
             (

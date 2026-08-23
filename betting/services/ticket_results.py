@@ -22,7 +22,7 @@ def _batched(values, size):
         yield batch
 
 
-def recalculate_tickets_for_fixture_sync(fixture_id):
+def recalculate_tickets_for_fixture_sync(fixture_id, *, include_correction_backfill=False):
     affected_ticket_ids = []
     processed = 0
     failed = 0
@@ -78,10 +78,12 @@ def recalculate_tickets_for_fixture_sync(fixture_id):
                         if current_ticket.status == "pending":
                             current_ticket.recalculate_ticket()
                             current_ticket.check_and_update_status()
-                        else:
+                        elif include_correction_backfill:
                             current_ticket.backfill_after_result_correction(
                                 reason=f"Fixture {fixture.id} result corrected"
                             )
+                        # NORMAL PATH (every day result save): NEVER TOUCH ALREADY SETTLED TICKETS!
+                        # else: skip. Prevent duplicate payouts / missing reversals.
                     processed += 1
                 except Exception:
                     failed += 1

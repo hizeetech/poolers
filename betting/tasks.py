@@ -379,12 +379,19 @@ def update_started_fixtures_status():
         logger.debug("No started fixtures found to update.")
 
 @shared_task
-def recalculate_tickets_for_fixture(fixture_id):
+def recalculate_tickets_for_fixture(fixture_id, *, include_correction_backfill=False):
     """
     Background task to recalculate all tickets associated with a changed fixture.
     This prevents timeouts when saving results in the admin.
+
+    Normal usage (every day result save): include_correction_backfill=False (DEFAULT)
+      → ONLY processes PENDING tickets. NEVER touches won/lost tickets.
+      → Prevents duplicate payouts / missing reversals.
+
+    Explicit admin reprocess button (fixture result WAS corrected!): include_correction_backfill=True
+      → Also runs backfill_after_result_correction on already-settled tickets (reverse old payout → resettle).
     """
-    recalculate_tickets_for_fixture_sync(fixture_id)
+    recalculate_tickets_for_fixture_sync(fixture_id, include_correction_backfill=include_correction_backfill)
 
 
 @shared_task

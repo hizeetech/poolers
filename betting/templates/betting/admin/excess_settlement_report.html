@@ -27,14 +27,14 @@
     </div>
     <div class="col-6 col-md-3">
       <div class="card border-0 shadow-sm p-3 h-100 border-start border-success border-4">
-        <div class="small text-muted">Can Auto Reverse Now (balance ≥ excess)</div>
+        <div class="small text-muted">Can Auto Reverse Now (own wallet ≥ excess OR agent+cashier combined pool ≥ excess)</div>
         <div class="fs-4 fw-bold text-success">{{ summary.total_can_auto }}</div>
         <div class="small text-muted mt-1">₦{{ summary.total_can_auto_amount|floatformat:2|default:"0.00" }}</div>
       </div>
     </div>
     <div class="col-6 col-md-3">
       <div class="card border-0 shadow-sm p-3 h-100 border-start border-warning border-4">
-        <div class="small text-muted">Manual Reverse Needed (no balance left)</div>
+        <div class="small text-muted">Manual Reverse Needed (combined family pool still &lt; excess)</div>
         <div class="fs-4 fw-bold text-warning">{{ summary.total_manual_needed }}</div>
         <div class="small text-muted mt-1">₦{{ summary.total_manual_amount|floatformat:2|default:"0.00" }}</div>
       </div>
@@ -73,7 +73,7 @@
         <label class="form-label small text-muted mb-1">Reverse Status Filter</label>
         <select name="status" class="form-select form-select-sm">
           <option value="all" {% if current_status_filter == 'all' %}selected{% endif %}>All (Auto + Manual)</option>
-          <option value="auto" {% if current_status_filter == 'auto' %}selected{% endif %}>Auto Reverse Eligible Only</option>
+          <option value="auto" {% if current_status_filter == 'auto' %}selected{% endif %}>Auto Reverse Eligible Only (own wallet OR agent+cashier combined)</option>
           <option value="manual" {% if current_status_filter == 'manual' %}selected{% endif %}>Manual Reverse Only</option>
         </select>
       </div>
@@ -85,7 +85,27 @@
   </div>
 
   {% if rows %}
-  <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirmBulk(this);">
+  <div class="card border-0 shadow-sm mb-4 p-3 bg-white d-flex flex-wrap gap-2 align-items-center border-start border-4 border-success">
+    <div class="fw-semibold text-success me-2">
+      <i class="bi bi-lightning-charge-fill me-1"></i> ONE-CLICK ALL ELIGIBLE ROWS (all pages):
+    </div>
+    <div class="small text-muted mb-1 mb-md-0 w-100 d-md-none"></div>
+    <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirmAllPages(this, false);" class="d-flex flex-wrap gap-2 align-items-center">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="reverse_all_auto">
+      <button type="submit" class="btn btn-success btn-sm px-4 py-2 rounded-pill shadow">
+        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse ALL Pages (Status=Auto Only)
+      </button>
+      <button type="submit" name="dry_run" value="1" class="btn btn-outline-success btn-sm px-4 py-2 rounded-pill" onclick="window.__confirmAllPagesDry=true;">
+        <i class="bi bi-clipboard-check me-1"></i> Dry Run ALL Pages (preview only, no DB changes)
+      </button>
+    </form>
+    <small class="text-muted ms-auto">
+      Respects current <b>Date / Betting Period filters</b>. Processes every <b>Status=Auto Reverse Eligible</b> row across ALL pages internally (you do NOT need to click through pages).
+    </small>
+  </div>
+
+  <form method="POST" id="bulkForm" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirmBulk(this);">
     {% csrf_token %}
     <input type="hidden" name="action" value="reverse_bulk">
 
@@ -95,13 +115,13 @@
         <label for="selectAllTop" class="form-check-label fw-semibold small">Select all on page (Auto-reversible rows only)</label>
       </div>
       <button type="submit" class="btn btn-success btn-sm px-4 py-2 rounded-pill">
-        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected
+        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected (this page only)
       </button>
       <button type="submit" name="dry_run" value="1" class="btn btn-outline-success btn-sm px-4 py-2 rounded-pill ms-2">
         <i class="bi bi-clipboard-check me-1"></i> Dry Run Only (no changes)
       </button>
       <small class="text-muted ms-auto">
-        Auto-reverse is applied ONLY for rows where <b>wallet balance ≥ excess won</b>. All others are skipped automatically to avoid negative wallet balances.
+        Auto-reverse is applied ONLY when <b>own wallet ≥ excess OR agent+cashier combined pool ≥ excess</b>. Deduction prefers agent wallet first, then cashiers. No wallet ever goes negative.
       </small>
     </div>
 
@@ -118,15 +138,17 @@
             <th class="text-center">Payouts / Reversals</th>
             <th class="text-center">Excess<br>Settled (N)</th>
             <th>Date &amp; Time (Last)</th>
-            <th class="text-end">Current Wallet Balance</th>
+            <th class="text-end">Own Wallet Balance</th>
+            <th class="text-end">Agent+Cashier Pool Balance</th>
             <th>Status</th>
-            <th class="text-end">After Reverse Wallet Remain</th>
+            <th>Deduction Breakdown (Agent → Cashiers by desc balance)</th>
+            <th class="text-end">After Reverse Pool Remain</th>
             <th class="text-center" style="width:150px;">Action</th>
           </tr>
         </thead>
         <tbody>
           {% for r in rows %}
-          <tr class="{% if not r.can_auto_reverse %}table-warning{% endif %}">
+          <tr class="{% if not r.can_auto_reverse %}table-warning{% elif r.is_combined_only_auto %}table-info{% endif %}">
             <td>
               {% if r.can_auto_reverse %}
               <input class="form-check-input row-check" type="checkbox" name="selected_keys" value="{{ r.row_key }}">
@@ -163,11 +185,36 @@
             <td class="text-end">
               <span class="fw-semibold">₦{{ r.wallet_balance|floatformat:2 }}</span>
             </td>
+            <td class="text-end">
+              <span class="fw-semibold {% if r.is_combined_only_auto %}text-primary{% else %}text-dark{% endif %}">₦{{ r.combined_family_balance|floatformat:2 }}</span>
+              {% if r.is_combined_only_auto %}
+                <div class="small text-primary">
+                  <i class="bi bi-people-fill me-1"></i>Combined covers excess
+                </div>
+              {% endif %}
+            </td>
             <td>
-              {% if r.can_auto_reverse %}
+              {% if r.is_combined_only_auto %}
+                <span class="badge bg-primary">Combined Auto Eligible</span>
+              {% elif r.can_auto_reverse %}
                 <span class="badge bg-success">Auto Reverse OK</span>
               {% else %}
                 <span class="badge bg-warning text-dark">Manual Reverse Needed</span>
+              {% endif %}
+            </td>
+            <td class="small">
+              {% if r.can_auto_reverse and r.deduction_split_preview %}
+                <div class="d-flex flex-column gap-1">
+                {% for s in r.deduction_split_preview %}
+                  <div class="d-flex justify-content-between gap-2">
+                    <span class="badge rounded-pill {% if s.0|lower == 'agent' %}bg-primary{% else %}bg-info{% endif %}" style="min-width:72px; text-align:center;">{{ s.0 }}</span>
+                    <span class="text-muted">{{ s.1 }}</span>
+                    <span class="fw-semibold text-end">{{ s.2 }}</span>
+                  </div>
+                {% endfor %}
+                </div>
+              {% else %}
+                <span class="text-muted">—</span>
               {% endif %}
             </td>
             <td class="text-end">
@@ -179,17 +226,17 @@
             </td>
             <td class="text-center">
               {% if r.can_auto_reverse %}
-              <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirm('Confirm auto-reverse ₦{{ r.excess_won|floatformat:2 }} for @{{ r.username }} ticket {{ r.ticket_id_str }}? Balance will be ₦{{ r.remaining_in_wallet|floatformat:2 }}.');" class="d-inline">
+              <form method="POST" action="{% url 'betting_admin:admin_excess_settlement_report' %}{% if base_qs %}?{{ base_qs }}{% endif %}" onsubmit="return confirm('Confirm auto-reverse ₦{{ r.excess_won|floatformat:2 }} for @{{ r.username }} ticket {{ r.ticket_id_str }}? Excess deducted from agent wallet first, then from cashiers if needed (combined ₦{{ r.combined_family_balance|floatformat:2 }}). After deduction, pool balance = ₦{{ r.remaining_in_wallet|floatformat:2 }}. No wallet can go negative.');" class="d-inline">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="reverse_one">
                 <input type="hidden" name="user_id" value="{{ r.user_id }}">
                 <input type="hidden" name="ticket_id" value="{{ r.ticket_id }}">
-                <button class="btn btn-sm btn-outline-success rounded-pill px-3">
+                <button class="btn btn-sm {% if r.is_combined_only_auto %}btn-outline-primary{% else %}btn-outline-success{% endif %} rounded-pill px-3">
                   <i class="bi bi-arrow-counterclockwise"></i> Auto Reverse
                 </button>
               </form>
               {% else %}
-                <small class="text-muted d-block">User has withdrawn excess</small>
+                <small class="text-muted d-block">Combined family pool still insufficient</small>
                 <small class="d-block text-muted"><i>Reconcile manually</i></small>
               {% endif %}
             </td>
@@ -205,13 +252,13 @@
         <label for="selectAllBot" class="form-check-label fw-semibold small">Select all on page (Auto-reversible rows only)</label>
       </div>
       <button type="submit" class="btn btn-success btn-sm px-4 py-2 rounded-pill">
-        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected
+        <i class="bi bi-arrow-counterclockwise me-1"></i> Bulk Auto Reverse Selected (this page only)
       </button>
       <button type="submit" name="dry_run" value="1" class="btn btn-outline-success btn-sm px-4 py-2 rounded-pill ms-2">
         <i class="bi bi-clipboard-check me-1"></i> Dry Run Only
       </button>
       <small class="text-muted ms-auto">
-        Auto-reverse is applied ONLY for rows where <b>wallet balance ≥ excess won</b>. All others are skipped automatically to avoid negative wallet balances.
+        Auto-reverse is applied ONLY for rows where <b>own wallet OR agent+cashier combined pool ≥ excess won</b>. No individual wallet ever goes negative.
       </small>
     </div>
   </form>
@@ -239,14 +286,17 @@
 </div>
 
 <script>
+window.__confirmAllPagesDry = false;
 function toggleAll(src, selector) {
   var els = document.querySelectorAll(selector);
   for (var i = 0; i < els.length; i++) {
     if (els[i].disabled) continue;
     els[i].checked = src.checked;
   }
-  document.getElementById('selectAllTop').checked = src.checked;
-  document.getElementById('selectAllBot').checked = src.checked;
+  var top = document.getElementById('selectAllTop');
+  var bot = document.getElementById('selectAllBot');
+  if (top) top.checked = src.checked;
+  if (bot) bot.checked = src.checked;
 }
 function confirmBulk(f) {
   var count = f.querySelectorAll('input.row-check:checked').length;
@@ -254,7 +304,33 @@ function confirmBulk(f) {
     alert('Please select at least one eligible row first.');
     return false;
   }
-  return confirm('Confirm BULK auto-reverse of ' + count + ' selected row(s)? Only rows with wallet balance >= excess amount will be processed; all others are skipped safely (no negative balance ever).');
+  return confirm('Confirm BULK auto-reverse of ' + count + ' selected row(s) on THIS page? Deductions will use agent wallet first, then cashiers (combined agent+cashier pool covers). Only rows where combined pool balance >= excess amount will be processed; all others are skipped safely. No wallet ever goes negative.');
+}
+function confirmAllPages(f) {
+  var dry = window.__confirmAllPagesDry === true;
+  window.__confirmAllPagesDry = false;
+  var totalRows = parseInt("{{ summary.total_rows }}", 10) || 0;
+  var autoRows = parseInt("{{ summary.total_can_auto }}", 10) || 0;
+  var autoAmount = "₦{{ summary.total_can_auto_amount|floatformat:2|default:"0.00" }}";
+  if (dry) {
+    return confirm(
+      "[DRY RUN, NO DB CHANGES]\\n\\n" +
+      "You are about to simulate bulk auto-reverse of ALL Status=Auto eligible rows across ALL pages (currently " +
+      autoRows + " rows, totaling " + autoAmount + " across all pages).\\n\\n" +
+      "This preview respects the current filters (Date range, Betting Period).\\n\\n" +
+      "No wallet balances will be modified, no transactions will be created.\\n\\n" +
+      "Continue?"
+    );
+  }
+  return confirm(
+    "[REAL DEDUCTIONS — PLEASE CONFIRM TWICE]\\n\\n" +
+    "You are about to EXECUTE bulk auto-reverse on ALL Status=Auto eligible rows across ALL pages (currently " +
+    autoRows + " rows, totaling " + autoAmount + " across all pages).\\n\\n" +
+    "This respects the current filters (Date range, Betting Period).\\n\\n" +
+    "Deduction order = Agent wallet FIRST (up to full balance), then each cashier under the agent ordered by highest balance first. EACH wallet is individually protected against going negative — split deduction will be skipped entirely for a row if combined pool still becomes insufficient at lock time.\\n\\n" +
+    "A new bet_payout_reversal Transaction + WalletLedgerEntry will be created per split per wallet, with admin username audit trail.\\n\\n" +
+    "Type exactly below in your head: I WANT TO DEDUCT, then click OK. (Click Cancel to abort.)"
+  );
 }
 </script>
 {% endblock %}

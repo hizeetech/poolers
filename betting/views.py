@@ -22538,6 +22538,81 @@ def admin_fixture_odds_proposal_counts_json(request):
         return JsonResponse({'ok': False, 'error': str(exc)}, status=500)
 
 
+def _get_excess_agent_family_user_ids(user):
+    """Return set of user IDs: agent + all cashiers under him; or cashier + his parent agent; else just user.id.
+
+    Confirmed hierarchy: BUser.agent FK → for cashiers, .agent points to owning agent (OgunAdeolaC1.agent = OgunAdeola);
+    for agents, agents_under related_name gives upline. We traverse DOWN from agent (cashiers) and UP from cashier (parent agent).
+    """
+    if user is None:
+        return set()
+    ids = {user.id}
+    from betting.models import User as BUser
+    try:
+        ut = getattr(user, 'user_type', '') or ''
+        if ut == 'agent':
+            try:
+                cashier_ids = set(
+                    BUser.objects.filter(user_type='cashier', agent_id=user.id).values_list('id', flat=True)
+                )
+                ids.update(cashier_ids)
+            except Exception:
+                pass
+        elif ut == 'cashier':
+            try:
+                parent_agent_id = getattr(user, 'agent_id', None)
+                if parent_agent_id:
+                    ids.add(int(parent_agent_id))
+                    sibling_cashier_ids = set(
+                        BUser.objects.filter(user_type='cashier', agent_id=parent_agent_id).values_list('id', flat=True)
+                    )
+                    ids.update(sibling_cashier_ids)
+            except Exception:
+                pass
+        elif ut in ('super_agent', 'master_agent'):
+            try:
+                downline_agent_ids = set(
+                    BUser.objects.filter(agent_id=user.id, user_type__in=['agent', 'cashier']).values_list('id', flat=True)
+                )
+                ids.update(downline_agent_ids)
+                if downline_agent_ids:
+                    sub_cashier_ids = set(
+                        BUser.objects.filter(user_type='cashier', agent_id__in=list(downline_agent_ids)).values_list('id', flat=True)
+                    )
+                    ids.update(sub_cashier_ids)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return set(int(x) for x in ids if x)
+
+
+def _split_deduction_by_family(owed, ordered_wallets):
+    """Split deduction across family wallets (agent first, then cashiers by balance desc).
+    ordered_wallets: list of tuples (user_id, wallet_obj OR balance_decimal) — wallets already locked or safe to read.
+    Returns list of (wallet_key_or_id, deduct_amount) sum = owed; returns [] if combined < owed (cannot split).
+    Deducts agent first as much as possible; then remaining onto next cashier.
+    """
+    splits = []
+    remaining = Decimal(str(owed)).quantize(Decimal('0.01'))
+    if remaining <= Decimal('0.00'):
+        return []
+    for entry in ordered_wallets:
+        if remaining <= Decimal('0.00'):
+            break
+        wallet_user_id, bal_raw = entry[0], entry[1]
+        bal = Decimal(str(getattr(bal_raw, 'balance', bal_raw) or Decimal('0.00'))).quantize(Decimal('0.01'))
+        if bal <= Decimal('0.00'):
+            continue
+        take = min(bal, remaining).quantize(Decimal('0.01'))
+        if take > Decimal('0.00'):
+            splits.append((wallet_user_id, take))
+            remaining = (remaining - take).quantize(Decimal('0.01'))
+    if remaining > Decimal('0.00'):
+        return []
+    return splits
+
+
 def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_period_id=None, status_filter='all'):
     """Pure-ORM helper used by the admin excess settlement report + CSV export."""
     from betting.models import BetTicket, BettingPeriod, Wallet, Transaction, User as BUser
@@ -22587,7 +22662,7 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
 
     users = {
         u.pk: u for u in BUser.objects.filter(pk__in=user_ids).only(
-            'pk', 'username', 'email', 'user_type', 'first_name', 'last_name'
+            'pk', 'username', 'email', 'user_type', 'first_name', 'last_name', 'agent_id'
         )
     }
     tickets = {
@@ -22599,6 +22674,58 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
         w.user_id: Decimal(str(w.balance or Decimal('0.00')))
         for w in Wallet.objects.filter(user_id__in=user_ids).only('user_id', 'balance')
     }
+
+    expanded_family_user_ids = set()
+    per_row_families = {}
+    for r in grouped:
+        uid = r['user_id']
+        user = users.get(uid)
+        if user is None:
+            continue
+        fam = _get_excess_agent_family_user_ids(user)
+        per_row_families[uid] = fam
+        expanded_family_user_ids.update(fam)
+
+    extra_wallet_ids = expanded_family_user_ids - set(wallets.keys())
+    if extra_wallet_ids:
+        extra_wallets = {
+            w.user_id: Decimal(str(w.balance or Decimal('0.00')))
+            for w in Wallet.objects.filter(user_id__in=list(extra_wallet_ids)).only('user_id', 'balance')
+        }
+        wallets.update(extra_wallets)
+
+    family_info_lookup = {}
+    for r in grouped:
+        uid = r['user_id']
+        user = users.get(uid)
+        if user is None:
+            continue
+        fam_ids = sorted(per_row_families.get(uid, {uid}))
+        fam_bal = sum((wallets.get(fid, Decimal('0.00')) for fid in fam_ids), Decimal('0.00')).quantize(Decimal('0.01'))
+        ordered_preview = []
+        for fid in fam_ids:
+            fu = users.get(fid)
+            if fu is None:
+                try:
+                    fu = BUser.objects.filter(pk=fid).only('pk', 'username', 'email', 'user_type').first()
+                    if fu is not None:
+                        users[fid] = fu
+                except Exception:
+                    fu = None
+            label = f"@{fu.username or (fu.email if fu else fid) or fid}" if fu else f"u{fid}"
+            role = (fu.get_user_type_display() if fu else '?') or 'user'
+            bal_f = wallets.get(fid, Decimal('0.00')).quantize(Decimal('0.01'))
+            ordered_preview.append((fid, bal_f, label, role))
+        ordered_preview.sort(key=lambda t: (
+            0 if (t[3] and str(t[3]).lower() == 'agent') else (1 if str(t[3]).lower() == 'cashier' else 2),
+            -t[1],
+            t[2],
+        ))
+        family_info_lookup[uid] = {
+            'family_user_ids': fam_ids,
+            'family_combined_balance': fam_bal,
+            'family_ordered_preview': ordered_preview,
+        }
 
     raw_rows = []
     for r in grouped:
@@ -22613,6 +22740,22 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
         stake = Decimal(str(ticket.stake_amount or Decimal('0.00'))).quantize(Decimal('0.01'))
         bal = wallets.get(uid, Decimal('0.00')).quantize(Decimal('0.01'))
         can_auto = bal >= excess_won
+
+        fam = family_info_lookup.get(uid, {})
+        combined_bal = fam.get('family_combined_balance', Decimal('0.00')).quantize(Decimal('0.01'))
+        combined_can_auto = combined_bal >= excess_won
+        effective_can_auto = can_auto or (combined_can_auto and not can_auto)
+        is_combined_only = (not can_auto) and combined_can_auto
+
+        preview_split = _split_deduction_by_family(excess_won, [
+            (tup[0], tup[1]) for tup in fam.get('family_ordered_preview', [])
+        ])
+        split_summary_html_parts = []
+        for (wallet_uid, deduct_amt) in preview_split:
+            fu = users.get(wallet_uid)
+            label = (fu.username if fu else '') or f"u{wallet_uid}"
+            role_label = (fu.get_user_type_display() if fu else '') or 'user'
+            split_summary_html_parts.append((role_label, f"@{label}", f"₦{deduct_amt:,.2f}"))
         excess_count = max(int(r['payout_count'] or 0) - int(r['reversal_count'] or 0), 1)
 
         raw_rows.append({
@@ -22633,8 +22776,16 @@ def _get_excess_settlement_rows(*, start_date=None, end_date=None, betting_perio
             'first_settled_at': r['first_settled_at'],
             'last_settled_at': r['last_settled_at'],
             'wallet_balance': bal,
-            'can_auto_reverse': can_auto,
-            'remaining_in_wallet': max(bal - excess_won, Decimal('0.00')).quantize(Decimal('0.01')),
+            'can_auto_reverse': effective_can_auto,
+            'can_auto_reverse_own_only': can_auto,
+            'combined_family_balance': combined_bal,
+            'is_combined_only_auto': is_combined_only,
+            'family_user_ids': fam.get('family_user_ids', []),
+            'family_ordered_preview': fam.get('family_ordered_preview', []),
+            'deduction_split_preview': split_summary_html_parts,
+            'remaining_in_wallet': max(bal - excess_won, Decimal('0.00')).quantize(Decimal('0.01')) if can_auto else (
+                max(combined_bal - excess_won, Decimal('0.00')).quantize(Decimal('0.01')) if combined_can_auto else Decimal('0.00')
+            ),
             'row_key': f"{uid}_{tid}",
         })
 
@@ -22691,6 +22842,137 @@ def admin_excess_settlement_report(request):
     except Exception:
         betting_period_id = None
 
+    def _process_auto_reverse_keys(selected_keys, *, dry_run):
+        actor = request.user
+        processed = 0
+        skipped = 0
+        reversed_total = Decimal('0.00')
+        failures = []
+
+        for (uid, tid) in selected_keys:
+            try:
+                with db_transaction.atomic():
+                    user = BUser.objects.select_for_update().get(pk=uid)
+                    ticket = BetTicket.objects.select_for_update().get(pk=tid)
+
+                    rows_q = Transaction.objects.filter(
+                        user_id=uid, related_bet_ticket_id=tid,
+                        transaction_type__in=['bet_payout', 'bet_payout_reversal'],
+                    )
+                    payout_total = rows_q.filter(transaction_type='bet_payout').aggregate(
+                        s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
+                    )['s'] or Decimal('0.00')
+                    tx_reversed = rows_q.filter(transaction_type='bet_payout_reversal').aggregate(
+                        s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
+                    )['s'] or Decimal('0.00')
+                    owed = (Decimal(str(payout_total)) - Decimal(str(tx_reversed))).quantize(Decimal('0.01'))
+                    if owed <= Decimal('0.00'):
+                        skipped += 1
+                        continue
+
+                    family_ids = sorted(_get_excess_agent_family_user_ids(user))
+                    wallets_locked = {
+                        w.user_id: w for w in Wallet.objects.select_for_update().filter(user_id__in=family_ids)
+                    }
+                    ordered_entries = []
+                    for fid in family_ids:
+                        fu = BUser.objects.filter(pk=fid).only('pk', 'user_type', 'username', 'email').first()
+                        w = wallets_locked.get(fid)
+                        bal_f = Decimal(str(w.balance or Decimal('0.00'))).quantize(Decimal('0.01')) if w else Decimal('0.00')
+                        role = (fu.get_user_type_display() if fu else '') or 'user'
+                        ordered_entries.append((fid, bal_f, role, fu))
+                    ordered_entries.sort(key=lambda t: (
+                        0 if (t[2] and str(t[2]).lower() == 'agent') else (1 if str(t[2]).lower() == 'cashier' else 2),
+                        -t[1],
+                    ))
+                    split = _split_deduction_by_family(owed, [(e[0], e[1]) for e in ordered_entries])
+                    if not split:
+                        combined_sum = sum((e[1] for e in ordered_entries), Decimal('0.00')).quantize(Decimal('0.01'))
+                        failures.append(
+                            f"@{user.username or user.email} tkt {ticket.ticket_id}: owes ₦{owed:,.2f}, own wallet ₦{ordered_entries[0][1]:,.2f} "
+                            f"(agent-family combined ₦{combined_sum:,.2f}) — INSUFFICIENT (SKIP, manual deduction only)"
+                        )
+                        skipped += 1
+                        continue
+
+                    if dry_run:
+                        processed += 1
+                        reversed_total += owed
+                        continue
+
+                    total_reversed_for_row = Decimal('0.00')
+                    split_details_log = []
+                    for (wallet_uid, deduct_amt) in split:
+                        w = wallets_locked.get(wallet_uid)
+                        fu = BUser.objects.filter(pk=wallet_uid).only('pk', 'username', 'email', 'user_type').first()
+                        if w is None:
+                            continue
+                        role_label = (fu.get_user_type_display() if fu else '') or 'user'
+                        who_label = f"@{fu.username if fu else wallet_uid}"
+                        desc_main = (
+                            f"Admin AUTO-REVERSAL of excess duplicate settlement for ticket {ticket.ticket_id} "
+                            f"(original winning user @{user.username or user.email}). "
+                            f"Family-pool deduction: {role_label} {who_label} deducted ₦{deduct_amt:,.2f} "
+                            f"(total excess for ticket = ₦{owed:,.2f}). "
+                            f"System paid ₦{owed:,.2f} more than previously reversed."
+                        )
+                        reversal_tx = Transaction.objects.create(
+                            user=user,
+                            initiating_user=actor,
+                            target_user=fu or user,
+                            transaction_type='bet_payout_reversal',
+                            amount=deduct_amt,
+                            is_successful=True,
+                            status='completed',
+                            description=desc_main,
+                            related_bet_ticket=ticket,
+                            timestamp=timezone.now(),
+                        )
+                        try:
+                            w.apply_delta(
+                                amount=-deduct_amt,
+                                actor=actor,
+                                transaction_obj=reversal_tx,
+                                reference=str(ticket.ticket_id),
+                                reason=desc_main,
+                                metadata={
+                                    'source': 'excess_settlement_family_pool_reverse',
+                                    'ticket_id': ticket.ticket_id,
+                                    'original_winning_user_id': user.id,
+                                    'deducting_wallet_user_id': wallet_uid,
+                                    'deducting_wallet_role': role_label,
+                                    'ticket_excess_total_owed': str(owed),
+                                    'this_split_amount': str(deduct_amt),
+                                    'reversal_tx_id': str(reversal_tx.id),
+                                },
+                            )
+                        except ValueError as neg_err:
+                            failures.append(
+                                f"wallet u{wallet_uid} cannot go negative when deducting ₦{deduct_amt:,.2f}: {neg_err} (aborting this row only, tx rolled back)"
+                            )
+                            raise db_transaction.TransactionManagementError("negative-protection-abort-row")
+                        total_reversed_for_row = (total_reversed_for_row + deduct_amt).quantize(Decimal('0.01'))
+                        split_details_log.append(f"{role_label} {who_label} ₦{deduct_amt:,.2f}")
+                    log_admin_activity(
+                        request,
+                        (
+                            f"Auto reversed excess duplicate settlement ₦{total_reversed_for_row:,.2f} "
+                            f"for ticket {ticket.ticket_id} (original user {user.email}/{user.username}). "
+                            f"Split: {' | '.join(split_details_log)}."
+                        ),
+                        action_type="EXCESS_SETTLEMENT_AUTO_REVERSE",
+                        affected_object=f"Ticket {ticket.ticket_id}",
+                    )
+                    processed += 1
+                    reversed_total = (reversed_total + total_reversed_for_row).quantize(Decimal('0.01'))
+            except db_transaction.TransactionManagementError:
+                skipped += 1
+                continue
+            except Exception as e:
+                skipped += 1
+                failures.append(f"u={uid} t={tid}: {e}")
+        return processed, skipped, reversed_total, failures
+
     if request.method == 'POST':
         action = request.POST.get('action') or ''
         redirect_to = request.get_full_path()
@@ -22716,108 +22998,40 @@ def admin_excess_settlement_report(request):
                 selected_keys.append((int(u_str), int(t_str)))
             except Exception:
                 selected_keys = []
+        elif action == 'reverse_all_auto':
+            try:
+                _, all_auto_rows = _get_excess_settlement_rows(
+                    start_date=start_date,
+                    end_date=end_date,
+                    betting_period_id=betting_period_id,
+                    status_filter='auto',
+                )
+                selected_keys = [(int(r['user_id']), int(r['ticket_id'])) for r in all_auto_rows]
+            except Exception as e:
+                messages.error(request, f"Error collecting ALL eligible rows: {e}")
+                return redirect(redirect_to)
 
         if not selected_keys:
-            messages.error(request, "Please select at least one row to auto reverse.")
+            messages.error(request, "Please select at least one row (no rows currently match current filters / Auto Reverse Eligible set).")
             return redirect(redirect_to)
 
         try:
-            with db_transaction.atomic():
-                actor = request.user
-                processed = 0
-                skipped = 0
-                reversed_total = Decimal('0.00')
-                failures = []
-
-                for (uid, tid) in selected_keys:
-                    try:
-                        user = BUser.objects.select_for_update().get(pk=uid)
-                        ticket = BetTicket.objects.select_for_update().get(pk=tid)
-                        wallet = Wallet.objects.select_for_update().get(user=user)
-
-                        rows_q = Transaction.objects.filter(
-                            user_id=uid, related_bet_ticket_id=tid,
-                            transaction_type__in=['bet_payout', 'bet_payout_reversal'],
-                        )
-                        payout_total = rows_q.filter(transaction_type='bet_payout').aggregate(
-                            s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
-                        )['s'] or Decimal('0.00')
-                        tx_reversed = rows_q.filter(transaction_type='bet_payout_reversal').aggregate(
-                            s=Coalesce(Sum('amount'), Value(Decimal('0.00')), output_field=DecimalField())
-                        )['s'] or Decimal('0.00')
-                        owed = (Decimal(str(payout_total)) - Decimal(str(tx_reversed))).quantize(Decimal('0.01'))
-                        if owed <= Decimal('0.00'):
-                            skipped += 1
-                            continue
-
-                        bal = Decimal(str(wallet.balance or Decimal('0.00'))).quantize(Decimal('0.01'))
-                        if bal < owed:
-                            failures.append(
-                                f"@{user.username or user.email} tkt {ticket.ticket_id}: owes ₦{owed:,.2f}, wallet ₦{bal:,.2f} (SKIP)"
-                            )
-                            skipped += 1
-                            continue
-
-                        if dry_run:
-                            processed += 1
-                            reversed_total += owed
-                            continue
-
-                        reversal_tx = Transaction.objects.create(
-                            user=user,
-                            initiating_user=actor,
-                            target_user=user,
-                            transaction_type='bet_payout_reversal',
-                            amount=owed,
-                            is_successful=True,
-                            status='completed',
-                            description=(
-                                f"Admin AUTO-REVERSAL of excess duplicate settlement for ticket {ticket.ticket_id}. "
-                                f"System paid ₦{owed:,.2f} more than previously reversed."
-                            ),
-                            related_bet_ticket=ticket,
-                            timestamp=timezone.now(),
-                        )
-                        wallet.apply_delta(
-                            amount=-owed,
-                            actor=actor,
-                            transaction_obj=reversal_tx,
-                            reference=str(ticket.ticket_id),
-                            reason=reversal_tx.description,
-                            metadata={
-                                'source': 'excess_settlement_auto_reverse',
-                                'ticket_id': ticket.ticket_id,
-                                'user_id': user.id,
-                                'reversal_tx_id': str(reversal_tx.id),
-                            },
-                        )
-                        processed += 1
-                        reversed_total += owed
-                        log_admin_activity(
-                            request,
-                            (
-                                f"Auto reversed excess duplicate settlement ₦{owed:,.2f} "
-                                f"for user {user.email}/{user.username} ticket {ticket.ticket_id}"
-                            ),
-                            action_type="EXCESS_SETTLEMENT_AUTO_REVERSE",
-                            affected_object=f"Ticket {ticket.ticket_id}",
-                        )
-                    except Exception as e:
-                        skipped += 1
-                        failures.append(f"u={uid} t={tid}: {e}")
-
-                totals_msg = (
-                    f"{'[DRY RUN] ' if dry_run else ''}"
-                    f"Processed {processed} rows, reversed ₦{reversed_total:,.2f}. "
-                    f"Skipped/insufficient: {skipped}."
+            processed, skipped, reversed_total, failures = _process_auto_reverse_keys(
+                selected_keys,
+                dry_run=dry_run,
+            )
+            totals_msg = (
+                f"{'[DRY RUN] ' if dry_run else ''}"
+                f"Processed {processed} rows, reversed ₦{reversed_total:,.2f}. "
+                f"Skipped/insufficient: {skipped}."
+            )
+            if failures:
+                messages.warning(
+                    request,
+                    totals_msg + f" First 5 failures: {' | '.join(failures[:5])}{' ...' if len(failures) > 5 else ''}"
                 )
-                if failures:
-                    messages.warning(
-                        request,
-                        totals_msg + f" First 5 failures: {' | '.join(failures[:5])}{' ...' if len(failures) > 5 else ''}"
-                    )
-                else:
-                    messages.success(request, totals_msg)
+            else:
+                messages.success(request, totals_msg)
         except Exception as e:
             messages.error(request, f"Auto reverse error: {e}")
 
@@ -22850,12 +23064,18 @@ def admin_excess_settlement_report(request):
             'Stake Amount (NGN)', 'Excess Won Not Reversed (NGN)',
             'Payout Count', 'Reversal Count', 'Excess Settlements Count',
             'First Settled At', 'Last Settled At',
-            'Current Wallet Balance (NGN)',
-            'Can Auto Reverse (balance >= excess)',
+            'Own Wallet Balance (NGN)',
+            'Agent-Family Combined Pool Balance (NGN)',
+            'Can Auto Reverse (own balance >= excess)',
+            'Combined Auto Eligible (family pool >= excess)',
             'Wallet Remaining After Reversal (NGN)',
+            'Deduction Split Preview (if auto)',
             'User ID', 'Ticket PK',
         ])
         for r in rows:
+            split_preview_str = '; '.join([
+                f"{s[0]} {s[1]} {s[2]}" for s in r.get('deduction_split_preview', [])
+            ])
             w.writerow([
                 r['username'], r['email'], r['user_type_display'], r['ticket_id_str'],
                 f"{r['stake_amount']:.2f}", f"{r['excess_won']:.2f}",
@@ -22863,8 +23083,11 @@ def admin_excess_settlement_report(request):
                 r['first_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['first_settled_at'] else '',
                 r['last_settled_at'].strftime('%Y-%m-%d %H:%M:%S') if r['last_settled_at'] else '',
                 f"{r['wallet_balance']:.2f}",
-                'YES' if r['can_auto_reverse'] else 'NO',
+                f"{r['combined_family_balance']:.2f}",
+                'YES' if r.get('can_auto_reverse_own_only') else 'NO',
+                'YES' if r.get('is_combined_only_auto') or r.get('can_auto_reverse_own_only') else 'NO',
                 f"{r['remaining_in_wallet']:.2f}",
+                split_preview_str,
                 r['user_id'], r['ticket_id'],
             ])
         return resp

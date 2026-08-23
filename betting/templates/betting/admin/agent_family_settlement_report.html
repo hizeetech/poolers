@@ -119,7 +119,7 @@
               {% for u in family_users %}
                 <span class="badge rounded-pill {% if u.user_type == 'cashier' %}bg-info{% else %}bg-primary{% endif %}">
                   {{ u.get_user_type_display }} · @{{ u.username|default:u.email }}
-                  <span class="ms-1 opacity-75">bal ₦{{ u._cached_wallet_balance|floatformat:2|default:"0.00" }}</span>
+                  <span class="ms-1 opacity-75">bal ₦{{ u.cached_wallet_balance|floatformat:2 }}</span>
                 </span>
               {% empty %}
                 <span class="text-muted">no members?</span>

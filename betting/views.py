@@ -23328,7 +23328,7 @@ def _agent_family_audit_rows(*, agent_user, start_date=None, end_date=None, bett
     }
     fu_with_wallets = []
     for u in family_users_sorted:
-        u._cached_wallet_balance = wallets_map.get(u.id, Decimal('0.00'))
+        u.cached_wallet_balance = wallets_map.get(u.id, Decimal('0.00'))
         fu_with_wallets.append(u)
     return {
         'family_users': fu_with_wallets,

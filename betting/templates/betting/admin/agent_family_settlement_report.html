@@ -196,11 +196,9 @@
         </thead>
         <tbody>
           {% for r in rows %}
-          {% with n_excess=r.payout_count|add:"-1" %}
-          {% with excess_amount=r.excess_won %}
-          {% if excess_amount > 0 and r.payout_count >= 2 %}
+          {% if r.row_is_warning %}
           <tr class="table-warning">
-          {% elif excess_amount > 0 %}
+          {% elif r.row_is_info %}
           <tr class="table-info">
           {% else %}
           <tr>
@@ -217,7 +215,7 @@
             <td>
               <div class="fw-semibold">@{{ r.username }}</div>
               <div class="small text-muted">{{ r.email }}</div>
-              <div class="small text-muted mt-1">Current wallet bal: <b>₦{{ r.wallet_balance|floatformat:2|default:"0.00" }}</b></div>
+              <div class="small text-muted mt-1">Current wallet bal: <b>₦{{ r.wallet_balance|floatformat:2 }}</b></div>
             </td>
             <td><span class="badge rounded-pill {% if r.user_type == 'agent' %}bg-primary{% else %}bg-info{% endif %}">{{ r.user_type_display }}</span></td>
             <td><code>{{ r.ticket_id_str }}</code></td>
@@ -225,28 +223,12 @@
             <td class="text-center"><span class="badge bg-success">{{ r.payout_count }}</span></td>
             <td class="text-center"><span class="badge bg-danger">{{ r.reversal_count }}</span></td>
             <td class="text-center">
-              {% if excess_amount > 0 %}
-                {% with ne=r.payout_count|add:"-1" %}
-                  {% if ne >= 2 or r.payout_count > r.reversal_count|add:1 %}
-                    <span class="badge bg-danger px-2 py-1">N × {{ r.payout_count|add:r.reversal_count|divisibleby:2|yesno:"0,0" }} excess</span>
-                  {% else %}
-                    {% with nex=r.payout_count|add:"0" %}{% with rrc=r.reversal_count|add:0 %}
-                      {% if nex > rrc %}
-                      <span class="badge bg-warning text-dark px-2 py-1">N × {{ nex|add:"-1"|default:nex }} extra</span>
-                      {% else %}
-                      <span class="badge bg-success">settled OK</span>
-                      {% endif %}
-                    {% endwith %}{% endwith %}
-                  {% endif %}
-                {% endwith %}
-              {% else %}
-                <span class="badge bg-success">settled OK</span>
-              {% endif %}
+              <span class="badge {{ r.badge_class }}">{{ r.badge_label }}</span>
             </td>
             <td class="text-end text-success fw-semibold">₦{{ r.total_payout|floatformat:2 }}</td>
             <td class="text-end text-primary fw-semibold">₦{{ r.total_reversal|floatformat:2 }}</td>
-            <td class="text-end fw-bold {% if excess_amount > 0 %}text-danger{% else %}text-success{% endif %}">
-              ₦{{ excess_amount|floatformat:2 }}
+            <td class="text-end fw-bold {% if r.excess_won > 0 %}text-danger{% else %}text-success{% endif %}">
+              ₦{{ r.excess_won|floatformat:2 }}
             </td>
             <td class="small">
               <div>{% if r.last_settled_at %}{{ r.last_settled_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}</div>
@@ -296,8 +278,6 @@
             </td>
           </tr>
           {% endif %}
-          {% endwith %}
-          {% endwith %}
           {% endfor %}
         </tbody>
       </table>

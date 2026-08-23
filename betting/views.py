@@ -23261,6 +23261,32 @@ def _agent_family_audit_rows(*, agent_user, start_date=None, end_date=None, bett
                 tx_log.append((tx.timestamp, tx.transaction_type, Decimal(str(tx.amount or 0)), actor_str, note))
         except Exception:
             pass
+        payout_count_v = int(g.get('payout_count') or 0)
+        reversal_count_v = int(g.get('reversal_count') or 0)
+        # Pre-compute badge label/class (AVOID complex DTL math bugs that hit 500):
+        if excess <= Decimal('0.00'):
+            badge_label = 'settled OK'
+            badge_class = 'bg-success'
+            row_is_warning = False
+            row_is_info = False
+        else:
+            diff = payout_count_v - reversal_count_v
+            n_extra_raw = payout_count_v - 1
+            if diff >= 3 or payout_count_v >= 4:
+                badge_label = f'N × {max(diff, n_extra_raw, 1)} excess (severe)'
+                badge_class = 'bg-danger px-2 py-1'
+                row_is_warning = True
+                row_is_info = False
+            elif diff >= 2 or payout_count_v >= 3:
+                badge_label = f'N × {max(diff, n_extra_raw, 1)} excess'
+                badge_class = 'bg-danger px-2 py-1'
+                row_is_warning = True
+                row_is_info = False
+            else:
+                badge_label = f'N × {max(diff, n_extra_raw, 1)} extra'
+                badge_class = 'bg-warning text-dark px-2 py-1'
+                row_is_warning = False
+                row_is_info = True
         rows.append({
             'user_id': uid,
             'ticket_id': tid,
@@ -23270,8 +23296,8 @@ def _agent_family_audit_rows(*, agent_user, start_date=None, end_date=None, bett
             'user_type': user.user_type,
             'ticket_id_str': (ticket.ticket_id or ''),
             'stake_amount': stake,
-            'payout_count': int(g.get('payout_count') or 0),
-            'reversal_count': int(g.get('reversal_count') or 0),
+            'payout_count': payout_count_v,
+            'reversal_count': reversal_count_v,
             'total_payout': tp,
             'total_reversal': tr,
             'excess_won': excess,
@@ -23279,6 +23305,10 @@ def _agent_family_audit_rows(*, agent_user, start_date=None, end_date=None, bett
             'last_settled_at': g.get('last_settled_at'),
             'wallet_balance': wallets_map.get(uid, Decimal('0.00')),
             'tx_log': tx_log,
+            'badge_label': badge_label,
+            'badge_class': badge_class,
+            'row_is_warning': row_is_warning,
+            'row_is_info': row_is_info,
         })
     rows.sort(key=lambda r: (
         {'master_agent': 0, 'super_agent': 1, 'agent': 2, 'cashier': 3}.get(r['user_type'], 9),

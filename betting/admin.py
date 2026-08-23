@@ -2028,7 +2028,12 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             return current_period.start_date, current_period.end_date, current_period
 
         fallback_period = BettingPeriod.objects.filter(is_active=True).order_by('-start_date').first()
-        if fallback_period:
+        # BUG FIX: If fallback_period is IN THE FUTURE (start_date > today, which is why
+        # nothing is being counted in current columns), do NOT use it.
+        # Instead use today-based computed Tue>Mon week window (the always-correct fallback).
+        if fallback_period and fallback_period.start_date <= ref_date <= fallback_period.end_date:
+            return fallback_period.start_date, fallback_period.end_date, fallback_period
+        if fallback_period and fallback_period.end_date >= ref_date and fallback_period.start_date <= ref_date:
             return fallback_period.start_date, fallback_period.end_date, fallback_period
 
         weekday = ref_date.weekday()
@@ -2220,13 +2225,24 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
                 previous_won_amount=Case(
                     When(
                         user__user_type='agent',
-                        then=Coalesce(
-                            Subquery(
-                                previous_agent_cashier_won_subquery,
+                        then=(
+                            Coalesce(
+                                Subquery(
+                                    previous_direct_won_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
                                 output_field=DecimalField(max_digits=12, decimal_places=2),
-                            ),
-                            Value(Decimal('0.00')),
-                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                            +
+                            Coalesce(
+                                Subquery(
+                                    previous_agent_cashier_won_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
                         ),
                     ),
                     default=Coalesce(
@@ -2275,13 +2291,24 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
                 current_won_amount=Case(
                     When(
                         user__user_type='agent',
-                        then=Coalesce(
-                            Subquery(
-                                current_agent_cashier_won_subquery,
+                        then=(
+                            Coalesce(
+                                Subquery(
+                                    current_direct_won_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
                                 output_field=DecimalField(max_digits=12, decimal_places=2),
-                            ),
-                            Value(Decimal('0.00')),
-                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                            +
+                            Coalesce(
+                                Subquery(
+                                    current_agent_cashier_won_subquery,
+                                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                                ),
+                                Value(Decimal('0.00')),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
                         ),
                     ),
                     default=Coalesce(

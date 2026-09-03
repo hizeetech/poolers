@@ -32,35 +32,40 @@ set -euo pipefail
 # ---- Configuration (override via env) -------------------------------------
 APP_DIR="${APP_DIR:-/var/www/shop}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
-GUNICORN_SERVICE="${GUNICORN_SERVICE:-gunicorn}"
-CELERY_WORKER_SERVICE="${CELERY_WORKER_SERVICE:-celery-worker}"
-CELERY_BEAT_SERVICE="${CELERY_BEAT_SERVICE:-celery-beat}"
+GUNICORN_SERVICE="${GUNICORN_SERVICE:-shop-gunicorn}"
+CELERY_WORKER_SERVICE="${CELERY_WORKER_SERVICE:-shop-celery}"
+CELERY_BEAT_SERVICE="${CELERY_BEAT_SERVICE:-shop-celery-beat}"
 GUNICORN_PIDFILE="${GUNICORN_PIDFILE:-/var/run/gunicorn.pid}"
 ERRLOG="${ERRLOG:-$APP_DIR/logs/django_errors.log}"
-VENV_ACTIVATE="${VENV_ACTIVATE:-}"  # e.g. /var/www/shop/venv/bin/activate ; leave empty if none
+VENV_ACTIVATE="${VENV_ACTIVATE:-}"                  # e.g. /var/www/shop/env/bin/activate ; leave empty if none
+DJANGO_SETTINGS_MODULE="${DJANGO_SETTINGS_MODULE:-poolbetting.settings}"
+# Two HTTP admin endpoints that previously 500'd under PgBouncer transaction mode.
+# Keep them in sync with betting/admin.py + betting/urls.py.
+VIEW_SMOKE_PATHS="${VIEW_SMOKE_PATHS:-/admin/ops/loan-overdraft-center/ /crm/dashboard/}"
+export DJANGO_SETTINGS_MODULE
 
 # ---- Helpers ---------------------------------------------------------------
 log()   { printf "[deploy-pgbouncer-fix %s] %s\n" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
-die()   { log "FATAL: $*"; print_rollback_help; exit 1; }
+die()   { local m="$1"; log "FATAL: $m"; print_rollback_help "${GOOD_SHA:-}"; exit 1; }
 
 print_rollback_help() {
-    cat <<'EOF'
+    local good_sha="${1:-<run:  git rev-parse HEAD  before deploy>}"
+    local pidfile="${GUNICORN_PIDFILE:-/var/run/gunicorn.pid}"
+    cat <<EOF
 
 ============================ ROLLBACK =======================================
-1) Find the last known-good commit hash BEFORE this deploy.  On the server:
-       cd /var/www/shop
-       git log --oneline -20
+Pre-deploy known-good commit (captured at start of this run):
+    GOOD_SHA=$good_sha
 
-2) Revert code + FULL SIGKILL restart (copy-paste block, replace <GOOD_SHA>):
-       cd /var/www/shop
-       git reset --hard <GOOD_SHA>
-       find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-       pkill -9 -f 'celery worker' 2>/dev/null || true
-       pkill -9 -f 'celery beat'   2>/dev/null || true
-       if [ -f /var/run/gunicorn.pid ]; then kill -9 "$(cat /var/run/gunicorn.pid)" 2>/dev/null || true; rm -f /var/run/gunicorn.pid; fi
-       pkill -9 -f 'gunicorn' 2>/dev/null || true
-       sudo systemctl start gunicorn celery-worker celery-beat
-       # ^ ADAPT service names to match your systemd units.
+Copy-paste this block to rollback instantly on failure:
+    cd $APP_DIR
+    git reset --hard $good_sha
+    find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    pkill -9 -f 'celery worker' 2>/dev/null || true
+    pkill -9 -f 'celery beat'   2>/dev/null || true
+    if [ -f $pidfile ]; then kill -9 "\$(cat $pidfile)" 2>/dev/null || true; rm -f $pidfile; fi
+    pkill -9 -f 'gunicorn' 2>/dev/null || true
+    sudo systemctl start $GUNICORN_SERVICE $CELERY_WORKER_SERVICE $CELERY_BEAT_SERVICE
 =============================================================================
 EOF
 }
@@ -77,10 +82,21 @@ if [ -n "${VENV_ACTIVATE}" ] && [ -f "${VENV_ACTIVATE}" ]; then
     source "${VENV_ACTIVATE}"
 fi
 
-python - <<'PY' >/dev/null 2>&1 \
-    || die "Python / Django not usable here. Is the venv activated? (set VENV_ACTIVATE=/path/to/venv/bin/activate)"
-import django; django.setup()
+log "Verifying python+django imports (DJANGO_SETTINGS_MODULE=$DJANGO_SETTINGS_MODULE)..."
+set +e
+PY_STDERR=$(python - <<'PY' 2>&1
+import sys, django
+django.setup()
+sys.stderr.write("DJANGO_OK\n")
 PY
+)
+PY_RC=$?
+set -e
+if [ "$PY_RC" -ne 0 ] || ! printf '%s' "$PY_STDERR" | grep -q "DJANGO_OK"; then
+    echo "$PY_STDERR" >&2
+    die "Python/Django import check failed. stdout+stderr printed above. Tips: 1) set VENV_ACTIVATE=/path/to/venv/bin/activate  2) override DJANGO_SETTINGS_MODULE if poolbetting.settings is wrong for this host"
+fi
+log "Python/Django import check passed"
 
 GOOD_SHA=$(git rev-parse HEAD)
 log "Pre-deploy commit: $GOOD_SHA   (SAVE THIS FOR ROLLBACK IF NEEDED)"
@@ -231,11 +247,13 @@ if [ -f "$ERRLOG" ]; then
     BEFORE=$(wc -l < "$ERRLOG")
     log "  $ERRLOG lines before view smoke-test: $BEFORE"
 
-    python - <<'PY'
+    python - <<PY
 import django; django.setup()
 from django.test import Client
 from django.contrib.auth import get_user_model
+import os
 
+PATHS = [p for p in os.environ.get("VIEW_SMOKE_PATHS", "").split() if p]
 User = get_user_model()
 admin = User.objects.filter(is_superuser=True).order_by("pk").first()
 if admin is None:
@@ -243,7 +261,7 @@ if admin is None:
 else:
     c = Client()
     c.force_login(admin)
-    for path in ("/admin/ops/loan-overdraft-center/", "/admin/ops/crm-dashboard/"):
+    for path in PATHS:
         try:
             r = c.get(path, follow=True)
             print(f"  GET {path} -> HTTP {r.status_code}")

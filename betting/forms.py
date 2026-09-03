@@ -1519,6 +1519,22 @@ class ResetPasswordForm(forms.Form):
 
 
 class AdminUserChangeForm(DuplicateEmailConfirmationMixin, DjangoUserChangeForm):
+    master_agent = SafeModelChoiceField(
+        queryset=User.objects.filter(user_type='master_agent'),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+    super_agent = SafeModelChoiceField(
+        queryset=User.objects.filter(user_type='super_agent'),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+    agent = SafeModelChoiceField(
+        queryset=User.objects.filter(user_type='agent'),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+
     password = forms.CharField( 
         widget=forms.PasswordInput(attrs={'class': 'form-control rounded-md'}),
         required=False,
@@ -1877,6 +1893,12 @@ class AccountUserWalletActionForm(forms.Form):
         return cleaned_data
 
 class CRMUserProfileForm(DuplicateEmailConfirmationMixin, forms.ModelForm):
+    vip_manager = SafeModelChoiceField(
+        queryset=User.objects.filter(user_type='crm').order_by('email'),
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if 'vip_manager' in self.fields:

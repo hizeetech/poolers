@@ -301,7 +301,7 @@ def backfill_withdrawal_notification_emails(self, withdrawal_ids):
     failed = 0
 
     qs = UserWithdrawal.objects.filter(id__in=list(withdrawal_ids or [])).select_related('user').order_by('id')
-    for w in qs.iterator():
+    for w in qs:
         needed_events = []
 
         if w.email_request_admin_sent_at is None or w.email_request_user_sent_at is None:

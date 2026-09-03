@@ -35,6 +35,71 @@ CustomUser = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+def _materialize_queryset_choices(queryset, label_getter=None, allow_empty_queryset_fallback=True):
+    try:
+        materialized = list(queryset)
+    except Exception:
+        if allow_empty_queryset_fallback:
+            return []
+        raise
+    label_fn = label_getter or (lambda obj: getattr(queryset.model, '__str__', lambda self: f'{self.pk}')(obj))
+    return [(obj.pk, label_fn(obj)) for obj in materialized]
+
+
+class SafeModelChoiceField(forms.ModelChoiceField):
+    def __init__(self, queryset, *args, choices=None, **kwargs):
+        empty_label = kwargs.pop('empty_label', None)
+        super().__init__(queryset, *args, empty_label=empty_label, **kwargs)
+        materialized_choices = list(choices) if choices is not None else None
+        if materialized_choices is None:
+            try:
+                def _label_from(obj):
+                    if hasattr(self, 'label_from_instance'):
+                        try:
+                            return self.label_from_instance(obj)
+                        except Exception:
+                            pass
+                    return str(obj)
+                materialized_choices = _materialize_queryset_choices(
+                    self.queryset,
+                    label_getter=_label_from,
+                )
+            except Exception:
+                materialized_choices = []
+        if empty_label is not None:
+            if not materialized_choices or materialized_choices[0][0] != '':
+                materialized_choices = [('', empty_label or '---------')] + list(materialized_choices)
+        self.choices = materialized_choices
+
+    def label_from_instance(self, obj):
+        return super().label_from_instance(obj)
+
+
+class SafeModelMultipleChoiceField(forms.ModelMultipleChoiceField):
+    def __init__(self, queryset, *args, choices=None, **kwargs):
+        super().__init__(queryset, *args, **kwargs)
+        materialized_choices = list(choices) if choices is not None else None
+        if materialized_choices is None:
+            try:
+                def _label_from(obj):
+                    if hasattr(self, 'label_from_instance'):
+                        try:
+                            return self.label_from_instance(obj)
+                        except Exception:
+                            pass
+                    return str(obj)
+                materialized_choices = _materialize_queryset_choices(
+                    self.queryset,
+                    label_getter=_label_from,
+                )
+            except Exception:
+                materialized_choices = []
+        self.choices = materialized_choices
+
+    def label_from_instance(self, obj):
+        return super().label_from_instance(obj)
+
+
 class MultiFileInput(forms.ClearableFileInput):
     allow_multiple_selected = True
 
@@ -967,11 +1032,11 @@ class AdminUserCreationForm(DuplicateEmailConfirmationMixin, DjangoUserCreationF
     user_type = forms.ChoiceField(choices=USER_TYPE_ADMIN_CHOICES, initial='player',
                                   widget=forms.Select(attrs={'class': 'form-control'}))
     
-    master_agent = forms.ModelChoiceField(queryset=User.objects.filter(user_type='master_agent'), 
+    master_agent = SafeModelChoiceField(queryset=User.objects.filter(user_type='master_agent'), 
                                           required=False, widget=forms.Select(attrs={'class': 'form-control'}))
-    super_agent = forms.ModelChoiceField(queryset=User.objects.filter(user_type='super_agent'), 
+    super_agent = SafeModelChoiceField(queryset=User.objects.filter(user_type='super_agent'), 
                                          required=False, widget=forms.Select(attrs={'class': 'form-control'}))
-    agent = forms.ModelChoiceField(queryset=User.objects.filter(user_type='agent'), 
+    agent = SafeModelChoiceField(queryset=User.objects.filter(user_type='agent'), 
                                    required=False, widget=forms.Select(attrs={'class': 'form-control'}))
     cashier_prefix = forms.CharField(max_length=10, required=False, 
                                      widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Cashier Prefix (for cashiers)'}))
@@ -1530,7 +1595,7 @@ class AdminUserChangeForm(DuplicateEmailConfirmationMixin, DjangoUserChangeForm)
             self._maybe_sync_agent_cashiers(user)
         return user
 
-class UserWithUsernameChoiceField(forms.ModelChoiceField):
+class UserWithUsernameChoiceField(SafeModelChoiceField):
     def label_from_instance(self, obj):
         full_name = f"{obj.first_name or ''} {obj.last_name or ''}".strip()
         user_type_display = obj.get_user_type_display()
@@ -1692,7 +1757,7 @@ class LoanCenterDecisionForm(forms.Form):
 
 
 class AdminOverdraftWalletFundingForm(forms.Form):
-    super_agent = forms.ModelChoiceField(
+    super_agent = SafeModelChoiceField(
         queryset=User.objects.filter(user_type="super_agent", is_active=True).order_by("username", "email"),
         widget=forms.Select(attrs={"class": "form-select"}),
         empty_label="Select super agent",
@@ -1876,11 +1941,15 @@ class CRMWithdrawalDecisionForm(forms.Form):
 
 
 class CustomerComplaintForm(forms.ModelForm):
+    user = SafeModelChoiceField(
+        queryset=User.objects.none(),
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+
     class Meta:
         model = CustomerComplaint
         fields = ('user', 'complaint_type', 'subject', 'description', 'priority')
         widgets = {
-            'user': forms.Select(attrs={'class': 'form-select'}),
             'complaint_type': forms.Select(attrs={'class': 'form-select'}),
             'subject': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Complaint subject'}),
             'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the complaint'}),
@@ -1898,7 +1967,7 @@ class CustomerComplaintActionForm(forms.Form):
     complaint_id = forms.IntegerField(widget=forms.HiddenInput())
     status = forms.ChoiceField(choices=CustomerComplaint.STATUS_CHOICES, widget=forms.Select(attrs={'class': 'form-select form-select-sm'}))
     priority = forms.ChoiceField(choices=CustomerComplaint.PRIORITY_CHOICES, widget=forms.Select(attrs={'class': 'form-select form-select-sm'}))
-    assigned_to = forms.ModelChoiceField(
+    assigned_to = SafeModelChoiceField(
         queryset=User.objects.filter(Q(user_type='crm') | Q(user_type='admin')).order_by('email'),
         required=False,
         widget=forms.Select(attrs={'class': 'form-select form-select-sm'}),
@@ -1940,12 +2009,12 @@ class BulkMessageTemplateForm(forms.ModelForm):
 
 
 class BulkMessageCampaignForm(forms.ModelForm):
-    target_agent_ids = forms.ModelMultipleChoiceField(
+    target_agent_ids = SafeModelMultipleChoiceField(
         queryset=User.objects.filter(user_type='agent').order_by('username', 'email'),
         required=False,
         widget=forms.SelectMultiple(attrs={'class': 'form-select'}),
     )
-    target_users = forms.ModelMultipleChoiceField(
+    target_users = SafeModelMultipleChoiceField(
         queryset=User.objects.none(),
         required=False,
         widget=forms.SelectMultiple(attrs={'class': 'form-select'}),
@@ -2420,18 +2489,18 @@ class AccountUnlockAppealReviewForm(forms.Form):
 
 
 class AgentRemapForm(forms.Form):
-    current_super_agent = forms.ModelChoiceField(
+    current_super_agent = SafeModelChoiceField(
         queryset=User.objects.none(),
         label="Current Super Agent",
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
-    agents = forms.ModelMultipleChoiceField(
+    agents = SafeModelMultipleChoiceField(
         queryset=User.objects.none(),
         label="Agents",
         required=False,
         widget=forms.CheckboxSelectMultiple,
     )
-    destination_super_agent = forms.ModelChoiceField(
+    destination_super_agent = SafeModelChoiceField(
         queryset=User.objects.none(),
         label="Transfer To Super Agent",
         widget=forms.Select(attrs={'class': 'form-select'}),
@@ -2545,7 +2614,7 @@ class AdminManualWalletForm(forms.Form):
         return cleaned_data
 
 class FixtureUploadForm(forms.Form):
-    betting_period = forms.ModelChoiceField(
+    betting_period = SafeModelChoiceField(
         queryset=BettingPeriod.objects.filter(is_active=True),
         required=True,
         label="Select Betting Period",
@@ -2558,7 +2627,7 @@ class FixtureUploadForm(forms.Form):
     )
 
 class SuperAdminFundAccountUserForm(forms.Form):
-    account_user = forms.ModelChoiceField(
+    account_user = SafeModelChoiceField(
         queryset=User.objects.filter(user_type='account_user'),
         widget=forms.Select(attrs={'class': 'form-control'}),
         label="Select Account User"
@@ -2580,7 +2649,7 @@ class SuperAdminFundAccountUserForm(forms.Form):
 
 
 class CashierVoidPermissionForm(forms.Form):
-    cashiers = forms.ModelMultipleChoiceField(
+    cashiers = SafeModelMultipleChoiceField(
         queryset=CustomUser.objects.none(),
         required=False,
         widget=forms.CheckboxSelectMultiple,

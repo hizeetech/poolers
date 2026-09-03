@@ -884,7 +884,7 @@ def _notify_admins_of_unlock_appeal(appeal):
     review_url = reverse('betting:account_appeals_review')
     message = 'A new account unlock appeal has been submitted.'
     admin_qs = User.objects.filter(Q(is_superuser=True) | Q(user_type='admin'), is_active=True).distinct()
-    for admin_user in admin_qs.iterator():
+    for admin_user in admin_qs:
         create_notification(
             recipient=admin_user,
             notification_type='SYSTEM_ANNOUNCEMENT',
@@ -4228,12 +4228,17 @@ def place_bet(request):
                         idempotency_payload = f"bet-{request.user.id}-{json.dumps(selections_data, sort_keys=True)}-{stake_amount_str}-{is_system_bet}-{permutation_count}"
                         idempotency_key = hashlib.sha256(idempotency_payload.encode('utf-8')).hexdigest()
                         
-                        if cache.get(idempotency_key):
+                        _idempotency_hit = False
+                        try:
+                            _idempotency_hit = bool(cache.get(idempotency_key))
+                            if not _idempotency_hit:
+                                cache.set(idempotency_key, True, timeout=30)
+                        except Exception as _cache_err:
+                            logger.warning(f"Cache unavailable idempotency user {request.user.id}: {_cache_err}")
+                            _idempotency_hit = False
+                        if _idempotency_hit:
                             logger.warning(f"Duplicate bet placement blocked for user {request.user.id}")
                             return JsonResponse({'success': False, 'message': 'Duplicate bet detected. Please wait a moment.'})
-                        
-                        # Lock for 30 seconds
-                        cache.set(idempotency_key, True, timeout=30)
                     except Exception as e:
                         logger.error(f"Idempotency check error: {e}")
                         idempotency_key = None # Ensure it's None if check failed
@@ -4245,9 +4250,15 @@ def place_bet(request):
                     # Helper to clear lock on failure
                     def fail_response(message):
                         if idempotency_key:
-                            cache.delete(idempotency_key)
+                            try:
+                                cache.delete(idempotency_key)
+                            except Exception as _de:
+                                logger.warning(f"Cache delete fail uid={request.user.id}: {_de}")
                         if placement_lock_key:
-                            release_ticket_placement_lock(placement_lock_key)
+                            try:
+                                release_ticket_placement_lock(placement_lock_key)
+                            except Exception as _ue:
+                                logger.warning(f"Placement lock release fail uid={request.user.id}: {_ue}")
                         return JsonResponse({'success': False, 'message': message})
 
                     placement_lock_key = acquire_ticket_placement_lock(request.user.id)
@@ -4572,8 +4583,14 @@ def place_bet(request):
 
                         try:
                             reject_key = f"betting_limits:rejects:u:{request.user.id}"
-                            cnt = int(cache.get(reject_key) or 0) + 1
-                            cache.set(reject_key, cnt, timeout=600)
+                            try:
+                                cnt = int(cache.get(reject_key) or 0) + 1
+                            except Exception:
+                                cnt = 1
+                            try:
+                                cache.set(reject_key, cnt, timeout=600)
+                            except Exception:
+                                pass
                             if cnt >= 5:
                                 ActivityLog.objects.create(
                                     user=request.user,
@@ -15777,7 +15794,7 @@ def _get_admin_notification_email_target():
 
 def _notify_crm_daily_report_submitted(report):
     message = f"{report.staff.get_full_name() or report.staff.email} submitted CRM report for {report.report_date}."
-    for admin_user in _crm_reporting_admin_queryset().iterator():
+    for admin_user in list(_crm_reporting_admin_queryset()):
         create_notification(
             recipient=admin_user,
             notification_type='SYSTEM_ANNOUNCEMENT',
@@ -16561,7 +16578,7 @@ def _retail_report_notification_link(report):
 
 def _notify_retail_daily_report_submitted(report):
     message = f"{report.retail_manager.get_full_name() or report.retail_manager.email} submitted Retail report for {report.report_date}."
-    for admin_user in _crm_reporting_admin_queryset().iterator():
+    for admin_user in list(_crm_reporting_admin_queryset()):
         create_notification(
             recipient=admin_user,
             notification_type='SYSTEM_ANNOUNCEMENT',

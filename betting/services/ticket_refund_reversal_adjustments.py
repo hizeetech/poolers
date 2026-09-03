@@ -113,7 +113,7 @@ def backfill_incorrect_refund_reversal_adjustments(*, actor=None, dry_run=False)
         .order_by("timestamp", "id")
     )
 
-    for refund_reversal_tx in queryset.iterator():
+    for refund_reversal_tx in queryset:
         summary["scanned"] += 1
         wallet_entry = _reversal_wallet_entry(refund_reversal_tx)
         reversed_tx = _reversed_refund_transaction(wallet_entry)

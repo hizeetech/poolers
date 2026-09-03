@@ -699,7 +699,7 @@ def notify_fixture_status_and_odds_change(sender, instance, **kwargs):
         notif_type = "FIXTURE_POSTPONED" if instance.status == "postponed" else "EVENT_ABANDONED"
         title = "Fixture Updated"
         message = f"{instance.home_team} vs {instance.away_team} status changed to {instance.get_status_display()}."
-        for u in users_qs.iterator():
+        for u in users_qs:
             try:
                 create_notification(
                     recipient=u,
@@ -718,7 +718,7 @@ def notify_fixture_status_and_odds_change(sender, instance, **kwargs):
         cache.set(dedupe_key, 1, timeout=600)
         title = "Odds Changed"
         message = f"Odd updated for {instance.home_team} vs {instance.away_team}."
-        for u in users_qs.iterator():
+        for u in users_qs:
             try:
                 create_notification(
                     recipient=u,

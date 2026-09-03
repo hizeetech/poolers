@@ -18,7 +18,7 @@ def logout_user_from_all_active_sessions(user):
     user_id = str(getattr(user, "pk", "") or "")
     if not user_id:
         return
-    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+    for session in list(Session.objects.filter(expire_date__gte=timezone.now())):
         try:
             if session.get_decoded().get(SESSION_KEY) == user_id:
                 session.delete()

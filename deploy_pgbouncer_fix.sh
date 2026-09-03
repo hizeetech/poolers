@@ -32,12 +32,37 @@ set -euo pipefail
 # ---- Configuration (override via env) -------------------------------------
 APP_DIR="${APP_DIR:-/var/www/shop}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
-GUNICORN_SERVICE="${GUNICORN_SERVICE:-shop-gunicorn}"
-CELERY_WORKER_SERVICE="${CELERY_WORKER_SERVICE:-shop-celery}"
-CELERY_BEAT_SERVICE="${CELERY_BEAT_SERVICE:-shop-celery-beat}"
+GUNICORN_SERVICE="${GUNICORN_SERVICE:-shop-gunicorn.service}"
+CELERY_WORKER_SERVICE="${CELERY_WORKER_SERVICE:-shop-celery.service}"
+CELERY_BEAT_SERVICE="${CELERY_BEAT_SERVICE:-shop-celery-beat.service}"
+POSTGRES_SERVICE="${POSTGRES_SERVICE:-postgresql@16-main.service}"
+# Set RESTART_POSTGRES=1 to also cycle PostgreSQL during Stage 3.
+# Default 0 (no restart) because it drops all live connections.
+RESTART_POSTGRES="${RESTART_POSTGRES:-0}"
 GUNICORN_PIDFILE="${GUNICORN_PIDFILE:-/var/run/gunicorn.pid}"
 ERRLOG="${ERRLOG:-$APP_DIR/logs/django_errors.log}"
 VENV_ACTIVATE="${VENV_ACTIVATE:-}"                  # e.g. /var/www/shop/env/bin/activate ; leave empty if none
+# Absolute path to the venv python binary.
+# If VENV_ACTIVATE is set, we auto-derive this as <venv-dir>/bin/python3.
+# Otherwise, fall back to the system lookup order:  APP_DIR/env/bin/python3 -> python3 -> python.
+if [ -z "${PYTHON_BIN:-}" ]; then
+    if [ -n "$VENV_ACTIVATE" ] && [ -f "$VENV_ACTIVATE" ]; then
+        _VENVDIR=$(cd "$(dirname "$VENV_ACTIVATE")/.." && pwd)
+        if [ -x "$_VENVDIR/bin/python3" ]; then
+            PYTHON_BIN="$_VENVDIR/bin/python3"
+        fi
+    fi
+fi
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    if [ -x "$APP_DIR/env/bin/python3" ]; then
+        PYTHON_BIN="$APP_DIR/env/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN=python3
+    else
+        PYTHON_BIN=python
+    fi
+fi
 DJANGO_SETTINGS_MODULE="${DJANGO_SETTINGS_MODULE:-poolbetting.settings}"
 # Two HTTP admin endpoints that previously 500'd under PgBouncer transaction mode.
 # Keep them in sync with betting/admin.py + betting/urls.py.
@@ -51,6 +76,10 @@ die()   { local m="$1"; log "FATAL: $m"; print_rollback_help "${GOOD_SHA:-}"; ex
 print_rollback_help() {
     local good_sha="${1:-<run:  git rev-parse HEAD  before deploy>}"
     local pidfile="${GUNICORN_PIDFILE:-/var/run/gunicorn.pid}"
+    local pg_restart_line=""
+    if [ "${RESTART_POSTGRES:-0}" = "1" ]; then
+        pg_restart_line="    sudo systemctl restart $POSTGRES_SERVICE"
+    fi
     cat <<EOF
 
 ============================ ROLLBACK =======================================
@@ -65,7 +94,8 @@ Copy-paste this block to rollback instantly on failure:
     pkill -9 -f 'celery beat'   2>/dev/null || true
     if [ -f $pidfile ]; then kill -9 "\$(cat $pidfile)" 2>/dev/null || true; rm -f $pidfile; fi
     pkill -9 -f 'gunicorn' 2>/dev/null || true
-    sudo systemctl start $GUNICORN_SERVICE $CELERY_WORKER_SERVICE $CELERY_BEAT_SERVICE
+$pg_restart_line
+    sudo systemctl restart $GUNICORN_SERVICE $CELERY_WORKER_SERVICE $CELERY_BEAT_SERVICE
 =============================================================================
 EOF
 }
@@ -82,9 +112,9 @@ if [ -n "${VENV_ACTIVATE}" ] && [ -f "${VENV_ACTIVATE}" ]; then
     source "${VENV_ACTIVATE}"
 fi
 
-log "Verifying python+django imports (DJANGO_SETTINGS_MODULE=$DJANGO_SETTINGS_MODULE)..."
+log "Verifying python+django imports (DJANGO_SETTINGS_MODULE=$DJANGO_SETTINGS_MODULE, PYTHON_BIN=$PYTHON_BIN)..."
 set +e
-PY_STDERR=$(python - <<'PY' 2>&1
+PY_STDERR=$("$PYTHON_BIN" - <<'PY' 2>&1
 import sys, django
 django.setup()
 sys.stderr.write("DJANGO_OK\n")
@@ -94,7 +124,7 @@ PY_RC=$?
 set -e
 if [ "$PY_RC" -ne 0 ] || ! printf '%s' "$PY_STDERR" | grep -q "DJANGO_OK"; then
     echo "$PY_STDERR" >&2
-    die "Python/Django import check failed. stdout+stderr printed above. Tips: 1) set VENV_ACTIVATE=/path/to/venv/bin/activate  2) override DJANGO_SETTINGS_MODULE if poolbetting.settings is wrong for this host"
+    die "Python/Django import check failed. stdout+stderr printed above. Tips: 1) set VENV_ACTIVATE=/path/to/venv/bin/activate  2) override PYTHON_BIN if auto-detection is wrong  3) override DJANGO_SETTINGS_MODULE if poolbetting.settings is wrong for this host"
 fi
 log "Python/Django import check passed"
 
@@ -111,7 +141,15 @@ log "Deployed commit: $(git rev-parse HEAD)"
 log "Clearing __pycache__ bytecode under $APP_DIR"
 find "$APP_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-# ---- Stage 3: FULL SIGKILL restart ----------------------------------------
+# ---- Stage 3: FULL SIGKILL + systemctl restart (matches your manual workflow) --------
+# Per project memory, a plain HUP/reload may leave old code loaded -> SIGKILL required.
+# We SIGKILL first so stale workers release DB connections / PgBouncer slots, then
+# restart via systemd exactly as you run manually:
+#   sudo systemctl restart postgresql@16-main  (opt-in, RESTART_POSTGRES=1)
+#   sudo systemctl restart shop-gunicorn.service
+#   sudo systemctl restart shop-celery.service
+#   sudo systemctl restart shop-celery-beat.service
+
 log "Stopping Celery worker + beat (pkill -9)..."
 pkill -9 -f 'celery worker' 2>/dev/null || true
 pkill -9 -f 'celery beat'   2>/dev/null || true
@@ -128,15 +166,26 @@ fi
 pkill -9 -f 'gunicorn' 2>/dev/null || true
 sleep 1
 
-log "Starting Gunicorn service: $GUNICORN_SERVICE"
-sudo systemctl start "$GUNICORN_SERVICE" \
-    || log "WARNING: systemctl start $GUNICORN_SERVICE returned non-zero — is it systemd-managed? (if you start gunicorn manually, do it now then press enter)"
+# Optional PostgreSQL restart (off by default — drops all live connections).
+if [ "${RESTART_POSTGRES:-0}" = "1" ]; then
+    log "Restarting PostgreSQL service: $POSTGRES_SERVICE (RESTART_POSTGRES=1 was set)"
+    sudo systemctl restart "$POSTGRES_SERVICE" \
+        || die "systemctl restart $POSTGRES_SERVICE failed"
+    log "PostgreSQL restarted. Waiting 5s for postgres + pgbouncer to be healthy..."
+    sleep 5
+else
+    log "Skipping PostgreSQL restart (RESTART_POSTGRES != 1). To cycle DB too, rerun with: RESTART_POSTGRES=1 ./deploy_pgbouncer_fix.sh"
+fi
 
-log "Starting Celery services: $CELERY_WORKER_SERVICE + $CELERY_BEAT_SERVICE"
-sudo systemctl start "$CELERY_WORKER_SERVICE" 2>/dev/null \
-    || log "WARNING: systemctl start $CELERY_WORKER_SERVICE failed (ignore if you start celery manually)"
-sudo systemctl start "$CELERY_BEAT_SERVICE"   2>/dev/null \
-    || log "WARNING: systemctl start $CELERY_BEAT_SERVICE failed (ignore if you start celery manually)"
+log "Restarting Gunicorn service: $GUNICORN_SERVICE"
+sudo systemctl restart "$GUNICORN_SERVICE" \
+    || die "systemctl restart $GUNICORN_SERVICE failed"
+
+log "Restarting Celery services: $CELERY_WORKER_SERVICE + $CELERY_BEAT_SERVICE"
+sudo systemctl restart "$CELERY_WORKER_SERVICE" \
+    || die "systemctl restart $CELERY_WORKER_SERVICE failed"
+sudo systemctl restart "$CELERY_BEAT_SERVICE" \
+    || die "systemctl restart $CELERY_BEAT_SERVICE failed"
 
 sleep 6
 log "Process snapshot:"
@@ -168,7 +217,7 @@ log "[1/4] PASS — no .iterator() in hot paths"
 
 # ---- Stage 4/2: module import + SafeModelChoiceField check ----------------
 log "[2/4] Module imports + SafeModelChoiceField form-field check"
-python - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import sys, django
 django.setup()
 from betting import forms, signals, tasks, utils  # noqa: F401  (import smoke test)
@@ -210,7 +259,7 @@ esac
 
 # ---- Stage 4/3: atomic fixture.save() rollback test -----------------------
 log "[3/4] Atomic fixture.save() signal-chain test (rolled back, no real writes)"
-python - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import sys, traceback
 import django; django.setup()
 from django.db import transaction
@@ -247,7 +296,7 @@ if [ -f "$ERRLOG" ]; then
     BEFORE=$(wc -l < "$ERRLOG")
     log "  $ERRLOG lines before view smoke-test: $BEFORE"
 
-    python - <<PY
+    "$PYTHON_BIN" - <<PY
 import django; django.setup()
 from django.test import Client
 from django.contrib.auth import get_user_model

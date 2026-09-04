@@ -208,6 +208,8 @@
                             <div class="admin-quick-link-text">View balance before, amount, balance after, processor, and time.</div>
                         </a>
                     </div>
+                    {% comment %} DISABLED Manual Credit/Debit tile (still reachable via direct URL: /admin/betting/admin-manual-wallet-manager/ ) {% endcomment %}
+                    {% comment %}
                     <div class="col-12 col-sm-6 col-xl-3 mb-3">
                         <a href="{% url 'betting_admin:admin_manual_wallet_manager' %}" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);">
                             <div>
@@ -215,6 +217,16 @@
                                 <div class="admin-quick-link-title">Manual Credit/Debit</div>
                             </div>
                             <div class="admin-quick-link-text">Open wallet adjustment tools</div>
+                        </a>
+                    </div>
+                    {% endcomment %}
+                    <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                        <a href="/admin/betting/passwordresetrequest/" class="admin-quick-link-tile" style="background: linear-gradient(135deg, #6610f2 0%, #520dc2 100%);">
+                            <div>
+                                <div class="admin-quick-link-icon"><i class="fas fa-key"></i></div>
+                                <div class="admin-quick-link-title">Password Reset Request</div>
+                            </div>
+                            <div class="admin-quick-link-text">View password reset requests and status</div>
                         </a>
                     </div>
                     <div class="col-12 col-sm-6 col-xl-3 mb-3">

@@ -169,11 +169,14 @@
                         <i class="fas fa-tachometer-alt"></i> Dashboard
                     </a>
                 </li>
+                {% comment %} DISABLED Manual Credit/Debit sidebar link (still reachable via direct URL) {% endcomment %}
+                {% comment %}
                 <li class="nav-item">
                     <a class="nav-link {% if 'admin_manual_wallet_manager' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:admin_manual_wallet_manager' %}">
                         <i class="fas fa-wallet me-2"></i> Manual Credit/Debit
                     </a>
                 </li>
+                {% endcomment %}
                 <li class="nav-item">
                     <a class="nav-link {% if 'fixture' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'betting_admin:manage_fixtures' %}">
                         <i class="fas fa-futbol"></i> Manage Fixtures

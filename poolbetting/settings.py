@@ -57,11 +57,12 @@ JAZZMIN_SETTINGS = {
     },
     "custom_links": {
         "betting": [{
-            "name": "Manual Credit/Debit", 
-            "url": "betting_admin:admin_manual_wallet_manager", 
-            "icon": "fas fa-wallet",
-            "permissions": ["auth.view_user"]
-        }, {
+            # DISABLED Manual Credit/Debit link (still reachable via direct URL)
+            # "name": "Manual Credit/Debit",
+            # "url": "betting_admin:admin_manual_wallet_manager",
+            # "icon": "fas fa-wallet",
+            # "permissions": ["auth.view_user"]
+        # }, {
             "name": "Agent Re-Mapping",
             "url": "betting:agent_remapping",
             "icon": "fas fa-exchange-alt",

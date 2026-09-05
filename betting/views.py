@@ -21658,29 +21658,25 @@ def api_admin_user_search(request):
             except (TypeError, ValueError):
                 digit_id = None
 
-        pass1_qs = base_qs.none()
-        something_indexed = False
         q_pass1 = (
             Q(username__istartswith=stripped) |
             Q(email__istartswith=stripped) |
             Q(phone_number__endswith=stripped)
         )
-        pass1_qs = base_qs.filter(q_pass1).order_by()
-        something_indexed = True
+        collected_pks = set(base_qs.filter(q_pass1).values_list('pk', flat=True))
         if digit_id is not None:
-            pass1_qs = pass1_qs | base_qs.filter(pk=digit_id)
-        # Caller self-match on indexable fields
+            collected_pks.update(base_qs.filter(pk=digit_id).values_list('pk', flat=True))
+        # Caller self-match on indexable fields — always add caller pk if they match indexably
         if caller_hit_qs.filter(
             Q(username__istartswith=stripped) |
             Q(email__istartswith=stripped) |
             Q(phone_number__endswith=stripped) |
             (Q(pk=caller.pk) if digit_id == caller.pk else Q(pk__in=[]))
         ).exists():
-            pass1_qs = (pass1_qs | caller_hit_qs).distinct()
+            collected_pks.add(caller.pk)
 
         # Count pass1 candidates (before pagination). Only run heavy pass2 if pass1 < 50.
-        pass1_count = pass1_qs.distinct().count() if something_indexed else 0
-        results_qs = pass1_qs.distinct()
+        pass1_count = len(collected_pks)
 
         # ----- Pass 2: expensive middle-of-string icontains (only when pass1 is sparse) -----
         if pass1_count < 50:
@@ -21692,21 +21688,19 @@ def api_admin_user_search(request):
                 Q(last_name__icontains=stripped) |
                 Q(other_name__icontains=stripped)
             )
-            pass2_qs = base_qs.filter(q_pass2)
-            # Caller self hit for pass2
+            collected_pks.update(base_qs.filter(q_pass2).values_list('pk', flat=True))
             if caller_hit_qs.filter(q_pass2).exists():
-                pass2_qs = (pass2_qs | caller_hit_qs).distinct()
-            results_qs = (results_qs | pass2_qs).distinct()
+                collected_pks.add(caller.pk)
             if digit_id is not None:
-                extra = apply_permission_filters(User.objects.filter(pk=digit_id))
-                results_qs = (results_qs | extra).distinct()
-    else:
-        # No search term: nothing required for Select2 (minimumInputLength=2), but return caller for safety.
-        results_qs = caller_hit_qs
+                collected_pks.update(
+                    apply_permission_filters(User.objects.filter(pk=digit_id)).values_list('pk', flat=True)
+                )
 
-    # Stable ordering: sort primary by matching caller-first, then username ascending.
-    # Using pk-based ordering keeps plan fast vs. sorting by email (which can be NULL heavy).
-    results_qs = results_qs.order_by('-pk') if results_qs is not None else User.objects.none()
+        # One final QS: stable pk ordering, no union() / combine() bugs
+        results_qs = User.objects.filter(pk__in=list(collected_pks)).order_by('-pk')
+    else:
+        # No search term: return caller safely (Select2 minimumInputLength=2 prevents actual use)
+        results_qs = caller_hit_qs
 
     paginator = Paginator(results_qs, 20)
     try:

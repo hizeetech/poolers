@@ -142,6 +142,54 @@ class SiteConfiguration(models.Model):
         help_text="If enabled, Double Chance odds (1X / 12 / X2) are shown on the frontend fixtures page in a collapsible 'More Markets' sub-row below the 1X2 row.",
     )
 
+    # ============================================================
+    # Notification Email Overrides (2026-09-05)
+    # Comma-separated list of email addresses. Leave BLANK to use
+    # the default auto-discovered recipients (existing behaviour).
+    # ============================================================
+    deposit_initiated_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Deposit Initiated (Pending) — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a user initiates a deposit (transaction_type=deposit, status=pending). Leave blank to use the default admin/finance/superuser auto-discovery list.'
+    )
+    deposit_successful_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Deposit Successful (Completed) — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a deposit is confirmed successful (status=completed). Leave blank to use the default admin/finance/superuser auto-discovery list.'
+    )
+    deposit_failed_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Deposit Failed — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a deposit fails (status=failed). Leave blank to use the default admin/finance/superuser auto-discovery list.'
+    )
+    withdrawal_initiated_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Withdrawal Requested (Pending) — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a user submits a withdrawal request. Leave blank to use the existing auto-discovered list (superuser/admin/finance/account_user + WITHDRAWAL_ADMIN_EMAILS env).'
+    )
+    withdrawal_approved_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Withdrawal Approved or Completed — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a withdrawal is approved or payout completed successfully. Leave blank to use the existing auto-discovered list.'
+    )
+    withdrawal_rejected_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Withdrawal Rejected — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification whenever a withdrawal is rejected. Leave blank to use the existing auto-discovered list.'
+    )
+    stuck_deposit_alert_notification_emails = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Stuck Pending Deposit Alerts — Admin Notifications',
+        help_text='Comma-separated list of email addresses that should receive an email notification when a deposit has been pending for longer than the reconciliation threshold (default 30 minutes). Leave blank to use the existing auto-discovered list (superuser/admin/finance).'
+    )
+
     def save(self, *args, **kwargs):
         previous_values = None
         if self.pk:
@@ -1055,6 +1103,15 @@ class Transaction(models.Model):
     payment_gateway = models.CharField(max_length=20, choices=[('paystack', 'Paystack'), ('monnify', 'Monnify'), ('kora', 'Kora')], default='paystack')
     paystack_reference = models.CharField(max_length=100, blank=True, null=True, unique=True)
     external_reference = models.CharField(max_length=100, blank=True, null=True, unique=True)
+
+    # Deposit email notification tracking (prevents duplicate sends)
+    email_initiated_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: user "pending initiated" email sent at')
+    email_initiated_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: admin "pending initiated" email sent at')
+    email_successful_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: user "completed/successful" email sent at')
+    email_successful_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: admin "completed/successful" email sent at')
+    email_failed_user_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: user "failed" email sent at')
+    email_failed_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: admin "failed" email sent at')
+    last_email_error = models.TextField(blank=True, default='', help_text='Last email send error message (for deposit notifications)')
 
     class Meta:
         ordering = ['-timestamp']

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deposit Initiated (Pending)</title>
+</head>
+<body>
+    <div style="background:#f6f9fc;padding:24px 0;">
+        <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+            <div style="background:#0b3d2e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+                    {{ site_name|default:"StakeNaija"|escape }}
+                </div>
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+                    {% if is_admin_copy %}New Deposit (Pending){% else %}Your Deposit Is Being Processed{% endif %}
+                </div>
+            </div>
+
+            <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+                <div style="padding:18px 18px 0 18px;">
+                    {% if is_admin_copy %}
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        New Pending Deposit
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        A user has initiated a deposit that is currently pending gateway confirmation.
+                    </div>
+                    {% else %}
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        Deposit Received
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        Your deposit request has been received and is being processed by {{ gateway|default:"our payment partner"|escape }}. Your wallet will be credited automatically once payment is confirmed.
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div style="padding:18px;">
+                    <div style="display:inline-block;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;font-weight:800;border-radius:999px;padding:6px 10px;letter-spacing:0.2px;">
+                        STATUS: {{ status|default:"pending"|upper|escape }}
+                    </div>
+
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;margin-top:12px;">
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Username</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ user.username|default:user.email|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Email</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ user.email|default:"-"|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Amount</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:800;">{{ amount_formatted|default:"-"|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:10px;">Payment Details</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;line-height:1.55;">
+                                    <div><span style="color:#667085;">Gateway:</span> <span style="font-weight:800;">{{ gateway|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#667085;">Date/Time:</span> <span style="font-weight:800;">{{ created_at|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#667085;">Transaction Reference:</span> <span style="font-weight:800;">{{ reference|default:"-"|escape }}</span></div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% if description %}
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Description</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;">{{ description|escape }}</div>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </table>
+
+                    <div style="margin-top:12px;border:1px dashed #d0d5dd;border-radius:12px;padding:12px;background:#ffffff;">
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:8px;">
+                            Copy &amp; Paste
+                        </div>
+                        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;white-space:pre-wrap;word-break:break-word;line-height:1.5;">
+Username: {{ user.username|default:user.email|escape }}
+Email: {{ user.email|default:"-"|escape }}
+Amount: {{ amount_formatted|default:"-"|escape }}
+Gateway: {{ gateway|default:"-"|escape }}
+Date/Time: {{ created_at|default:"-"|escape }}
+Transaction Reference: {{ reference|default:"-"|escape }}
+Deposit Status: {{ status|default:"pending"|upper|escape }}
+                        </div>
+                    </div>
+
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+                        {% if is_admin_copy %}Review and reconcile pending deposits in your finance dashboard or run the deposit reconciliation Celery task.{% else %}If your payment was successful but your wallet has not been credited after 30 minutes, contact support with the transaction reference above.{% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+                © {% now "Y" %} {{ site_name|default:"StakeNaija"|escape }}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

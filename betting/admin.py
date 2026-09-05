@@ -858,14 +858,16 @@ class BetTicketAdmin(admin.ModelAdmin):
     )
     list_filter = ('status', TicketSelectionCountFilter, 'placed_at', 'user')
     search_fields = ('ticket_id', 'id__startswith', 'user__email__icontains')
-    raw_id_fields = ('user', 'deleted_by')
+    raw_id_fields = ('user', 'deleted_by', 'bonus_rule', 'cashout_processed_by')
     ordering = ('-placed_at',)
     inlines = [SelectionInline]
     readonly_fields = ('selections_snapshot_preview',)
+    show_full_result_count = False
+    list_per_page = 50
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('user', 'deleted_by').annotate(
-            annotated_selection_count=Count('selections', distinct=True)
+        return super().get_queryset(request).select_related(
+            'user', 'bonus_rule', 'deleted_by', 'cashout_processed_by'
         )
 
     def selection_count(self, obj):
@@ -1674,6 +1676,8 @@ class WalletAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email')
     list_select_related = ('user',)
     readonly_fields = ('last_updated',)
+    show_full_result_count = False
+    list_per_page = 50
 
 class WalletLedgerEntryAdmin(admin.ModelAdmin):
     list_display = ("created_at", "user", "direction", "amount", "balance_before", "balance_after", "actor", "reference")
@@ -1681,6 +1685,8 @@ class WalletLedgerEntryAdmin(admin.ModelAdmin):
     search_fields = ("user__email", "user__username", "actor__email", "reference", "reason")
     date_hierarchy = "created_at"
     list_select_related = ("user", "actor", "wallet", "transaction")
+    show_full_result_count = False
+    list_per_page = 50
 
 # --- Transaction Admin ---
 class TransactionAdmin(admin.ModelAdmin):
@@ -1689,7 +1695,9 @@ class TransactionAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
     readonly_fields = ('timestamp',)
     date_hierarchy = 'timestamp'
-    list_select_related = ('user',)
+    list_select_related = ('user', 'initiating_user', 'target_user', 'related_bet_ticket', 'related_withdrawal_request', 'related_payout')
+    show_full_result_count = False
+    list_per_page = 50
 
     def payment_gateway_used(self, obj):
         if obj.transaction_type != 'deposit':
@@ -1708,6 +1716,8 @@ class PaymentGatewayDepositAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'user', 'payment_gateway', 'amount', 'status', 'is_successful', 'external_reference')
     list_filter = ('payment_gateway', 'status', 'is_successful', 'timestamp')
     search_fields = ('user__username', 'user__email', 'paystack_reference', 'external_reference', 'description', 'id')
+    show_full_result_count = False
+    list_per_page = 50
     readonly_fields = (
         'id',
         'user',
@@ -1965,6 +1975,8 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     reopen_insufficient_funds_message = (
         "Cannot reopen this withdrawal request because the user's wallet balance is insufficient to re-deduct the withdrawal amount."
     )
+    show_full_result_count = False
+    list_per_page = 50
 
     def short_id(self, obj):
         return str(getattr(obj, 'id', '') or '')[:8]
@@ -3990,6 +4002,7 @@ class ActivityLogAdmin(admin.ModelAdmin):
     list_per_page = 50
     date_hierarchy = 'timestamp'
     list_select_related = ('user',)
+    show_full_result_count = False
     
     def has_add_permission(self, request):
         return False
@@ -4109,6 +4122,31 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
         }),
+        ('Notification Email Settings — Admin Recipients', {
+            'fields': (
+                'deposit_initiated_notification_emails',
+                'deposit_successful_notification_emails',
+                'deposit_failed_notification_emails',
+                'withdrawal_initiated_notification_emails',
+                'withdrawal_approved_notification_emails',
+                'withdrawal_rejected_notification_emails',
+                'stuck_deposit_alert_notification_emails',
+            ),
+            'description': (
+                '<div style="padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;margin-bottom:4px;font-family:system-ui,sans-serif;font-size:13px;color:#9a3412;">'
+                '<b style="font-weight:800;">HOW TO USE:</b> Enter comma-separated email addresses in any field to override the default recipient list '
+                'for that notification event. <b>Leave a field blank</b> to use the default auto-discovered admin/finance/superuser recipients (existing behaviour). '
+                'Example: <code style="background:#fff;padding:2px 6px;border-radius:4px;border:1px solid #fdba74;">finance@stakenaija.ng, admin@stakenaija.ng, ceo@stakenaija.ng</code>'
+                '</div>'
+                '<div style="margin-top:8px;font-family:system-ui,sans-serif;font-size:12px;color:#667085;line-height:1.5;">'
+                '<b>Defaults (when field is empty):</b><br>'
+                '&nbsp;&nbsp;• Deposit notifications: active superusers + admin + finance users<br>'
+                '&nbsp;&nbsp;• Withdrawal notifications: active superusers + admin + finance + account_user + env var WITHDRAWAL_ADMIN_EMAILS<br>'
+                '&nbsp;&nbsp;• Stuck-deposit alerts: same as deposit defaults<br>'
+                '<b>All 7 events also always send a copy to the individual user (TO = user.email, CC = agent if assigned).</b>'
+                '</div>'
+            ),
+        }),
     )
 
     def get_form(self, request, obj=None, **kwargs):
@@ -4117,6 +4155,25 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         form.base_fields['navbar_gradient_start'].widget.input_type = 'color'
         form.base_fields['navbar_gradient_end'].widget.input_type = 'color'
         form.base_fields['navbar_link_hover_color'].widget.input_type = 'color'
+        # Make notification email fields use Textarea with monospace + rows=2 for easy comma-list edit
+        import django.forms as _df
+        for fn in [
+            'deposit_initiated_notification_emails',
+            'deposit_successful_notification_emails',
+            'deposit_failed_notification_emails',
+            'withdrawal_initiated_notification_emails',
+            'withdrawal_approved_notification_emails',
+            'withdrawal_rejected_notification_emails',
+            'stuck_deposit_alert_notification_emails',
+        ]:
+            if fn in form.base_fields:
+                old = form.base_fields[fn]
+                form.base_fields[fn].widget = _df.Textarea(attrs={
+                    'rows': 2,
+                    'spellcheck': 'false',
+                    'style': 'font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 8px 10px; letter-spacing: 0.1px;'
+                })
+                form.base_fields[fn].required = False
         return form
 
     def has_add_permission(self, request):
@@ -4331,6 +4388,9 @@ class CreditRequestAdmin(admin.ModelAdmin):
     list_filter = ('status', 'request_type', 'created_at')
     search_fields = ('requester__email', 'recipient__email', 'reason')
     readonly_fields = ('created_at', 'updated_at')
+    list_select_related = ('requester', 'recipient')
+    show_full_result_count = False
+    list_per_page = 50
 
 
 class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
@@ -4360,6 +4420,8 @@ class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
         'updated_at',
     )
     fields = readonly_fields
+    show_full_result_count = False
+    list_per_page = 50
 
     def get_queryset(self, request):
         return (

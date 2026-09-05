@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALERT: Stuck Pending Deposit</title>
+</head>
+<body>
+    <div style="background:#f6f9fc;padding:24px 0;">
+        <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+            <div style="background:#92400e;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+                    ⚠️ ALERT · {{ site_name|default:"StakeNaija"|escape }}
+                </div>
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.9);font-size:13px;margin-top:4px;">
+                    Stuck Pending Deposit — Requires Manual Attention
+                </div>
+            </div>
+
+            <div style="background:#ffffff;border:1px solid #fed7aa;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+                <div style="padding:18px 18px 0 18px;">
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        Deposit Pending Beyond Threshold
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        A deposit has been in <b style="font-weight:800;color:#92400e;">PENDING</b> status longer than the reconciliation threshold. Please investigate manually and credit the user if the payment was successful.
+                    </div>
+                </div>
+
+                <div style="padding:18px;">
+                    <div style="display:inline-block;background:#fff7ed;border:2px solid #fb923c;color:#92400e;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;font-weight:900;border-radius:999px;padding:7px 12px;letter-spacing:0.3px;">
+                        ⚠️ REQUIRES MANUAL REVIEW
+                    </div>
+
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;margin-top:12px;">
+                        <tr>
+                            <td style="background:#fffbeb;border:1px solid #fed7aa;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#92400e;font-size:12px;font-weight:800;margin-bottom:6px;">User</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">
+                                    {{ user.username|default:user.email|escape }} &lt;{{ user.email|default:"-"|escape }}&gt;
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fffbeb;border:1px solid #fed7aa;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#92400e;font-size:12px;font-weight:800;margin-bottom:6px;">Pending Amount</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#92400e;font-size:16px;font-weight:900;">{{ amount_formatted|default:"-"|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fffbeb;border:1px solid #fed7aa;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#92400e;font-size:12px;font-weight:800;margin-bottom:10px;">Reconciliation Data</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;line-height:1.65;">
+                                    <div><span style="color:#92400e;font-weight:800;">Gateway:</span> <span style="font-weight:800;">{{ gateway|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#92400e;font-weight:800;">Initiated:</span> <span style="font-weight:800;">{{ created_at|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#92400e;font-weight:800;">Reference:</span> <span style="font-weight:800;font-family:ui-monospace,Menlo,monospace;">{{ reference|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#92400e;font-weight:800;">Current Status:</span> <span style="font-weight:800;text-transform:uppercase;">{{ status|default:"pending"|escape }}</span></div>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div style="margin-top:12px;border:1px dashed #fdba74;border-radius:12px;padding:12px;background:#fff7ed;">
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#92400e;font-size:12px;font-weight:800;margin-bottom:8px;">
+                            Recommended Next Steps
+                        </div>
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#78350f;font-size:12.5px;line-height:1.7;">
+                            1. Open the payment gateway dashboard ({{ gateway|default:"provider"|escape }}) and verify payment using reference: <b style="font-family:ui-monospace,Menlo,monospace;">{{ reference|default:"-"|escape }}</b><br>
+                            2. If confirmed paid: manually mark the transaction as completed and credit the user's wallet.<br>
+                            3. If confirmed unpaid / declined: mark the transaction as failed to clear the pending state.<br>
+                            4. If stuck in a mid-state: reach out to payment support with the reference.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+                This is an automated alert from {{ site_name|default:"StakeNaija"|escape }}. Do not reply directly to this email. · © {% now "Y" %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

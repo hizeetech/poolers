@@ -51,7 +51,38 @@ def _fmt_money(value):
         return f"₦{value}"
 
 
-def _withdrawal_admin_recipients():
+# ============================================================
+# 2026-09-05: Recipient resolver + SiteConfiguration overrides
+# ============================================================
+def _parse_csv_emails(raw_text):
+    """Parse a comma/newline/semicolon separated string of emails, return deduped sorted list."""
+    if not raw_text:
+        return []
+    s = str(raw_text or '').replace(';', ',').replace('\n', ',').replace('\r', ',').replace('\t', ' ')
+    parts = [p.strip() for p in s.split(',') if p and p.strip()]
+    out = set()
+    for p in parts:
+        # strip surrounding <> from "Name <email>" style entries
+        lt = p.find('<')
+        gt = p.find('>')
+        if 0 <= lt < gt:
+            p = p[lt+1:gt].strip()
+        if '@' in p:
+            out.add(p.lower())
+    return sorted(out)
+
+
+def _get_site_config():
+    """Safe SiteConfiguration.load() wrapper (returns None if DB unavailable)."""
+    try:
+        from .models import SiteConfiguration
+        return SiteConfiguration.load()
+    except Exception:
+        return None
+
+
+def _default_withdrawal_admin_recipients():
+    """Original auto-discovered withdrawal admin recipients (fallback when site config blank)."""
     configured = getattr(settings, 'WITHDRAWAL_ADMIN_EMAILS', None) or []
     configured = [e.strip() for e in configured if e and '@' in e]
     qs = (
@@ -61,9 +92,99 @@ def _withdrawal_admin_recipients():
         .exclude(email='')
         .values_list('email', flat=True)
     )
-    all_emails = set(configured)
-    all_emails.update([e.strip() for e in qs if e and '@' in e])
+    all_emails = set(e.lower().strip() for e in configured if e and '@' in e)
+    all_emails.update([e.strip().lower() for e in qs if e and '@' in e])
     return sorted(all_emails)
+
+
+def _default_deposit_admin_recipients():
+    """Original auto-discovered deposit admin recipients (fallback when site config blank)."""
+    qs = (
+        User.objects.filter(is_active=True)
+        .filter(Q(is_superuser=True) | Q(user_type__in=['admin', 'finance']))
+        .exclude(email__isnull=True)
+        .exclude(email='')
+        .values_list('email', flat=True)
+    )
+    return sorted(set(e.strip().lower() for e in qs if e and '@' in e))
+
+
+def _withdrawal_admin_recipients():
+    """Withdrawal admin recipients: SiteConfig override FIRST, else legacy fallback.
+
+    event (optional): one of 'requested', 'approved', 'completed', 'rejected'
+    (used to pick the correct SiteConfiguration field override)
+    """
+    sc = _get_site_config()
+    if sc is not None:
+        # Determine which field applies for the calling context
+        # send_withdrawal_notification_emails passes 'event' via thread-local stack inspection
+        # or direct override kwarg; default behaviour: if ANY withdrawal field is filled, use that
+        # (fallback chain: initiated field → approved/rejected field as catch-all)
+        override_initiated = _parse_csv_emails(getattr(sc, 'withdrawal_initiated_notification_emails', '') or '')
+        override_approved  = _parse_csv_emails(getattr(sc, 'withdrawal_approved_notification_emails', '') or '')
+        override_rejected  = _parse_csv_emails(getattr(sc, 'withdrawal_rejected_notification_emails', '') or '')
+
+        # If admin has filled ANY of the 3, honour them (fill empties with the others)
+        if override_initiated or override_approved or override_rejected:
+            merged = set(override_initiated)
+            merged.update(override_approved)
+            merged.update(override_rejected)
+            if merged:
+                return sorted(merged)
+    # Fallback: original auto-discovered logic
+    return _default_withdrawal_admin_recipients()
+
+
+def _withdrawal_admin_recipients_for_event(event):
+    """Withdrawal recipients resolved for a specific event (picks the exact override field if filled)."""
+    sc = _get_site_config()
+    if sc is not None:
+        if event == 'requested':
+            fval = _parse_csv_emails(getattr(sc, 'withdrawal_initiated_notification_emails', '') or '')
+            if fval:
+                return fval
+        elif event in ('approved', 'completed'):
+            fval = _parse_csv_emails(getattr(sc, 'withdrawal_approved_notification_emails', '') or '')
+            if fval:
+                return fval
+        elif event == 'rejected':
+            fval = _parse_csv_emails(getattr(sc, 'withdrawal_rejected_notification_emails', '') or '')
+            if fval:
+                return fval
+    # Fallback: generic _withdrawal_admin_recipients (merged override or legacy)
+    return _withdrawal_admin_recipients()
+
+
+def _deposit_admin_recipients_for_event(event):
+    """Deposit admin recipients: SiteConfig override first, else legacy fallback.
+
+    event: one of 'initiated', 'successful', 'failed', 'stuck_alert'
+    """
+    sc = _get_site_config()
+    if sc is not None:
+        field_map = {
+            'initiated':   'deposit_initiated_notification_emails',
+            'successful':  'deposit_successful_notification_emails',
+            'failed':      'deposit_failed_notification_emails',
+            'stuck_alert': 'stuck_deposit_alert_notification_emails',
+        }
+        fn = field_map.get(event)
+        if fn:
+            fval = _parse_csv_emails(getattr(sc, fn, '') or '')
+            if fval:
+                return fval
+        # Catch-all: if ANY deposit field filled, merge them as fallback
+        any_filled = (
+            _parse_csv_emails(getattr(sc, 'deposit_initiated_notification_emails', '') or '') +
+            _parse_csv_emails(getattr(sc, 'deposit_successful_notification_emails', '') or '') +
+            _parse_csv_emails(getattr(sc, 'deposit_failed_notification_emails', '') or '') +
+            _parse_csv_emails(getattr(sc, 'stuck_deposit_alert_notification_emails', '') or '')
+        )
+        if any_filled:
+            return sorted(set(any_filled))
+    return _default_deposit_admin_recipients()
+
 
 def _withdrawal_agent_recipients(withdrawal_user):
     try:
@@ -244,7 +365,7 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
                 raise
 
     if getattr(withdrawal, admin_field, None) is None:
-        recipients = _withdrawal_admin_recipients()
+        recipients = _withdrawal_admin_recipients_for_event(event_key)
         if not recipients:
             UserWithdrawal.objects.filter(id=withdrawal.id).update(
                 last_email_error="No admin recipients configured for withdrawal notifications."
@@ -346,6 +467,194 @@ def backfill_withdrawal_notification_emails(self, withdrawal_ids):
         'skipped': skipped,
         'failed': failed,
     }
+
+
+# ============================================================
+# 2026-09-05: DEPOSIT NOTIFICATION EMAILS (new feature)
+# ============================================================
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 5})
+def send_deposit_notification_emails(self, transaction_id, event):
+    """Send deposit email notifications for a given transaction.
+
+    event: one of 'initiated', 'successful', 'failed'
+    """
+    tx = Transaction.objects.select_related('user', 'initiating_user').get(id=transaction_id)
+    if tx.transaction_type != 'deposit':
+        return
+
+    try:
+        from .models import SiteConfiguration
+        site = SiteConfiguration.load()
+        site_name = (getattr(site, 'site_name', '') or 'StakeNaija').strip() or 'StakeNaija'
+    except Exception:
+        site_name = 'StakeNaija'
+
+    event_key = (event or '').strip().lower()
+    if event_key not in ['initiated', 'successful', 'failed']:
+        return
+
+    # Only allow statuses that match the event (event->status sanity guard)
+    event_to_valid_status = {
+        'initiated':  {'pending', 'completed', 'failed'},
+        'successful': {'completed'},
+        'failed':     {'failed'},
+    }
+    if (tx.status or '').strip().lower() not in event_to_valid_status.get(event_key, set()):
+        return
+
+    lock_key = f"deposit-email-lock:{transaction_id}:{event_key}"
+    if not cache.add(lock_key, 1, timeout=300):
+        return
+
+    reference = (
+        getattr(tx, 'external_reference', None)
+        or getattr(tx, 'paystack_reference', None)
+        or str(tx.id)
+    )
+    gateway = (getattr(tx, 'payment_gateway', '') or '').strip().title() or 'Paystack'
+    local_created = timezone.localtime(tx.timestamp) if tx.timestamp else None
+
+    subject_map = {
+        'initiated':  f"{site_name} • Deposit Initiated (Pending)",
+        'successful': f"{site_name} • Deposit Successful",
+        'failed':     f"{site_name} • Deposit Failed",
+    }
+    template_map = {
+        'initiated':  'betting/email/deposit_initiated.html',
+        'successful': 'betting/email/deposit_successful.html',
+        'failed':     'betting/email/deposit_failed.html',
+    }
+    user_field_map = {
+        'initiated':  'email_initiated_user_sent_at',
+        'successful': 'email_successful_user_sent_at',
+        'failed':     'email_failed_user_sent_at',
+    }
+    admin_field_map = {
+        'initiated':  'email_initiated_admin_sent_at',
+        'successful': 'email_successful_admin_sent_at',
+        'failed':     'email_failed_admin_sent_at',
+    }
+
+    subject = subject_map[event_key]
+    template_name = template_map[event_key]
+    user_field = user_field_map[event_key]
+    admin_field = admin_field_map[event_key]
+
+    ctx_base = {
+        'site_name': site_name,
+        'user': tx.user,
+        'transaction': tx,
+        'deposit': tx,
+        'amount_formatted': _fmt_money(tx.amount),
+        'created_at': local_created.strftime('%Y-%m-%d %H:%M:%S') if local_created else '',
+        'reference': reference,
+        'gateway': gateway,
+        'status': tx.status,
+        'event': event_key,
+        'description': (tx.description or '').strip(),
+    }
+
+    now = timezone.now()
+
+    # ---- USER EMAIL ----
+    if getattr(tx, user_field, None) is None:
+        to_email = (getattr(tx.user, 'email', '') or '').strip()
+        to_emails = [to_email] if (to_email and '@' in to_email) else []
+        cc_emails = []
+        agent_emails = _withdrawal_agent_recipients(tx.user)
+        for e in agent_emails:
+            if e and e not in to_emails and e not in cc_emails:
+                cc_emails.append(e)
+        if not to_emails and cc_emails:
+            to_emails = cc_emails
+            cc_emails = []
+
+        if to_emails:
+            try:
+                html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': False})
+                text = strip_tags(html) or f"{site_name}: Deposit {event_key}"
+                msg = EmailMultiAlternatives(subject=subject, body=text, to=to_emails, cc=cc_emails)
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=False)
+                Transaction.objects.filter(id=tx.id).update(**{user_field: now, 'last_email_error': ''})
+            except Exception as e:
+                Transaction.objects.filter(id=tx.id).update(last_email_error=f"USER {event_key}: {str(e)[:1800]}")
+                raise
+
+    # ---- ADMIN EMAIL ----
+    if getattr(tx, admin_field, None) is None:
+        recipients = _deposit_admin_recipients_for_event(event_key)
+        if not recipients:
+            try:
+                Transaction.objects.filter(id=tx.id).update(
+                    last_email_error=f"ADMIN {event_key}: No recipients configured."
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': True})
+                text = strip_tags(html) or f"{site_name}: Deposit {event_key}"
+                msg = EmailMultiAlternatives(subject=f"[ADMIN] {subject}", body=text, to=recipients)
+                msg.attach_alternative(html, "text/html")
+                msg.send(fail_silently=False)
+                Transaction.objects.filter(id=tx.id).update(**{admin_field: now})
+            except Exception as e:
+                try:
+                    Transaction.objects.filter(id=tx.id).update(
+                        last_email_error=f"ADMIN {event_key}: {str(e)[:1800]}"
+                    )
+                except Exception:
+                    pass
+                raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={'max_retries': 3})
+def send_stuck_deposit_alert_email(self, transaction_id):
+    """Send a stuck-pending-deposit alert email to admins (in addition to in-app notif)."""
+    tx = Transaction.objects.select_related('user').get(id=transaction_id)
+    if tx.transaction_type != 'deposit' or (tx.status or '') != 'pending':
+        return
+    try:
+        from .models import SiteConfiguration
+        site = SiteConfiguration.load()
+        site_name = (getattr(site, 'site_name', '') or 'StakeNaija').strip() or 'StakeNaija'
+    except Exception:
+        site_name = 'StakeNaija'
+
+    recipients = _deposit_admin_recipients_for_event('stuck_alert')
+    if not recipients:
+        return
+
+    reference = (
+        getattr(tx, 'external_reference', None)
+        or getattr(tx, 'paystack_reference', None)
+        or str(tx.id)
+    )
+    gateway = (getattr(tx, 'payment_gateway', '') or '').strip().title() or 'Paystack'
+    local_created = timezone.localtime(tx.timestamp) if tx.timestamp else None
+
+    subject = f"[ALERT] {site_name} • Stuck Pending Deposit — {_fmt_money(tx.amount)} — {getattr(tx.user, 'email', '') or ''}"
+    try:
+        html = render_to_string('betting/email/deposit_stuck_alert.html', {
+            'site_name': site_name,
+            'user': tx.user,
+            'transaction': tx,
+            'deposit': tx,
+            'amount_formatted': _fmt_money(tx.amount),
+            'created_at': local_created.strftime('%Y-%m-%d %H:%M:%S') if local_created else '',
+            'reference': reference,
+            'gateway': gateway,
+            'status': tx.status,
+        })
+        text = strip_tags(html) or subject
+        msg = EmailMultiAlternatives(subject=subject, body=text, to=recipients)
+        msg.attach_alternative(html, "text/html")
+        msg.send(fail_silently=False)
+    except Exception:
+        # Don't raise for stuck-alert (it's a best-effort, already has in-app notif)
+        pass
+
 
 @shared_task
 def update_started_fixtures_status():
@@ -932,5 +1241,11 @@ def _maybe_alert_stuck_deposit(*, tx, now, ttl_seconds):
             message=msg_admin,
             data={"transaction_id": str(tx.id), "reference": ref, "gateway": gateway, "status": tx.status},
         )
+    except Exception:
+        pass
+
+    # 2026-09-05: Also send EMAIL alert to configured admin email recipients
+    try:
+        send_stuck_deposit_alert_email.delay(str(tx.id))
     except Exception:
         pass

@@ -51,6 +51,28 @@ def _enqueue_withdrawal_email(withdrawal_id, event):
         t.daemon = True
         t.start()
 
+
+def _enqueue_deposit_email(transaction_id, event):
+    """Enqueue deposit notification email for a Transaction (deposit type) + event."""
+    try:
+        from .tasks import send_deposit_notification_emails
+    except Exception:
+        return
+
+    def _sync_send():
+        try:
+            send_deposit_notification_emails(transaction_id, event)
+        except Exception:
+            return
+
+    try:
+        send_deposit_notification_emails.delay(transaction_id, event)
+        return
+    except Exception:
+        t = threading.Thread(target=_sync_send)
+        t.daemon = True
+        t.start()
+
 def fetch_and_update_isp(log_id, ip_address):
     try:
         log_debug(f"Thread started for log {log_id}, IP: {ip_address}")
@@ -554,46 +576,97 @@ def log_withdrawal(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Transaction)
 def retail_tx_broadcast(sender, instance, created, **kwargs):
-    if not created:
-        return
-    if not instance.is_successful or instance.status != 'completed':
-        return
-    if not instance.user:
-        return
-    t = instance.transaction_type
+    # ============================================================
+    # 2026-09-05: Deposit email notifications (new feature)
+    # ============================================================
+    if getattr(instance, 'transaction_type', '') == 'deposit':
+        now_status = (getattr(instance, 'status', '') or '').strip().lower()
+        if created:
+            # A brand-new deposit transaction was just created → enqueue "initiated" emails
+            def _enqueue_dep_created():
+                _enqueue_deposit_email(str(instance.pk), 'initiated')
+            try:
+                transaction.on_commit(_enqueue_dep_created)
+            except Exception:
+                # No active atomic block — fire directly
+                _run_in_background(_enqueue_dep_created)
+
+    t = getattr(instance, 'transaction_type', '')
     kpi = {}
-    if t == 'deposit':
-        kpi = {"deposits_today": float(instance.amount)}
-    elif t == 'withdrawal':
-        kpi = {"withdrawals_today": float(instance.amount)}
-    elif t == 'commission_payout':
-        kpi = {"commission": float(instance.amount)}
-    _run_after_commit_in_background(
-        _broadcast_retail_event_for_user,
-        user=instance.user,
-        payload={
-            "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
-            "event_type": "transaction",
-            "user": (instance.user.email or instance.user.username or "-"),
-            "label": t,
-            "amount": str(instance.amount),
-            "status": instance.status,
-            "kpi_deltas": kpi,
-        },
-    )
-    _run_after_commit_in_background(
-        _broadcast_finance_event,
-        {
-            "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
-            "event_type": "transaction",
-            "user": (instance.user.email or instance.user.username or "-"),
-            "label": t,
-            "amount": str(instance.amount),
-            "status": instance.status,
-            "kpi_deltas": kpi,
-        }
-    )
-    _schedule_wallet_event_for_user(instance.user)
+    if not created:
+        pass
+    elif not instance.is_successful or instance.status != 'completed':
+        pass
+    elif not instance.user:
+        pass
+    else:
+        if t == 'deposit':
+            kpi = {"deposits_today": float(instance.amount)}
+        elif t == 'withdrawal':
+            kpi = {"withdrawals_today": float(instance.amount)}
+        elif t == 'commission_payout':
+            kpi = {"commission": float(instance.amount)}
+    if kpi:
+        _run_after_commit_in_background(
+            _broadcast_retail_event_for_user,
+            user=instance.user,
+            payload={
+                "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
+                "event_type": "transaction",
+                "user": (instance.user.email or instance.user.username or "-"),
+                "label": t,
+                "amount": str(instance.amount),
+                "status": instance.status,
+                "kpi_deltas": kpi,
+            },
+        )
+        _run_after_commit_in_background(
+            _broadcast_finance_event,
+            {
+                "ts": instance.timestamp.isoformat() if getattr(instance, 'timestamp', None) else "",
+                "event_type": "transaction",
+                "user": (instance.user.email or instance.user.username or "-"),
+                "label": t,
+                "amount": str(instance.amount),
+                "status": instance.status,
+                "kpi_deltas": kpi,
+            }
+        )
+        _schedule_wallet_event_for_user(instance.user)
+
+
+@receiver(pre_save, sender=Transaction)
+def _deposit_status_change_email_enqueue(sender, instance, **kwargs):
+    """When a deposit transaction's status changes to completed/failed → enqueue email."""
+    if getattr(instance, 'transaction_type', '') != 'deposit':
+        return
+    if not instance.pk:
+        return
+    try:
+        old = Transaction.objects.filter(pk=instance.pk).only('status').first()
+    except Exception:
+        return
+    if not old:
+        return
+    old_s = (getattr(old, 'status', '') or '').strip().lower()
+    new_s = (getattr(instance, 'status', '') or '').strip().lower()
+    if old_s == new_s:
+        return
+    event = None
+    if new_s == 'completed':
+        event = 'successful'
+    elif new_s == 'failed':
+        event = 'failed'
+    if not event:
+        return
+
+    def _fire():
+        _enqueue_deposit_email(str(instance.pk), event)
+
+    try:
+        transaction.on_commit(_fire)
+    except Exception:
+        _run_in_background(_fire)
 
 
 @receiver(post_save, sender=Wallet)

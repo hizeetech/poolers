@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deposit Failed</title>
+</head>
+<body>
+    <div style="background:#f6f9fc;padding:24px 0;">
+        <div style="max-width:720px;margin:0 auto;padding:0 12px;">
+            <div style="background:#7f1d1d;border-radius:14px;padding:16px 18px;margin-bottom:12px;">
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#ffffff;font-size:18px;font-weight:800;line-height:1.25;">
+                    {{ site_name|default:"StakeNaija"|escape }}
+                </div>
+                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:rgba(255,255,255,0.85);font-size:13px;margin-top:4px;">
+                    {% if is_admin_copy %}Deposit Failed (Declined){% else %}Your Deposit Could Not Be Completed{% endif %}
+                </div>
+            </div>
+
+            <div style="background:#ffffff;border:1px solid #e9edf2;border-radius:14px;box-shadow:0 10px 26px rgba(16,24,40,0.08);overflow:hidden;">
+                <div style="padding:18px 18px 0 18px;">
+                    {% if is_admin_copy %}
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        Deposit Failed
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        A deposit attempt has been declined or failed at the payment gateway. The user's wallet was NOT credited.
+                    </div>
+                    {% else %}
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:18px;font-weight:800;">
+                        Deposit Unsuccessful
+                    </div>
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:13px;margin-top:6px;">
+                        Your recent deposit attempt could not be completed. No funds have been deducted from your wallet on {{ site_name|default:"StakeNaija"|escape }}. If your bank account was debited, the charge will be automatically reversed by your bank within 24-48 hours.
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div style="padding:18px;">
+                    <div style="display:inline-block;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;font-weight:800;border-radius:999px;padding:6px 10px;letter-spacing:0.2px;">
+                        STATUS: {{ status|default:"failed"|upper|escape }}
+                    </div>
+
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;margin-top:12px;">
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Username</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#101828;font-size:13px;font-weight:700;">{{ user.username|default:user.email|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Attempted Amount</div>
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#991b1b;font-size:14px;font-weight:800;">{{ amount_formatted|default:"-"|escape }}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:10px;">Payment Details</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;font-size:13px;line-height:1.55;">
+                                    <div><span style="color:#667085;">Gateway:</span> <span style="font-weight:800;">{{ gateway|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#667085;">Date/Time:</span> <span style="font-weight:800;">{{ created_at|default:"-"|escape }}</span></div>
+                                    <div><span style="color:#667085;">Transaction Reference:</span> <span style="font-weight:800;">{{ reference|default:"-"|escape }}</span></div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% if description %}
+                        <tr>
+                            <td style="background:#fbfcfe;border:1px solid #eef2f6;border-radius:12px;padding:12px;">
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:6px;">Gateway Response</div>
+                                <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#991b1b;font-size:13px;">{{ description|escape }}</div>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </table>
+
+                    <div style="margin-top:12px;border:1px dashed #fecdd3;border-radius:12px;padding:12px;background:#fff1f2;">
+                        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-bottom:8px;">
+                            Copy &amp; Paste
+                        </div>
+                        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#991b1b;font-size:13px;font-weight:700;white-space:pre-wrap;word-break:break-word;line-height:1.5;">
+Username: {{ user.username|default:user.email|escape }}
+Email: {{ user.email|default:"-"|escape }}
+Attempted Amount: {{ amount_formatted|default:"-"|escape }}
+Gateway: {{ gateway|default:"-"|escape }}
+Date/Time: {{ created_at|default:"-"|escape }}
+Transaction Reference: {{ reference|default:"-"|escape }}
+Deposit Status: {{ status|default:"failed"|upper|escape }}
+                        </div>
+                    </div>
+
+                    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#667085;font-size:12px;margin-top:14px;">
+                        {% if is_admin_copy %}No wallet credit occurred. Review the reconciliation task and gateway response for this transaction reference. Investigate any repeated failures with the payment provider.{% else %}You can try depositing again. If the issue persists or your bank was debited without a successful deposit, contact support with the transaction reference above.{% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#98a2b3;font-size:12px;margin-top:12px;text-align:center;">
+                © {% now "Y" %} {{ site_name|default:"StakeNaija"|escape }}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

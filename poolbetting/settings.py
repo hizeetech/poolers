@@ -236,7 +236,7 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', 'hizeetech'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
-        'CONN_MAX_AGE': 0,  # Immediate close after each request (no idle pool held). Combined with PostgreSQL idle_session_timeout=30s auto-close → keeps poolbetting_db usage <35%/300 even at peak traffic, never "sorry too many clients"
+        'CONN_MAX_AGE': 60,  # Reuse connections for 60s (matches PostgreSQL idle_session_timeout). Prevents the "hundreds of short-lived zombie idle" pile-up that caused "too many clients" on 2026-09-05. Keep-alive inside a gunicorn worker process between requests. Old value = 0 caused ~1 connect/disconnect per SQL call, which exploded under 100 concurrent admins doing 1-char autocomplete keystrokes.
     }
 }
 

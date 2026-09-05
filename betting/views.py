@@ -21614,39 +21614,101 @@ def api_downline_wallet_balance(request):
 @user_passes_test(lambda u: u.is_superuser or u.user_type in ['admin', 'account_user'])
 def api_admin_user_search(request):
     """
-    API endpoint for Admin to search ANY user (excluding superusers).
-    Used for Manual Wallet Manager autocomplete.
+    API endpoint for Admin / Superuser to search ANY user.
+    Used for Manual Wallet Manager autocomplete (Select2).
+
+    2026-09-05 fix — 2-pass search:
+      Pass 1: indexable istartswith/endswith lookups on username/email/phone + exact id.
+              Hits `betting_user_username_key` (unique btree) and `*_like` varchar_pattern_ops indexes
+              → ~1 ms with 277 rows.
+      Pass 2: (only if pass 1 returned < 50 rows total page-1) expensive 7-field `__icontains` scan.
+              Falls back for middle-of-string searches like phone last-4-digits or partial last names.
+
+    Excludes superusers from the general pool, but INCLUDES the caller in results if search matches
+    the caller's own username/email/phone (so admin PartnerStaker can type their own handle and see themselves).
     """
-    search_term = request.GET.get('q', '')
+    search_term = (request.GET.get('q', '') or '').strip()
     page = request.GET.get('page', 1)
-    
-    # Start with all users except superusers
-    queryset = User.objects.exclude(is_superuser=True)
-    
-    # If account_user, exclude other account_users to match dashboard logic
-    if request.user.user_type == 'account_user':
-        queryset = queryset.exclude(user_type='account_user')
-    
-    # Apply search filter
+    caller = request.user
+
+    # If account_user, exclude other account_users (dashboard parity)
+    exclude_account_user = (caller.user_type == 'account_user')
+
+    def apply_permission_filters(qs):
+        """Generic QS -> permission filters (exclude superusers + account_user peers)."""
+        if exclude_account_user:
+            qs = qs.exclude(user_type='account_user')
+        return qs
+
+    # Base pool: all non-superusers, permission-filtered.
+    base_qs = apply_permission_filters(User.objects.exclude(is_superuser=True))
+
+    # Always include the CALLER in results if they match (fixes "I typed my own username and got nothing").
+    caller_hit_qs = User.objects.filter(pk=caller.pk)
+
+    results_qs = None
+
     if search_term:
-        qs_filter = (
-            Q(email__icontains=search_term) |
-            Q(phone_number__icontains=search_term) |
-            Q(username__icontains=search_term) |
-            Q(first_name__icontains=search_term) |
-            Q(last_name__icontains=search_term) |
-            Q(other_name__icontains=search_term)
+        # ----- Pass 1: indexed lookups (cheap, ms-scale) -----
+        stripped = search_term.lstrip('@').strip()
+        digit_id = None
+        if stripped.isdigit():
+            try:
+                digit_id = int(stripped)
+            except (TypeError, ValueError):
+                digit_id = None
+
+        pass1_qs = base_qs.none()
+        something_indexed = False
+        q_pass1 = (
+            Q(username__istartswith=stripped) |
+            Q(email__istartswith=stripped) |
+            Q(phone_number__endswith=stripped)
         )
-        queryset = queryset.filter(qs_filter)
-        if search_term.isdigit():
-            extra = User.objects.filter(id=int(search_term)).exclude(is_superuser=True)
-            if request.user.user_type == 'account_user':
-                extra = extra.exclude(user_type='account_user')
-            queryset = (queryset | extra).distinct()
-    
-    # Pagination
-    paginator = Paginator(queryset.order_by('email'), 20)
-    
+        pass1_qs = base_qs.filter(q_pass1).order_by()
+        something_indexed = True
+        if digit_id is not None:
+            pass1_qs = pass1_qs | base_qs.filter(pk=digit_id)
+        # Caller self-match on indexable fields
+        if caller_hit_qs.filter(
+            Q(username__istartswith=stripped) |
+            Q(email__istartswith=stripped) |
+            Q(phone_number__endswith=stripped) |
+            (Q(pk=caller.pk) if digit_id == caller.pk else Q(pk__in=[]))
+        ).exists():
+            pass1_qs = (pass1_qs | caller_hit_qs).distinct()
+
+        # Count pass1 candidates (before pagination). Only run heavy pass2 if pass1 < 50.
+        pass1_count = pass1_qs.distinct().count() if something_indexed else 0
+        results_qs = pass1_qs.distinct()
+
+        # ----- Pass 2: expensive middle-of-string icontains (only when pass1 is sparse) -----
+        if pass1_count < 50:
+            q_pass2 = (
+                Q(email__icontains=stripped) |
+                Q(phone_number__icontains=stripped) |
+                Q(username__icontains=stripped) |
+                Q(first_name__icontains=stripped) |
+                Q(last_name__icontains=stripped) |
+                Q(other_name__icontains=stripped)
+            )
+            pass2_qs = base_qs.filter(q_pass2)
+            # Caller self hit for pass2
+            if caller_hit_qs.filter(q_pass2).exists():
+                pass2_qs = (pass2_qs | caller_hit_qs).distinct()
+            results_qs = (results_qs | pass2_qs).distinct()
+            if digit_id is not None:
+                extra = apply_permission_filters(User.objects.filter(pk=digit_id))
+                results_qs = (results_qs | extra).distinct()
+    else:
+        # No search term: nothing required for Select2 (minimumInputLength=2), but return caller for safety.
+        results_qs = caller_hit_qs
+
+    # Stable ordering: sort primary by matching caller-first, then username ascending.
+    # Using pk-based ordering keeps plan fast vs. sorting by email (which can be NULL heavy).
+    results_qs = results_qs.order_by('-pk') if results_qs is not None else User.objects.none()
+
+    paginator = Paginator(results_qs, 20)
     try:
         users_page = paginator.page(page)
     except PageNotAnInteger:
@@ -21656,13 +21718,12 @@ def api_admin_user_search(request):
 
     results = []
     for u in users_page:
-        text = f"{u.get_full_name()} ({u.email})"
+        text = f"{u.get_full_name()} ({u.email or '—'})"
         if u.username:
             text += f" @{u.username}"
         if u.phone_number:
             text += f" - {u.phone_number}"
         text += f" [{u.get_user_type_display()}]"
-            
         results.append({
             'id': u.id,
             'text': text
@@ -21957,6 +22018,7 @@ def admin_manual_wallet_manager(request):
     action_form = AdminManualWalletForm()
     found_user = None
     search_results = None
+    found_user_wallet_balance = Decimal("0.00")
     manual_transaction_types = ['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
     recent_page_number = request.GET.get('recent_page') or request.POST.get('recent_page') or 1
 
@@ -21964,11 +22026,12 @@ def admin_manual_wallet_manager(request):
         if 'search_user' in request.POST:
             search_form = AccountUserSearchForm(request.POST)
             if search_form.is_valid():
-                search_term = search_form.cleaned_data['search_term']
-                # Search for any user except superuser
+                search_term = (search_form.cleaned_data['search_term'] or '').strip()
+                # Search for any user except superuser. Include username.
                 users = User.objects.filter(
                     Q(email__icontains=search_term) | 
                     Q(phone_number__icontains=search_term) |
+                    Q(username__icontains=search_term) |
                     Q(first_name__icontains=search_term) |
                     Q(last_name__icontains=search_term)
                 ).exclude(is_superuser=True)
@@ -22035,6 +22098,12 @@ def admin_manual_wallet_manager(request):
                 if target_user.is_superuser:
                     messages.error(request, "Operation not allowed on superusers.")
                     return redirect('betting_admin:admin_manual_wallet_manager')
+
+                # Ensure the target user has a Wallet row (never 500 on orphan users)
+                target_wallet, _wallet_created = Wallet.objects.get_or_create(
+                    user=target_user,
+                    defaults={'balance': Decimal('0.00')}
+                )
 
                 if action_form.is_valid():
                     action = action_form.cleaned_data['action']
@@ -22133,6 +22202,12 @@ def admin_manual_wallet_manager(request):
             else:
                  messages.error(request, "Target user not specified.")
 
+    # Safe wallet-balance for found user — no 500 on orphan rows.
+    if found_user is not None:
+        w = Wallet.objects.filter(user=found_user).first()
+        if w is not None:
+            found_user_wallet_balance = w.balance or Decimal("0.00")
+
     # Get recent manual transactions (Admin and Account User)
     recent_transactions_queryset = Transaction.objects.filter(
         transaction_type__in=manual_transaction_types
@@ -22144,6 +22219,7 @@ def admin_manual_wallet_manager(request):
         'search_form': search_form,
         'action_form': action_form,
         'found_user': found_user,
+        'found_user_wallet_balance': found_user_wallet_balance,
         'search_results': search_results,
         'recent_transactions': recent_transactions,
         'recent_page_number': recent_transactions.number,

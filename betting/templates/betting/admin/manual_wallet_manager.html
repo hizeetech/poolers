@@ -16,12 +16,12 @@
 $(document).ready(function() {
     $('#user_search_select').select2({
         theme: 'bootstrap-5',
-        placeholder: 'Search by Name, Email, Phone, or Username...',
+        placeholder: 'Search by Username, Name, Email, or Phone (type 2+ chars)...',
         allowClear: true,
         ajax: {
             url: '{% url "betting:api_admin_user_search" %}',
             dataType: 'json',
-            delay: 250,
+            delay: 350,
             data: function (params) {
                 return {
                     q: params.term, // search term
@@ -39,12 +39,21 @@ $(document).ready(function() {
             },
             cache: true
         },
-        minimumInputLength: 1,
+        minimumInputLength: 2,
+        width: '100%'
     });
-    
-    // Auto-submit on selection
+
+    // Submit the user-search form on selection (picks the user for credit/debit)
     $('#user_search_select').on('select2:select', function (e) {
-        $(this).closest('form').submit();
+        var selectedId = e.params.data.id;
+        if (!selectedId) return;
+        var $form = $(this).closest('form');
+        // Replace the select's own name="search_term" payload with the selected user_id
+        // AND inject hidden name=search_user (handles POST branch in admin_manual_wallet_manager)
+        $form.find('input[name="search_term"]').remove();
+        $form.append('<input type="hidden" name="search_term" value="' + selectedId + '">');
+        $form.append('<input type="hidden" name="search_user" value="1">');
+        $form.submit();
     });
 });
 </script>
@@ -71,14 +80,12 @@ $(document).ready(function() {
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="user_search_select" class="form-label">Search User</label>
-                            <select name="search_term" id="user_search_select" class="form-select" style="width: 100%;">
+                            <select id="user_search_select" class="form-select" style="width: 100%;">
                                 <!-- Options loaded via AJAX -->
                             </select>
                             <input type="hidden" name="search_user" value="1">
                         </div>
                     </form>
-
-                    <!-- Removed list-group results as Select2 handles selection directly -->
 
                     {% if found_user %}
                     <div class="alert alert-info border-info shadow-sm">
@@ -87,15 +94,16 @@ $(document).ready(function() {
                                 <h5 class="alert-heading"><i class="fas fa-user-check me-2"></i>User Selected</h5>
                                 <p class="mb-1"><strong>Name:</strong> {{ found_user.get_full_name }}</p>
                                 <p class="mb-1"><strong>Email:</strong> {{ found_user.email }}</p>
+                                <p class="mb-1"><strong>Username:</strong> {% firstof found_user.username '—' %}</p>
                                 <p class="mb-1"><strong>Type:</strong> {{ found_user.get_user_type_display }}</p>
-                                <p class="mb-0"><strong>Current Balance:</strong> ₦{{ found_user.wallet.balance|floatformat:2 }}</p>
+                                <p class="mb-0"><strong>Current Balance:</strong> ₦{{ found_user_wallet_balance|floatformat:2 }}</p>
                             </div>
                         </div>
                         <hr>
                         <form method="post">
                             {% csrf_token %}
                             <input type="hidden" name="target_user_id" value="{{ found_user.id }}">
-                            
+
                             <div class="mb-3">
                                 <label class="form-label fw-bold">Action</label>
                                 <div class="d-flex gap-3">

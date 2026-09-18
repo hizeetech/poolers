@@ -56,6 +56,10 @@ class FixtureRiskStateAdmin(admin.ModelAdmin):
     list_filter = ("is_suspended", "manual_override")
     search_fields = ("fixture__home_team", "fixture__away_team")
     actions = ("suspend_selected", "resume_selected", "set_override", "clear_override")
+    # NOTE: original raw_id_fields below — 2 fields removed because they do NOT exist on FixtureRiskState model (causing duplicate reported E002):
+    # 'set_by', 'cleared_by'
+    # raw_id_fields = ("fixture", "suspended_by", "resumed_by", "set_by", "cleared_by")
+    raw_id_fields = ("fixture", "suspended_by", "resumed_by")
 
     @admin.action(description="Suspend selected fixtures")
     def suspend_selected(self, request, queryset):
@@ -119,6 +123,10 @@ class MarketRiskStateAdmin(admin.ModelAdmin):
     list_filter = ("is_suspended", "manual_override", "market_key")
     search_fields = ("fixture__home_team", "fixture__away_team", "market_key")
     actions = ("suspend_selected", "resume_selected", "set_override", "clear_override")
+    # NOTE: original raw_id_fields below — 2 fields removed because they do NOT exist on FixtureRiskState model (causing duplicate reported E002):
+    # 'set_by', 'cleared_by'
+    # raw_id_fields = ("fixture", "suspended_by", "resumed_by", "set_by", "cleared_by")
+    raw_id_fields = ("fixture", "suspended_by", "resumed_by")
 
     @admin.action(description="Suspend selected markets")
     def suspend_selected(self, request, queryset):
@@ -184,6 +192,10 @@ class SelectionRiskStateAdmin(admin.ModelAdmin):
     list_filter = ("is_suspended", "manual_override", "market_key")
     search_fields = ("fixture__home_team", "fixture__away_team", "selection_key")
     actions = ("suspend_selected", "resume_selected", "set_override", "clear_override")
+    # NOTE: original raw_id_fields below — 2 fields removed because they do NOT exist on FixtureRiskState model (causing duplicate reported E002):
+    # 'set_by', 'cleared_by'
+    # raw_id_fields = ("fixture", "suspended_by", "resumed_by", "set_by", "cleared_by")
+    raw_id_fields = ("fixture", "suspended_by", "resumed_by")
 
     @admin.action(description="Suspend selected selections")
     def suspend_selected(self, request, queryset):
@@ -288,6 +300,7 @@ class MarketLiabilitySnapshotAdmin(admin.ModelAdmin):
 class AgentExposureSnapshotAdmin(admin.ModelAdmin):
     list_display = ("agent", "total_stake_today", "total_potential_payout_today", "ticket_count_today", "updated_at")
     search_fields = ("agent__email", "agent__username")
+    raw_id_fields = ("agent",)
 
     def has_add_permission(self, request):
         return False
@@ -297,6 +310,7 @@ class AgentExposureSnapshotAdmin(admin.ModelAdmin):
 class UserExposureSnapshotAdmin(admin.ModelAdmin):
     list_display = ("user", "total_stake_today", "total_potential_payout_today", "ticket_count_today", "updated_at")
     search_fields = ("user__email", "user__username")
+    raw_id_fields = ("user",)
 
     def has_add_permission(self, request):
         return False
@@ -362,6 +376,7 @@ class SharpBettorProfileAdmin(admin.ModelAdmin):
     list_filter = ("is_flagged",)
     search_fields = ("user__email", "user__username")
     readonly_fields = ("last_calculated_at", "updated_at")
+    raw_id_fields = ("user",)
 
 
 @admin.register(DeviceFingerprint)
@@ -370,6 +385,7 @@ class DeviceFingerprintAdmin(admin.ModelAdmin):
     list_filter = ("last_seen_at",)
     search_fields = ("user__email", "user__username", "fingerprint_hash", "ip_address")
     readonly_fields = ("created_at",)
+    raw_id_fields = ("user",)
 
 
 @admin.register(SyndicateGroup)
@@ -383,6 +399,7 @@ class SyndicateGroupAdmin(admin.ModelAdmin):
 class SyndicateMemberAdmin(admin.ModelAdmin):
     list_display = ("group", "user", "role", "joined_at")
     search_fields = ("group__name", "user__email", "user__username")
+    raw_id_fields = ("group", "user")
 
 
 @admin.register(DuplicateTicketLog)

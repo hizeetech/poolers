@@ -4549,8 +4549,9 @@ def place_bet(request):
 
                     agent_obj = _resolve_agent_for_user(request.user)
 
+                    winning_cap_applied_info = None
                     try:
-                        limits = validate_ticket_against_limits(
+                        limits, winning_cap_info_inner = validate_ticket_against_limits(
                             user=request.user,
                             ticket_type=bet_type,
                             selection_count=len(valid_selections),
@@ -4558,6 +4559,9 @@ def place_bet(request):
                             max_winning=max_winning,
                             ticket_odds=max_line_odd,
                         )
+                        if winning_cap_info_inner:
+                            winning_cap_applied_info = winning_cap_info_inner
+                            max_winning = Decimal(str(winning_cap_info_inner['final_capped'])).quantize(Decimal('0.01'))
                     except BettingLimitViolation as e:
                         BettingLimitAuditLog.objects.create(
                             action_type='TICKET_REJECTED',
@@ -4632,6 +4636,11 @@ def place_bet(request):
                         'total_stake': str(total_stake),
                         'ticket_odds': str(max_line_odd),
                     })
+                    if winning_cap_applied_info:
+                        limits_snapshot['winning_cap_applied'] = True
+                        limits_snapshot['winning_cap_original_projected'] = str(winning_cap_applied_info['original_projected'])
+                        limits_snapshot['winning_cap_final_capped'] = str(winning_cap_applied_info['final_capped'])
+                        limits_snapshot['winning_cap_source'] = str(winning_cap_applied_info['source'])
                     limits_snapshot['selections_snapshot'] = [
                         {
                             'fixture_id': s['fixture'].id,
@@ -4678,6 +4687,32 @@ def place_bet(request):
                             bet_type=sel['bet_type'],
                             odd_selected=sel['odd']
                         )
+
+                    if winning_cap_applied_info:
+                        try:
+                            BettingLimitAuditLog.objects.create(
+                                action_type='TICKET_WINNING_CAPPED',
+                                actor=request.user,
+                                agent=agent_obj,
+                                affected_user=request.user,
+                                ticket=bet_ticket,
+                                ip_address=ip_address,
+                                message=(
+                                    f"Maximum winning capped: ₦{winning_cap_applied_info['original_projected']:.2f} → "
+                                    f"₦{winning_cap_applied_info['final_capped']:.2f} "
+                                    f"(source: {winning_cap_applied_info['source']})"
+                                ),
+                                data={
+                                    'original_projected': str(winning_cap_applied_info['original_projected']),
+                                    'final_capped': str(winning_cap_applied_info['final_capped']),
+                                    'limit_value': str(winning_cap_applied_info['limit_value']),
+                                    'source': str(winning_cap_applied_info['source']),
+                                    'bet_type': bet_type,
+                                    'ticket_id': bet_ticket.ticket_id,
+                                }
+                            )
+                        except Exception:
+                            pass
 
                     try:
                         log_duplicate_ticket_if_needed(
@@ -4870,12 +4905,25 @@ def place_bet(request):
                     if placement_lock_key:
                         release_ticket_placement_lock(placement_lock_key)
 
-                    return JsonResponse({
-                        'success': True, 
-                        'message': f'Successfully placed bet!',
+                    success_msg = f'Successfully placed bet!'
+                    if winning_cap_applied_info:
+                        success_msg += (
+                            f" ⚠️ Maximum winning capped at ₦{winning_cap_applied_info['final_capped']:.2f}"
+                            f" (original projected ₦{winning_cap_applied_info['original_projected']:.2f})."
+                        )
+                    response_payload = {
+                        'success': True,
+                        'message': success_msg,
                         'ticket_id': bet_ticket.ticket_id,
-                        'new_balance': str(user_wallet.balance)
-                    })
+                        'new_balance': str(user_wallet.balance),
+                        'max_winning_stored': str(max_winning),
+                    }
+                    if winning_cap_applied_info:
+                        response_payload['winning_cap_applied'] = True
+                        response_payload['winning_cap_original_projected'] = str(winning_cap_applied_info['original_projected'])
+                        response_payload['winning_cap_final_capped'] = str(winning_cap_applied_info['final_capped'])
+                        response_payload['winning_cap_source'] = str(winning_cap_applied_info['source'])
+                    return JsonResponse(response_payload)
 
                 except json.JSONDecodeError:
                     return JsonResponse({'success': False, 'message': 'Invalid data format.'})
@@ -4981,8 +5029,10 @@ def place_bet(request):
                         messages.error(request, 'Too many requests. Please retry.')
                         return redirect('betting:fixtures')
 
+                    agent_obj_single = (request.user if request.user.user_type in ['agent', 'super_agent', 'master_agent'] else (request.user.agent or request.user.super_agent or request.user.master_agent))
+                    winning_cap_applied_info_single = None
                     try:
-                        limits = validate_ticket_against_limits(
+                        limits, winning_cap_info_inner_s = validate_ticket_against_limits(
                             user=request.user,
                             ticket_type='single',
                             selection_count=1,
@@ -4990,11 +5040,14 @@ def place_bet(request):
                             max_winning=max_winning,
                             ticket_odds=odd,
                         )
+                        if winning_cap_info_inner_s:
+                            winning_cap_applied_info_single = winning_cap_info_inner_s
+                            max_winning = Decimal(str(winning_cap_info_inner_s['final_capped'])).quantize(Decimal('0.01'))
                     except BettingLimitViolation as e:
                         BettingLimitAuditLog.objects.create(
                             action_type='TICKET_REJECTED',
                             actor=request.user,
-                            agent=(request.user if request.user.user_type in ['agent', 'super_agent', 'master_agent'] else (request.user.agent or request.user.super_agent or request.user.master_agent)),
+                            agent=agent_obj_single,
                             affected_user=request.user,
                             ip_address=get_client_ip(request),
                             message=e.message,
@@ -5012,6 +5065,11 @@ def place_bet(request):
                         'total_stake': str(stake_amount),
                         'ticket_odds': str(odd),
                     })
+                    if winning_cap_applied_info_single:
+                        limits_snapshot['winning_cap_applied'] = True
+                        limits_snapshot['winning_cap_original_projected'] = str(winning_cap_applied_info_single['original_projected'])
+                        limits_snapshot['winning_cap_final_capped'] = str(winning_cap_applied_info_single['final_capped'])
+                        limits_snapshot['winning_cap_source'] = str(winning_cap_applied_info_single['source'])
                     limits_snapshot['selections_snapshot'] = [
                         {
                             'fixture_id': fixture.id,
@@ -5046,6 +5104,32 @@ def place_bet(request):
                         odd_selected=odd # Store the odd at the time of betting
                     )
 
+                    if winning_cap_applied_info_single:
+                        try:
+                            BettingLimitAuditLog.objects.create(
+                                action_type='TICKET_WINNING_CAPPED',
+                                actor=request.user,
+                                agent=agent_obj_single,
+                                affected_user=request.user,
+                                ticket=bet_ticket,
+                                ip_address=get_client_ip(request),
+                                message=(
+                                    f"Maximum winning capped: ₦{winning_cap_applied_info_single['original_projected']:.2f} → "
+                                    f"₦{winning_cap_applied_info_single['final_capped']:.2f} "
+                                    f"(source: {winning_cap_applied_info_single['source']})"
+                                ),
+                                data={
+                                    'original_projected': str(winning_cap_applied_info_single['original_projected']),
+                                    'final_capped': str(winning_cap_applied_info_single['final_capped']),
+                                    'limit_value': str(winning_cap_applied_info_single['limit_value']),
+                                    'source': str(winning_cap_applied_info_single['source']),
+                                    'bet_type': 'single',
+                                    'ticket_id': bet_ticket.ticket_id,
+                                }
+                            )
+                        except Exception:
+                            pass
+
                     # Record Transaction
                     tx = Transaction.objects.create(
                         user=request.user,
@@ -5067,7 +5151,19 @@ def place_bet(request):
                     )
 
                     release_ticket_placement_lock(placement_lock_key)
-                    messages.success(request, f'Bet placed successfully! Your ticket ID is {bet_ticket.ticket_id}. Potential winning: ₦{potential_winning:.2f}')
+                    success_base = f'Bet placed successfully! Your ticket ID is {bet_ticket.ticket_id}.'
+                    success_winning_display = max_winning
+                    if winning_cap_applied_info_single:
+                        messages.warning(
+                            request,
+                            f"⚠️ Maximum winning capped: original ₦{winning_cap_applied_info_single['original_projected']:.2f} → "
+                            f"final capped ₦{winning_cap_applied_info_single['final_capped']:.2f} "
+                            f"(source: {winning_cap_applied_info_single['source']})."
+                        )
+                        success_base += f' ⚠️ Winning capped to ₦{winning_cap_applied_info_single["final_capped"]:.2f} (original ₦{winning_cap_applied_info_single["original_projected"]:.2f}).'
+                    else:
+                        success_base += f' Potential winning: ₦{potential_winning:.2f}'
+                    messages.success(request, success_base)
                     return redirect('betting:fixtures') # Redirect back to fixtures with errors
                 else:
                     for field, errors in form.errors.items():
@@ -5266,6 +5362,10 @@ def check_ticket_status(request):
         'ticket_bonus_percent': (ticket.bonus_percentage_applied * Decimal('100')) if ticket else Decimal('0.00'),
         'ticket_estimated_bonus': (max(Decimal('0.00'), (ticket.max_winning - ticket.potential_winning)) if ticket and not ticket.bonus_is_final else (ticket.bonus_amount if ticket else Decimal('0.00'))),
         'ticket_selections_snapshot': (ticket.betting_limits_snapshot or {}).get('selections_snapshot', []) if ticket else [],
+        'ticket_winning_cap_applied': bool((ticket.betting_limits_snapshot or {}).get('winning_cap_applied')) if ticket else False,
+        'ticket_winning_cap_original_projected': (ticket.betting_limits_snapshot or {}).get('winning_cap_original_projected') if ticket else None,
+        'ticket_winning_cap_final_capped': (ticket.betting_limits_snapshot or {}).get('winning_cap_final_capped') if ticket else None,
+        'ticket_winning_cap_source': (ticket.betting_limits_snapshot or {}).get('winning_cap_source') if ticket else None,
     }
     return render(request, 'betting/check_ticket.html', context)
 
@@ -9872,147 +9972,53 @@ def declare_result(request, fixture_id):
     if request.method == 'POST':
         form = DeclareResultForm(request.POST, instance=fixture)
         if form.is_valid():
-            # Get the result from the form.
-            # IMPORTANT: Your Fixture model has a 'result' field with choices like 'home_win', 'draw', etc.
-            # Your form's 'result' field correctly points to this.
-            # The 'winning_outcome' variable in the previous code snippet for fixture was not a model field.
-            # So, we should update the fixture.result directly.
             fixture.home_score = form.cleaned_data['home_score']
             fixture.away_score = form.cleaned_data['away_score']
-            fixture.result = form.cleaned_data['result'] # Use the form's cleaned data for result
-            fixture.status = form.cleaned_data['status'] 
+            fixture.result = form.cleaned_data['result']
+            fixture.status = form.cleaned_data['status']
             fixture.save()
 
-            # Process all bet tickets related to this fixture
-            # Use select_related/prefetch_related if fetching many to reduce queries
-            bets_on_this_fixture = BetTicket.objects.filter(
-                selections__fixture=fixture 
-            ).distinct().select_for_update() 
-            affected_ticket_ids = [str(pk) for pk in bets_on_this_fixture.values_list('id', flat=True)]
+            affected_ticket_ids = list(BetTicket.objects.filter(
+                selections__fixture=fixture
+            ).distinct().values_list('id', flat=True))
 
-            for ticket in bets_on_this_fixture:
-                # Find the specific selection for *this* fixture within *this* ticket
-                selection_for_this_fixture = ticket.selections.filter(fixture=fixture).first()
+            for ticket_id in affected_ticket_ids:
+                try:
+                    with db_transaction.atomic():
+                        locked_ticket = BetTicket.objects.select_for_update().get(pk=ticket_id)
 
-                if not selection_for_this_fixture:
-                    continue # Should not happen if query above is correct
+                        if locked_ticket.status in BetTicket.VOIDED_STATUSES:
+                            messages.info(request, f"Ticket {locked_ticket.id} was previously voided and will not be re-processed.")
+                            continue
+                        if locked_ticket.status != 'pending' and locked_ticket.payout_processed:
+                            continue
+                        if locked_ticket.status not in ('pending', 'won'):
+                            continue
 
-                if ticket.status == 'pending': 
-                    # Determine if the selection on this ticket for this fixture wins
-                    is_selection_winning = False
-                    # The following logic should mirror how results are actually determined
-                    # based on fixture.home_score, fixture.away_score and fixture.result (which is now correctly set)
+                        locked_ticket.recalculate_ticket()
+                        locked_ticket.refresh_from_db() if False else None
+                        if locked_ticket.status != 'pending':
+                            locked_ticket.save() if locked_ticket.pk else None
+                            if locked_ticket.status == 'cancelled':
+                                messages.info(request, f"Ticket {locked_ticket.ticket_id} is VOIDED (stake will be refunded if eligible).")
+                            continue
+                        locked_ticket.check_and_update_status(actor=request.user, source='declare_result_view')
 
-                    # Simplified: if the selection matches the declared fixture result, it's winning for that selection
-                    if selection_for_this_fixture.bet_type == fixture.result:
-                        is_selection_winning = True
-                    elif selection_for_this_fixture.bet_type == 'home_or_draw' and fixture.result in ('home_win', 'draw'):
-                        is_selection_winning = True
-                    elif selection_for_this_fixture.bet_type == 'either_team_win' and fixture.result in ('home_win', 'away_win'):
-                        is_selection_winning = True
-                    elif selection_for_this_fixture.bet_type == 'away_or_draw' and fixture.result in ('away_win', 'draw'):
-                        is_selection_winning = True
-                    # Handle DNB cases where a draw voids the selection
-                    elif selection_for_this_fixture.bet_type == 'home_dnb' and fixture.result == 'draw':
-                        is_selection_winning = None # Voided
-                    elif selection_for_this_fixture.bet_type == 'away_dnb' and fixture.result == 'draw':
-                        is_selection_winning = None # Voided
-                    # Add more complex logic for Over/Under, BTTS if not covered by direct result match
-                    # (Your Fixture clean method already sets fixture.result based on scores, so this simplifies things)
-                    
-                    selection_for_this_fixture.is_winning_selection = is_selection_winning
-                    selection_for_this_fixture.save()
+                        if locked_ticket.status == 'won' and locked_ticket.payout_processed:
+                            messages.success(request, f"Ticket {locked_ticket.ticket_id} is WON! Winnings of ₦{locked_ticket.max_winning:.2f} credited to {locked_ticket.user.email}.")
+                            log_admin_activity(request, f"Declare fixture {fixture.id}: Ticket {locked_ticket.ticket_id} settled WON via check_and_update_status.")
+                        elif locked_ticket.status == 'lost':
+                            messages.info(request, f"Ticket {locked_ticket.ticket_id} is LOST.")
+                            log_admin_activity(request, f"Declare fixture {fixture.id}: Ticket {locked_ticket.ticket_id} LOST via check_and_update_status.")
+                except Exception as e:
+                    messages.error(request, f"Ticket {ticket_id} processing failed: {e}")
+                    log_admin_activity(request, f"Declared fixture {fixture.id}: ERROR processing ticket {ticket_id}: {e}")
 
-                    # Re-evaluate entire ticket status after updating this selection
-                    # This logic should ideally be in a BetTicket method
-                    all_selections_evaluated = True
-                    ticket_still_winning = True
-                    ticket_is_voided = False
-
-                    for sel in ticket.selections.all():
-                        if sel.is_winning_selection is None: # Found a voided selection
-                            ticket_is_voided = True
-                            break
-                        if sel.is_winning_selection == False: # Found a losing selection
-                            ticket_still_winning = False
-                        
-                        # Check if fixture related to this selection is settled/voided
-                        if sel.fixture.status not in ['settled', 'cancelled']:
-                            all_selections_evaluated = False
-                            break # Not all fixtures on the ticket are settled yet
-
-                    if all_selections_evaluated:
-                        if ticket_is_voided:
-                            ticket.status = 'cancelled'
-                            # Refund stake for voided tickets
-                            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                            refund_tx = Transaction.objects.create(
-                                user=ticket.user,
-                                initiating_user=request.user, 
-                                target_user=ticket.user,
-                                transaction_type='ticket_deletion_refund',
-                                amount=ticket.stake_amount,
-                                is_successful=True,
-                                status='completed',
-                                description=f"Refund for voided bet ticket {ticket.id} (due to voided selection in fixture {fixture.home_team} vs {fixture.away_team})",
-                                related_bet_ticket=ticket,
-                                timestamp=timezone.now()
-                            )
-                            user_wallet.apply_delta(
-                                amount=ticket.stake_amount,
-                                actor=request.user,
-                                transaction_obj=refund_tx,
-                                reference=str(ticket.ticket_id),
-                                reason=refund_tx.description,
-                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_void", "void_status": ticket.status},
-                            )
-                            messages.info(request, f"Ticket {ticket.id} is VOIDED (stake refunded) due to fixture {fixture.home_team} vs {fixture.away_team} resulting in a void.")
-                            log_admin_activity(request, f"Ticket {ticket.id} VOIDED and refunded due to fixture {fixture.id} void result.")
-                        elif ticket_still_winning:
-                            ticket.status = 'won'
-                            ticket.save()
-
-                            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                            payout_tx = Transaction.objects.create(
-                                user=ticket.user,
-                                initiating_user=request.user, 
-                                target_user=ticket.user,
-                                transaction_type='bet_payout',
-                                amount=ticket.max_winning,
-                                is_successful=True,
-                                status='completed',
-                                description=f"Winnings for bet ticket {ticket.id} on {fixture.home_team} vs {fixture.away_team}",
-                                related_bet_ticket=ticket,
-                                timestamp=timezone.now()
-                            )
-                            user_wallet.apply_delta(
-                                amount=ticket.max_winning,
-                                actor=request.user,
-                                transaction_obj=payout_tx,
-                                reference=str(ticket.ticket_id),
-                                reason=payout_tx.description,
-                                metadata={"ticket_id": ticket.ticket_id, "source": "ticket_won"},
-                            )
-                            messages.success(request, f"Ticket {ticket.id} is WON! Winnings of ₦{ticket.max_winning:.2f} paid to {ticket.user.email}.")
-                            log_admin_activity(request, f"Declared fixture {fixture.id} as WON for ticket {ticket.id} and paid out.")
-                        else:
-                            ticket.status = 'lost'
-                            ticket.save()
-                            messages.info(request, f"Ticket {ticket.id} is LOST.")
-                            log_admin_activity(request, f"Declared fixture {fixture.id} as LOST for ticket {ticket.id}.")
-                    
-                    ticket.save() # Save the ticket status update
-
-                elif ticket.status in BetTicket.VOIDED_STATUSES:
-                    messages.info(request, f"Ticket {ticket.id} was previously voided and will not be processed for result.")
-                # No need for else (already processed) as per previous code, as it would be handled by the update logic above.
-
-
-            messages.success(request, f"Result declared for {fixture.home_team} vs {fixture.away_team} as '{fixture.get_result_display()}'. All associated tickets processed.")
-            log_admin_activity(request, f"Declared result for fixture {fixture.id} ({fixture.home_team} vs {fixture.away_team}) as {fixture.result}.")
+            messages.success(request, f"Result declared for {fixture.home_team} vs {fixture.away_team} as '{fixture.get_result_display()}'. All associated tickets processed via check_and_update_status (9-way idempotency protection).")
+            log_admin_activity(request, f"Declared result for fixture {fixture.id} ({fixture.home_team} vs {fixture.away_team}) as {fixture.result}. Protected settle path.")
             if affected_ticket_ids:
                 from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
-                enqueue_refresh_weekly_commissions_for_ticket_ids(affected_ticket_ids)
+                enqueue_refresh_weekly_commissions_for_ticket_ids([str(x) for x in affected_ticket_ids])
             return redirect('betting_admin:manage_fixtures')
         else:
             for field, errors in form.errors.items():
@@ -11284,6 +11290,10 @@ def admin_ticket_details(request, ticket_id):
             'cashout_record': cashout_record,
             'cashout_quote': cashout_quote,
             'cashout_settings': cashout_settings,
+            'ticket_winning_cap_applied': bool((ticket.betting_limits_snapshot or {}).get('winning_cap_applied')),
+            'ticket_winning_cap_original_projected': (ticket.betting_limits_snapshot or {}).get('winning_cap_original_projected'),
+            'ticket_winning_cap_final_capped': (ticket.betting_limits_snapshot or {}).get('winning_cap_final_capped'),
+            'ticket_winning_cap_source': (ticket.betting_limits_snapshot or {}).get('winning_cap_source'),
         },
     )
 
@@ -11338,43 +11348,27 @@ def admin_void_ticket_single(request, ticket_id):
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser or u.user_type == 'admin')
-@db_transaction.atomic
 def admin_settle_won_ticket_single(request, ticket_id):
     ticket = get_object_or_404(BetTicket, id=ticket_id)
 
     if request.method == 'POST':
-        if ticket.status != 'pending':
-            messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be manually settled as won.")
-            return redirect('betting_admin:admin_ticket_report') 
-
         try:
-            ticket.status = 'won'
-            ticket.save()
+            with db_transaction.atomic():
+                locked = BetTicket.objects.select_for_update().get(pk=ticket.pk)
+                if locked.status == 'won' and locked.payout_processed:
+                    messages.warning(request, f"Ticket {locked.ticket_id} is already WON and paid (no action taken).")
+                    return redirect('betting_admin:admin_ticket_report')
+                if locked.status not in ('pending', 'won'):
+                    messages.warning(request, f"Ticket {locked.ticket_id} is already '{locked.status}' and cannot be manually settled as won.")
+                    return redirect('betting_admin:admin_ticket_report')
 
-            user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
+                locked.status = 'won'
+                locked.save(update_fields=['status'])
+                locked.check_and_update_status(actor=request.user, source='admin_settle_won_single')
+
             winnings_amount = ticket.max_winning
-            payout_tx = Transaction.objects.create(
-                user=ticket.user,
-                initiating_user=request.user,
-                target_user=ticket.user,
-                transaction_type='bet_payout',
-                amount=winnings_amount,
-                is_successful=True,
-                status='completed',
-                description=f"Admin payout: Winnings for Bet Ticket {ticket.ticket_id}",
-                related_bet_ticket=ticket,
-                timestamp=timezone.now()
-            )
-            user_wallet.apply_delta(
-                amount=winnings_amount,
-                actor=request.user,
-                transaction_obj=payout_tx,
-                reference=str(ticket.ticket_id),
-                reason=payout_tx.description,
-                metadata={"ticket_id": ticket.ticket_id, "source": "admin_settle_won"},
-            )
             messages.success(request, f"Bet ticket {ticket.ticket_id} settled as WON and winnings of ₦{winnings_amount:.2f} paid to {ticket.user.email}.")
-            log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON and paid out winnings.")
+            log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON (via check_and_update_status single).")
         except Exception as e:
             messages.error(request, f"Failed to settle ticket {ticket.ticket_id} as WON: {e}")
             log_admin_activity(request, f"Failed to settle ticket {ticket.ticket_id} as WON. Error: {e}")

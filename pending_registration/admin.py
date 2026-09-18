@@ -28,6 +28,7 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
     list_display = ('full_name', 'email', 'user_type', 'registered_by', 'status', 'created_at', 'actions_buttons')
     list_filter = ('status', 'user_type', 'created_at')
     search_fields = ('full_name', 'email', 'registered_by__email')
+    raw_id_fields = ('master_agent', 'super_agent', 'registered_by')
     readonly_fields = ('password',) 
     
     def get_queryset(self, request):

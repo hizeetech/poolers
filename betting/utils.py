@@ -403,32 +403,49 @@ def get_effective_betting_limits_for_user(user, ticket_type=None):
     effective['agent_id'] = getattr(agent, 'id', None)
     effective['has_agent_override'] = bool(override)
     effective['has_user_override'] = bool(user_override)
+    effective['_source_agent_override'] = False
+    effective['_source_user_override'] = False
 
     if override:
+        agent_set_max_win = False
         for k in ['min_stake', 'max_stake', 'max_winning', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_agent_per_day', 'max_payout_per_user_per_day']:
             if override.get(k) is not None:
                 effective[k] = override[k]
+                if k == 'max_winning':
+                    agent_set_max_win = True
         if override.get('max_stake_by_ticket_type'):
             merged = dict(effective.get('max_stake_by_ticket_type') or {})
             merged.update(override.get('max_stake_by_ticket_type') or {})
             effective['max_stake_by_ticket_type'] = merged
-        if override.get('max_winning_by_ticket_type'):
+        agent_set_max_win_by_ticket = bool(override.get('max_winning_by_ticket_type'))
+        if agent_set_max_win_by_ticket:
             merged = dict(effective.get('max_winning_by_ticket_type') or {})
             merged.update(override.get('max_winning_by_ticket_type') or {})
             effective['max_winning_by_ticket_type'] = merged
 
     if user_override:
+        user_set_max_win = False
         for k in ['min_stake', 'max_stake', 'max_winning', 'max_odds_per_ticket', 'max_selections_per_ticket', 'max_payout_per_user_per_day']:
             if user_override.get(k) is not None:
                 effective[k] = user_override[k]
+                if k == 'max_winning':
+                    user_set_max_win = True
         if user_override.get('max_stake_by_ticket_type'):
             merged = dict(effective.get('max_stake_by_ticket_type') or {})
             merged.update(user_override.get('max_stake_by_ticket_type') or {})
             effective['max_stake_by_ticket_type'] = merged
-        if user_override.get('max_winning_by_ticket_type'):
+        user_set_max_win_by_ticket = bool(user_override.get('max_winning_by_ticket_type'))
+        if user_set_max_win_by_ticket:
             merged = dict(effective.get('max_winning_by_ticket_type') or {})
             merged.update(user_override.get('max_winning_by_ticket_type') or {})
             effective['max_winning_by_ticket_type'] = merged
+        if user_set_max_win or user_set_max_win_by_ticket:
+            effective['_source_user_override'] = True
+            effective['_source_agent_override'] = False
+        elif override and (agent_set_max_win or agent_set_max_win_by_ticket):
+            effective['_source_agent_override'] = True
+    elif override and (agent_set_max_win or agent_set_max_win_by_ticket):
+        effective['_source_agent_override'] = True
 
     ticket_type = _normalize_ticket_type(ticket_type)
     effective['ticket_type'] = ticket_type
@@ -544,9 +561,23 @@ def validate_ticket_against_limits(
     if max_odds is not None and ticket_odds > max_odds:
         raise BettingLimitViolation(f"Maximum odds per ticket is {max_odds:.2f}.", code="MAX_ODDS", data={'max_odds_per_ticket': str(max_odds), 'limits': serialize_limits(limits)})
 
+    winning_cap_info = None
     max_win_limit = limits.get('max_winning_effective') if ticket_type else limits.get('max_winning')
     if max_win_limit is not None and max_winning > max_win_limit:
-        raise BettingLimitViolation(f"Maximum winning per ticket is ₦{max_win_limit:.2f}.", code="MAX_WINNING", data={'max_winning': str(max_win_limit), 'limits': serialize_limits(limits)})
+        original_projected = max_winning
+        capped_winning = Decimal(max_win_limit).quantize(Decimal('0.01'))
+        cap_source = 'global'
+        if limits.get('_source_user_override'):
+            cap_source = 'user_override'
+        elif limits.get('_source_agent_override'):
+            cap_source = 'agent_override'
+        winning_cap_info = {
+            'original_projected': original_projected,
+            'final_capped': capped_winning,
+            'limit_value': Decimal(max_win_limit).quantize(Decimal('0.01')),
+            'source': cap_source,
+        }
+        max_winning = capped_winning
 
     if include_exposure:
         BetTicket = apps.get_model('betting', 'BetTicket')
@@ -596,4 +627,4 @@ def validate_ticket_against_limits(
                     data={'platform_day_total': str(platform_day_sum), 'max_payout_per_day': str(max_platform_day), 'limits': serialize_limits(limits)}
                 )
 
-    return limits
+    return limits, winning_cap_info

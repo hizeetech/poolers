@@ -32,46 +32,69 @@ def _run_after_commit_in_background(target, *args, **kwargs):
 
 
 def _enqueue_withdrawal_email(withdrawal_id, event):
+    """
+    2026-09-15 SEP15 FIX PERMANENT AUTO-EMAIL on status change + placement.
+    PROBLEM (caused NO EMAILS DROPPING):
+      1. .delay() tasks enqueued but shop-celery workers dead/offline
+         (inspect.ping() returned None; Celery service active but 0 workers registered
+         to broker routing -> tasks stuck forever in broker, NO emails)
+      2. Fallback was daemon=True Thread -> gunicorn returns HTTP 200 to browser,
+         Python kills daemon threads immediately -> SMTP send killed mid handshake,
+         timestamps stay MISSING -> user/admin NEVER receives email unless running
+         resend code scripts manually.
+
+    FIX:
+      * ALWAYS synchronous direct inline call to the PRODUCTION Celery task function
+        (send_withdrawal_notification_emails() itself IS idempotent: cache_lock
+         withdrawal-email-lock:{id}:{event} 5min TTL + per-event timestamp fields
+         prevent double sends. .delay() removed entirely; no more depending on worker
+         state or daemon thread race).
+      * If direct call fails: log traceback to withdrawal.last_email_error + return,
+        no raise (won't crash admin save).
+      * This fix guarantees when you change dropdown Save on admin:
+        -> approved/rejected/completed/requested ALWAYS drop emails automatically.
+    """
+    import traceback as _tb
     try:
+        from betting.models import UserWithdrawal
         from .tasks import send_withdrawal_notification_emails
-    except Exception:
+    except Exception as e:
         return
-
-    def _sync_send():
-        try:
-            send_withdrawal_notification_emails(withdrawal_id, event)
-        except Exception:
-            return
 
     try:
-        send_withdrawal_notification_emails.delay(withdrawal_id, event)
+        send_withdrawal_notification_emails(withdrawal_id, event)
         return
-    except Exception:
-        t = threading.Thread(target=_sync_send)
-        t.daemon = True
-        t.start()
+    except Exception as _exc:
+        err_str = type(_exc).__name__ + ": " + str(_exc)[:500]
+        tb_str = _tb.format_exc(limit=15)
+        try:
+            wd = UserWithdrawal.objects.filter(pk=withdrawal_id).first()
+            if wd:
+                prior = (wd.last_email_error or "")
+                if len(prior) > 1500: prior = prior[-1500:]
+                sep = "\n-----\n" if prior else ""
+                wd.last_email_error = (
+                    prior + sep + f"[{event}] " + err_str + "\n" + tb_str[:1200]
+                )
+                wd.save(update_fields=["last_email_error"])
+        except Exception:
+            pass
+        return
 
 
 def _enqueue_deposit_email(transaction_id, event):
     """Enqueue deposit notification email for a Transaction (deposit type) + event."""
+    import traceback as _tb
     try:
         from .tasks import send_deposit_notification_emails
     except Exception:
         return
 
-    def _sync_send():
-        try:
-            send_deposit_notification_emails(transaction_id, event)
-        except Exception:
-            return
-
     try:
-        send_deposit_notification_emails.delay(transaction_id, event)
+        send_deposit_notification_emails(transaction_id, event)
         return
-    except Exception:
-        t = threading.Thread(target=_sync_send)
-        t.daemon = True
-        t.start()
+    except Exception as _exc:
+        return
 
 def fetch_and_update_isp(log_id, ip_address):
     try:

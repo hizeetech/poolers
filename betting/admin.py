@@ -1063,48 +1063,36 @@ class BetTicketAdmin(admin.ModelAdmin):
     def settle_won_selected_tickets(self, request, queryset):
         tickets_settled = 0
         tickets_failed = 0
+        tickets_already = 0
+        actor = getattr(request, 'user', None)
 
-        with db_transaction.atomic():
-            for ticket in queryset:
-                if ticket.status != 'pending':
-                    messages.warning(request, f"Ticket {ticket.ticket_id} is already '{ticket.status}' and cannot be manually settled as won.")
-                    tickets_failed += 1
-                    continue
+        for ticket in queryset.only('id', 'status', 'payout_processed', 'ticket_id'):
+            try:
+                with db_transaction.atomic():
+                    locked = BetTicket.objects.select_for_update().get(pk=ticket.pk)
+                    if locked.status == 'won' and locked.payout_processed:
+                        messages.warning(request, f"Ticket {locked.ticket_id} is already WON and paid (no action taken).")
+                        tickets_already += 1
+                        continue
+                    if locked.status not in ('pending', 'won'):
+                        messages.warning(request, f"Ticket {locked.ticket_id} is status '{locked.status}' (not pending/won — cannot manually settle as won).")
+                        tickets_failed += 1
+                        continue
 
-                try:
-                    ticket.status = 'won'
-                    ticket.save()
+                    locked.status = 'won'
+                    locked.save(update_fields=['status'])
+                    locked.check_and_update_status(actor=actor, source='admin_bulk_settle_won')
 
-                    user_wallet = Wallet.objects.select_for_update().get(user=ticket.user)
-                    winnings_amount = ticket.max_winning
-                    tx = Transaction.objects.create(
-                        user=ticket.user,
-                        initiating_user=request.user,
-                        target_user=ticket.user,
-                        transaction_type='bet_payout',
-                        amount=winnings_amount,
-                        is_successful=True,
-                        status='completed',
-                        description=f"Admin payout: Winnings for Bet Ticket {ticket.ticket_id}",
-                        related_bet_ticket=ticket,
-                        timestamp=timezone.now()
-                    )
-                    user_wallet.apply_delta(
-                        amount=winnings_amount,
-                        actor=request.user,
-                        transaction_obj=tx,
-                        reference=str(ticket.ticket_id),
-                        reason=tx.description,
-                        metadata={"ticket_id": ticket.ticket_id, "source": "admin_action"},
-                    )
                     tickets_settled += 1
-                    views.log_admin_activity(request, f"Settled bet ticket {ticket.ticket_id} as WON and paid out winnings.") 
-                except Exception as e:
-                    messages.error(request, f"Failed to settle ticket {ticket.ticket_id}: {e}")
-                    tickets_failed += 1
+                    views.log_admin_activity(request, f"Settled bet ticket {locked.ticket_id} as WON (via bulk action check_and_update_status).")
+            except Exception as e:
+                messages.error(request, f"Failed to settle ticket {ticket.ticket_id}: {e}")
+                tickets_failed += 1
 
         if tickets_settled > 0:
-            messages.success(request, f"Successfully settled {tickets_settled} bet tickets as WON.")
+            messages.success(request, f"Successfully settled {tickets_settled} bet tickets as WON and paid winnings.")
+        if tickets_already > 0:
+            messages.info(request, f"{tickets_already} tickets were already paid (skipped).")
         if tickets_failed > 0:
             messages.warning(request, f"Failed to settle {tickets_failed} bet tickets as WON.")
 
@@ -1166,7 +1154,8 @@ class FixtureAdmin(admin.ModelAdmin):
     list_editable = ('match_date', 'match_time', 'draw_odd', 'is_active')
     list_filter = ('betting_period', 'status', 'is_active', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    
+    raw_id_fields = ('betting_period',)  # CRIT_A4 FIX 2: Eliminate InvalidCursorName risk under concurrent Saturday/Sunday fixture edits when BettingPeriod table grows
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         # Only show fixtures from active betting periods
@@ -1584,7 +1573,8 @@ class ResultAdmin(admin.ModelAdmin):
     list_editable = ('home_score', 'away_score', 'status')
     list_filter = ('status', 'match_date', 'betting_period')
     search_fields = ('home_team', 'away_team', 'serial_number')
-    
+    raw_id_fields = ('betting_period',)  # CRIT_A4 FIX 1: Eliminate InvalidCursorName class under concurrent Sat/Sun result edit/settle cascade row locks
+
     def has_add_permission(self, request):
         return False
 
@@ -1678,6 +1668,7 @@ class WalletAdmin(admin.ModelAdmin):
     readonly_fields = ('last_updated',)
     show_full_result_count = False
     list_per_page = 50
+    raw_id_fields = ('user',)
 
 class WalletLedgerEntryAdmin(admin.ModelAdmin):
     list_display = ("created_at", "user", "direction", "amount", "balance_before", "balance_after", "actor", "reference")
@@ -1687,6 +1678,7 @@ class WalletLedgerEntryAdmin(admin.ModelAdmin):
     list_select_related = ("user", "actor", "wallet", "transaction")
     show_full_result_count = False
     list_per_page = 50
+    raw_id_fields = ("user", "actor", "wallet", "transaction")
 
 # --- Transaction Admin ---
 class TransactionAdmin(admin.ModelAdmin):
@@ -1698,6 +1690,14 @@ class TransactionAdmin(admin.ModelAdmin):
     list_select_related = ('user', 'initiating_user', 'target_user', 'related_bet_ticket', 'related_withdrawal_request', 'related_payout')
     show_full_result_count = False
     list_per_page = 50
+    # NOTE: original raw_id_fields below — 5 fields removed because they do not exist on Transaction model (causing admin.E002 27 total):
+    # 'related_recall_approval', 'related_loan', 'related_credit_request', 'related_loan_payment', 'related_failed_deposit'
+    # raw_id_fields = ('user', 'initiating_user', 'target_user', 'related_bet_ticket',
+    #                  'related_withdrawal_request', 'related_payout', 'commission_related_period',
+    #                  'related_recall_approval', 'related_loan', 'related_credit_request',
+    #                  'related_loan_payment', 'related_failed_deposit')
+    raw_id_fields = ('user', 'initiating_user', 'target_user', 'related_bet_ticket',
+                     'related_withdrawal_request', 'related_payout', 'commission_related_period')
 
     def payment_gateway_used(self, obj):
         if obj.transaction_type != 'deposit':
@@ -1977,6 +1977,12 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
     )
     show_full_result_count = False
     list_per_page = 50
+    # NOTE: original raw_id_fields below — 8 fields removed because they do NOT exist on UserWithdrawal model (causing 8 admin.E002 errors):
+    # 'approver', 'approving_user', 'completer', 'completed_by', 'impersonating_user', 'disputed_by', 'recalled_by', 'second_approver'
+    # raw_id_fields = ('user', 'approver', 'approving_user', 'completer',
+    #                  'completed_by', 'impersonating_user', 'disputed_by', 'recalled_by',
+    #                  'second_approver')
+    raw_id_fields = ('user',)
 
     def short_id(self, obj):
         return str(getattr(obj, 'id', '') or '')[:8]
@@ -4132,7 +4138,7 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
                 'withdrawal_rejected_notification_emails',
                 'stuck_deposit_alert_notification_emails',
             ),
-            'description': (
+            'description': mark_safe(
                 '<div style="padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;margin-bottom:4px;font-family:system-ui,sans-serif;font-size:13px;color:#9a3412;">'
                 '<b style="font-weight:800;">HOW TO USE:</b> Enter comma-separated email addresses in any field to override the default recipient list '
                 'for that notification event. <b>Leave a field blank</b> to use the default auto-discovered admin/finance/superuser recipients (existing behaviour). '

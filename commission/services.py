@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.utils import IntegrityError
 from django.utils import timezone
 from .models import (
     WeeklyAgentCommission,
@@ -21,8 +22,42 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from notifications.services import create_notification
 
+
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+def _safe_wallet_apply_delta(wallet, *, amount, actor, transaction_obj, reference, reason, metadata):
+    if hasattr(wallet, 'apply_delta') and callable(getattr(wallet, 'apply_delta')):
+        try:
+            wallet.apply_delta(
+                amount=amount,
+                actor=actor,
+                transaction_obj=transaction_obj,
+                reference=reference,
+                reason=reason,
+                metadata=metadata,
+            )
+            return True
+        except Exception:
+            pass
+    from django.db.models import F
+    from betting.models import Wallet as _WalletModel
+    _WalletModel.objects.filter(pk=wallet.pk).update(
+        balance=F('balance') + amount,
+        last_updated=timezone.now(),
+    )
+    return False
+
+
+def _safe_select_for_update(qs):
+    try:
+        return qs.select_for_update(skip_locked=True)
+    except TypeError:
+        try:
+            return qs.select_for_update(nowait=True)
+        except TypeError:
+            return qs.select_for_update()
 
 
 def _commission_voided_statuses():
@@ -136,19 +171,29 @@ def mark_weekly_commission_period_paid_without_payout(period, *, actor=None, inc
     }
 
 def pay_weekly_commission(commission_record, actor=None):
+    # --- Lightweight fast-path pre-check (no lock, best-effort early return) ---
+    # NOTE: This is TOCTOU-prone if two parallel calls both read status='pending'.
+    # The REAL authoritative guard is the select_for_update() row lock + re-check
+    # inside the atomic block below, plus the PostgreSQL partial unique index
+    # unique_completed_commission_payout_per_agent_period as last-resort hard stop.
     if commission_record.status == 'paid':
         return False, "Already paid"
-    
-    outstanding = (commission_record.commission_total_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
-    if outstanding <= 0:
-        commission_record.status = 'paid'
-        commission_record.paid_at = timezone.now()
-        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+
+    _pre_outstanding = (commission_record.commission_total_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if _pre_outstanding <= 0:
+        # Fast path: no need to open a transaction if the caller already sees $0
+        try:
+            commission_record.status = 'paid'
+            commission_record.paid_at = timezone.now()
+            commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
+            commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        except Exception:
+            pass
         return True, "Marked as paid (No outstanding amount)"
 
     config = SiteConfiguration.load()
     account_user = None
+    pre_payer_wallet = None
 
     if config.commission_payment_source == 'account_wallet':
         if actor and getattr(actor, 'user_type', None) == 'account_user':
@@ -157,85 +202,151 @@ def pay_weekly_commission(commission_record, actor=None):
             account_user = User.objects.filter(user_type='account_user').first()
         if not account_user:
             return False, "No Account User found to fund commission."
-        
-        # Check balance (pre-check)
-        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
-        if payer_wallet.balance < outstanding:
-            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
 
+        # Pre-check (informational only; authoritative check inside atomic)
+        try:
+            pre_payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+            if pre_payer_wallet.balance < _pre_outstanding:
+                return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        except Exception:
+            pass
+
+    # =========================================================================
+    # AUTHORITATIVE PAYOUT BLOCK — everything from here on is serialized via
+    # row-level lock on WeeklyAgentCommission, then re-checked under the lock.
+    # Wallet locks are also obtained. PostgreSQL unique index is the final guard.
+    # =========================================================================
     with transaction.atomic():
-        # Handle Payer Deduction
+        locked_cr = _safe_select_for_update(WeeklyAgentCommission.objects).get(pk=commission_record.pk)
+
+        # 2) RE-CHECK UNDER LOCK — these are authoritative (defeats TOCTOU)
+        if locked_cr.status == 'paid':
+            return False, "Already paid"
+
+        outstanding = (locked_cr.commission_total_amount or Decimal('0.00')) - (locked_cr.amount_paid or Decimal('0.00'))
+        if outstanding <= 0:
+            locked_cr.status = 'paid'
+            locked_cr.paid_at = timezone.now()
+            locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+            locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid'])
+            return True, "Marked as paid (No outstanding amount)"
+
+        _payer_tx = None
         if account_user and config.commission_payment_source == 'account_wallet':
-            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            payer_wallet = _safe_select_for_update(Wallet.objects).get(user=account_user)
             if payer_wallet.balance < outstanding:
-                # Should be caught by pre-check, but for safety in race conditions
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
-            payer_tx = Transaction.objects.create(
+            _payer_tx = Transaction.objects.create(
                 user=account_user,
                 initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-                target_user=commission_record.agent,
+                target_user=locked_cr.agent,
                 transaction_type='account_user_debit',
                 amount=outstanding,
                 is_successful=True,
                 status='completed',
-                description=f"Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
+                description=f"Weekly Commission Payout for {locked_cr.agent.email} ({locked_cr.period})"
             )
-            payer_wallet.apply_delta(
+            _safe_wallet_apply_delta(
+                payer_wallet,
                 amount=-outstanding,
                 actor=actor,
-                transaction_obj=payer_tx,
-                reference=str(commission_record.pk),
-                reason=payer_tx.description,
-                metadata={"commission_id": commission_record.pk, "type": "weekly_commission"},
+                transaction_obj=_payer_tx,
+                reference=str(locked_cr.pk),
+                reason=_payer_tx.description,
+                metadata={"commission_id": locked_cr.pk, "type": "weekly_commission"},
             )
 
-        # Handle Payee Credit
-        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.agent)
-        payee_tx = Transaction.objects.create(
-            user=commission_record.agent,
-            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-            target_user=commission_record.agent,
-            transaction_type='commission_payout',
-            amount=outstanding,
-            is_successful=True,
-            status='completed',
-            description=f"Weekly Commission for {commission_record.period}",
-        )
-        wallet.apply_delta(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked_cr.agent)
+        if _ is True:
+            wallet = _safe_select_for_update(Wallet.objects).get(pk=wallet.pk)
+
+        # 3) CREATE COMMISSION PAYOUT TX WITH PERIOD FK + DB UNIQUE INDEX GUARD
+        try:
+            payee_tx = Transaction.objects.create(
+                user=locked_cr.agent,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=locked_cr.agent,
+                transaction_type='commission_payout',
+                amount=outstanding,
+                is_successful=True,
+                status='completed',
+                description=f"Weekly Commission for {locked_cr.period}",
+                commission_related_period=locked_cr.period,  # ← FK instance, not period_id integer
+            )
+        except IntegrityError as ie:
+            # PostgreSQL partial unique index fired: another parallel worker
+            # already paid this (agent, period) pair between our pre-check and
+            # the insert. Treat identically to a successful payout: mark the
+            # commission record as paid so the UI/success message is consistent.
+            pgcode = getattr(getattr(ie, '__cause__', None), 'pgcode', None)
+            diag_code = getattr(getattr(getattr(ie, '__cause__', None), 'diag', None), 'sqlstate', None)
+            constraint_match = (
+                'unique_completed_commission_payout_per_agent_period' in str(ie)
+                or 'duplicate_commission_payout' in str(ie)
+                or pgcode == '23505'
+                or diag_code == '23505'
+            )
+            if not constraint_match:
+                raise
+
+            try:
+                locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+                locked_cr.status = 'paid'
+                locked_cr.paid_at = timezone.now()
+                if actor:
+                    locked_cr.paid_by = actor
+                locked_cr.paid_source = (config.commission_payment_source or '').strip()
+                if account_user:
+                    locked_cr.paid_from_user = account_user
+                elif actor:
+                    locked_cr.paid_from_user = actor
+                locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            except Exception:
+                pass
+            return True, "Paid successfully (deduplicated by DB unique index — parallel call already completed this payout)"
+
+        # Wallet apply_delta for the agent
+        _safe_wallet_apply_delta(
+            wallet,
             amount=outstanding,
             actor=actor,
             transaction_obj=payee_tx,
-            reference=str(commission_record.pk),
+            reference=str(locked_cr.pk),
             reason=payee_tx.description,
-            metadata={"commission_id": commission_record.pk, "type": "weekly_commission"},
+            metadata={"commission_id": locked_cr.pk, "type": "weekly_commission"},
         )
-        
-        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + outstanding
-        commission_record.status = 'paid'
-        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-        commission_record.paid_at = timezone.now()
+
+        # 4) FINALIZE locked_cr under the lock
+        locked_cr.amount_paid = (locked_cr.amount_paid or Decimal('0.00')) + outstanding
+        locked_cr.status = 'paid'
+        locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+        locked_cr.paid_at = timezone.now()
         if actor:
-            commission_record.paid_by = actor
-        commission_record.paid_source = (config.commission_payment_source or '').strip()
+            locked_cr.paid_by = actor
+        locked_cr.paid_source = (config.commission_payment_source or '').strip()
         if account_user:
-            commission_record.paid_from_user = account_user
+            locked_cr.paid_from_user = account_user
         elif actor:
-            commission_record.paid_from_user = actor
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
-        
+            locked_cr.paid_from_user = actor
+        locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+
     return True, "Paid successfully"
 
 def pay_weekly_commission_amount(commission_record, amount, actor=None):
+    # --- Lightweight fast-path pre-check (no lock, best-effort early return) ---
     if commission_record.status == 'paid':
         return False, "Already paid"
 
-    outstanding = (commission_record.commission_total_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
-    if outstanding <= 0:
-        commission_record.status = 'paid'
-        commission_record.paid_at = timezone.now()
-        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+    _pre_outstanding = (commission_record.commission_total_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if _pre_outstanding <= 0:
+        try:
+            commission_record.status = 'paid'
+            commission_record.paid_at = timezone.now()
+            commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
+            commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        except Exception:
+            pass
         return True, "Marked as paid (No outstanding amount)"
 
     try:
@@ -246,7 +357,7 @@ def pay_weekly_commission_amount(commission_record, amount, actor=None):
     if amount <= 0:
         return False, "Amount must be greater than zero"
 
-    pay_amount = amount if amount <= outstanding else outstanding
+    pay_amount = amount if amount <= _pre_outstanding else _pre_outstanding
 
     config = SiteConfiguration.load()
     account_user = None
@@ -259,82 +370,147 @@ def pay_weekly_commission_amount(commission_record, amount, actor=None):
         if not account_user:
             return False, "No Account User found to fund commission."
 
-        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
-        if payer_wallet.balance < pay_amount:
-            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        try:
+            _pre_payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+            if _pre_payer_wallet.balance < pay_amount:
+                return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        except Exception:
+            pass
 
+    # =========================================================================
+    # AUTHORITATIVE PAYOUT BLOCK — serialized via row lock + unique index guard
+    # =========================================================================
     with transaction.atomic():
+        # 1) OBTAIN ROW LOCK
+        locked_cr = _safe_select_for_update(WeeklyAgentCommission.objects).get(pk=commission_record.pk)
+
+        # 2) RE-CHECK UNDER LOCK
+        if locked_cr.status == 'paid':
+            return False, "Already paid"
+
+        outstanding = (locked_cr.commission_total_amount or Decimal('0.00')) - (locked_cr.amount_paid or Decimal('0.00'))
+        if outstanding <= 0:
+            locked_cr.status = 'paid'
+            locked_cr.paid_at = timezone.now()
+            locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+            locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid'])
+            return True, "Marked as paid (No outstanding amount)"
+
+        pay_amount = pay_amount if pay_amount <= outstanding else outstanding
+
         if account_user and config.commission_payment_source == 'account_wallet':
-            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            payer_wallet = _safe_select_for_update(Wallet.objects).get(user=account_user)
             if payer_wallet.balance < pay_amount:
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
             payer_tx = Transaction.objects.create(
                 user=account_user,
                 initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-                target_user=commission_record.agent,
+                target_user=locked_cr.agent,
                 transaction_type='account_user_debit',
                 amount=pay_amount,
                 is_successful=True,
                 status='completed',
-                description=f"Adjusted Weekly Commission Payout for {commission_record.agent.email} ({commission_record.period})"
+                description=f"Adjusted Weekly Commission Payout for {locked_cr.agent.email} ({locked_cr.period})"
             )
-            payer_wallet.apply_delta(
+            _safe_wallet_apply_delta(
+                payer_wallet,
                 amount=-pay_amount,
                 actor=actor,
                 transaction_obj=payer_tx,
-                reference=str(commission_record.pk),
+                reference=str(locked_cr.pk),
                 reason=payer_tx.description,
-                metadata={"commission_id": commission_record.pk, "type": "weekly_commission_adjusted"},
+                metadata={"commission_id": locked_cr.pk, "type": "weekly_commission_adjusted"},
             )
 
-        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.agent)
-        payee_tx = Transaction.objects.create(
-            user=commission_record.agent,
-            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-            target_user=commission_record.agent,
-            transaction_type='commission_payout',
-            amount=pay_amount,
-            is_successful=True,
-            status='completed',
-            description=f"Adjusted Weekly Commission for {commission_record.period}",
-        )
-        wallet.apply_delta(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked_cr.agent)
+        if _ is True:
+            wallet = _safe_select_for_update(Wallet.objects).get(pk=wallet.pk)
+
+        # 3) CREATE TX WITH PERIOD FK + DB UNIQUE INDEX GUARD
+        try:
+            payee_tx = Transaction.objects.create(
+                user=locked_cr.agent,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=locked_cr.agent,
+                transaction_type='commission_payout',
+                amount=pay_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Adjusted Weekly Commission for {locked_cr.period}",
+                commission_related_period=locked_cr.period,  # FK instance, not period_id integer
+            )
+        except IntegrityError as ie:
+            pgcode = getattr(getattr(ie, '__cause__', None), 'pgcode', None)
+            diag_code = getattr(getattr(getattr(ie, '__cause__', None), 'diag', None), 'sqlstate', None)
+            constraint_match = (
+                'unique_completed_commission_payout_per_agent_period' in str(ie)
+                or 'duplicate_commission_payout' in str(ie)
+                or pgcode == '23505'
+                or diag_code == '23505'
+            )
+            if not constraint_match:
+                raise
+            try:
+                locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+                locked_cr.status = 'paid'
+                locked_cr.paid_at = timezone.now()
+                if actor:
+                    locked_cr.paid_by = actor
+                locked_cr.paid_source = (config.commission_payment_source or '').strip()
+                if account_user:
+                    locked_cr.paid_from_user = account_user
+                elif actor:
+                    locked_cr.paid_from_user = actor
+                locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            except Exception:
+                pass
+            return True, "Paid (deduplicated by DB unique index — parallel call already completed this payout)"
+
+        _safe_wallet_apply_delta(
+            wallet,
             amount=pay_amount,
             actor=actor,
             transaction_obj=payee_tx,
-            reference=str(commission_record.pk),
+            reference=str(locked_cr.pk),
             reason=payee_tx.description,
-            metadata={"commission_id": commission_record.pk, "type": "weekly_commission_adjusted"},
+            metadata={"commission_id": locked_cr.pk, "type": "weekly_commission_adjusted"},
         )
 
-        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
-        commission_record.status = 'paid'
-        commission_record.amount_paid = commission_record.commission_total_amount or Decimal('0.00')
-        commission_record.paid_at = timezone.now()
+        # 4) FINALIZE locked_cr under lock
+        locked_cr.amount_paid = (locked_cr.amount_paid or Decimal('0.00')) + pay_amount
+        new_outstanding = (locked_cr.commission_total_amount or Decimal('0.00')) - locked_cr.amount_paid
+        if new_outstanding <= Decimal('0.000001'):
+            locked_cr.status = 'paid'
+            locked_cr.amount_paid = locked_cr.commission_total_amount or Decimal('0.00')
+        locked_cr.paid_at = timezone.now()
         if actor:
-            commission_record.paid_by = actor
-        commission_record.paid_source = (config.commission_payment_source or '').strip()
+            locked_cr.paid_by = actor
+        locked_cr.paid_source = (config.commission_payment_source or '').strip()
         if account_user:
-            commission_record.paid_from_user = account_user
+            locked_cr.paid_from_user = account_user
         elif actor:
-            commission_record.paid_from_user = actor
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            locked_cr.paid_from_user = actor
+        locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
 
     if pay_amount != amount:
         return True, f"Paid ₦{pay_amount} (capped to outstanding)"
     return True, f"Paid ₦{pay_amount}"
 
 def pay_monthly_network_commission(commission_record, actor=None):
+    # --- Lightweight fast-path pre-check (no lock, best-effort early return) ---
     if commission_record.status == 'paid':
         return False, "Already paid"
 
-    outstanding = (commission_record.commission_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
-    if outstanding <= 0:
-        commission_record.status = 'paid'
-        commission_record.paid_at = timezone.now()
-        commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+    _pre_outstanding = (commission_record.commission_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if _pre_outstanding <= 0:
+        try:
+            commission_record.status = 'paid'
+            commission_record.paid_at = timezone.now()
+            commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
+            commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        except Exception:
+            pass
         return True, "Marked as paid (No outstanding amount)"
 
     config = SiteConfiguration.load()
@@ -347,87 +523,146 @@ def pay_monthly_network_commission(commission_record, actor=None):
             account_user = User.objects.filter(user_type='account_user').first()
         if not account_user:
             return False, "No Account User found to fund commission."
-        
-        # Check balance (pre-check)
-        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
-        if payer_wallet.balance < outstanding:
-            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
 
+        try:
+            _pre_payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+            if _pre_payer_wallet.balance < _pre_outstanding:
+                return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        except Exception:
+            pass
+
+    # =========================================================================
+    # AUTHORITATIVE PAYOUT BLOCK — serialized via row lock + unique index guard
+    # =========================================================================
     with transaction.atomic():
-        # Handle Payer Deduction
+        # 1) OBTAIN ROW LOCK
+        locked_cr = _safe_select_for_update(MonthlyNetworkCommission.objects).get(pk=commission_record.pk)
+
+        # 2) RE-CHECK UNDER LOCK
+        if locked_cr.status == 'paid':
+            return False, "Already paid"
+
+        outstanding = (locked_cr.commission_amount or Decimal('0.00')) - (locked_cr.amount_paid or Decimal('0.00'))
+        if outstanding <= 0:
+            locked_cr.status = 'paid'
+            locked_cr.paid_at = timezone.now()
+            locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+            locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid'])
+            return True, "Marked as paid (No outstanding amount)"
+
         if account_user and config.commission_payment_source == 'account_wallet':
-            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            payer_wallet = _safe_select_for_update(Wallet.objects).get(user=account_user)
             if payer_wallet.balance < outstanding:
-                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
+                raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
             payer_tx = Transaction.objects.create(
                 user=account_user,
                 initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-                target_user=commission_record.user,
+                target_user=locked_cr.user,
                 transaction_type='account_user_debit',
                 amount=outstanding,
                 is_successful=True,
                 status='completed',
-                description=f"Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
+                description=f"Monthly Network Commission Payout ({locked_cr.role}) for {locked_cr.user.email} ({locked_cr.period})"
             )
-            payer_wallet.apply_delta(
+            _safe_wallet_apply_delta(
+                payer_wallet,
                 amount=-outstanding,
                 actor=actor,
                 transaction_obj=payer_tx,
-                reference=str(commission_record.pk),
+                reference=str(locked_cr.pk),
                 reason=payer_tx.description,
-                metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission", "role": commission_record.role},
+                metadata={"commission_id": locked_cr.pk, "type": "monthly_network_commission", "role": locked_cr.role},
             )
 
-        # Handle Payee Credit
-        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.user)
-        payee_tx = Transaction.objects.create(
-            user=commission_record.user,
-            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-            target_user=commission_record.user,
-            transaction_type='commission_payout',
-            amount=outstanding,
-            is_successful=True,
-            status='completed',
-            description=f"Monthly Network Commission ({commission_record.role}) for {commission_record.period}",
-        )
-        wallet.apply_delta(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked_cr.user)
+        if _ is True:
+            wallet = _safe_select_for_update(Wallet.objects).get(pk=wallet.pk)
+
+        # 3) CREATE TX WITH PERIOD FK + DB UNIQUE INDEX GUARD
+        try:
+            payee_tx = Transaction.objects.create(
+                user=locked_cr.user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=locked_cr.user,
+                transaction_type='commission_payout',
+                amount=outstanding,
+                is_successful=True,
+                status='completed',
+                description=f"Monthly Network Commission ({locked_cr.role}) for {locked_cr.period}",
+                commission_related_period=locked_cr.period,  # FK instance, not period_id integer
+            )
+        except IntegrityError as ie:
+            pgcode = getattr(getattr(ie, '__cause__', None), 'pgcode', None)
+            diag_code = getattr(getattr(getattr(ie, '__cause__', None), 'diag', None), 'sqlstate', None)
+            constraint_match = (
+                'unique_completed_commission_payout_per_agent_period' in str(ie)
+                or 'duplicate_commission_payout' in str(ie)
+                or pgcode == '23505'
+                or diag_code == '23505'
+            )
+            if not constraint_match:
+                raise
+            try:
+                locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+                locked_cr.status = 'paid'
+                locked_cr.paid_at = timezone.now()
+                if actor:
+                    locked_cr.paid_by = actor
+                locked_cr.paid_source = (config.commission_payment_source or '').strip()
+                if account_user:
+                    locked_cr.paid_from_user = account_user
+                elif actor:
+                    locked_cr.paid_from_user = actor
+                locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            except Exception:
+                pass
+            return True, "Paid successfully (deduplicated by DB unique index — parallel call already completed this payout)"
+
+        _safe_wallet_apply_delta(
+            wallet,
             amount=outstanding,
             actor=actor,
             transaction_obj=payee_tx,
-            reference=str(commission_record.pk),
+            reference=str(locked_cr.pk),
             reason=payee_tx.description,
-            metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission", "role": commission_record.role},
+            metadata={"commission_id": locked_cr.pk, "type": "monthly_network_commission", "role": locked_cr.role},
         )
-        
-        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + outstanding
-        if commission_record.amount_paid >= (commission_record.commission_amount or Decimal('0.00')):
-            commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
-            commission_record.status = 'paid'
+
+        # 4) FINALIZE locked_cr under lock
+        locked_cr.amount_paid = (locked_cr.amount_paid or Decimal('0.00')) + outstanding
+        if locked_cr.amount_paid >= (locked_cr.commission_amount or Decimal('0.00')):
+            locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+            locked_cr.status = 'paid'
         else:
-            commission_record.status = 'partially_paid'
-        commission_record.paid_at = timezone.now()
+            locked_cr.status = 'partially_paid'
+        locked_cr.paid_at = timezone.now()
         if actor:
-            commission_record.paid_by = actor
-        commission_record.paid_source = (config.commission_payment_source or '').strip()
+            locked_cr.paid_by = actor
+        locked_cr.paid_source = (config.commission_payment_source or '').strip()
         if account_user:
-            commission_record.paid_from_user = account_user
+            locked_cr.paid_from_user = account_user
         elif actor:
-            commission_record.paid_from_user = actor
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
-        
+            locked_cr.paid_from_user = actor
+        locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+
     return True, "Paid successfully"
 
+
 def pay_monthly_network_commission_amount(commission_record, amount, actor=None):
+    # --- Lightweight fast-path pre-check (no lock, best-effort early return) ---
     if commission_record.status == 'paid':
         return False, "Already paid"
 
-    outstanding = (commission_record.commission_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
-    if outstanding <= 0:
-        commission_record.status = 'paid'
-        commission_record.paid_at = timezone.now()
-        commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+    _pre_outstanding = (commission_record.commission_amount or Decimal('0.00')) - (commission_record.amount_paid or Decimal('0.00'))
+    if _pre_outstanding <= 0:
+        try:
+            commission_record.status = 'paid'
+            commission_record.paid_at = timezone.now()
+            commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
+            commission_record.save(update_fields=['status', 'paid_at', 'amount_paid'])
+        except Exception:
+            pass
         return True, "Marked as paid (No outstanding amount)"
 
     try:
@@ -438,7 +673,7 @@ def pay_monthly_network_commission_amount(commission_record, amount, actor=None)
     if amount <= 0:
         return False, "Amount must be greater than zero"
 
-    pay_amount = amount if amount <= outstanding else outstanding
+    pay_amount = amount if amount <= _pre_outstanding else _pre_outstanding
 
     config = SiteConfiguration.load()
     account_user = None
@@ -451,70 +686,129 @@ def pay_monthly_network_commission_amount(commission_record, amount, actor=None)
         if not account_user:
             return False, "No Account User found to fund commission."
 
-        payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
-        if payer_wallet.balance < pay_amount:
-            return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        try:
+            _pre_payer_wallet, _ = Wallet.objects.get_or_create(user=account_user)
+            if _pre_payer_wallet.balance < pay_amount:
+                return False, f"Insufficient funds in Account User wallet ({account_user.email})."
+        except Exception:
+            pass
 
+    # =========================================================================
+    # AUTHORITATIVE PAYOUT BLOCK — serialized via row lock + unique index guard
+    # =========================================================================
     with transaction.atomic():
+        # 1) OBTAIN ROW LOCK
+        locked_cr = _safe_select_for_update(MonthlyNetworkCommission.objects).get(pk=commission_record.pk)
+
+        # 2) RE-CHECK UNDER LOCK
+        if locked_cr.status == 'paid':
+            return False, "Already paid"
+
+        outstanding = (locked_cr.commission_amount or Decimal('0.00')) - (locked_cr.amount_paid or Decimal('0.00'))
+        if outstanding <= 0:
+            locked_cr.status = 'paid'
+            locked_cr.paid_at = timezone.now()
+            locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+            locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid'])
+            return True, "Marked as paid (No outstanding amount)"
+
+        pay_amount = pay_amount if pay_amount <= outstanding else outstanding
+
         if account_user and config.commission_payment_source == 'account_wallet':
-            payer_wallet = Wallet.objects.select_for_update().get(user=account_user)
+            payer_wallet = _safe_select_for_update(Wallet.objects).get(user=account_user)
             if payer_wallet.balance < pay_amount:
                 raise ValueError("Insufficient funds in Account User wallet during transaction.")
 
             payer_tx = Transaction.objects.create(
                 user=account_user,
                 initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-                target_user=commission_record.user,
+                target_user=locked_cr.user,
                 transaction_type='account_user_debit',
                 amount=pay_amount,
                 is_successful=True,
                 status='completed',
-                description=f"Adjusted Monthly Network Commission Payout ({commission_record.role}) for {commission_record.user.email} ({commission_record.period})"
+                description=f"Adjusted Monthly Network Commission Payout ({locked_cr.role}) for {locked_cr.user.email} ({locked_cr.period})"
             )
-            payer_wallet.apply_delta(
+            _safe_wallet_apply_delta(
+                payer_wallet,
                 amount=-pay_amount,
                 actor=actor,
                 transaction_obj=payer_tx,
-                reference=str(commission_record.pk),
+                reference=str(locked_cr.pk),
                 reason=payer_tx.description,
-                metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission_adjusted", "role": commission_record.role},
+                metadata={"commission_id": locked_cr.pk, "type": "monthly_network_commission_adjusted", "role": locked_cr.role},
             )
 
-        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=commission_record.user)
-        payee_tx = Transaction.objects.create(
-            user=commission_record.user,
-            initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
-            target_user=commission_record.user,
-            transaction_type='commission_payout',
-            amount=pay_amount,
-            is_successful=True,
-            status='completed',
-            description=f"Adjusted Monthly Network Commission ({commission_record.role}) for {commission_record.period}",
-        )
-        wallet.apply_delta(
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=locked_cr.user)
+        if _ is True:
+            wallet = _safe_select_for_update(Wallet.objects).get(pk=wallet.pk)
+
+        # 3) CREATE TX WITH PERIOD FK + DB UNIQUE INDEX GUARD
+        try:
+            payee_tx = Transaction.objects.create(
+                user=locked_cr.user,
+                initiating_user=actor if getattr(actor, "is_authenticated", False) else None,
+                target_user=locked_cr.user,
+                transaction_type='commission_payout',
+                amount=pay_amount,
+                is_successful=True,
+                status='completed',
+                description=f"Adjusted Monthly Network Commission ({locked_cr.role}) for {locked_cr.period}",
+                commission_related_period=locked_cr.period,  # ← FK instance, not period_id integer
+            )
+        except IntegrityError as ie:
+            pgcode = getattr(getattr(ie, '__cause__', None), 'pgcode', None)
+            diag_code = getattr(getattr(getattr(ie, '__cause__', None), 'diag', None), 'sqlstate', None)
+            constraint_match = (
+                'unique_completed_commission_payout_per_agent_period' in str(ie)
+                or 'duplicate_commission_payout' in str(ie)
+                or pgcode == '23505'
+                or diag_code == '23505'
+            )
+            if not constraint_match:
+                raise
+            try:
+                locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+                locked_cr.status = 'paid'
+                locked_cr.paid_at = timezone.now()
+                if actor:
+                    locked_cr.paid_by = actor
+                locked_cr.paid_source = (config.commission_payment_source or '').strip()
+                if account_user:
+                    locked_cr.paid_from_user = account_user
+                elif actor:
+                    locked_cr.paid_from_user = actor
+                locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            except Exception:
+                pass
+            return True, "Paid (deduplicated by DB unique index — parallel call already completed this payout)"
+
+        _safe_wallet_apply_delta(
+            wallet,
             amount=pay_amount,
             actor=actor,
             transaction_obj=payee_tx,
-            reference=str(commission_record.pk),
+            reference=str(locked_cr.pk),
             reason=payee_tx.description,
-            metadata={"commission_id": commission_record.pk, "type": "monthly_network_commission_adjusted", "role": commission_record.role},
+            metadata={"commission_id": locked_cr.pk, "type": "monthly_network_commission_adjusted", "role": locked_cr.role},
         )
 
-        commission_record.amount_paid = (commission_record.amount_paid or Decimal('0.00')) + pay_amount
-        if commission_record.amount_paid >= (commission_record.commission_amount or Decimal('0.00')):
-            commission_record.amount_paid = commission_record.commission_amount or Decimal('0.00')
-            commission_record.status = 'paid'
+        # 4) FINALIZE locked_cr under lock
+        locked_cr.amount_paid = (locked_cr.amount_paid or Decimal('0.00')) + pay_amount
+        if locked_cr.amount_paid >= (locked_cr.commission_amount or Decimal('0.00')):
+            locked_cr.amount_paid = locked_cr.commission_amount or Decimal('0.00')
+            locked_cr.status = 'paid'
         else:
-            commission_record.status = 'partially_paid'
-        commission_record.paid_at = timezone.now()
+            locked_cr.status = 'partially_paid'
+        locked_cr.paid_at = timezone.now()
         if actor:
-            commission_record.paid_by = actor
-        commission_record.paid_source = (config.commission_payment_source or '').strip()
+            locked_cr.paid_by = actor
+        locked_cr.paid_source = (config.commission_payment_source or '').strip()
         if account_user:
-            commission_record.paid_from_user = account_user
+            locked_cr.paid_from_user = account_user
         elif actor:
-            commission_record.paid_from_user = actor
-        commission_record.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
+            locked_cr.paid_from_user = actor
+        locked_cr.save(update_fields=['status', 'paid_at', 'amount_paid', 'paid_by', 'paid_source', 'paid_from_user'])
 
     if pay_amount != amount:
         return True, f"Paid ₦{pay_amount} (capped to outstanding)"

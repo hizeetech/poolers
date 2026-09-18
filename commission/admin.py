@@ -309,12 +309,14 @@ class CommissionProfileAssignmentLogAdmin(admin.ModelAdmin):
     list_filter = ('assigned_by_role', 'is_override', 'new_profile', 'created_at')
     search_fields = ('agent__email', 'agent__username', 'assigned_by__email', 'assigned_by__username', 'ip_address', 'assignment_reason')
     readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('agent', 'assigned_by', 'previous_profile', 'new_profile')
 
 
 class CommissionOverrideLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'agent', 'old_profile', 'new_profile', 'admin_user', 'ip_address')
     list_filter = ('new_profile', 'created_at')
     search_fields = ('agent__email', 'agent__username', 'admin_user__email', 'admin_user__username', 'reason', 'ip_address')
+    raw_id_fields = ('agent', 'admin_user', 'old_profile', 'new_profile')
 
 
 class CommissionChangeRequestAdmin(admin.ModelAdmin):
@@ -322,6 +324,7 @@ class CommissionChangeRequestAdmin(admin.ModelAdmin):
     list_filter = ('status', 'requested_profile', 'created_at')
     search_fields = ('agent__email', 'agent__username', 'requested_by__email', 'requested_by__username', 'reason', 'decision_note')
     readonly_fields = ('created_at', 'updated_at', 'decided_at')
+    raw_id_fields = ('agent', 'current_profile', 'requested_profile', 'requested_by', 'decided_by')
 
 class NetworkCommissionSettingsAdmin(admin.ModelAdmin):
     list_display = ('role', 'commission_percent', 'payout_day_description')
@@ -372,6 +375,7 @@ class WeeklyAgentCommissionAdmin(admin.ModelAdmin):
     actions = ['pay_commissions']
     readonly_fields = ('created_at', 'paid_at', 'total_stake', 'total_winnings', 'ggr', 
                       'commission_ggr_amount', 'commission_hybrid_amount', 'commission_total_amount', 'status')
+    raw_id_fields = ('agent', 'period', 'paid_by', 'paid_from_user')
 
     class Media:
         js = ('commission/js/weekly_commission_admin.js', 'commission/js/select_all_commissions.js')
@@ -547,6 +551,7 @@ class MonthlyNetworkCommissionAdmin(admin.ModelAdmin):
     search_fields = ('user__email',)
     actions = ['pay_commissions']
     readonly_fields = ('created_at', 'paid_at')
+    raw_id_fields = ('user', 'period', 'paid_by', 'paid_from_user')
 
     def add_view(self, request, form_url='', extra_context=None):
         from django.template.response import TemplateResponse
@@ -640,6 +645,10 @@ class CommissionRecallAdmin(admin.ModelAdmin):
     search_fields = ('beneficiary__email', 'beneficiary__username', 'requested_by__email', 'requested_by__username', 'period__start_date', 'period__end_date')
     readonly_fields = ('created_at',)
     actions = ('approve_selected', 'reject_selected')
+    # NOTE: original raw_id_fields — 2 fields removed because they do NOT exist on CommissionRecall model (2 admin.E002 errors):
+    # 'approved_by', 'executed_by'
+    # raw_id_fields = ('beneficiary', 'period', 'requested_by', 'decided_by', 'approved_by', 'executed_by')
+    raw_id_fields = ('beneficiary', 'period', 'requested_by', 'decided_by')
 
     @admin.action(description='Approve selected recall request(s) (execute recall)')
     def approve_selected(self, request, queryset):

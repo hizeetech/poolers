@@ -46,23 +46,25 @@ def _materialize_queryset_choices(queryset, label_getter=None, allow_empty_query
     return [(obj.pk, label_fn(obj)) for obj in materialized]
 
 
-class SafeModelChoiceField(forms.ModelChoiceField):
-    def __init__(self, queryset, *args, choices=None, **kwargs):
-        empty_label = kwargs.pop('empty_label', None)
-        super().__init__(queryset, *args, empty_label=empty_label, **kwargs)
-        materialized_choices = list(choices) if choices is not None else None
+class _SafeModelChoiceFieldMixin:
+    def _safe_label_from(self, obj):
+        if hasattr(self, 'label_from_instance'):
+            try:
+                return self.label_from_instance(obj)
+            except Exception:
+                pass
+        try:
+            return str(obj)
+        except Exception:
+            return getattr(obj, 'pk', None) or getattr(obj, 'id', '')
+
+    def _rematerialize_choices(self, queryset, choices_override=None, empty_label=None):
+        materialized_choices = list(choices_override) if choices_override is not None else None
         if materialized_choices is None:
             try:
-                def _label_from(obj):
-                    if hasattr(self, 'label_from_instance'):
-                        try:
-                            return self.label_from_instance(obj)
-                        except Exception:
-                            pass
-                    return str(obj)
                 materialized_choices = _materialize_queryset_choices(
-                    self.queryset,
-                    label_getter=_label_from,
+                    queryset,
+                    label_getter=self._safe_label_from,
                 )
             except Exception:
                 materialized_choices = []
@@ -71,33 +73,53 @@ class SafeModelChoiceField(forms.ModelChoiceField):
                 materialized_choices = [('', empty_label or '---------')] + list(materialized_choices)
         self.choices = materialized_choices
 
-    def label_from_instance(self, obj):
-        return super().label_from_instance(obj)
 
-
-class SafeModelMultipleChoiceField(forms.ModelMultipleChoiceField):
+class SafeModelChoiceField(_SafeModelChoiceFieldMixin, forms.ModelChoiceField):
     def __init__(self, queryset, *args, choices=None, **kwargs):
-        super().__init__(queryset, *args, **kwargs)
-        materialized_choices = list(choices) if choices is not None else None
-        if materialized_choices is None:
-            try:
-                def _label_from(obj):
-                    if hasattr(self, 'label_from_instance'):
-                        try:
-                            return self.label_from_instance(obj)
-                        except Exception:
-                            pass
-                    return str(obj)
-                materialized_choices = _materialize_queryset_choices(
-                    self.queryset,
-                    label_getter=_label_from,
-                )
-            except Exception:
-                materialized_choices = []
-        self.choices = materialized_choices
+        empty_label = kwargs.pop('empty_label', None)
+        self._empty_label_storage = empty_label
+        self._choices_override_init = choices
+        super().__init__(queryset, *args, empty_label=empty_label, **kwargs)
+        self._rematerialize_choices(self.queryset, choices_override=choices, empty_label=empty_label)
 
     def label_from_instance(self, obj):
         return super().label_from_instance(obj)
+
+    @property
+    def queryset(self):
+        return super().queryset
+
+    @queryset.setter
+    def queryset(self, value):
+        try:
+            forms.ModelChoiceField.queryset.fset(self, value)
+        except AttributeError:
+            object.__setattr__(self, '_queryset', value)
+            self.widget.choices = self.choices
+        self._rematerialize_choices(value, choices_override=None, empty_label=getattr(self, '_empty_label_storage', None))
+
+
+class SafeModelMultipleChoiceField(_SafeModelChoiceFieldMixin, forms.ModelMultipleChoiceField):
+    def __init__(self, queryset, *args, choices=None, **kwargs):
+        self._choices_override_init = choices
+        super().__init__(queryset, *args, **kwargs)
+        self._rematerialize_choices(self.queryset, choices_override=choices, empty_label=None)
+
+    def label_from_instance(self, obj):
+        return super().label_from_instance(obj)
+
+    @property
+    def queryset(self):
+        return super().queryset
+
+    @queryset.setter
+    def queryset(self, value):
+        try:
+            forms.ModelMultipleChoiceField.queryset.fset(self, value)
+        except AttributeError:
+            object.__setattr__(self, '_queryset', value)
+            self.widget.choices = self.choices
+        self._rematerialize_choices(value, choices_override=None, empty_label=None)
 
 
 class MultiFileInput(forms.ClearableFileInput):

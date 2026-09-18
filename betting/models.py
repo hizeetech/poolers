@@ -878,6 +878,7 @@ class BettingLimitAuditLog(models.Model):
         ('AGENT_UPDATE', 'Agent Update'),
         ('USER_UPDATE', 'User Update'),
         ('TICKET_REJECTED', 'Ticket Rejected'),
+        ('TICKET_WINNING_CAPPED', 'Ticket Winning Capped'),
     )
 
     action_type = models.CharField(max_length=30, choices=ACTION_CHOICES)
@@ -1113,6 +1114,8 @@ class Transaction(models.Model):
     email_failed_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True, help_text='For deposit: admin "failed" email sent at')
     last_email_error = models.TextField(blank=True, default='', help_text='Last email send error message (for deposit notifications)')
 
+    commission_related_period = models.ForeignKey('commission.CommissionPeriod', on_delete=models.SET_NULL, null=True, blank=True, related_name='commission_period_transactions', help_text='For commission_payout tx type: links to the CommissionPeriod this payment settles. Used in DB partial unique index to prevent double-paying the same agent+period.')
+
     class Meta:
         ordering = ['-timestamp']
         constraints = [
@@ -1122,6 +1125,13 @@ class Transaction(models.Model):
                 name='unique_completed_bet_payout_per_ticket',
                 violation_error_code='duplicate_bet_payout',
                 violation_error_message='A completed bet payout already exists for this ticket.',
+            ),
+            models.UniqueConstraint(
+                fields=['target_user', 'commission_related_period'],
+                condition=models.Q(transaction_type='commission_payout', status='completed'),
+                name='unique_completed_commission_payout_per_agent_period',
+                violation_error_code='duplicate_commission_payout',
+                violation_error_message='A completed commission payout already exists for this agent and commission period.',
             ),
         ]
 
@@ -2048,7 +2058,7 @@ class BetTicket(models.Model):
     def has_computed_results(self):
         return self.selections.filter(fixture__status__in=['finished', 'settled']).exists()
 
-    def check_and_update_status(self):
+    def check_and_update_status(self, *, actor=None, source='ticket_settlement'):
         # --- Idempotency early returns: prevent any double-processing / double-payout ---
         if self.status != 'pending':
             # Already won/lost/cashed_out/voided — nothing to do.
@@ -2297,13 +2307,13 @@ class BetTicket(models.Model):
                 try:
                     payout_tx = Transaction.objects.create(
                         user=self.user,
-                        initiating_user=None,
+                        initiating_user=actor if actor and getattr(actor, "is_authenticated", False) else None,
                         target_user=self.user,
                         transaction_type=PAYOUT_TX_TYPE,
                         amount=payout_amount,
                         is_successful=True,
                         status=PAYOUT_TX_STATUS,
-                        description=f"Winnings for ticket {locked_ticket.ticket_id}",
+                        description=(f"Admin payout: Winnings for Bet Ticket {locked_ticket.ticket_id}" if actor and actor.is_authenticated else f"Winnings for ticket {locked_ticket.ticket_id}"),
                         related_bet_ticket=locked_ticket,
                         timestamp=timezone.now()
                     )
@@ -2319,13 +2329,13 @@ class BetTicket(models.Model):
 
                 wallet.apply_delta(
                     amount=payout_amount,
-                    actor=None,
+                    actor=(actor if actor and getattr(actor, "is_authenticated", False) else None),
                     transaction_obj=payout_tx,
                     reference=str(locked_ticket.ticket_id),
                     reason=payout_tx.description,
                     metadata={
                         "ticket_id": locked_ticket.ticket_id,
-                        "source": "ticket_settlement",
+                        "source": source or "ticket_settlement",
                     },
                 )
 

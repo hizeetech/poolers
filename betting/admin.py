@@ -900,18 +900,19 @@ class BetTicketAdmin(admin.ModelAdmin):
         cashout_url = reverse('admin:betting_betticket_cashout_single', args=[obj.pk])
         can_void = obj.status not in ('won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES)
         if can_void:
+            stake_str = f"{obj.stake_amount:.2f}"
             void_confirm = (
                 f"Are you sure you want to VOID ticket {obj.ticket_id} and refund stake "
-                f"\u20a6{obj.stake_amount:.2f}? This cannot be undone."
+                f"\u20a6{stake_str}? This cannot be undone."
             ).replace("'", "\\'").replace('"', '&quot;')
             void_btn = format_html(
                 '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
                 'background:#dc3545;color:#fff;text-decoration:none;border-radius:4px;'
                 'font-size:12px;font-weight:600;" href="{}" '
-                'onclick="return confirm(\'{}\');">Void &amp; Refund \u20a6{:.2f}</a>',
+                'onclick="return confirm(\'{}\');">Void &amp; Refund \u20a6{}</a>',
                 void_url,
                 void_confirm,
-                obj.stake_amount,
+                stake_str,
             )
             btns.append(void_btn)
         try:
@@ -923,18 +924,19 @@ class BetTicketAdmin(admin.ModelAdmin):
             quote = build_cashout_quote(ticket=ticket_for_quote, source="admin_list_preview")
             if quote and getattr(quote, 'eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
                 amt = Decimal(quote.cashout_amount)
+                amt_str = f"{amt:.2f}"
                 cash_confirm = (
-                    f"Confirm: Cash Out ticket {obj.ticket_id} for \u20a6{amt:.2f} "
+                    f"Confirm: Cash Out ticket {obj.ticket_id} for \u20a6{amt_str} "
                     f"(credited as winnings). Continue?"
                 ).replace("'", "\\'").replace('"', '&quot;')
                 cash_btn = format_html(
                     '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
                     'background:#28a745;color:#fff;text-decoration:none;border-radius:4px;'
                     'font-size:12px;font-weight:600;" href="{}" '
-                    'onclick="return confirm(\'{}\');">Cashout \u20a6{:.2f}</a>',
+                    'onclick="return confirm(\'{}\');">Cashout \u20a6{}</a>',
                     cashout_url,
                     cash_confirm,
-                    amt,
+                    amt_str,
                 )
                 btns.append(cash_btn)
         except Exception:

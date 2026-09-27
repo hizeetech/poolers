@@ -854,7 +854,7 @@ class BetTicketAdmin(admin.ModelAdmin):
     change_list_template = "betting/admin/betticket_change_list.html"
     list_display = (
         'ticket_id', 'user', 'selection_count', 'stake_amount', 'display_total_odd', 'potential_winning',
-        'min_winning', 'won_amount_display', 'status', 'placed_at', 'deleted_by', 'deleted_at'
+        'min_winning', 'won_amount_display', 'status', 'placed_at', 'deleted_by', 'deleted_at', 'row_actions'
     )
     list_filter = ('status', TicketSelectionCountFilter, 'placed_at', 'user')
     search_fields = ('ticket_id', 'id__startswith', 'user__email__icontains')
@@ -891,6 +891,140 @@ class BetTicketAdmin(admin.ModelAdmin):
 
     won_amount_display.short_description = 'Won Amt'
     won_amount_display.admin_order_field = 'cashout_amount'
+
+    def row_actions(self, obj):
+        from betting.services.cashout import build_cashout_quote
+        btns = []
+        void_url = reverse('admin:betting_betticket_void_single', args=[obj.pk])
+        cashout_url = reverse('admin:betting_betticket_cashout_single', args=[obj.pk])
+        can_void = obj.status not in ('won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES)
+        if can_void:
+            void_btn = (
+                f'<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;background:#dc3545;color:#fff;'
+                f'text-decoration:none;border-radius:4px;font-size:12px;font-weight:600;" '
+                f'href="{void_url}" onclick="return confirm('"'Are you sure you want to VOID ticket {obj.ticket_id} and refund stake ₦{obj.stake_amount:.2f}? This cannot be undone.'"');">'
+                f'Void &amp; Refund ₦{obj.stake_amount:.2f}</a>'
+            )
+            btns.append(void_btn)
+        try:
+            quote = build_cashout_quote(ticket=obj, source="admin_list_preview")
+            if quote and getattr(quote, 'is_eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
+                amt = f"{quote.cashout_amount:.2f}"
+                cash_btn = (
+                    f'<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;background:#28a745;color:#fff;'
+                    f'text-decoration:none;border-radius:4px;font-size:12px;font-weight:600;" '
+                    f'href="{cashout_url}" onclick="return confirm('"'Confirm: Cash Out ticket {obj.ticket_id} for ₦{amt} (credited as winnings). Continue?'"');">'
+                    f'Cashout ₦{amt}</a>'
+                )
+                btns.append(cash_btn)
+        except Exception:
+            pass
+        if not btns:
+            return mark_safe('<span style="color:#999;font-size:11px;">—</span>')
+        return mark_safe('<div style="white-space:nowrap;">' + "".join(btns) + '</div>')
+
+    row_actions.short_description = 'Actions'
+    row_actions.allow_tags = True
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                '<path:object_id>/void-single/',
+                self.admin_site.admin_view(self.void_single_ticket_view),
+                name='betting_betticket_void_single',
+            ),
+            path(
+                '<path:object_id>/cashout-single/',
+                self.admin_site.admin_view(self.cashout_single_ticket_view),
+                name='betting_betticket_cashout_single',
+            ),
+        ]
+        return custom + urls
+
+    def void_single_ticket_view(self, request, object_id):
+        from django.http import HttpResponseRedirect
+        ticket = get_object_or_404(BetTicket, pk=object_id)
+        try:
+            with db_transaction.atomic():
+                locked = BetTicket.objects.select_for_update().select_related("user").get(pk=ticket.pk)
+                if locked.status in ['won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES]:
+                    messages.warning(request, f"Ticket {locked.ticket_id} is already '{locked.display_status_label}' and cannot be voided.")
+                    return HttpResponseRedirect(reverse('admin:betting_betticket_changelist'))
+                deleted_at = timezone.now()
+                refund_tx = Transaction.objects.create(
+                    user=locked.user,
+                    initiating_user=request.user if getattr(request.user, "is_authenticated", False) else None,
+                    target_user=locked.user,
+                    transaction_type='ticket_deletion_refund',
+                    amount=locked.stake_amount,
+                    is_successful=True,
+                    status='completed',
+                    description=f"Admin single-ticket void: Stake refunded for ticket {locked.ticket_id}",
+                    related_bet_ticket=locked,
+                    timestamp=deleted_at,
+                )
+                user_wallet = Wallet.objects.select_for_update().get(user=locked.user)
+                user_wallet.apply_delta(
+                    amount=locked.stake_amount,
+                    actor=request.user if getattr(request.user, "is_authenticated", False) else None,
+                    transaction_obj=refund_tx,
+                    reference=str(locked.ticket_id),
+                    reason=refund_tx.description,
+                    metadata={"ticket_id": locked.ticket_id, "source": "admin_single_void"},
+                )
+                BetTicket.objects.filter(pk=locked.pk).update(
+                    status='deleted',
+                    deleted_by=request.user,
+                    deleted_at=deleted_at,
+                    last_updated=deleted_at,
+                )
+            try:
+                from commission.tasks import enqueue_refresh_weekly_commissions_for_ticket_ids
+                from betting.signals import schedule_admin_betticket_refresh
+                enqueue_refresh_weekly_commissions_for_ticket_ids([str(locked.id)])
+                schedule_admin_betticket_refresh({"ticket_ids": [locked.ticket_id], "action": "single_void", "count": 1})
+            except Exception:
+                pass
+            views.log_admin_activity(request, f"Single-ticket void + refunded stake for BetTicket {locked.ticket_id}.")
+            messages.success(request, f"Ticket {locked.ticket_id} voided. Stake ₦{locked.stake_amount:.2f} refunded.")
+        except Exception as e:
+            messages.error(request, f"Failed to void ticket {ticket.ticket_id}: {e}")
+        return HttpResponseRedirect(reverse('admin:betting_betticket_changelist'))
+
+    def cashout_single_ticket_view(self, request, object_id):
+        from django.http import HttpResponseRedirect
+        from betting.services.cashout import execute_cashout, CashOutError
+        ticket = get_object_or_404(BetTicket, pk=object_id)
+        try:
+            quote_ok = execute_cashout(
+                ticket_id=str(ticket.pk),
+                actor=request.user,
+                ip_address=getattr(request, 'META', {}).get('REMOTE_ADDR', ''),
+                user_agent=getattr(request, 'META', {}).get('HTTP_USER_AGENT', '')[:200],
+            )
+            reloaded = BetTicket.objects.get(pk=ticket.pk)
+            views.log_admin_activity(
+                request,
+                f"Admin single-ticket cashout for BetTicket {reloaded.ticket_id} -> status={reloaded.status} cashout_amount={reloaded.cashout_amount}.",
+            )
+            if reloaded.status == 'cashed_out':
+                try:
+                    from betting.signals import schedule_admin_betticket_refresh
+                    schedule_admin_betticket_refresh({"ticket_ids": [reloaded.ticket_id], "action": "single_cashout", "count": 1})
+                except Exception:
+                    pass
+                messages.success(
+                    request,
+                    f"Ticket {reloaded.ticket_id} cashed out successfully. User credited with winnings ₦{reloaded.cashout_amount:.2f} (bet_cashout wallet transaction)."
+                )
+            else:
+                messages.warning(request, f"Cashout completed for {reloaded.ticket_id}, ticket status now: {reloaded.status}.")
+        except CashOutError as ce:
+            messages.error(request, f"Cashout not eligible for ticket {ticket.ticket_id}: {ce}")
+        except Exception as e:
+            messages.error(request, f"Failed to cashout ticket {ticket.ticket_id}: {e}")
+        return HttpResponseRedirect(reverse('admin:betting_betticket_changelist'))
 
     def selections_snapshot_preview(self, obj):
         snap = (getattr(obj, 'betting_limits_snapshot', None) or {}).get('selections_snapshot') or []
@@ -4125,6 +4259,23 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'fields': ('show_double_chance_odds',),
             'description': 'Control visibility of Double Chance (1X / 12 / X2) odds on the public fixtures page. When ON, DC odds appear in a collapsible More Markets sub-row beneath the 1X2 row. When OFF, only 1X2 odds are shown.',
         }),
+        ('Withdrawal Processing Control', {
+            'fields': (
+                'withdrawals_paused',
+                'withdrawals_pause_message',
+                'withdrawals_pause_processing_delay_seconds',
+            ),
+            'description': mark_safe(
+                '<div style="padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;margin-bottom:4px;font-family:system-ui,sans-serif;font-size:13px;color:#1e40af;">'
+                '<b style="font-weight:800;">HOW IT WORKS (TRANSPARENT MODE — NO NETWORK GIMMICK):</b><br>'
+                '1. Tick <b>"Pause All New Withdrawal Requests"</b> and click <b>Save</b> → non-admin users can no longer submit new withdrawals.<br>'
+                '2. Set the <b>Processing Delay (seconds)</b> → the user\'s submit button shows the normal <i>"Processing..."</i> state for that long (feels like genuine server processing).<br>'
+                '3. The user then sees the <b>Honest Custom Message</b> you write above (e.g. "Withdrawals temporarily paused during Saturday peak — please retry after 11pm WAT. Your funds are safe.").<br>'
+                '<b>NO deceptive "network error" spinner. Users trust transparent messaging. Always write a truthful message — it protects your brand long-term.</b><br>'
+                'Admin / Finance roles are <b>EXEMPTED</b> from the pause so operations team can still withdraw normally. Uncheck the box + Save to instantly resume normal withdrawals.'
+                '</div>'
+            ),
+        }),
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
         }),
@@ -4171,13 +4322,15 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'withdrawal_approved_notification_emails',
             'withdrawal_rejected_notification_emails',
             'stuck_deposit_alert_notification_emails',
+            'withdrawals_pause_message',
         ]:
             if fn in form.base_fields:
                 old = form.base_fields[fn]
+                rows = 5 if fn == 'withdrawals_pause_message' else 2
                 form.base_fields[fn].widget = _df.Textarea(attrs={
-                    'rows': 2,
-                    'spellcheck': 'false',
-                    'style': 'font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 8px 10px; letter-spacing: 0.1px;'
+                    'rows': rows,
+                    'spellcheck': 'false' if fn != 'withdrawals_pause_message' else 'true',
+                    'style': 'font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 8px 10px; letter-spacing: 0.1px;' if fn != 'withdrawals_pause_message' else 'font-size: 13.5px; line-height: 1.6; padding: 10px 12px;'
                 })
                 form.base_fields[fn].required = False
         return form

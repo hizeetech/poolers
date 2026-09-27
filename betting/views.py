@@ -412,16 +412,57 @@ def crm_can_approve_withdrawals(user):
     return user.crm_role in ['ops', 'supervisor']
 
 def _is_global_withdrawals_enabled():
+    """Emergency lockdown flag (SystemSetting). Button disabled entirely if False."""
     from betting.models import SystemSetting
     v = SystemSetting.get_setting('GLOBAL_WITHDRAWALS_ENABLED', '1')
     return str(v).strip().lower() in ('1', 'true', 'yes', 'on', 'enabled')
 
+def _withdrawals_in_smooth_pause_mode():
+    """Smooth pause mode (SiteConfig.withdrawals_paused=True).
+    Emergency lockout takes precedence: if _is_global_withdrawals_enabled() returns False,
+    we are NOT in smooth pause — we are in hard lockdown mode, button is disabled.
+    Returns False OR the resolved SiteConfig row (truthy) so callers can read fields."""
+    if not _is_global_withdrawals_enabled():
+        return False
+    try:
+        from betting.models import SiteConfiguration
+        cfg = SiteConfiguration.objects.filter(pk=1).first()
+        if cfg and getattr(cfg, 'withdrawals_paused', False):
+            return cfg
+    except Exception:
+        return False
+    return False
+
 def _global_withdrawals_disabled_message():
     from betting.models import SystemSetting
+    try:
+        cfg = _withdrawals_in_smooth_pause_mode()
+        if cfg:
+            custom = getattr(cfg, 'withdrawals_pause_message', None) or ''
+            custom = str(custom).strip()
+            if custom:
+                return custom
+    except Exception:
+        pass
     custom = SystemSetting.get_setting('GLOBAL_WITHDRAWALS_MESSAGE', None)
     if custom and str(custom).strip():
         return str(custom).strip()
     return "Withdrawals temporarily suspended by platform administration during duplicate-settlement reconciliation. Please check back later or contact support."
+
+def _global_withdrawals_delay_seconds():
+    try:
+        cfg = _withdrawals_in_smooth_pause_mode()
+        if cfg:
+            raw = getattr(cfg, 'withdrawals_pause_processing_delay_seconds', 0) or 0
+            raw = int(raw or 0)
+            if raw < 0:
+                raw = 0
+            if raw > 60:
+                raw = 60
+            return raw
+    except Exception:
+        return 0
+    return 0
 
 def crm_can_suspend_users(user):
     if not is_crm_user(user):
@@ -4911,12 +4952,89 @@ def place_bet(request):
                             f" ⚠️ Maximum winning capped at ₦{winning_cap_applied_info['final_capped']:.2f}"
                             f" (original projected ₦{winning_cap_applied_info['original_projected']:.2f})."
                         )
+
+                    # Option1 First-Print DB Parity: build full ticket dict inline so
+                    # fixtures.html first-print populateFromTicket() uses DB-verified values
+                    # DIRECTLY (no 2nd get_ticket_details_json fetch → no 403/race fallback-to-stale-DOM).
+                    _placed_at_local = bet_ticket.placed_at
+                    try:
+                        from django.utils import timezone as _tz
+                        if _placed_at_local and _tz.is_aware(_placed_at_local):
+                            _placed_at_local = _tz.localtime(_placed_at_local)
+                    except Exception:
+                        pass
+                    _selections_payload = []
+                    try:
+                        for _s in bet_ticket.selections.select_related('fixture', 'fixture__betting_period').all():
+                            _fixture = _s.fixture
+                            _match_date_str = ''
+                            _match_time_str = ''
+                            try:
+                                if getattr(_fixture, 'match_date', None):
+                                    _match_date_str = _fixture.match_date.strftime('%Y-%m-%d')
+                            except Exception:
+                                pass
+                            try:
+                                if getattr(_fixture, 'match_time', None):
+                                    if hasattr(_fixture.match_time, 'strftime'):
+                                        _match_time_str = _fixture.match_time.strftime('%H:%M')
+                                    else:
+                                        _match_time_str = str(_fixture.match_time)[:5]
+                            except Exception:
+                                pass
+                            _bt_display = (_s.bet_type or '').replace('_', ' ').title()
+                            _odd_value = float(_s.odd_selected) if _s.odd_selected is not None and str(_s.odd_selected) != '' else 1.0
+                            _selections_payload.append({
+                                'fixture_id': str(getattr(_fixture, 'id', '') or ''),
+                                'fixture_home_team': getattr(_fixture, 'home_team', '') or '',
+                                'fixture_away_team': getattr(_fixture, 'away_team', '') or '',
+                                'fixture_match_date': _match_date_str,
+                                'fixture_match_time': _match_time_str,
+                                'bet_type': _s.bet_type or '',
+                                'bet_type_display': _bt_display,
+                                'odd': _odd_value,
+                                'fixture_period_name': (getattr(getattr(_fixture, 'betting_period', None), 'name', None) if getattr(_fixture, 'betting_period', None) else '') or ''
+                            })
+                    except Exception as _serr:
+                        logger.warning(f"Option1 inline ticket selections serialize err ticket={bet_ticket.ticket_id!r}: {_serr}")
+                    _bonus_amount = bet_ticket.bonus_amount if bet_ticket.bonus_amount is not None else Decimal('0.00')
+                    _bonus_is_final = bool(getattr(bet_ticket, 'bonus_is_final', False))
+                    _inline_ticket = {
+                        'ticket_id': bet_ticket.ticket_id,
+                        'placed_at': _placed_at_local.strftime('%Y-%m-%d %H:%M') if _placed_at_local and hasattr(_placed_at_local, 'strftime') else '',
+                        'stake_amount': float(bet_ticket.stake_amount) if bet_ticket.stake_amount is not None else 0.0,
+                        'total_odd': float(bet_ticket.total_odd) if bet_ticket.total_odd is not None else 0.0,
+                        'max_winning': float(bet_ticket.max_winning) if bet_ticket.max_winning is not None else 0.0,
+                        'potential_winning': float(bet_ticket.potential_winning) if bet_ticket.potential_winning is not None else 0.0,
+                        'min_winning': float(bet_ticket.min_winning) if bet_ticket.min_winning is not None else 0.0,
+                        'bonus_percentage_applied': float(getattr(bet_ticket, 'bonus_percentage_applied', Decimal('0.0000')) or 0.0),
+                        'bonus_base': getattr(bet_ticket, 'bonus_base', None),
+                        'bonus_base_amount': float(getattr(bet_ticket, 'bonus_base_amount', Decimal('0.00')) or 0.0),
+                        'bonus_amount': float(_bonus_amount),
+                        'bonus_is_final': _bonus_is_final,
+                        'bonus_applied_at': None,
+                        'original_selections_count': int(getattr(bet_ticket, 'original_selections_count', None) or len(_selections_payload) or 0),
+                        'selections': _selections_payload,
+                        'status': bet_ticket.get_status_display() if hasattr(bet_ticket, 'get_status_display') else str(bet_ticket.status or ''),
+                        'status_code': bet_ticket.status or '',
+                        'bet_type': bet_ticket.bet_type or ('single' if len(_selections_payload) == 1 else ('multiple' if len(_selections_payload) > 1 else '')),
+                        'system_min_count': bet_ticket.system_min_count,
+                    }
+                    try:
+                        if hasattr(bet_ticket, 'bonus_applied_at') and bet_ticket.bonus_applied_at is not None:
+                            _baa = bet_ticket.bonus_applied_at
+                            if hasattr(_baa, 'strftime'):
+                                _inline_ticket['bonus_applied_at'] = _baa.strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        pass
+
                     response_payload = {
                         'success': True,
                         'message': success_msg,
                         'ticket_id': bet_ticket.ticket_id,
                         'new_balance': str(user_wallet.balance),
                         'max_winning_stored': str(max_winning),
+                        'ticket': _inline_ticket,
                     }
                     if winning_cap_applied_info:
                         response_payload['winning_cap_applied'] = True
@@ -6937,12 +7055,30 @@ def monnify_webhook(request):
 def withdraw_funds(request):
     expects_json = request.headers.get('Content-Type', '').startswith('application/json')
     is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
-    # Global kill-switch for withdrawals (admin toggle via SystemSetting):
+    # HARD LOCKDOWN (SystemSetting): Button is greyed out on template level already.
     if not _is_global_withdrawals_enabled() and not is_admin_or_super:
         msg = _global_withdrawals_disabled_message()
         if expects_json:
             return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'message': msg}, status=423)
         messages.error(request, msg)
+        return redirect('betting:wallet')
+    # SMOOTH PAUSE MODE (SiteConfig.withdrawals_paused=True): Button is clickable,
+    # user goes through flow, then server delays X seconds with normal "Processing..."
+    # button state, then shows the HONEST custom message via Swal.fire — NEVER a false
+    # network spinner gimmick. Admin/Finance users are ALWAYS EXEMPTED so staff can withdraw.
+    smooth_pause_cfg = _withdrawals_in_smooth_pause_mode()
+    if smooth_pause_cfg and not is_admin_or_super:
+        delay = _global_withdrawals_delay_seconds()
+        if delay > 0:
+            import time as _time_mod_smooth
+            try:
+                _time_mod_smooth.sleep(int(delay))
+            except Exception:
+                pass
+        msg = _global_withdrawals_disabled_message()
+        if expects_json:
+            return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'smooth_pause': True, 'message': msg}, status=423)
+        messages.warning(request, msg)
         return redirect('betting:wallet')
     allowed_user_types = {'master_agent', 'super_agent', 'agent', 'account_user', 'finance', 'admin', 'retail_manager', 'crm'}
     if request.user.user_type not in allowed_user_types:
@@ -7131,10 +7267,27 @@ def verify_withdrawal_pin(request):
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
 
-    # Global kill-switch (skip pin verify if withdrawals globally disabled):
     is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
+
+    # HARD LOCKDOWN (SystemSetting): Template disables button entirely, so this endpoint
+    # is rarely reached, but guard anyway with immediate hard-fail.
     if not _is_global_withdrawals_enabled() and not is_admin_or_super:
         return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'message': _global_withdrawals_disabled_message()}, status=423)
+
+    # SMOOTH PAUSE MODE (SiteConfig.withdrawals_paused): user already typed PIN, now
+    # server simulates processing delay X seconds, then returns HONEST custom error
+    # message with withdrawals_disabled=True → Swal.fire displays. Admin/Finance exempt.
+    smooth_cfg = _withdrawals_in_smooth_pause_mode()
+    if smooth_cfg and not is_admin_or_super:
+        delay = _global_withdrawals_delay_seconds()
+        if delay > 0:
+            import time as _time_mod_smooth_pin
+            try:
+                _time_mod_smooth_pin.sleep(int(delay))
+            except Exception:
+                pass
+        msg = _global_withdrawals_disabled_message()
+        return JsonResponse({'status': 'error', 'withdrawals_disabled': True, 'smooth_pause': True, 'message': msg}, status=423)
 
     if request.headers.get('Content-Type', '').startswith('application/json'):
         try:
@@ -7975,8 +8128,10 @@ def user_dashboard(request):
     recent_tickets = BetTicket.objects.filter(user=user).order_by('-placed_at')[:10]
     active_bets_count = BetTicket.objects.filter(user=user, status='pending').count()
     
-    # Calculate Total Winnings (only WON tickets)
-    total_winnings = BetTicket.objects.filter(user=user, status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal('0.00')
+    # Calculate Total Winnings: WON tickets (max_winning) + CASHED OUT tickets (cashout_amount paid to user)
+    _won_agg = BetTicket.objects.filter(user=user, status='won').aggregate(Sum('max_winning'))
+    _cash_agg = BetTicket.objects.filter(user=user, status='cashed_out').aggregate(Sum('cashout_amount'))
+    total_winnings = (_won_agg.get('max_winning__sum') or Decimal('0.00')) + (_cash_agg.get('cashout_amount__sum') or Decimal('0.00'))
 
     context = {
         'recent_tickets': recent_tickets,
@@ -8263,7 +8418,13 @@ def agent_dashboard(request):
 
     # Aggregate total turnover and winnings for downline
     total_downline_turnover = downline_bet_tickets.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-    total_downline_winnings = downline_bet_tickets.filter(status='won').aggregate(Sum('max_winning'))['max_winning__sum'] or Decimal('0.00')
+    # Winnings = WON settled (max_winning) + CASHED OUT tickets (cashout_amount actually paid to user)
+    _downline_won_agg = downline_bet_tickets.filter(status='won').aggregate(Sum('max_winning'))
+    _downline_cash_agg = downline_bet_tickets.filter(status='cashed_out').aggregate(Sum('cashout_amount'))
+    total_downline_winnings = (
+        (_downline_won_agg.get('max_winning__sum') or Decimal('0.00'))
+        + (_downline_cash_agg.get('cashout_amount__sum') or Decimal('0.00'))
+    )
     
     downline_ggr = total_downline_turnover - total_downline_winnings
 
@@ -8407,8 +8568,13 @@ def agent_dashboard(request):
         default=Value(0),
         output_field=DecimalField()
     )
-    win_case = Case(
+    won_case = Case(
         When(bet_tickets__status='won', then=F('bet_tickets__potential_winning')),
+        default=Value(0),
+        output_field=DecimalField()
+    )
+    cashout_case = Case(
+        When(bet_tickets__status='cashed_out', then=F('bet_tickets__cashout_amount')),
         default=Value(0),
         output_field=DecimalField()
     )
@@ -8416,16 +8582,20 @@ def agent_dashboard(request):
     if tickets_date_filter is not None:
         top_performers = downline_users_qs.annotate(
             user_total_stake=Sum(stake_case, filter=tickets_date_filter),
-            user_total_winnings=Sum(win_case, filter=tickets_date_filter),
+            _user_won_sum=Coalesce(Sum(won_case, filter=tickets_date_filter), Value(0), output_field=DecimalField()),
+            _user_cash_sum=Coalesce(Sum(cashout_case, filter=tickets_date_filter), Value(0), output_field=DecimalField()),
         ).annotate(
-            user_ggr=F('user_total_stake') - F('user_total_winnings')
+            user_total_winnings=F('_user_won_sum') + F('_user_cash_sum'),
+            user_ggr=F('user_total_stake') - (F('_user_won_sum') + F('_user_cash_sum'))
         ).order_by('-user_ggr')[:5]
     else:
         top_performers = downline_users_qs.annotate(
             user_total_stake=Sum(stake_case),
-            user_total_winnings=Sum(win_case),
+            _user_won_sum=Coalesce(Sum(won_case), Value(0), output_field=DecimalField()),
+            _user_cash_sum=Coalesce(Sum(cashout_case), Value(0), output_field=DecimalField()),
         ).annotate(
-            user_ggr=F('user_total_stake') - F('user_total_winnings')
+            user_total_winnings=F('_user_won_sum') + F('_user_cash_sum'),
+            user_ggr=F('user_total_stake') - (F('_user_won_sum') + F('_user_cash_sum'))
         ).order_by('-user_ggr')[:5] # Top 5 based on GGR
 
     # Recent activity from downline users
@@ -9218,7 +9388,10 @@ def agent_sales_winnings_report(request):
         ).exclude(status__in=BetTicket.VOIDED_STATUSES)
 
         total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-        total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+        # CRM report: Winnings = WON potential_winning + CASHED OUT cashout_amount actually paid
+        _crm_won_agg = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))
+        _crm_cash_agg = bets_by_user.filter(status='cashed_out').aggregate(Sum('cashout_amount'))
+        total_winnings = (_crm_won_agg.get('potential_winning__sum') or Decimal('0.00')) + (_crm_cash_agg.get('cashout_amount__sum') or Decimal('0.00'))
         
         net_result = total_stake - total_winnings
 
@@ -9473,7 +9646,10 @@ def admin_dashboard(request):
 
     total_bets_placed = BetTicket.objects.count()
     total_stake_amount = BetTicket.objects.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-    total_potential_winning = BetTicket.objects.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+    total_potential_winning = (
+        (BetTicket.objects.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00'))
+        + (BetTicket.objects.filter(status='cashed_out').aggregate(Sum('cashout_amount'))['cashout_amount__sum'] or Decimal('0.00'))
+    )
     
     total_deposits = Transaction.objects.filter(transaction_type='deposit', is_successful=True).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
     total_withdrawals = UserWithdrawal.objects.filter(status='approved').aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
@@ -9552,10 +9728,9 @@ def admin_dashboard(request):
             .filter(placed_at__gte=period_start_dt, placed_at__lte=period_end_dt)
         )
         period_turnover = tickets_qs.aggregate(total=Coalesce(Sum('stake_amount'), Value(0), output_field=DecimalField()))['total']
-        period_winnings = (
-            tickets_qs.filter(status='won')
-            .aggregate(total=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['total']
-        )
+        won_sum = tickets_qs.filter(status='won').aggregate(total=Coalesce(Sum('max_winning'), Value(0), output_field=DecimalField()))['total']
+        cash_sum = tickets_qs.filter(status='cashed_out').aggregate(total=Coalesce(Sum('cashout_amount'), Value(0), output_field=DecimalField()))['total']
+        period_winnings = (won_sum or Decimal('0.00')) + (cash_sum or Decimal('0.00'))
         period_ggr = (period_turnover or Decimal('0.00')) - (period_winnings or Decimal('0.00'))
         period_commission_paid = (
             WeeklyAgentCommission.objects.filter(period=selected_commission_period)
@@ -11442,7 +11617,11 @@ def admin_sales_winnings_report(request):
         ).exclude(status__in=BetTicket.VOIDED_STATUSES)
 
         total_stake = bets_by_user.aggregate(Sum('stake_amount'))['stake_amount__sum'] or Decimal('0.00')
-        total_winnings = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))['potential_winning__sum'] or Decimal('0.00')
+        # Finance Admin report: Winnings = WON potential_winning + CASHED OUT cashout_amount actually paid
+        _fin_won_agg = bets_by_user.filter(status='won').aggregate(Sum('potential_winning'))
+        _fin_cash_agg = bets_by_user.filter(status='cashed_out').aggregate(Sum('cashout_amount'))
+        total_winnings = (_fin_won_agg.get('potential_winning__sum') or Decimal('0.00')) + (_fin_cash_agg.get('cashout_amount__sum') or Decimal('0.00'))
+        total_winnings = Decimal(str(total_winnings))
         
         net_result = total_stake - total_winnings
 
@@ -12200,7 +12379,7 @@ def _ticket_transaction_summary(queryset, filtered_users, start_dt):
         'closing_balance': closing_balance,
         'total_deposits': _aggregate_money(queryset.filter(transaction_type='Deposit'), field='credit'),
         'total_stakes': _aggregate_money(queryset.filter(transaction_type='Ticket Purchase'), field='debit'),
-        'total_winnings': _aggregate_money(queryset.filter(transaction_type='Winning Settlement'), field='credit'),
+        'total_winnings': _aggregate_money(queryset.filter(transaction_type__in=['Winning Settlement', 'bet_cashout']), field='credit'),
         'total_voids_refunded': _aggregate_money(queryset.filter(transaction_type='Ticket Voided'), field='credit'),
         'total_withdrawals': _aggregate_money(queryset.filter(transaction_type='Withdrawal'), field='debit'),
         'commission_credits': commission_credits,
@@ -21734,14 +21913,19 @@ def get_ticket_details_json(request):
     if not ticket_id:
         return JsonResponse({'success': False, 'message': 'Ticket ID is required'}, status=400)
 
-    # Permission check: Cashier, Agent, Admin
-    if not (request.user.user_type in ['cashier', 'agent', 'admin'] or request.user.is_superuser):
-        return JsonResponse({'success': False, 'message': 'Unauthorized'}, status=403)
-
     try:
         ticket = BetTicket.objects.get(ticket_id=ticket_id)
     except BetTicket.DoesNotExist:
         return JsonResponse({'success': False, 'message': 'Ticket not found'}, status=404)
+
+    # Permission check: Cashier, Agent, Admin, Superuser, OR the TICKET OWNER (player users).
+    _is_staff = (
+        getattr(request.user, 'user_type', None) in ['cashier', 'agent', 'admin']
+        or bool(getattr(request.user, 'is_superuser', False))
+    )
+    _is_owner = bool(getattr(ticket, 'user_id', None)) and bool(getattr(request.user, 'id', None)) and ticket.user_id == request.user.id
+    if not (_is_staff or _is_owner):
+        return JsonResponse({'success': False, 'message': 'Unauthorized'}, status=403)
 
     selections_data = []
     seen_fixture_ids = set()

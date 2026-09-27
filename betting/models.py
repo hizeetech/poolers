@@ -142,6 +142,39 @@ class SiteConfiguration(models.Model):
         help_text="If enabled, Double Chance odds (1X / 12 / X2) are shown on the frontend fixtures page in a collapsible 'More Markets' sub-row below the 1X2 row.",
     )
 
+    withdrawals_paused = models.BooleanField(
+        default=False,
+        verbose_name="Pause All New Withdrawal Requests",
+        help_text=(
+            "When checked, non-admin users cannot submit new withdrawal requests. "
+            "The submit button shows a normal 'Processing...' indicator during the configured delay, "
+            "then displays the honest custom message below (never a false network-error spinner gimmick). "
+            "Admins/Finance users can still submit withdrawals. Uncheck to restore normal withdrawals."
+        ),
+    )
+    withdrawals_pause_message = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Custom Pause Message (shown to users)",
+        help_text=(
+            "Enter the exact message users will see when withdrawals are paused. Be open and honest — e.g. "
+            "'Withdrawals are temporarily paused during Saturday peak processing to keep payout servers stable. "
+            "Please try again after 11pm WAT. Your wallet balance is 100% safe and unaffected. Thank you for your patience!' "
+            "If left blank, a generic default platform message is used."
+        ),
+    )
+    withdrawals_pause_processing_delay_seconds = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Processing Delay Before Showing Message (seconds)",
+        help_text=(
+            "Optional artificial delay (0-60 seconds) between the user clicking 'Request Withdrawal' and the "
+            "message appearing. During the delay the button shows the normal 'Processing...' state so the click "
+            "feels like genuine financial processing before the honest message is shown. DO NOT combine with "
+            "any network-error deception. Recommended values: 0 (instant) or 3-8 seconds (feels real processing). "
+            "Maximum 60 seconds to avoid request timeouts."
+        ),
+    )
+
     # ============================================================
     # Notification Email Overrides (2026-09-05)
     # Comma-separated list of email addresses. Leave BLANK to use

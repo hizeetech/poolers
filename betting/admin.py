@@ -870,6 +870,28 @@ class BetTicketAdmin(admin.ModelAdmin):
             'user', 'bonus_rule', 'deleted_by', 'cashout_processed_by'
         )
 
+    def changelist_view(self, request, extra_context=None):
+        from django.db.models import prefetch_related_objects
+        from betting.services.cashout import build_cashout_quote
+        response = super().changelist_view(request, extra_context=extra_context)
+        try:
+            cl = getattr(response, 'context_data', None) and response.context_data.get('cl')
+            if cl is None:
+                return response
+            page_rows = list(getattr(cl, 'result_list', []) or [])
+            if not page_rows:
+                return response
+            prefetch_related_objects(page_rows, 'selections__fixture')
+            for obj in page_rows:
+                try:
+                    quote = build_cashout_quote(ticket=obj, source="admin_list_bulk_prefetch")
+                    obj._row_actions_cashout_quote = quote
+                except Exception:
+                    obj._row_actions_cashout_quote = None
+        except Exception:
+            pass
+        return response
+
     def selection_count(self, obj):
         return obj.original_selections_count or getattr(obj, 'annotated_selection_count', 0)
 
@@ -893,7 +915,6 @@ class BetTicketAdmin(admin.ModelAdmin):
     won_amount_display.admin_order_field = 'cashout_amount'
 
     def row_actions(self, obj):
-        from betting.services.cashout import build_cashout_quote
         from django.utils.html import format_html
         btns = []
         void_url = reverse('admin:betting_betticket_void_single', args=[obj.pk])
@@ -915,32 +936,24 @@ class BetTicketAdmin(admin.ModelAdmin):
                 stake_str,
             )
             btns.append(void_btn)
-        try:
-            ticket_for_quote = (
-                BetTicket.objects.select_related('user', 'bonus_rule')
-                .prefetch_related('selections__fixture')
-                .get(pk=obj.pk)
+        quote = getattr(obj, '_row_actions_cashout_quote', None)
+        if quote and getattr(quote, 'eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
+            amt = Decimal(quote.cashout_amount)
+            amt_str = f"{amt:.2f}"
+            cash_confirm = (
+                f"Confirm: Cash Out ticket {obj.ticket_id} for \u20a6{amt_str} "
+                f"(credited as winnings). Continue?"
+            ).replace("'", "\\'").replace('"', '&quot;')
+            cash_btn = format_html(
+                '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
+                'background:#28a745;color:#fff;text-decoration:none;border-radius:4px;'
+                'font-size:12px;font-weight:600;" href="{}" '
+                'onclick="return confirm(\'{}\');">Cashout \u20a6{}</a>',
+                cashout_url,
+                cash_confirm,
+                amt_str,
             )
-            quote = build_cashout_quote(ticket=ticket_for_quote, source="admin_list_preview")
-            if quote and getattr(quote, 'eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
-                amt = Decimal(quote.cashout_amount)
-                amt_str = f"{amt:.2f}"
-                cash_confirm = (
-                    f"Confirm: Cash Out ticket {obj.ticket_id} for \u20a6{amt_str} "
-                    f"(credited as winnings). Continue?"
-                ).replace("'", "\\'").replace('"', '&quot;')
-                cash_btn = format_html(
-                    '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
-                    'background:#28a745;color:#fff;text-decoration:none;border-radius:4px;'
-                    'font-size:12px;font-weight:600;" href="{}" '
-                    'onclick="return confirm(\'{}\');">Cashout \u20a6{}</a>',
-                    cashout_url,
-                    cash_confirm,
-                    amt_str,
-                )
-                btns.append(cash_btn)
-        except Exception:
-            pass
+            btns.append(cash_btn)
         if not btns:
             return mark_safe('<span style="color:#999;font-size:11px;">—</span>')
         return format_html('<div style="white-space:nowrap;">{}</div>', mark_safe("".join(str(b) for b in btns)))

@@ -894,16 +894,24 @@ class BetTicketAdmin(admin.ModelAdmin):
 
     def row_actions(self, obj):
         from betting.services.cashout import build_cashout_quote
+        from django.utils.html import format_html
         btns = []
         void_url = reverse('admin:betting_betticket_void_single', args=[obj.pk])
         cashout_url = reverse('admin:betting_betticket_cashout_single', args=[obj.pk])
         can_void = obj.status not in ('won', 'lost', 'cashed_out', *BetTicket.VOIDED_STATUSES)
         if can_void:
-            void_btn = (
-                f'<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;background:#dc3545;color:#fff;'
-                f'text-decoration:none;border-radius:4px;font-size:12px;font-weight:600;" '
-                f'href="{void_url}" onclick="return confirm('"'Are you sure you want to VOID ticket {obj.ticket_id} and refund stake ₦{obj.stake_amount:.2f}? This cannot be undone.'"');">'
-                f'Void &amp; Refund ₦{obj.stake_amount:.2f}</a>'
+            void_confirm = (
+                f"Are you sure you want to VOID ticket {obj.ticket_id} and refund stake "
+                f"\u20a6{obj.stake_amount:.2f}? This cannot be undone."
+            ).replace("'", "\\'").replace('"', '&quot;')
+            void_btn = format_html(
+                '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
+                'background:#dc3545;color:#fff;text-decoration:none;border-radius:4px;'
+                'font-size:12px;font-weight:600;" href="{}" '
+                'onclick="return confirm(\'{}\');">Void &amp; Refund \u20a6{:.2f}</a>',
+                void_url,
+                void_confirm,
+                obj.stake_amount,
             )
             btns.append(void_btn)
         try:
@@ -914,19 +922,26 @@ class BetTicketAdmin(admin.ModelAdmin):
             )
             quote = build_cashout_quote(ticket=ticket_for_quote, source="admin_list_preview")
             if quote and getattr(quote, 'eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
-                amt = f"{quote.cashout_amount:.2f}"
-                cash_btn = (
-                    f'<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;background:#28a745;color:#fff;'
-                    f'text-decoration:none;border-radius:4px;font-size:12px;font-weight:600;" '
-                    f'href="{cashout_url}" onclick="return confirm('"'Confirm: Cash Out ticket {obj.ticket_id} for ₦{amt} (credited as winnings). Continue?'"');">'
-                    f'Cashout ₦{amt}</a>'
+                amt = Decimal(quote.cashout_amount)
+                cash_confirm = (
+                    f"Confirm: Cash Out ticket {obj.ticket_id} for \u20a6{amt:.2f} "
+                    f"(credited as winnings). Continue?"
+                ).replace("'", "\\'").replace('"', '&quot;')
+                cash_btn = format_html(
+                    '<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;'
+                    'background:#28a745;color:#fff;text-decoration:none;border-radius:4px;'
+                    'font-size:12px;font-weight:600;" href="{}" '
+                    'onclick="return confirm(\'{}\');">Cashout \u20a6{:.2f}</a>',
+                    cashout_url,
+                    cash_confirm,
+                    amt,
                 )
                 btns.append(cash_btn)
         except Exception:
             pass
         if not btns:
             return mark_safe('<span style="color:#999;font-size:11px;">—</span>')
-        return mark_safe('<div style="white-space:nowrap;">' + "".join(btns) + '</div>')
+        return format_html('<div style="white-space:nowrap;">{}</div>', mark_safe("".join(str(b) for b in btns)))
 
     row_actions.short_description = 'Actions'
     row_actions.allow_tags = True

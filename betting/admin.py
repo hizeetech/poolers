@@ -907,8 +907,13 @@ class BetTicketAdmin(admin.ModelAdmin):
             )
             btns.append(void_btn)
         try:
-            quote = build_cashout_quote(ticket=obj, source="admin_list_preview")
-            if quote and getattr(quote, 'is_eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
+            ticket_for_quote = (
+                BetTicket.objects.select_related('user', 'bonus_rule')
+                .prefetch_related('selections__fixture')
+                .get(pk=obj.pk)
+            )
+            quote = build_cashout_quote(ticket=ticket_for_quote, source="admin_list_preview")
+            if quote and getattr(quote, 'eligible', False) and quote.cashout_amount and quote.cashout_amount > Decimal('0.00'):
                 amt = f"{quote.cashout_amount:.2f}"
                 cash_btn = (
                     f'<a class="button" style="display:inline-block;padding:4px 10px;margin:1px;background:#28a745;color:#fff;'

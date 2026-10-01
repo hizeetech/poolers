@@ -99,7 +99,7 @@ from .models import (
     BettingLimitAuditLog, GlobalBettingSettings, AgentBettingLimitOverride,
     CashierRegistrationRequest, CRMActionLog, LoginAttempt,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping, RetailManagerDashboardNote,
-    AgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog,
+    AgentTransferLog, SuperAgentTransferLog, AccountUnlockAppeal, AccountLockAuditLog,
     CustomerComplaint, CustomerComplaintNote, BulkMessageTemplate, BulkMessageCampaign, BulkMessageDelivery, CRMOpsAuditLog,
     FinanceAuditLog, WithdrawalPinVerificationLog, PaymentGatewayEventLog, FinanceTransactionReview,
     LedgerAccount, JournalEntry, JournalLine, FinanceSettlementBatch, FinanceSettlementItem,
@@ -123,7 +123,7 @@ from .forms import (
     LoanCenterDecisionForm, AdminOverdraftWalletFundingForm, LoanOverrideUnlockForm, LoanOverrideRelockForm,
     ForgotPasswordForm, ResetPasswordForm, WithdrawalPinCreateForm, WithdrawalPinResetForm,
     CRMUserProfileForm, CRMWithdrawalDecisionForm, CashierVoidPermissionForm, AgentMinStakeOverrideForm,
-    RetailManagerDashboardNoteForm, DashboardTaskReportForm, AgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
+    RetailManagerDashboardNoteForm, DashboardTaskReportForm, AgentRemapForm, SuperAgentRemapForm, AccountUnlockAppealForm, AccountUnlockAppealReviewForm,
     CustomerComplaintForm, CustomerComplaintActionForm, CustomerComplaintNoteForm, BulkMessageTemplateForm,
     BulkMessageCampaignForm, CRMThresholdSettingsForm, CRMDailyReportForm, CRMAdminReviewForm,
     RetailDailyReportForm, RetailAdminReviewForm
@@ -433,6 +433,25 @@ def _withdrawals_in_smooth_pause_mode():
         return False
     return False
 
+def _withdraw_button_disabled_by_admin_check():
+    """SiteConfig checkbox: disable/hide withdraw button on user wallet page + backend guard.
+    Admin/finance/superuser bypass. Returns bool."""
+    try:
+        from betting.models import SiteConfiguration
+        cfg = SiteConfiguration.objects.filter(pk=1).first()
+        if cfg and getattr(cfg, 'withdraw_button_disabled', False):
+            return True
+    except Exception:
+        return False
+    return False
+
+def _user_is_admin_finance_bypass(user):
+    """Bypass rule: admin/finance/superuser skip withdraw disable/pause guards."""
+    if getattr(user, 'is_superuser', False):
+        return True
+    ut = getattr(user, 'user_type', None)
+    return ut in ('admin', 'finance')
+
 def _global_withdrawals_disabled_message():
     from betting.models import SystemSetting
     try:
@@ -535,6 +554,9 @@ def crm_can_remap_agents(user):
     return bool(user.is_authenticated and (user.is_superuser or user.user_type in ['admin', 'crm']))
 
 
+crm_can_remap_super_agents = crm_can_remap_agents
+
+
 def _crm_agent_transfer_history_queryset(*, q='', start_dt=None, end_dt=None, old_super_agent_id='', new_super_agent_id=''):
     qs = AgentTransferLog.objects.select_related(
         'agent', 'old_super_agent', 'new_super_agent', 'transferred_by'
@@ -563,6 +585,40 @@ def _crm_agent_transfer_history_queryset(*, q='', start_dt=None, end_dt=None, ol
             Q(new_super_agent__email__icontains=q) |
             Q(new_super_agent__first_name__icontains=q) |
             Q(new_super_agent__last_name__icontains=q) |
+            Q(transferred_by__username__icontains=q) |
+            Q(transferred_by__email__icontains=q)
+        )
+    return qs
+
+
+def _crm_super_agent_transfer_history_queryset(*, q='', start_dt=None, end_dt=None, old_master_agent_id='', new_master_agent_id=''):
+    qs = SuperAgentTransferLog.objects.select_related(
+        'super_agent', 'old_master_agent', 'new_master_agent', 'transferred_by'
+    ).order_by('-created_at')
+    if start_dt:
+        qs = qs.filter(created_at__gte=start_dt)
+    if end_dt:
+        qs = qs.filter(created_at__lte=end_dt)
+    if old_master_agent_id.isdigit():
+        qs = qs.filter(old_master_agent_id=int(old_master_agent_id))
+    if new_master_agent_id.isdigit():
+        qs = qs.filter(new_master_agent_id=int(new_master_agent_id))
+    if q:
+        qs = qs.filter(
+            Q(super_agent__username__icontains=q) |
+            Q(super_agent__email__icontains=q) |
+            Q(super_agent__phone_number__icontains=q) |
+            Q(super_agent__first_name__icontains=q) |
+            Q(super_agent__last_name__icontains=q) |
+            Q(super_agent__other_name__icontains=q) |
+            Q(old_master_agent__username__icontains=q) |
+            Q(old_master_agent__email__icontains=q) |
+            Q(old_master_agent__first_name__icontains=q) |
+            Q(old_master_agent__last_name__icontains=q) |
+            Q(new_master_agent__username__icontains=q) |
+            Q(new_master_agent__email__icontains=q) |
+            Q(new_master_agent__first_name__icontains=q) |
+            Q(new_master_agent__last_name__icontains=q) |
             Q(transferred_by__username__icontains=q) |
             Q(transferred_by__email__icontains=q)
         )
@@ -5969,6 +6025,7 @@ def wallet_view(request):
         'can_transfer_from_wallet': can_transfer_from_wallet,
         'global_withdrawals_enabled': _is_global_withdrawals_enabled(),
         'global_withdrawals_disabled_message': _global_withdrawals_disabled_message(),
+        'withdraw_button_disabled_by_admin': _withdraw_button_disabled_by_admin_check(),
     }
     return render(request, 'betting/wallet.html', context)
 
@@ -7055,6 +7112,14 @@ def monnify_webhook(request):
 def withdraw_funds(request):
     expects_json = request.headers.get('Content-Type', '').startswith('application/json')
     is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
+    # NEW: WITHDRAW BUTTON DISABLED BY ADMIN KILL SWITCH (SiteConfig.withdraw_button_disabled=True).
+    # Runs BEFORE any transaction / sleep / lock / attempt counter logic.
+    if _withdraw_button_disabled_by_admin_check() and not is_admin_or_super:
+        msg = 'Withdrawals are currently disabled by the admin. Please check back later or contact support.'
+        if expects_json:
+            return JsonResponse({'status': 'error', 'success': False, 'withdraw_button_disabled_by_admin': True, 'message': msg}, status=403)
+        messages.warning(request, msg)
+        return redirect('betting:wallet')
     # HARD LOCKDOWN (SystemSetting): Button is greyed out on template level already.
     if not _is_global_withdrawals_enabled() and not is_admin_or_super:
         msg = _global_withdrawals_disabled_message()
@@ -7268,6 +7333,13 @@ def verify_withdrawal_pin(request):
         return JsonResponse({'status': 'error', 'message': 'Invalid request.'}, status=400)
 
     is_admin_or_super = getattr(request.user, 'is_superuser', False) or getattr(request.user, 'user_type', None) in ('admin', 'finance')
+
+    # NEW: WITHDRAW BUTTON DISABLED BY ADMIN (SiteConfig checkbox). Fast early return BEFORE
+    # any DB writes (no attempt counter increments). Pin validation never runs, user cannot
+    # lock themselves out of withdrawal during a global disable window.
+    if _withdraw_button_disabled_by_admin_check() and not is_admin_or_super:
+        msg = 'Withdrawals are currently disabled by the admin. Please check back later or contact support.'
+        return JsonResponse({'status': 'error', 'success': False, 'withdraw_button_disabled_by_admin': True, 'message': msg}, status=403)
 
     # HARD LOCKDOWN (SystemSetting): Template disables button entirely, so this endpoint
     # is rarely reached, but guard anyway with immediate hard-fail.
@@ -14253,6 +14325,198 @@ def agent_remapping(request):
 
 
 @login_required
+def super_agent_remapping(request):
+    if not crm_can_remap_super_agents(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    subtab = ((request.POST.get('subtab') if request.method == 'POST' else request.GET.get('subtab')) or 'remap').strip() or 'remap'
+    q = (request.GET.get('q') or '').strip()
+    history_q = (request.GET.get('history_q') or '').strip()
+    current_master_agent_id = ((request.POST.get('current_master_agent') if request.method == 'POST' else request.GET.get('current_master_agent')) or '').strip()
+    destination_master_agent_id = ((request.POST.get('destination_master_agent') if request.method == 'POST' else request.GET.get('destination_master_agent')) or '').strip()
+    history_old_master_agent_id = (request.GET.get('history_old_master_agent') or '').strip()
+    history_new_master_agent_id = (request.GET.get('history_new_master_agent') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    if start_date_str:
+        try:
+            start_dt = timezone.make_aware(datetime.combine(datetime.strptime(start_date_str, '%Y-%m-%d').date(), datetime.min.time()))
+        except Exception:
+            start_dt = None
+    if end_date_str:
+        try:
+            end_dt = timezone.make_aware(datetime.combine(datetime.strptime(end_date_str, '%Y-%m-%d').date(), datetime.max.time()))
+        except Exception:
+            end_dt = None
+
+    current_master_agents_qs = User.objects.filter(user_type='master_agent').select_related('wallet').order_by('username', 'email')
+    destination_master_agents_qs = current_master_agents_qs.filter(is_active=True)
+
+    super_agent_rows_qs = User.objects.filter(user_type='super_agent').select_related('master_agent', 'wallet').order_by('username', 'email')
+    if current_master_agent_id.isdigit():
+        super_agent_rows_qs = super_agent_rows_qs.filter(master_agent_id=int(current_master_agent_id))
+    else:
+        super_agent_rows_qs = super_agent_rows_qs.none()
+    if q:
+        super_agent_rows_qs = super_agent_rows_qs.filter(
+            Q(username__icontains=q) |
+            Q(email__icontains=q) |
+            Q(phone_number__icontains=q) |
+            Q(first_name__icontains=q) |
+            Q(last_name__icontains=q) |
+            Q(other_name__icontains=q)
+        )
+    remap_super_agent_rows = list(super_agent_rows_qs[:500])
+
+    remap_form = SuperAgentRemapForm(
+        current_master_agent_qs=current_master_agents_qs,
+        destination_master_agent_qs=destination_master_agents_qs,
+        super_agent_queryset=super_agent_rows_qs,
+        initial={
+            'current_master_agent': current_master_agent_id or None,
+            'destination_master_agent': destination_master_agent_id or None,
+        },
+    )
+
+    if request.method == 'POST' and request.POST.get('action') == 'transfer_super_agents':
+        remap_form = SuperAgentRemapForm(
+            request.POST,
+            current_master_agent_qs=current_master_agents_qs,
+            destination_master_agent_qs=destination_master_agents_qs,
+            super_agent_queryset=super_agent_rows_qs,
+        )
+        subtab = 'remap'
+        if remap_form.is_valid():
+            current_master_agent = remap_form.cleaned_data['current_master_agent']
+            destination_master_agent = remap_form.cleaned_data['destination_master_agent']
+            remarks = remap_form.cleaned_data.get('remarks') or ''
+            selected_super_agents = list(
+                remap_form.cleaned_data['super_agents'].select_related('master_agent').order_by('username', 'email')
+            )
+            try:
+                with db_transaction.atomic():
+                    for sa in selected_super_agents:
+                        if sa.master_agent_id != current_master_agent.id:
+                            raise ValueError('One or more selected Super Agents no longer belong to the chosen Current Master Agent.')
+                        if sa.master_agent_id == destination_master_agent.id:
+                            raise ValueError('Super Agent already belongs to this Master Agent.')
+
+                        old_master_agent = sa.master_agent
+                        sa.master_agent = destination_master_agent
+                        sa.save()
+
+                        downline_qs = User.objects.filter(super_agent_id=sa.id)
+                        downline_count = downline_qs.update(master_agent=destination_master_agent)
+
+                        SuperAgentTransferLog.objects.create(
+                            super_agent=sa,
+                            old_master_agent=old_master_agent,
+                            new_master_agent=destination_master_agent,
+                            transferred_by=request.user,
+                            remarks=remarks,
+                        )
+
+                        if old_master_agent:
+                            create_notification(
+                                recipient=old_master_agent,
+                                notification_type='SYSTEM_ANNOUNCEMENT',
+                                title='Super Agent Removed From Downline',
+                                message=f"{sa.get_full_name() or sa.username or sa.email} has been removed from your downline and reassigned by Management.",
+                                data={
+                                    'popup_category': 'message',
+                                    'delivery_channel': 'in_app',
+                                    'url': reverse('betting:super_agent_remapping'),
+                                },
+                            )
+                        create_notification(
+                            recipient=destination_master_agent,
+                            notification_type='SYSTEM_ANNOUNCEMENT',
+                            title='New Super Agent Assigned',
+                            message=f"{sa.get_full_name() or sa.username or sa.email} has been assigned to your downline by Management.",
+                            data={
+                                'popup_category': 'message',
+                                'delivery_channel': 'in_app',
+                                'url': reverse('betting:super_agent_remapping'),
+                            },
+                        )
+                        create_notification(
+                            recipient=sa,
+                            notification_type='SYSTEM_ANNOUNCEMENT',
+                            title='Master Agent Reassigned',
+                            message='Your account has been reassigned to a new Master Agent. Your operations, wallet, tickets and commissions remain unaffected.',
+                            data={
+                                'popup_category': 'message',
+                                'delivery_channel': 'in_app',
+                                'url': reverse('betting:user_dashboard'),
+                            },
+                        )
+                        if downline_count and downline_count < 30:
+                            for agent in downline_qs.only('id', 'username'):
+                                create_notification(
+                                    recipient=agent,
+                                    notification_type='SYSTEM_ANNOUNCEMENT',
+                                    title='Hierarchy Master Agent Updated',
+                                    message='Your Master Agent hierarchy has been updated due to a Super Agent reassignment. Your operations and wallet remain unaffected.',
+                                    data={
+                                        'popup_category': 'message',
+                                        'delivery_channel': 'in_app',
+                                        'url': reverse('betting:user_dashboard'),
+                                    },
+                                )
+                messages.success(request, f"{len(selected_super_agents)} super agent(s) transferred successfully.")
+                query = QueryDict(mutable=True)
+                query['subtab'] = 'history'
+                if history_q:
+                    query['history_q'] = history_q
+                if start_date_str:
+                    query['start_date'] = start_date_str
+                if end_date_str:
+                    query['end_date'] = end_date_str
+                return redirect(f"{reverse('betting:super_agent_remapping')}?{query.urlencode()}")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            except Exception:
+                messages.error(request, 'Super Agent transfer failed. Please try again.')
+
+    history_qs = _crm_super_agent_transfer_history_queryset(
+        q=history_q,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        old_master_agent_id=history_old_master_agent_id,
+        new_master_agent_id=history_new_master_agent_id,
+    )
+    history_paginator = Paginator(history_qs, 50)
+    history_page_number = request.GET.get('history_page') or 1
+    try:
+        history_page = history_paginator.page(history_page_number)
+    except Exception:
+        history_page = history_paginator.page(1)
+
+    context = {
+        'subtab': subtab,
+        'q': q,
+        'history_q': history_q,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
+        'current_master_agent': current_master_agent_id,
+        'destination_master_agent': destination_master_agent_id,
+        'history_old_master_agent': history_old_master_agent_id,
+        'history_new_master_agent': history_new_master_agent_id,
+        'current_master_agents': list(current_master_agents_qs[:300]),
+        'destination_master_agents': list(destination_master_agents_qs[:300]),
+        'remap_super_agent_rows': remap_super_agent_rows,
+        'remap_form': remap_form,
+        'selected_super_agent_ids': [str(v) for v in ((request.POST.getlist('super_agents') if request.method == 'POST' else []))],
+        'history_page': history_page,
+        'history_total_count': history_qs.count(),
+    }
+    return render(request, 'betting/super_agent_remapping.html', context)
+
+
+@login_required
 def agent_remapping_export(request):
     if not crm_can_remap_agents(request.user):
         return HttpResponse("Permission Denied", status=403)
@@ -14300,6 +14564,56 @@ def agent_remapping_export(request):
             'remarks': item.remarks or '',
         })
     return _export_simple_rows(rows=rows, title='agent_transfer_history', fmt=fmt)
+
+
+@login_required
+def super_agent_remapping_export(request):
+    if not crm_can_remap_super_agents(request.user):
+        return HttpResponse("Permission Denied", status=403)
+
+    fmt = (request.GET.get('format') or 'xlsx').strip().lower()
+    if fmt not in {'csv', 'xlsx', 'pdf'}:
+        return HttpResponseBadRequest('Unknown format')
+
+    history_q = (request.GET.get('history_q') or '').strip()
+    history_old_master_agent_id = (request.GET.get('history_old_master_agent') or '').strip()
+    history_new_master_agent_id = (request.GET.get('history_new_master_agent') or '').strip()
+    start_date_str = (request.GET.get('start_date') or '').strip()
+    end_date_str = (request.GET.get('end_date') or '').strip()
+
+    start_dt = None
+    end_dt = None
+    if start_date_str:
+        try:
+            start_dt = timezone.make_aware(datetime.combine(datetime.strptime(start_date_str, '%Y-%m-%d').date(), datetime.min.time()))
+        except Exception:
+            start_dt = None
+    if end_date_str:
+        try:
+            end_dt = timezone.make_aware(datetime.combine(datetime.strptime(end_date_str, '%Y-%m-%d').date(), datetime.max.time()))
+        except Exception:
+            end_dt = None
+
+    qs = _crm_super_agent_transfer_history_queryset(
+        q=history_q,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        old_master_agent_id=history_old_master_agent_id,
+        new_master_agent_id=history_new_master_agent_id,
+    )
+    rows = []
+    for item in qs[:100000]:
+        rows.append({
+            'date': item.created_at.isoformat(sep=' ', timespec='seconds') if item.created_at else '',
+            'super_agent_username': getattr(item.super_agent, 'username', '') or '',
+            'super_agent_name': getattr(item.super_agent, 'get_full_name', lambda: '')() or '',
+            'super_agent_phone': getattr(item.super_agent, 'phone_number', '') or '',
+            'old_master_agent': getattr(item.old_master_agent, 'username', '') or getattr(item.old_master_agent, 'email', '') or '',
+            'new_master_agent': getattr(item.new_master_agent, 'username', '') or getattr(item.new_master_agent, 'email', '') or '',
+            'transferred_by': getattr(item.transferred_by, 'username', '') or getattr(item.transferred_by, 'email', '') or '',
+            'remarks': item.remarks or '',
+        })
+    return _export_simple_rows(rows=rows, title='super_agent_transfer_history', fmt=fmt)
 
 
 @login_required
@@ -15534,6 +15848,7 @@ def crm_dashboard(request):
         'can_edit_profiles': crm_can_edit_profiles(request.user),
         'can_view_audit': crm_can_view_audit(request.user),
         'can_remap_agents': crm_can_remap_agents(request.user),
+        'can_remap_super_agents': crm_can_remap_super_agents(request.user),
         'can_message': crm_can_message(request.user),
         'retail_hierarchy': retail_hierarchy,
         'hierarchy_search_results': hierarchy_search_results,

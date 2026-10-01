@@ -64,7 +64,7 @@ from .models import (
     PaymentGatewayDeposit,
     CashierRegistrationRequest, PendingCashierRegistration, ApprovedNewCashier,
     RetailManagerMasterAgentMapping, RetailManagerSuperAgentMapping, RetailManagerAgentMapping,
-    AgentTransferLog,
+    AgentTransferLog, SuperAgentTransferLog,
     AccountUnlockAppeal, AccountLockAuditLog,
     FinanceAuditLog, CRMActionLog, WithdrawalReport,
     CustomerComplaint, CustomerComplaintNote, DashboardTask,
@@ -448,17 +448,57 @@ class CustomUserAdmin(UserAdmin):
         (None, {
             'classes': ('wide',),
             'fields': (
-                'email', 'username', 'password', 'password2',
+                'email', 'username', 'password',
                 'first_name', 'last_name', 'other_name', 'state', 'phone_number', 'shop_address', 'bank_account_name',
                 'kyc_status', 'vip_level', 'vip_manager',
-                'user_type', 'crm_role', 'finance_role', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets', 
-                'groups', 'user_permissions', 
+                'user_type', 'crm_role', 'finance_role', 'is_active', 'is_staff', 'is_superuser', 'can_manage_downline_wallets',
+                'groups', 'user_permissions',
                 'master_agent', 'super_agent', 'agent', 'cashier_prefix'
             ),
         }),
     )
+
+    # CRITICAL 2026sep29 FIX: Force Django admin Add User view to use the
+    # standard change_form.html template (which loops fieldsets normally)
+    # INSTEAD of Django's special admin/auth/user/add_form.html template.
+    # That special template hardcodes a 2-step "First enter a username and
+    # password. Then, you'll be able to edit more user options." workflow
+    # and ALWAYS renders ONLY email/username/password 3 fields on step 1,
+    # COMPLETELY IGNORING CustomUserAdmin.add_fieldsets / password1+password2
+    # field declarations / fieldsets group patches. The hardcoded banner
+    # text "First, enter a username and password..." was visible on LIVE.
+    add_form_template = 'admin/change_form.html'
     
-    readonly_fields = ('last_login', 'date_joined', 'withdrawal_locked_at') 
+    readonly_fields = ('last_login', 'date_joined', 'withdrawal_locked_at')
+
+    def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
+        if object_id is None:
+            extra_context = dict(extra_context or {})
+            extra_context['show_save_and_continue'] = True
+            _saved_cfmt = getattr(self, 'change_form_template', None)
+            try:
+                self.change_form_template = 'admin/change_form.html'
+                response = super().changeform_view(request, object_id=object_id, form_url=form_url, extra_context=extra_context)
+                if hasattr(response, 'template_name'):
+                    tn = response.template_name
+                    if isinstance(tn, (list, tuple)):
+                        response.template_name = ['admin/change_form.html' if 'user/add_form' in str(t) else t for t in tn]
+                    elif isinstance(tn, str) and 'user/add_form' in tn:
+                        response.template_name = 'admin/change_form.html'
+                return response
+            finally:
+                if _saved_cfmt is not None:
+                    self.change_form_template = _saved_cfmt
+        return super().changeform_view(request, object_id=object_id, form_url=form_url, extra_context=extra_context)
+
+    def add_view(self, request, form_url='', extra_context=None):
+        original_fieldsets_backup = self.fieldsets
+        try:
+            if getattr(self, 'add_fieldsets', None):
+                self.fieldsets = self.add_fieldsets
+            return self.changeform_view(request, object_id=None, form_url=form_url, extra_context=extra_context)
+        finally:
+            self.fieldsets = original_fieldsets_backup
 
     def enable_withdrawals(self, request, queryset):
         updated = queryset.update(withdrawal_locked=False, withdrawal_attempts=0, withdrawal_locked_at=None)
@@ -512,6 +552,35 @@ class CustomUserAdmin(UserAdmin):
         elif db_field.name == "super_agent":
             kwargs["queryset"] = User.objects.filter(user_type='super_agent')
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def get_fieldsets(self, request, obj=None):
+        base_fieldsets = super().get_fieldsets(request, obj)
+        if obj is not None:
+            return base_fieldsets
+
+        group0_name, group0_opts = base_fieldsets[0]
+        original_g0 = list(group0_opts.get('fields', []))
+
+        new_g0 = []
+        for f in original_g0:
+            if f in ('password1', 'password2'):
+                if 'password' not in new_g0:
+                    new_g0.append('password')
+            elif f == 'password':
+                if 'password' not in new_g0:
+                    new_g0.append('password')
+            else:
+                if f not in new_g0:
+                    new_g0.append(f)
+
+        if 'password' not in new_g0:
+            un_idx = new_g0.index('username') + 1 if 'username' in new_g0 else len(new_g0)
+            new_g0.insert(un_idx, 'password')
+
+        new_g0_opts = dict(group0_opts)
+        new_g0_opts['fields'] = tuple(new_g0)
+        new_fieldsets = [(group0_name, new_g0_opts)] + list(base_fieldsets[1:])
+        return tuple(new_fieldsets)
 
     def get_form(self, request, obj=None, **kwargs):
         # Pass the request to the form for permission checks if needed in form's clean method
@@ -3500,6 +3569,29 @@ class AgentTransferLogAdmin(admin.ModelAdmin):
         return request.user.is_superuser
 
 
+class SuperAgentTransferLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'super_agent', 'old_master_agent', 'new_master_agent', 'transferred_by')
+    list_filter = ('created_at', 'old_master_agent', 'new_master_agent', 'transferred_by')
+    search_fields = (
+        'super_agent__username', 'super_agent__email', 'super_agent__phone_number',
+        'old_master_agent__username', 'old_master_agent__email',
+        'new_master_agent__username', 'new_master_agent__email',
+        'transferred_by__username', 'transferred_by__email',
+        'remarks',
+    )
+    readonly_fields = [f.name for f in SuperAgentTransferLog._meta.fields]
+    date_hierarchy = 'created_at'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
 class AccountUnlockAppealAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'locked_user', 'appealed_by', 'status', 'reviewed_at', 'reviewed_by')
     list_filter = ('status', 'created_at', 'reviewed_at')
@@ -3581,6 +3673,7 @@ betting_admin_site.register(CRMOpsAuditLog, CRMOpsAuditLogAdmin)
 betting_admin_site.register(CRMDailyReport, CRMDailyReportAdmin)
 betting_admin_site.register(RetailDailyReport, RetailDailyReportAdmin)
 betting_admin_site.register(AgentTransferLog, AgentTransferLogAdmin)
+betting_admin_site.register(SuperAgentTransferLog, SuperAgentTransferLogAdmin)
 betting_admin_site.register(AccountUnlockAppeal, AccountUnlockAppealAdmin)
 betting_admin_site.register(AccountLockAuditLog, AccountLockAuditLogAdmin)
 
@@ -4299,15 +4392,17 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
                 'withdrawals_paused',
                 'withdrawals_pause_message',
                 'withdrawals_pause_processing_delay_seconds',
+                'withdraw_button_disabled',
             ),
             'description': mark_safe(
                 '<div style="padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;margin-bottom:4px;font-family:system-ui,sans-serif;font-size:13px;color:#1e40af;">'
-                '<b style="font-weight:800;">HOW IT WORKS (TRANSPARENT MODE — NO NETWORK GIMMICK):</b><br>'
-                '1. Tick <b>"Pause All New Withdrawal Requests"</b> and click <b>Save</b> → non-admin users can no longer submit new withdrawals.<br>'
-                '2. Set the <b>Processing Delay (seconds)</b> → the user\'s submit button shows the normal <i>"Processing..."</i> state for that long (feels like genuine server processing).<br>'
-                '3. The user then sees the <b>Honest Custom Message</b> you write above (e.g. "Withdrawals temporarily paused during Saturday peak — please retry after 11pm WAT. Your funds are safe.").<br>'
-                '<b>NO deceptive "network error" spinner. Users trust transparent messaging. Always write a truthful message — it protects your brand long-term.</b><br>'
-                'Admin / Finance roles are <b>EXEMPTED</b> from the pause so operations team can still withdraw normally. Uncheck the box + Save to instantly resume normal withdrawals.'
+                '<b style="font-weight:800;">HOW IT WORKS (2 MODES):</b><br>'
+                '<b>🟡 Mode 1 — Pause (honest notice with delay):</b><br>'
+                '1. Tick <b>"Pause All New Withdrawal Requests"</b> and click <b>Save</b> → non-admin users can still click the button, then they see the normal <i>"Processing..."</i> state for that long (feels like genuine server processing).<br>'
+                '2. After the delay they see the <b>Honest Custom Message</b> above (never a deceptive network-error gimmick).<br>'
+                '<br><b>🔴 Mode 2 — Hard OFF / Button Disabled:</b><br>'
+                'Tick <b>"Disable withdrawal button on user wallet"</b> below → the red "Request Withdrawal" button on users\' Wallet page is immediately replaced with a disabled grey notice AND backend requests are blocked even if user submits via AJAX / curl. No click, no delay, instant OFF state for emergencies.<br>'
+                '<br><b>Admin / Finance roles are EXEMPTED from both modes</b> so operations team can still withdraw normally. Uncheck any ticked box + <b>Save</b> to instantly resume normal withdrawals.'
                 '</div>'
             ),
         }),

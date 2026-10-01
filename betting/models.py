@@ -174,6 +174,18 @@ class SiteConfiguration(models.Model):
             "Maximum 60 seconds to avoid request timeouts."
         ),
     )
+    withdraw_button_disabled = models.BooleanField(
+        default=False,
+        verbose_name="Disable withdrawal button on user wallet",
+        help_text=(
+            "When checked, the Request Withdrawal button on the user Wallet page is disabled/hidden for all "
+            "non-admin/finance users, and backend withdrawal requests are blocked (even if a user submits the "
+            "request directly via AJAX / curl). Uncheck to enable withdrawals again. This is DIFFERENT from "
+            "'Pause All New Withdrawal Requests' above (which still shows the button + shows an honest message "
+            "after click / artificial delay). Use this checkbox for hard OFF / kill switch emergencies. "
+            "Admin/Finance/superuser accounts bypass this setting for operational testing."
+        ),
+    )
 
     # ============================================================
     # Notification Email Overrides (2026-09-05)
@@ -2997,6 +3009,51 @@ class AgentTransferLog(models.Model):
     def __str__(self):
         agent_label = getattr(self.agent, 'username', None) or getattr(self.agent, 'email', None) or f"agent#{self.agent_id}"
         return f"Agent Transfer - {agent_label}"
+
+
+class SuperAgentTransferLog(models.Model):
+    super_agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='super_agent_transfer_logs',
+        limit_choices_to={'user_type': 'super_agent'},
+    )
+    old_master_agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='super_agent_transfer_logs_as_old_ma',
+        limit_choices_to={'user_type': 'master_agent'},
+    )
+    new_master_agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='super_agent_transfer_logs_as_new_ma',
+        limit_choices_to={'user_type': 'master_agent'},
+    )
+    transferred_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='super_agent_transfer_logs_created',
+    )
+    remarks = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Super Agent Transfer Log'
+        verbose_name_plural = 'Super Agent Transfer Logs'
+
+    def __str__(self):
+        sa_label = getattr(self.super_agent, 'username', None) or getattr(self.super_agent, 'email', None) or f"super_agent#{self.super_agent_id}"
+        return f"Super Agent Transfer - {sa_label}"
 
 
 class AccountUnlockAppeal(models.Model):

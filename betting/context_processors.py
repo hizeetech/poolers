@@ -20,19 +20,36 @@ def wallet_balance(request):
     return {'user_wallet_balance': balance}
 
 def site_configuration(request):
-    badges = FooterBadge.objects.filter(is_active=True).order_by('order', 'id')
+    site_config = False
+    try:
+        site_config = SiteConfiguration.load()
+    except Exception:
+        site_config = False
+    badges = []
+    try:
+        badges = list(FooterBadge.objects.filter(is_active=True).order_by('order', 'id'))
+    except Exception:
+        badges = []
     unique_badges = []
     seen = set()
     for b in badges:
-        key = b.content_hash or b.image.name
-        if key in seen:
+        try:
+            key = b.content_hash or b.image.name
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_badges.append(b)
+        except Exception:
             continue
-        seen.add(key)
-        unique_badges.append(b)
+    footer_pages = []
+    try:
+        footer_pages = list(FooterPage.objects.filter(is_active=True, show_in_footer=True).order_by('order', 'footer_label'))
+    except Exception:
+        footer_pages = []
     now = timezone.localtime(timezone.now())
     return {
-        'site_config': SiteConfiguration.load(),
-        'footer_pages': FooterPage.objects.filter(is_active=True, show_in_footer=True).order_by('order', 'footer_label'),
+        'site_config': site_config,
+        'footer_pages': footer_pages,
         'footer_badges': unique_badges,
         'server_epoch_ms': int(now.timestamp() * 1000),
         'server_tz': timezone.get_current_timezone_name(),

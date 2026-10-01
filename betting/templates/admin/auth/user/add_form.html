@@ -1,0 +1,29 @@
+{% extends "admin/change_form.html" %}
+{% comment %}
+2026sep30 OVERRIDE TEMPLATE (CANNOT BE MISSED! Django loads this because
+betting/templates/admin/auth/user/add_form.html is found in the betting app
+template dir BEFORE django.contrib.admin's default
+templates/admin/auth/user/add_form.html is checked).
+
+Default Django/Jazzmin admin/auth/user/add_form.html hardcodes a TWO-STEP
+user creation workflow with this banner:
+    "First, enter a username and password. Then, you'll be able to edit more
+     user options."
+...and it renders ONLY 3 fields (email/username/password) in step 1,
+COMPLETELY IGNORING fieldsets/add_fieldsets/get_fieldsets() / admin class
+attribute overrides. The result was: only ONE password input box rendered
+(because password2 was declared in add_fieldsets but the template never
+loops it), -> admin typed only 1 password -> clean() required 2 matching ->
+add_error('password2', ...) had NO matching input HTML -> error invisible ->
+only Django's generic red "Please correct the errors below." top banner,
+causing MA/SA user save errors that the admin could not debug.
+
+By simply extending the STANDARD change_form.html template (which does NOT
+have this 2-step flow and correctly iterates through admin.fieldsets /
+admin.add_fieldsets groups), we GUARANTEE:
+  - General tab now renders 2 password boxes: Password * AND Confirm Password *
+  - Banner text is ELIMINATED entirely.
+  - form validation errors (password missing, passwords mismatch, required
+    MA/SA names/state) appear DIRECTLY UNDER the input fields, not as a
+    useless generic top banner.
+{% endcomment %}

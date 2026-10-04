@@ -1388,9 +1388,10 @@ class FixtureAdmin(admin.ModelAdmin):
         'serial_number_display',
         'status',
         'is_active',
+        'disable_toggle_action',
     )
     list_editable = ('match_date', 'match_time', 'draw_odd', 'is_active')
-    list_filter = ('betting_period', 'status', 'is_active', 'match_date')
+    list_filter = ('betting_period', 'status', 'is_active', 'disabled_for_betting', 'match_date')
     search_fields = ('home_team', 'away_team', 'serial_number')
     raw_id_fields = ('betting_period',)  # CRIT_A4 FIX 2: Eliminate InvalidCursorName risk under concurrent Saturday/Sunday fixture edits when BettingPeriod table grows
 
@@ -1407,6 +1408,28 @@ class FixtureAdmin(admin.ModelAdmin):
     serial_number_display.short_description = 'Serial Number'
     serial_number_display.admin_order_field = 'serial_int'
 
+    def disable_toggle_action(self, obj):
+        opts = self.model._meta
+        base_url = reverse(f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_changelist')
+        toggle_url = reverse(f'{self.admin_site.name}:{opts.app_label}_{opts.model_name}_toggle_disabled', args=[obj.pk])
+        query_sep = '&' if '?' in base_url else '?'
+        back = f"{base_url}{query_sep}toggled={obj.pk}"
+        if obj.disabled_for_betting:
+            label = 'Enable'
+            style = 'background-color:#198754;border-color:#198754;color:#fff;display:inline-block;padding:3px 12px;border-radius:9999px;font-size:12px;font-weight:700;text-decoration:none;'
+        else:
+            label = 'Disable'
+            style = 'background-color:#dc3545;border-color:#dc3545;color:#fff;display:inline-block;padding:3px 12px;border-radius:9999px;font-size:12px;font-weight:700;text-decoration:none;'
+        full = f"{toggle_url}?next={back}"
+        return format_html(
+            '<a style="{style}" href="{href}">{label}</a>',
+            style=style,
+            href=full,
+            label=label,
+        )
+    disable_toggle_action.short_description = 'Action'
+    disable_toggle_action.allow_tags = True
+
     class Media:
         js = ('js/admin_fixture_toggle.js',)
 
@@ -1417,8 +1440,23 @@ class FixtureAdmin(admin.ModelAdmin):
         my_urls = [
             path('import-fixtures/', self.admin_site.admin_view(self.import_fixtures), name='import_fixtures'),
             path('import-fixtures/sample/', self.admin_site.admin_view(self.download_sample_template), name='download_sample_template'),
+            path('<int:pk>/toggle-disabled/', self.admin_site.admin_view(self.toggle_disabled_view), name='betting_fixture_toggle_disabled'),
         ]
         return my_urls + urls
+
+    def toggle_disabled_view(self, request, pk):
+        from django.contrib.admin.options import get_content_type_for_model
+        fixture = get_object_or_404(self.model, pk=pk)
+        fixture.disabled_for_betting = not bool(fixture.disabled_for_betting)
+        fixture.save(update_fields=['disabled_for_betting'])
+        verb = "ENABLED" if not fixture.disabled_for_betting else "DISABLED"
+        label = f"#{fixture.serial_number} {fixture.home_team} vs {fixture.away_team}"
+        self.log_change(request, fixture, [{"changed": {"fields": ["disabled_for_betting", verb, label]}}])
+        messages.success(request, f"{verb}: fixture {label}.")
+        next_url = request.GET.get('next') or reverse(
+            f'{self.admin_site.name}:{self.model._meta.app_label}_{self.model._meta.model_name}_changelist'
+        )
+        return HttpResponseRedirect(next_url)
 
     def download_sample_template(self, request):
         import io

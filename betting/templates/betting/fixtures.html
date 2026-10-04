@@ -170,6 +170,15 @@
             font-size: 13px;
             cursor: pointer;
             user-select: none;
+            position: relative;
+        }
+        .smart-pick-number.smart-pick-number-disabled {
+            cursor: not-allowed !important;
+            pointer-events: none !important;
+            position: relative;
+            /* Normal same-as-active visual appearance */
+        }
+        .smart-pick-number[data-tt-type="circle"] {
             transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
         }
         .smart-pick-number[data-tt-type="circle"]:hover {
@@ -267,7 +276,14 @@
                 <div class="card-body">
                     <div id="smart-pick-grid" class="smart-pick-grid">
                         {% for fixture in fixtures %}
-                            <div class="smart-pick-number" data-event-number="{{ fixture.serial_number }}" data-tt-type="circle">{{ fixture.serial_number }}</div>
+                            <div class="smart-pick-number{% if fixture.disabled_for_betting %} smart-pick-number-disabled{% endif %}"
+                                 data-event-number="{{ fixture.serial_number }}"
+                                 data-fixture-id="{{ fixture.id }}"
+                                 data-fixture-disabled="{{ fixture.disabled_for_betting|yesno:'1,0' }}"
+                                 data-tt-type="circle"
+                                 {% if fixture.disabled_for_betting %}title="This event is disabled for betting."{% endif %}>
+                                {% if fixture.disabled_for_betting %}{{ fixture.serial_number }}{% else %}{{ fixture.serial_number }}{% endif %}
+                            </div>
                         {% endfor %}
                     </div>
                 </div>
@@ -361,7 +377,7 @@
                                     {% with f=pick.fixture %}
                                         {% if pick.odd_value %}
                                             <button type="button"
-                                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button"
+                                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button{% if f.disabled_for_betting %} disabled{% endif %}"
                                                     data-fixture-id="{{ f.id }}"
                                                     data-bet-type="{{ pick.bet_type }}"
                                                     data-odd="{{ pick.odd_value|floatformat:2 }}"
@@ -370,8 +386,10 @@
                                                     data-home-team="{{ f.home_team }}"
                                                     data-away-team="{{ f.away_team }}"
                                                     data-match-date="{{ f.match_date|date:'Y-m-d' }}"
-                                                    data-match-time="{{ f.match_time|time:'H:i' }}">
-                                                <div class="popular-pick-row">
+                                                    data-match-time="{{ f.match_time|time:'H:i' }}"
+                                                    data-fixture-disabled="{{ f.disabled_for_betting|yesno:'1,0' }}"
+                                                    {% if f.disabled_for_betting %}disabled aria-disabled="true" title="This event is disabled for betting."{% endif %}>
+                                                <div class="popular-pick-row {% if f.disabled_for_betting %}popular-pick-row-disabled{% endif %}">
                                                     <div class="popular-pick-left">
                                                         <div class="popular-pick-market">{{ pick.market_label }}</div>
                                                         <div class="popular-pick-selection">{{ pick.selection_label }}</div>
@@ -698,20 +716,31 @@
         if (!smartPickGrid) return;
         const buttons = Array.from(document.querySelectorAll('.bet-selection-btn[data-event-number][data-fixture-id][data-bet-type="draw"]'));
         const map = {};
+        const disabledMap = {};
         for (const btn of buttons) {
             const ev = String(btn.dataset.eventNumber || '').trim();
             const fid = String(btn.dataset.fixtureId || '').trim();
             if (!ev || !fid) continue;
             if (!map[ev]) {
                 map[ev] = fid;
+                disabledMap[ev] = isFixtureDisabledFromButton(btn);
             }
         }
 
         smartPickEventToFixtureId = map;
         const eventNumbers = Object.keys(map).sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
-        smartPickGrid.innerHTML = eventNumbers.map((n) => (
-            `<div class="smart-pick-number" data-event-number="${n}" data-tt-type="circle">${n}</div>`
-        )).join('');
+        smartPickGrid.innerHTML = eventNumbers.map((n) => {
+            const disabled = !!disabledMap[n];
+            const fid = map[n] || '';
+            return `<div class="smart-pick-number${disabled ? ' smart-pick-number-disabled' : ''}"
+                        data-event-number="${n}"
+                        data-fixture-id="${fid}"
+                        data-fixture-disabled="${disabled ? '1' : '0'}"
+                        data-tt-type="circle"
+                        ${disabled ? 'title="This event is disabled for betting."' : ''}>
+                ${disabled ? n : n}
+            </div>`;
+        }).join('');
         updateSmartPickHighlights();
     }
 
@@ -750,8 +779,18 @@
             const ev = String(target.dataset.eventNumber || '').trim();
             const fid = smartPickEventToFixtureId[ev];
             if (!fid) return;
+            if (String(target.dataset.fixtureDisabled || '') === '1') {
+                if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
+                displayMessage('This event is currently disabled for betting.', 'warning');
+                return;
+            }
             const drawBtn = findPreferredButtonForFixtureId(fid);
             if (!drawBtn) return;
+            if (isFixtureDisabledFromButton(drawBtn)) {
+                if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
+                displayMessage('This event is currently disabled for betting.', 'warning');
+                return;
+            }
 
             const existing = (selectedBets || []).find(bet => String(bet.fixture_id) === String(fid));
             if (existing && String(existing.bet_type || '') === 'draw') {
@@ -1145,12 +1184,26 @@
     }
 
 
+    function isFixtureDisabledFromButton(button) {
+        if (!button) return false;
+        if (String(button.dataset.fixtureDisabled || '') === '1') return true;
+        if (button.disabled || button.getAttribute('aria-disabled') === 'true') return true;
+        const card = button.closest ? button.closest('[data-fixture-disabled]') : null;
+        if (card && String(card.dataset.fixtureDisabled || '') === '1') return true;
+        return false;
+    }
+
     // Function to attach event listeners to bet buttons
     function attachBetButtonListeners() {
         document.querySelectorAll('.bet-selection-btn').forEach(button => {
             if (button.dataset.betBound === '1') return;
             button.dataset.betBound = '1';
-            button.addEventListener('click', function() {
+            button.addEventListener('click', function(e) {
+                if (isFixtureDisabledFromButton(this)) {
+                    if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
+                    displayMessage('This event is currently disabled for betting.', 'warning');
+                    return false;
+                }
                 const fixtureId = this.dataset.fixtureId;
                 const betType = this.dataset.betType;
                 const odd = parseFloat(this.dataset.odd);
@@ -1230,9 +1283,10 @@
                         const matchTime = escapeHtml(p.match_time || '');
                         const selectionText = escapeHtml(`${market} ${selection} (${oddText})`);
                         const fixtureId = escapeHtml(p.fixture_id || '');
+                        const disabled = !!p.disabled_for_betting;
                         return `
                             <button type="button"
-                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button"
+                                    class="btn btn-sm w-100 text-start popular-pick-btn bet-selection-btn fixture-period-odd-button${disabled ? ' disabled' : ''}"
                                     data-fixture-id="${fixtureId}"
                                     data-bet-type="${escapeHtml(betType)}"
                                     data-odd="${escapeHtml(oddText)}"
@@ -1241,8 +1295,10 @@
                                     data-home-team="${home}"
                                     data-away-team="${away}"
                                     data-match-date="${matchDate}"
-                                    data-match-time="${matchTime}">
-                                <div class="popular-pick-row">
+                                    data-match-time="${matchTime}"
+                                    data-fixture-disabled="${disabled ? '1' : '0'}"
+                                    ${disabled ? 'disabled aria-disabled="true" title="This event is disabled for betting."' : ''}>
+                                <div class="popular-pick-row${disabled ? ' popular-pick-row-disabled' : ''}">
                                     <div class="popular-pick-left">
                                         <div class="popular-pick-market">${market}</div>
                                         <div class="popular-pick-selection">${selection}</div>
@@ -1295,7 +1351,7 @@
                 if (picksResp.ok) {
                     const payload = await picksResp.json();
                     const picks = (payload && payload.success) ? (payload.picks || []) : [];
-                    const fingerprint = JSON.stringify(picks.map(p => [p.fixture_id, p.bet_type, p.odd, p.market_label, p.selection_label, p.home_team, p.away_team, p.match_date, p.match_time]));
+                    const fingerprint = JSON.stringify(picks.map(p => [p.fixture_id, p.bet_type, p.odd, p.market_label, p.selection_label, p.home_team, p.away_team, p.match_date, p.match_time, !!p.disabled_for_betting]));
                     if (fingerprint !== lastPopularPicksFingerprint) {
                         lastPopularPicksFingerprint = fingerprint;
                         renderPopularPicks(picks);
@@ -1543,84 +1599,195 @@
                             }
 
                             displayMessage(data.message + (data.ticket_id ? ` Your ticket ID: ${data.ticket_id}` : ''), 'success');
-                            
-                            // Populate and show the print modal
-                            const ticketIdEl = document.getElementById('modal-ticket-id');
-                            if(ticketIdEl) ticketIdEl.textContent = data.ticket_id;
+
                             lastPlacedTicketId = data.ticket_id || null;
                             if (rebetTicketBtn) rebetTicketBtn.disabled = !lastPlacedTicketId;
-                            
-                            const modalStakeEl = document.getElementById('modal-stake-amount');
-                            if(modalStakeEl) modalStakeEl.textContent = `₦${totalStakeInput.value}`; 
-                            
-                            const modalTotalOddsEl = document.getElementById('modal-total-odds');
-                            if(modalTotalOddsEl) modalTotalOddsEl.textContent = totalOddsSpan.textContent;
-                            
-                            const modalMinWinEl = document.getElementById('modal-min-winning');
-                            if(modalMinWinEl) modalMinWinEl.textContent = minWinningSpan.textContent;
-                            
-                            const modalPotWinEl = document.getElementById('modal-potential-winning');
-                            if(modalPotWinEl) modalPotWinEl.textContent = potentialWinningSpan.textContent;
-                            
-                            const modalBonusEl = document.getElementById('modal-bonus-amount');
-                            if(modalBonusEl) modalBonusEl.textContent = bonusAmountSpan.textContent;
 
-                            const modalMinimumWinRow = document.getElementById('modal-minimum-winning-row');
-                            const modalMinimumWinEl = document.getElementById('modal-minimum-winning');
-                            const shouldShowMinimumWinning = minimumWinningRow && !minimumWinningRow.classList.contains('d-none');
-                            if (modalMinimumWinRow) {
-                                modalMinimumWinRow.style.display = shouldShowMinimumWinning ? '' : 'none';
-                            }
-                            if (modalMinimumWinEl) {
-                                modalMinimumWinEl.textContent = shouldShowMinimumWinning && minimumWinningSpan ? minimumWinningSpan.textContent : '';
-                            }
-                            
-                            const modalMaxWinEl = document.getElementById('modal-max-winning');
-                            if(modalMaxWinEl) modalMaxWinEl.textContent = maxWinningSpan.textContent;
-                            
-                            const modalTimeEl = document.getElementById('modal-generation-time');
-                            if(modalTimeEl) modalTimeEl.textContent = new Date().toLocaleString();
+                            const _snapshotBets = Array.isArray(selectedBets) ? selectedBets.slice() : [];
+                            const _snapshotSystemK = permutationCountInput ? (parseInt(permutationCountInput.value || '0', 10) || 0) : 0;
 
-                            const modalSelectionsList = document.getElementById('modal-selections-list');
-                            if (modalSelectionsList) {
-                                modalSelectionsList.innerHTML = '';
-                                const betTypeEl = document.getElementById('modal-bet-type');
-                                if (betTypeEl) betTypeEl.textContent = isSystemBet ? 'SYSTEM' : 'ACCUMULATOR';
-                                selectedBets.forEach(bet => {
-                                    const tr = document.createElement('tr');
-                                    tr.innerHTML = `
-                                        <td style="border: 1px solid #000;">
-                                            <div class="fw-bold">${bet.fixture_home_team} vs ${bet.fixture_away_team}</div>
-                                        </td>
-                                        <td style="border: 1px solid #000;">
-                                            <div class="fw-bold">${bet.bet_type_display}</div>
-                                            <div class="text-muted small">${bet.fixture_match_date} ${bet.fixture_match_time}</div>
-                                        </td>
-                                        <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num">${parseFloat(bet.odd).toFixed(2)}</td>
-                                    `;
-                                    modalSelectionsList.appendChild(tr);
-                                });
-                                
-                                if(isSystemBet) {
-                                    const tr = document.createElement('tr');
-                                    tr.innerHTML = `
-                                        <td style="border: 1px solid #000; font-weight: 700;" colspan="3" class="text-center">
-                                            System Bet: ${permutationCount} of ${selectedBets.length} (${numberOfLinesSpan ? numberOfLinesSpan.textContent : 'N/A'} lines)
-                                        </td>
-                                    `;
-                                    modalSelectionsList.prepend(tr);
+                            // Helper set text by id (no-op if missing — never throws)
+                            const setText = function(id, val) { const el = document.getElementById(id); if (el) el.textContent = (val == null ? '' : val); };
+                            const findAny = function(ids) { for (let i = 0; i < ids.length; i++) { const el = document.getElementById(ids[i]); if (el) return el; } return null; };
+                            const removeWarningRow = function() {
+                                const list = document.getElementById('modal-selections-list');
+                                if (!list) return;
+                                const old = list.querySelectorAll('tr[data-preview-warning]');
+                                for (let i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+                            };
+                            const insertWarningRow = function(msg) {
+                                const list = document.getElementById('modal-selections-list');
+                                if (!list) return;
+                                removeWarningRow();
+                                const tr = document.createElement('tr');
+                                tr.setAttribute('data-preview-warning', '1');
+                                tr.innerHTML = '<td colspan="3" style="border:1px solid #dc3545;background:#f8d7da;color:#721c24;font-weight:700;padding:6px 4px;text-align:center;">' + msg + '</td>';
+                                list.prepend(tr);
+                            };
+                            const populateSelectionsFromTicket = function(ticket) {
+                                const list = document.getElementById('modal-selections-list');
+                                if (!list) return;
+                                list.innerHTML = '';
+                                if (ticket && Array.isArray(ticket.selections)) {
+                                    ticket.selections.forEach(function(sel) {
+                                        const tr = document.createElement('tr');
+                                        const home = sel.fixture_home_team || '';
+                                        const away = sel.fixture_away_team || '';
+                                        const bt = sel.bet_type_display || '';
+                                        const d = sel.fixture_match_date || '';
+                                        const t = sel.fixture_match_time || '';
+                                        const o = (sel.odd == null || isNaN(sel.odd)) ? 0 : sel.odd;
+                                        tr.innerHTML = '<td style="border:1px solid #000;"><div class="fw-bold text-dark">' + home + ' vs ' + away + '</div></td>' +
+                                                       '<td style="border:1px solid #000;"><div class="fw-bold">' + bt + '</div><div class="text-muted small">' + d + ' ' + t + '</div></td>' +
+                                                       '<td style="border:1px solid #000;" class="text-end fw-bold ticket-num">' + o.toFixed(2) + '</td>';
+                                        list.appendChild(tr);
+                                    });
                                 }
-                            }
-                            
-                            if (typeof printTicketModal !== 'undefined' && printTicketModal) {
-                                printTicketModal.show();
+                                if (ticket && ticket.bet_type === 'system' && ticket.system_min_count && ticket.original_selections_count) {
+                                    const n = ticket.original_selections_count | 0;
+                                    const k = ticket.system_min_count | 0;
+                                    let lines = 1;
+                                    for (let i = 0; i < k; i++) lines = lines * (n - i) / (i + 1);
+                                    const tr = document.createElement('tr');
+                                    tr.innerHTML = '<td style="border:1px solid #000;font-weight:700;" colspan="3" class="text-center">System Bet: ' + k + ' of ' + n + ' (' + lines + ' lines)</td>';
+                                    list.prepend(tr);
+                                }
+                            };
+                            const populateSelectionsFromBetslip = function(betType) {
+                                const list = document.getElementById('modal-selections-list');
+                                if (!list) return;
+                                list.innerHTML = '';
+                                if (!Array.isArray(_snapshotBets)) return;
+                                _snapshotBets.forEach(function(sel) {
+                                    const tr = document.createElement('tr');
+                                    const home = sel.home_team || (sel.fixture ? sel.fixture.home_team : '') || '';
+                                    const away = sel.away_team || (sel.fixture ? sel.fixture.away_team : '') || '';
+                                    const bt = (sel.bet_type || '').replace(/_/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+                                    const d = sel.match_date || (sel.fixture ? sel.fixture.match_date : '') || '';
+                                    const t = sel.match_time || (sel.fixture ? sel.fixture.match_time : '') || '';
+                                    const o = (sel.odd == null || isNaN(sel.odd)) ? 0 : sel.odd;
+                                    tr.innerHTML = '<td style="border:1px solid #000;"><div class="fw-bold text-dark">' + home + ' vs ' + away + '</div></td>' +
+                                                   '<td style="border:1px solid #000;"><div class="fw-bold">' + bt + '</div><div class="text-muted small">' + d + ' ' + t + '</div></td>' +
+                                                   '<td style="border:1px solid #000;" class="text-end fw-bold ticket-num">' + o.toFixed(2) + '</td>';
+                                    list.appendChild(tr);
+                                });
+                                if (betType === 'system') {
+                                    const n = (_snapshotBets.length || 0);
+                                    const k = (_snapshotSystemK || 0);
+                                    if (k > 0 && n >= k) {
+                                        let lines = 1;
+                                        for (let i = 0; i < k; i++) lines = lines * (n - i) / (i + 1);
+                                        const tr = document.createElement('tr');
+                                        tr.innerHTML = '<td style="border:1px solid #000;font-weight:700;" colspan="3" class="text-center">System Bet: ' + k + ' of ' + n + ' (' + lines + ' lines)</td>';
+                                        list.prepend(tr);
+                                    }
+                                }
+                            };
+                            const populateFromTicket = function(ticket) {
+                                removeWarningRow();
+                                setText('modal-ticket-id', ticket.ticket_id || '');
+                                setText('modal-generation-time', ticket.placed_at || (new Date().toLocaleString()));
+                                setText('modal-bet-type', (ticket.bet_type === 'system' ? 'SYSTEM' : (ticket.bet_type === 'single' ? 'SINGLE' : 'ACCUMULATOR')));
+                                setText('modal-stake-amount', '₦' + ((ticket.stake_amount == null ? 0 : ticket.stake_amount)).toFixed(2));
+                                setText('modal-total-odds', ticket.bet_type === 'system' ? 'Variable' : ((ticket.total_odd == null ? 0 : ticket.total_odd).toFixed(2)));
+                                setText('modal-potential-winning', '₦' + ((ticket.potential_winning == null ? 0 : ticket.potential_winning)).toFixed(2));
+                                const dBonus = ticket.bonus_is_final ? (ticket.bonus_amount || 0) : Math.max(0, (ticket.max_winning || 0) - (ticket.potential_winning || 0));
+                                setText('modal-bonus-amount', '₦' + (dBonus || 0).toFixed(2));
+                                setText('modal-max-winning', '₦' + ((ticket.max_winning == null ? 0 : ticket.max_winning)).toFixed(2));
+                                const showMin = ticket.bet_type === 'system';
+                                const minStr = showMin ? ('₦' + ((ticket.min_winning == null ? 0 : ticket.min_winning)).toFixed(2)) : '';
+                                setText('modal-min-winning', minStr);
+                                setText('modal-minimum-winning', minStr);
+                                const r1 = findAny(['modal-min-winning-row']); if (r1) r1.classList.toggle('d-none', !showMin);
+                                const r2 = findAny(['modal-minimum-winning-row']); if (r2) r2.style.display = showMin ? '' : 'none';
+                                populateSelectionsFromTicket(ticket);
+                                const statusContainer = findAny(['modal-status-container']); if (statusContainer) statusContainer.classList.add('d-none');
+                                const statusText = findAny(['modal-status']); if (statusText) statusText.textContent = '';
+                            };
+                            const populateFromPreview = function(dataIn, reasonMsg) {
+                                removeWarningRow();
+                                insertWarningRow(reasonMsg + ' — PREVIEW COPY: use Reprint from check-ticket for DB-verified receipt.');
+                                const betType = (dataIn.bet_type || (selectedBets && selectedBets.length === 1 ? 'single' : 'accumulator') || 'accumulator');
+                                const stakeNum = dataIn.stake_amount != null ? dataIn.stake_amount : (parseFloat((stakeAmountInput ? stakeAmountInput.value : '') || '0') || 0);
+                                const potNum   = dataIn.potential_winning != null ? dataIn.potential_winning : (parseFloat((potentialWinningSpan ? potentialWinningSpan.textContent : '').replace(/[^0-9.]/g,'')) || 0);
+                                const oddsNum  = dataIn.total_odd != null ? dataIn.total_odd : (parseFloat((totalOddsSpan ? totalOddsSpan.textContent : '').replace(/[^0-9.]/g,'')) || 0);
+                                const bonusNum = dataIn.bonus_amount != null ? dataIn.bonus_amount : (parseFloat((bonusAmountSpan ? bonusAmountSpan.textContent : '').replace(/[^0-9.]/g,'')) || 0);
+                                const maxNum   = dataIn.max_winning != null ? dataIn.max_winning : (parseFloat((maxWinningSpan ? maxWinningSpan.textContent : '').replace(/[^0-9.]/g,'')) || 0);
+                                const minNum   = dataIn.min_winning != null ? dataIn.min_winning : (parseFloat((minWinningSpan ? minWinningSpan.textContent : '').replace(/[^0-9.]/g,'')) || 0);
+                                setText('modal-ticket-id', dataIn.ticket_id || '');
+                                setText('modal-generation-time', (new Date()).toLocaleString());
+                                setText('modal-bet-type', (betType === 'system' ? 'SYSTEM' : (betType === 'single' ? 'SINGLE' : 'ACCUMULATOR')));
+                                setText('modal-stake-amount', '₦' + (stakeNum || 0).toFixed(2));
+                                setText('modal-total-odds', betType === 'system' ? 'Variable' : (oddsNum || 0).toFixed(2));
+                                setText('modal-potential-winning', '₦' + (potNum || 0).toFixed(2));
+                                setText('modal-bonus-amount', '₦' + (bonusNum || 0).toFixed(2));
+                                setText('modal-max-winning', '₦' + (maxNum || 0).toFixed(2));
+                                const showMin = betType === 'system';
+                                const minStr = showMin ? ('₦' + (minNum || 0).toFixed(2)) : '';
+                                setText('modal-min-winning', minStr);
+                                setText('modal-minimum-winning', minStr);
+                                const r1 = findAny(['modal-min-winning-row']); if (r1) r1.classList.toggle('d-none', !showMin);
+                                const r2 = findAny(['modal-minimum-winning-row']); if (r2) r2.style.display = showMin ? '' : 'none';
+                                populateSelectionsFromBetslip(betType);
+                                const statusContainer = findAny(['modal-status-container']); if (statusContainer) statusContainer.classList.add('d-none');
+                                const statusText = findAny(['modal-status']); if (statusText) statusText.textContent = '';
+                            };
+                            const showPrintModal = function() {
+                                try {
+                                    if (typeof printTicketModal !== 'undefined' && printTicketModal) {
+                                        printTicketModal.show();
+                                    } else {
+                                        const mEl = document.getElementById('printTicketModal');
+                                        if (mEl) { const mod = new bootstrap.Modal(mEl); mod.show(); }
+                                    }
+                                } catch (showErr) { console.error(showErr); }
+                            };
+
+                            if (data.ticket_id) {
+                                // Option1 FIRST-PRINT DB PARITY: if backend already included full inline DB-verified ticket,
+                                // use populateFromTicket DIRECTLY and SKIP the secondary get_ticket_details_json fetch
+                                // entirely. This eliminates 2 bugs: (a) player users previously ALWAYS got 403 on
+                                // get_ticket_details_json (only staff allowed, RC2 fixes too but no longer needed here);
+                                // (b) fallback populateFromPreview() reading stale DOM betslip values (stake wrong).
+                                let _used_inline = false;
+                                try {
+                                    if (data && typeof data === 'object' && data.ticket && typeof data.ticket === 'object' && data.ticket.ticket_id) {
+                                        populateFromTicket(data.ticket);
+                                        _used_inline = true;
+                                        showPrintModal();
+                                    }
+                                } catch (inlineErr) {
+                                    console.warn('Inline first-print populate failed, falling back to fetch:', inlineErr);
+                                    _used_inline = false;
+                                }
+                                if (!_used_inline) {
+                                    fetch(`{% url 'betting:get_ticket_details_json' %}?ticket_id=${encodeURIComponent(data.ticket_id)}&mode=reprint`)
+                                        .then(function(r) { return r.json(); })
+                                        .then(function(detail) {
+                                            try {
+                                                if (detail && detail.success && detail.ticket) {
+                                                    populateFromTicket(detail.ticket);
+                                                } else {
+                                                    populateFromPreview(data, detail && detail.message ? detail.message : 'Ticket details unavailable');
+                                                }
+                                                showPrintModal();
+                                            } catch (innerErr) {
+                                                console.error('Print populate error:', innerErr);
+                                                try { populateFromPreview(data, 'Populate failed: ' + (innerErr.message || 'error')); showPrintModal(); } catch(e){}
+                                            }
+                                        })
+                                        .catch(function(err) {
+                                            console.error('Print ticket fetch failed:', err);
+                                            try { populateFromPreview(data, 'Fetch failed: network/permission'); showPrintModal(); } catch(e){}
+                                        });
+                                }
                             } else {
-                                console.warn('printTicketModal is not defined or initialized.');
+                                try { populateFromPreview(data, 'No ticket_id in response'); showPrintModal(); } catch(e){}
                             }
 
-                            selectedBets = []; 
-                            updateBetslip(); 
-                            stakeAmountInput.value = '100'; 
+                            selectedBets = [];
+                            updateBetslip();
+                            stakeAmountInput.value = '100';
                         } catch (jsError) {
                             console.error('Error processing success response:', jsError);
                             // Even if UI update fails, show simple success message

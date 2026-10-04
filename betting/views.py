@@ -3658,7 +3658,7 @@ def _get_fixtures_data(period_id=None):
 
     if period_id:
         current_betting_period = get_object_or_404(BettingPeriod, id=period_id)
-        fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
+        fixtures = Fixture.objects.select_related('betting_period').filter(betting_period=current_betting_period).annotate(
             serial_int=Cast('serial_number', IntegerField())
         ).order_by('serial_int')
     else:
@@ -3683,22 +3683,22 @@ def _get_fixtures_data(period_id=None):
             ).order_by('-start_date').first()
 
         if current_betting_period:
-            fixtures = Fixture.objects.filter(betting_period=current_betting_period).annotate(
+            fixtures = Fixture.objects.select_related('betting_period').filter(betting_period=current_betting_period).annotate(
                 serial_int=Cast('serial_number', IntegerField())
             ).order_by('serial_int')
 
-    # Filter out fixtures that are not active or have invalid status
-    if fixtures.exists():
-        fixtures = fixtures.filter(is_active=True).exclude(status__in=['cancelled', 'finished', 'settled', 'postponed'])
-
-        # Filter out fixtures that have already started (Date/Time check)
-    # We compare against local time because match_date/time are typically stored as wall-clock time
+    # Apply ALL filters in single chain (no intermediate .exists() DB hit)
+    # Filter: active, not cancelled/finished/settled/postponed, not yet started match local time
     local_now = timezone.localtime(timezone.now())
     fixtures = fixtures.filter(
-       Q(match_date__gt=local_now.date()) | 
-       Q(match_date=local_now.date(), match_time__gt=local_now.time())
+        is_active=True
+    ).exclude(
+        status__in=['cancelled', 'finished', 'settled', 'postponed']
+    ).filter(
+        Q(match_date__gt=local_now.date()) |
+        Q(match_date=local_now.date(), match_time__gt=local_now.time())
     )
-        
+
     return fixtures, current_betting_period
 
 def calculate_bonus_amount(potential_winning, stake_amount, selections, bet_type):
@@ -3837,6 +3837,7 @@ def popular_picks_json(request, period_id=None):
             'away_team': f.away_team,
             'match_date': f.match_date.strftime('%Y-%m-%d') if f.match_date else '',
             'match_time': f.match_time.strftime('%H:%M') if f.match_time else '',
+            'disabled_for_betting': bool(getattr(f, 'disabled_for_betting', False)),
         })
         if len(picks) >= 10:
             break

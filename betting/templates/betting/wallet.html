@@ -106,6 +106,17 @@
         </div>
     </div>
     {% endif %}
+    {% if withdraw_button_disabled_by_admin and not request.user.is_superuser and request.user.user_type != 'admin' and request.user.user_type != 'finance' %}
+    <div class="alert alert-warning shadow-sm rounded-4 mb-4 border border-warning" role="alert">
+        <div class="d-flex align-items-start">
+            <i class="bi bi-slash-circle-fill me-3 fs-4"></i>
+            <div>
+                <h5 class="alert-heading fw-bold mb-1">⚠️ Withdrawals Disabled</h5>
+                <div class="mb-0">Withdrawal requests are temporarily disabled by platform administration. Please check back later or contact support for assistance.</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <div class="text-center mb-4">
         <h2 class="fw-bold text-dark wallet-title mb-0">My Wallet</h2>
     </div>
@@ -364,7 +375,12 @@
                                 <label for="id_account_number" class="form-label">Account Number</label>
                                 <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
                             </div>
-                            {% if request.user.withdrawal_locked or not global_withdrawals_enabled %}
+                            {% if withdraw_button_disabled_by_admin and not request.user.is_superuser and request.user.user_type != 'admin' and request.user.user_type != 'finance' %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-outline-secondary rounded-pill px-4 py-2 w-100" disabled>⛔ Withdrawals Disabled</button>
+                                <div class="text-muted small mt-2 text-center">
+                                    Withdrawal requests have been turned off by the admin. Please check back later or contact support.
+                                </div>
+                            {% elif request.user.withdrawal_locked or not global_withdrawals_enabled %}
                                 <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
                                 <div class="text-danger small mt-2 text-center">
                                     Withdrawal access has been disabled.
@@ -464,7 +480,12 @@
                                 <label for="id_account_number" class="form-label">Account Number</label>
                                 <input type="text" name="account_number" id="id_account_number" class="form-control rounded-pill px-4 py-2" placeholder="e.g., 0123456789" required>
                             </div>
-                            {% if request.user.withdrawal_locked or not global_withdrawals_enabled %}
+                            {% if withdraw_button_disabled_by_admin and not request.user.is_superuser and request.user.user_type != 'admin' and request.user.user_type != 'finance' %}
+                                <button type="button" id="withdrawRequestBtn" class="btn btn-outline-secondary rounded-pill px-4 py-2 w-100" disabled>⛔ Withdrawals Disabled</button>
+                                <div class="text-muted small mt-2 text-center">
+                                    Withdrawal requests have been turned off by the admin. Please check back later or contact support.
+                                </div>
+                            {% elif request.user.withdrawal_locked or not global_withdrawals_enabled %}
                                 <button type="button" id="withdrawRequestBtn" class="btn btn-danger rounded-pill px-4 py-2 w-100" disabled>Request Withdrawal</button>
                                 <div class="text-danger small mt-2 text-center">
                                     Withdrawal access has been disabled.

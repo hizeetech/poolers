@@ -213,9 +213,10 @@ class DashboardService:
         # 2. Total Tickets Sold
         total_tickets = tickets_period.count()
         
-        # 3. Total Winnings Paid (Approximation)
+        # 3. Total Winnings Paid (WON settled + CASHED OUT tickets actually paid to user)
         won_tickets_period = BetTicket.objects.filter(status='won', last_updated__gte=start_time)
-        total_winnings = won_tickets_period.aggregate(total=Sum('max_winning'))['total'] or 0
+        cash_tickets_period = BetTicket.objects.filter(status='cashed_out', last_updated__gte=start_time)
+        total_winnings = (won_tickets_period.aggregate(total=Sum('max_winning'))['total'] or 0) + (cash_tickets_period.aggregate(total=Sum('cashout_amount'))['total'] or 0)
         
         # 4. GGR
         ggr = total_stake - total_winnings

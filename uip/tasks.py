@@ -28,10 +28,10 @@ def aggregate_daily_metrics(date_str=None):
     tickets = BetTicket.objects.filter(placed_at__range=(start_of_day, end_of_day))
     total_stake = tickets.aggregate(total=Sum('stake_amount'))['total'] or 0
     
-    # 2. Winnings Paid (Approximation: Tickets WON on this day)
-    # Ideally, we should track actual payouts, but using won tickets is a standard GGR proxy
+    # 2. Winnings Paid (Tickets WON + CASHED OUT tickets actually paid to user)
     won_tickets = BetTicket.objects.filter(status='won', last_updated__range=(start_of_day, end_of_day))
-    total_winnings = won_tickets.aggregate(total=Sum('max_winning'))['total'] or 0
+    cash_tickets = BetTicket.objects.filter(status='cashed_out', last_updated__range=(start_of_day, end_of_day))
+    total_winnings = (won_tickets.aggregate(total=Sum('max_winning'))['total'] or 0) + (cash_tickets.aggregate(total=Sum('cashout_amount'))['total'] or 0)
     
     # 3. GGR
     ggr = total_stake - total_winnings

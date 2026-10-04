@@ -632,6 +632,8 @@
                     
                     const list = document.getElementById('modal-selections-list');
                     list.innerHTML = '';
+                    const betTypeEl = document.getElementById('modal-bet-type');
+                    if (betTypeEl) betTypeEl.textContent = (ticket.bet_type === 'system' ? 'SYSTEM' : (ticket.bet_type === 'single' ? 'SINGLE' : 'ACCUMULATOR'));
                     ticket.selections.forEach(sel => {
                         const tr = document.createElement('tr');
                         tr.innerHTML = `
@@ -639,12 +641,27 @@
                                 <div class="fw-bold text-dark">${sel.fixture_home_team} vs ${sel.fixture_away_team}</div>
                             </td>
                             <td style="border: 1px solid #000;">
-                                <div class="text-muted small">${sel.bet_type_display}</div>
+                                <div class="fw-bold">${sel.bet_type_display}</div>
+                                <div class="text-muted small">${sel.fixture_match_date} ${sel.fixture_match_time}</div>
                             </td>
                             <td style="border: 1px solid #000;" class="text-end fw-bold ticket-num">${sel.odd.toFixed(2)}</td>
                         `;
                         list.appendChild(tr);
                     });
+
+                    if (ticket.bet_type === 'system' && ticket.system_min_count && ticket.original_selections_count) {
+                        const n = ticket.original_selections_count;
+                        const k = ticket.system_min_count;
+                        let lines = 1;
+                        for (let i = 0; i < k; i++) lines = lines * (n - i) / (i + 1);
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td style="border: 1px solid #000; font-weight: 700;" colspan="3" class="text-center">
+                                System Bet: ${k} of ${n} (${lines} lines)
+                            </td>
+                        `;
+                        list.prepend(tr);
+                    }
 
                     const statusContainer = document.getElementById('modal-status-container');
                     const statusText = document.getElementById('modal-status');

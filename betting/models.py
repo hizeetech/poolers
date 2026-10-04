@@ -1342,6 +1342,7 @@ class Fixture(models.Model):
     home_score = models.IntegerField(null=True, blank=True)
     away_score = models.IntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    disabled_for_betting = models.BooleanField(default=False, help_text="When checked, this fixture remains visible on /fixtures/ but is completely unselectable (greyed out, no clicks, Smart Picks & Popular Picks skip it). Toggle via the Action column in the admin list.")
 
     odds_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)
     datetime_updated_at = models.DateTimeField(null=True, blank=True, db_index=True)

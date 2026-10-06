@@ -1249,3 +1249,82 @@ def _maybe_alert_stuck_deposit(*, tx, now, ttl_seconds):
         send_stuck_deposit_alert_email.delay(str(tx.id))
     except Exception:
         pass
+
+
+@shared_task(bind=False, name="betting.tasks.sweep_stuck_pending_tickets")
+def sweep_stuck_pending_tickets(max_per_run=5000, batch_size=100):
+    """
+    Periodic sweep catch-up task (registered via django-celery-beat
+    PeriodicTask id=15, every 30 minutes).
+
+    Finds BetTicket rows stuck in status='pending' even though all their
+    fixtures are decided (finished/settled/void group), then calls
+    BetTicket.check_and_update_status() which applies the triple
+    idempotency gates (status not pending → return; payout_processed →
+    return; bet_payout completed Transaction ≥1 → set flag return) so
+    the sweep is safe to re-run any number of times without double-paying
+    or touching already decided tickets.
+
+    Added live 2026-10-05 to catch up 7640 pending tickets left after
+    celery worker had been dead 12ms race killed 2026-10-04.
+    """
+    import logging
+    from django.utils import timezone
+    from betting.models import BetTicket
+    from django.db.models import Q
+
+    logger = logging.getLogger('celery.sweep_stuck_pending')
+    started = timezone.now()
+    logger.info("sweep_stuck_pending_tickets: start max_per_run=%s batch_size=%s", max_per_run, batch_size)
+
+    status_pending = 'pending'
+    FINAL_DECIDED_FIXTURE_STATUSES = ('finished', 'settled', 'cancelled', 'postponed',
+                                       'abandoned', 'no_result', 'deleted', 'void')
+
+    candidates_qs = (
+        BetTicket.objects
+        .filter(status=status_pending, payout_processed=False)
+        .filter(
+            ~Q(selections__fixture__status__in=('scheduled', 'live', 'in_play'))
+        )
+        .distinct()
+    )[:max_per_run]
+
+    candidates_ids = list(candidates_qs.values_list('id', flat=True))
+    total_candidates = len(candidates_ids)
+    logger.info("sweep_stuck_pending_tickets: total candidates found=%d", total_candidates)
+
+    counts = dict(won=0, lost=0, cancelled=0, remain_pending=0, errors=0)
+
+    for idx in range(0, total_candidates, batch_size):
+        batch_ids = candidates_ids[idx:idx + batch_size]
+        for tid in batch_ids:
+            try:
+                t = BetTicket.objects.get(pk=tid)
+                before_status = t.status
+                t.check_and_update_status(force_backfill=False)
+                after = BetTicket.objects.filter(pk=tid).values('status', 'payout_processed').first() or {}
+                s = after.get('status', before_status)
+                if s == 'won':
+                    counts['won'] += 1
+                elif s == 'lost':
+                    counts['lost'] += 1
+                elif s in ('cancelled', 'deleted', 'cashed_out'):
+                    counts['cancelled'] += 1
+                elif s == 'pending':
+                    counts['remain_pending'] += 1
+                else:
+                    counts['remain_pending'] += 1
+            except Exception as e:
+                counts['errors'] += 1
+                logger.exception("sweep_stuck_pending_tickets error for ticket_id=%s: %s", tid, e)
+
+    elapsed = (timezone.now() - started).total_seconds()
+    msg = (
+        f"sweep_stuck_pending_tickets DONE elapsed={elapsed:.1f}s "
+        f"candidates={total_candidates} "
+        f"won={counts['won']} lost={counts['lost']} cancelled={counts['cancelled']} "
+        f"remain_pending={counts['remain_pending']} errors={counts['errors']}"
+    )
+    logger.info(msg)
+    return msg

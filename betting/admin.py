@@ -312,7 +312,9 @@ class CustomUserAdmin(UserAdmin):
         'email',
     )
     
-    actions = ['unlock_accounts', 'impersonate_user_action', 'enable_withdrawals', 'disable_withdrawals', 'reset_withdrawal_attempts']
+    actions = ['unlock_accounts', 'lock_accounts', 'lock_all_except_admin_superusers',
+               'impersonate_user_action', 'enable_withdrawals', 'disable_withdrawals',
+               'reset_withdrawal_attempts']
 
     def withdrawal_pin_status(self, obj):
         return "Set" if getattr(obj, 'withdrawal_pin', '') else "Not Set"
@@ -433,6 +435,130 @@ class CustomUserAdmin(UserAdmin):
             message += f" {resolved_appeals} pending unlock appeal(s) marked approved."
         self.message_user(request, message)
     unlock_accounts.short_description = "Unlock selected accounts"
+
+    def lock_accounts(self, request, queryset):
+        if not (request.user.is_superuser or request.user.user_type in ('admin', 'crm', 'retail_manager')):
+            self.message_user(request, "Only superusers / admin / crm / retail_manager are allowed to bulk-lock accounts.", level=messages.ERROR)
+            return
+        exclude_self = queryset.exclude(pk=request.user.pk)
+        safe_qs = exclude_self.exclude(is_superuser=True).exclude(user_type__in=('admin',))
+        targets = list(safe_qs)
+        skipped = queryset.count() - len(targets)
+        now = timezone.now()
+        lock_reason = "Account locked from Django admin bulk action by {}.".format(request.user.username or request.user.email)
+        updated_count = safe_qs.update(
+            is_locked=True,
+            is_active=False,
+            locked_at=now,
+            lock_reason=lock_reason,
+        )
+        for user in targets:
+            LoginAttempt.objects.create(
+                user=user,
+                username_attempted=user.email,
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                status='locked',
+            )
+            AccountLockAuditLog.objects.create(
+                locked_user=user,
+                locked_by=request.user,
+                reviewed_by=request.user,
+                lock_reason=lock_reason,
+                action='locked',
+                remarks='Account locked from Django admin bulk action (lock_accounts).',
+            )
+        msg = f"{updated_count} account(s) successfully locked."
+        if skipped:
+            msg += f" ({skipped} skipped: self / superusers / admin-type accounts are exempt.)"
+        self.message_user(request, msg)
+    lock_accounts.short_description = "Lock selected accounts (selected rows only)"
+
+    def lock_all_except_admin_superusers(self, request, queryset):
+        if not (request.user.is_superuser or request.user.user_type == 'admin'):
+            self.message_user(request, "Only superusers / admin can use the platform-wide Lock All action.", level=messages.ERROR)
+            return
+        from django.db.models import Q as _Q
+        all_users = User.objects.all()
+        exempt_qs = all_users.filter(
+            _Q(is_superuser=True) |
+            _Q(user_type__in=('admin',)) |
+            _Q(pk=request.user.pk)
+        )
+        exempt_ids = set(exempt_qs.values_list('pk', flat=True))
+        candidates_qs = all_users.exclude(pk__in=exempt_ids)
+        targets_qs = candidates_qs.exclude(is_locked=True).exclude(is_active=False)
+        target_count = targets_qs.count()
+        exempt_count = all_users.count() - candidates_qs.count()
+        already_count = candidates_qs.count() - target_count
+
+        if request.POST.get('confirmed') == 'yes':
+            now = timezone.now()
+            lock_reason = "Platform-wide lock performed by {} on {}.".format(
+                request.user.username or request.user.email,
+                now.strftime('%Y-%m-%d %H:%M:%S')
+            )
+            updated_count = 0
+            batch_size = 500
+            target_pks = list(targets_qs.order_by('pk').values_list('pk', flat=True))
+            for i in range(0, len(target_pks), batch_size):
+                batch_pks = target_pks[i:i+batch_size]
+                batch_qs = User.objects.filter(pk__in=batch_pks)
+                updated_count += batch_qs.update(
+                    is_locked=True,
+                    is_active=False,
+                    locked_at=now,
+                    lock_reason=lock_reason,
+                )
+                audit_batch = []
+                login_batch = []
+                for uid in batch_pks:
+                    audit_batch.append(AccountLockAuditLog(
+                        locked_user_id=uid,
+                        locked_by=request.user,
+                        reviewed_by=request.user,
+                        lock_reason=lock_reason,
+                        action='locked',
+                        remarks='Account locked by platform-wide bulk action (lock_all_except_admin_superusers).',
+                    ))
+                    login_batch.append(LoginAttempt(
+                        user_id=uid,
+                        username_attempted='',
+                        ip_address=request.META.get('REMOTE_ADDR'),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        status='locked',
+                    ))
+                AccountLockAuditLog.objects.bulk_create(audit_batch, batch_size=500)
+                LoginAttempt.objects.bulk_create(login_batch, batch_size=500)
+
+            self.message_user(
+                request,
+                f"Platform-wide lock complete. {updated_count} user(s) locked. "
+                f"{exempt_count} exempt (admin/superuser/yourself). {already_count} already locked/inactive skipped."
+            )
+            return
+
+        context = {
+            'title': 'Confirm Platform-Wide Lock All Users',
+            'site_header': self.admin_site.site_header,
+            'site_title': self.admin_site.site_title,
+            'opts': self.model._meta,
+            'app_label': self.model._meta.app_label,
+            'queryset_summary': {
+                'exempt_count': exempt_count,
+                'already_locked_or_inactive': already_count,
+                'will_lock_count': target_count,
+                'total_users': all_users.count(),
+                'actor': request.user.username or request.user.email,
+                'actor_id': request.user.pk,
+            },
+            'action': request.POST.get('action'),
+            'select_across': request.POST.get('select_across'),
+            'index': request.POST.getlist('index'),
+            'selected_action': request.POST.getlist('_selected_action'),
+        }
+        return render(request, 'betting/admin/lock_all_confirm.html', context)
+    lock_all_except_admin_superusers.short_description = "LOCK ALL users (platform-wide, exempt admin & superusers)"
 
     fieldsets = (
         (None, {'fields': ('email', 'username', 'password')}),

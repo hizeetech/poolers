@@ -1,0 +1,74 @@
+{% extends "admin/base_site.html" %}
+{% load i10n l10n admin_urls %}
+
+{% block content %}
+<div class="content-main">
+    <h1>Confirm Platform-Wide Lock All Users</h1>
+
+    <div class="module">
+        <h2>Impact Summary</h2>
+        <table style="width: 100%; max-width: 600px; border-collapse: collapse; margin-bottom: 20px;">
+            <tr>
+                <td style="padding: 8px; border: 1px solid #ddd;"><strong>Total users in platform:</strong></td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{{ queryset_summary.total_users }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px; border: 1px solid #ddd;"><strong>Executing admin user (you):</strong></td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{{ queryset_summary.actor }} (id={{ queryset_summary.actor_id }})</td>
+            </tr>
+            <tr style="background-color: #d1ecf1;">
+                <td style="padding: 8px; border: 1px solid #ddd;"><strong>EXEMPT (NOT LOCKED - safe):</strong><br/>Admin user_type, superusers, and yourself</td>
+                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">{{ queryset_summary.exempt_count }}</td>
+            </tr>
+            <tr style="background-color: #f5f5f5;">
+                <td style="padding: 8px; border: 1px solid #ddd;"><strong>Already locked/inactive (SKIP):</strong></td>
+                <td style="padding: 8px; border: 1px solid #ddd;">{{ queryset_summary.already_locked_or_inactive }}</td>
+            </tr>
+            <tr style="background-color: #f8d7da; color: #721c24;">
+                <td style="padding: 8px; border: 1px solid #ddd;"><strong>WILL BE LOCKED this run:</strong><br/>(players, cashiers, agents, super_agents, master_agents, non-admin finance/crm users)</td>
+                <td style="padding: 8px; border: 1px solid #ddd; font-size: 18px; font-weight: bold;">{{ queryset_summary.will_lock_count }}</td>
+            </tr>
+        </table>
+
+        <div style="background-color: #f8d7da; color: #721c24; padding: 15px; border: 1px solid #f5c6cb; border-radius: 5px; margin-bottom: 20px;">
+            <strong><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: middle; margin-right: 5px;"><path d="M8 0a8 8 0 1 0 8 8A8.01 8.01 0 0 0 8 0zm1 12H7V7h2zm0-8H7V3h2z"/></svg>WARNING: DESTRUCTIVE ACTION, CANNOT BE UNDONE EN-MASSE AUTOMATICALLY:</strong>
+            <ul style="margin-top: 10px; padding-left: 20px;">
+                <li><strong>{{ queryset_summary.will_lock_count }} users</strong> will immediately lose access to both login AND dashboard (is_locked=True + is_active=False).</li>
+                <li>To unlock any specific user afterwards: go to that user's Security &amp; Locking tab, UNCHECK <em>is_locked</em> + CHECK <em>is_active</em>, then SAVE, or use the existing bulk <strong>Unlock selected accounts</strong> action.</li>
+                <li>Superusers ({{ queryset_summary.exempt_count }} exempt) including yourself will remain fully logged in and can unlock anyone.</li>
+                <li>Audit trail: each locked user gets a new <code>AccountLockAuditLog</code> row with locked_by=you, plus a <code>LoginAttempt</code> status=locked row.</li>
+                <li>Each user's <code>lock_reason</code> is set with timestamp, so you can tell platform-lock dates apart from brute-force auto-locks.</li>
+            </ul>
+        </div>
+
+        <form action="" method="post">
+            {% csrf_token %}
+            {% if select_across %}
+            <input type="hidden" name="select_across" value="{{ select_across }}" />
+            {% endif %}
+            {% if index %}
+                {% for idx in index %}
+                <input type="hidden" name="index" value="{{ idx }}" />
+                {% endfor %}
+            {% endif %}
+            {% if selected_action %}
+                {% for pk in selected_action %}
+                <input type="hidden" name="_selected_action" value="{{ pk }}" />
+                {% endfor %}
+            {% endif %}
+            <input type="hidden" name="action" value="{{ action }}" />
+            <input type="hidden" name="confirmed" value="yes" />
+
+            <div class="submit-row">
+                <input type="submit"
+                       value="Yes, I understand. LOCK {{ queryset_summary.will_lock_count }} users NOW."
+                       class="default"
+                       style="background-color: #c82333; border-color: #bd2130; color: #fff; padding: 10px 18px; font-weight: bold; border-radius: 4px; cursor: pointer;"
+                       onclick="return confirm('This action locks {{ queryset_summary.will_lock_count }} users. Are you SURE? Type OK in your mind and click.');"
+                />
+                <a href="#" onclick="window.history.back(); return false;" class="button" style="margin-left: 20px; padding: 10px 15px;">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

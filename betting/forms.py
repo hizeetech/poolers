@@ -1980,6 +1980,20 @@ class AdminUserChangeForm(DuplicateEmailConfirmationMixin, DjangoUserChangeForm)
             user.withdrawal_attempts = 0
             user.withdrawal_locked = False
             user.withdrawal_locked_at = None
+
+        # DEFENSIVE FALLBACK: if any upstream (e.g. V12 raw field) put plaintext pin
+        # directly into user.withdrawal_pin, detect plaintext on the instance before save, hash it
+        # instead of saving plaintext. Prevents "Invalid PIN" errors after admin reset.
+        import re as _re_pin
+        raw_pin_on_user = getattr(user, 'withdrawal_pin', '') or ''
+        _pin_hash_prefix = (
+            r'pbkdf2_sha256\$|argon2\$|bcrypt\$|bcrypt_sha256\$|'
+            r'sha1\$|md5\$|crypt\$|unsalted_md5\$|unsalted_sha1\$'
+        )
+        _IS_PIN_HASH = bool(raw_pin_on_user and _re_pin.match('^(' + _pin_hash_prefix + ')', raw_pin_on_user))
+        if raw_pin_on_user and not _IS_PIN_HASH and raw_pin_on_user != '':
+            # Non-hash (plaintext) raw pin stored. Re-hash immediately.
+            user.set_withdrawal_pin(raw_pin_on_user.strip())
                     
         if commit:
             user.save()

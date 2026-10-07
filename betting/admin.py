@@ -433,7 +433,8 @@ class CustomUserAdmin(UserAdmin):
             failed_login_attempts=0,
             last_failed_login=None,
             locked_at=None,
-            lock_reason=None
+            lock_reason=None,
+            is_active=True,
         )
         resolved_appeals = self._resolve_pending_unlock_appeals(
             request,
@@ -798,6 +799,7 @@ class CustomUserAdmin(UserAdmin):
                     remarks='Account locked from Django admin user form.',
                 )
             else:
+                obj.is_active = True
                 resolved_appeals = self._resolve_pending_unlock_appeals(
                     request,
                     [obj],

@@ -4,4 +4,4 @@ class BettingConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'betting'
     def ready(self):
-        pass
+        from . import admin_runtime_fixes  # noqa (registers correct admin class + fixes V12 closures / recursion)

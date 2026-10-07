@@ -22510,6 +22510,12 @@ def admin_manual_wallet_manager(request):
     manual_transaction_types = ['manual_credit', 'manual_debit', 'account_user_credit', 'account_user_debit']
     recent_page_number = request.GET.get('recent_page') or request.POST.get('recent_page') or 1
 
+    filter_username = (request.GET.get('filter_username') or '').strip()
+    filter_names = (request.GET.get('filter_names') or '').strip()
+    filter_date_from = (request.GET.get('filter_date_from') or '').strip()
+    filter_date_to = (request.GET.get('filter_date_to') or '').strip()
+    filter_action_type = (request.GET.get('filter_action_type') or '').strip()
+
     if request.method == 'POST':
         if 'search_user' in request.POST:
             search_form = AccountUserSearchForm(request.POST)
@@ -22700,8 +22706,47 @@ def admin_manual_wallet_manager(request):
     recent_transactions_queryset = Transaction.objects.filter(
         transaction_type__in=manual_transaction_types
     ).select_related('user', 'initiating_user').order_by('-timestamp')
+
+    if filter_username:
+        recent_transactions_queryset = recent_transactions_queryset.filter(
+            Q(user__username__icontains=filter_username) |
+            Q(initiating_user__username__icontains=filter_username)
+        )
+    if filter_names:
+        recent_transactions_queryset = recent_transactions_queryset.filter(
+            Q(user__first_name__icontains=filter_names) |
+            Q(user__last_name__icontains=filter_names) |
+            Q(initiating_user__first_name__icontains=filter_names) |
+            Q(initiating_user__last_name__icontains=filter_names)
+        )
+    if filter_action_type:
+        recent_transactions_queryset = recent_transactions_queryset.filter(transaction_type=filter_action_type)
+    if filter_date_from:
+        try:
+            from datetime import datetime as _dt
+            dt_from = _dt.strptime(filter_date_from, "%Y-%m-%d")
+            recent_transactions_queryset = recent_transactions_queryset.filter(timestamp__date__gte=dt_from.date())
+        except (ValueError, TypeError):
+            pass
+    if filter_date_to:
+        try:
+            from datetime import datetime as _dt2
+            dt_to = _dt2.strptime(filter_date_to, "%Y-%m-%d")
+            recent_transactions_queryset = recent_transactions_queryset.filter(timestamp__date__lte=dt_to.date())
+        except (ValueError, TypeError):
+            pass
+
     recent_transactions_paginator = Paginator(recent_transactions_queryset, 20)
     recent_transactions = recent_transactions_paginator.get_page(recent_page_number)
+
+    filter_qs_parts = []
+    if filter_username: filter_qs_parts.append(f"filter_username={filter_username}")
+    if filter_names: filter_qs_parts.append(f"filter_names={filter_names}")
+    if filter_action_type: filter_qs_parts.append(f"filter_action_type={filter_action_type}")
+    if filter_date_from: filter_qs_parts.append(f"filter_date_from={filter_date_from}")
+    if filter_date_to: filter_qs_parts.append(f"filter_date_to={filter_date_to}")
+    filter_querystring = "&".join(filter_qs_parts)
+    filter_applied_count = (1 if filter_username else 0)+(1 if filter_names else 0)+(1 if filter_action_type else 0)+(1 if filter_date_from else 0)+(1 if filter_date_to else 0)
 
     context = {
         'search_form': search_form,
@@ -22711,6 +22756,14 @@ def admin_manual_wallet_manager(request):
         'search_results': search_results,
         'recent_transactions': recent_transactions,
         'recent_page_number': recent_transactions.number,
+        'filter_username': filter_username,
+        'filter_names': filter_names,
+        'filter_date_from': filter_date_from,
+        'filter_date_to': filter_date_to,
+        'filter_action_type': filter_action_type,
+        'filter_querystring': filter_querystring,
+        'filter_applied_count': filter_applied_count,
+        'manual_transaction_types': manual_transaction_types,
     }
     return render(request, 'betting/admin/manual_wallet_manager.html', context)
 

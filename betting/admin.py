@@ -3,6 +3,37 @@ import os
 import sys
 from django import forms
 from django.contrib.auth.admin import UserAdmin
+
+# [2026-10-07 RECURSION GUARD] Save ORIGINAL Django UserAdmin parent methods
+# BEFORE V12_OVERWRITE_FORCE patches class UserAdmin itself with copies from
+# CustomUserAdmin causing infinite recursion UserAdmin.METHOD -> self call.
+_DJANGO_ORIG_USERADMIN_get_readonly_fields = UserAdmin.get_readonly_fields
+_DJANGO_ORIG_USERADMIN_get_fields = UserAdmin.get_fields
+_DJANGO_ORIG_USERADMIN_get_fieldsets = UserAdmin.get_fieldsets
+_DJANGO_ORIG_USERADMIN_get_form = UserAdmin.get_form
+_DJANGO_ORIG_USERADMIN_save_model = UserAdmin.save_model
+_DJANGO_ORIG_USERADMIN_get_queryset = UserAdmin.get_queryset
+_DJANGO_ORIG_USERADMIN_changeform_view = UserAdmin.changeform_view
+_DJANGO_ORIG_USERADMIN_formfield_for_foreignkey = UserAdmin.formfield_for_foreignkey
+_DJANGO_ORIG_USERADMIN_formfield_for_manytomany = UserAdmin.formfield_for_manytomany
+_DJANGO_ORIG_USERADMIN_add_view = UserAdmin.add_view
+_DJANGO_ORIG_USERADMIN_change_view = UserAdmin.change_view
+_DJANGO_ORIG_USERADMIN_changelist_view = UserAdmin.changelist_view
+_DJANGO_ORIG_USERADMIN_get_urls = UserAdmin.get_urls
+_DJANGO_ORIG_USERADMIN_delete_model = UserAdmin.delete_model
+_DJANGO_ORIG_USERADMIN_delete_queryset = UserAdmin.delete_queryset
+_DJANGO_ORIG_USERADMIN_get_search_results = UserAdmin.get_search_results
+_DJANGO_ORIG_USERADMIN_get_ordering = UserAdmin.get_ordering
+_DJANGO_ORIG_USERADMIN_get_list_display = UserAdmin.get_list_display
+_DJANGO_ORIG_USERADMIN_get_list_filter = UserAdmin.get_list_filter
+_DJANGO_ORIG_USERADMIN_has_add_permission = UserAdmin.has_add_permission
+_DJANGO_ORIG_USERADMIN_has_change_permission = UserAdmin.has_change_permission
+_DJANGO_ORIG_USERADMIN_has_delete_permission = UserAdmin.has_delete_permission
+_DJANGO_ORIG_USERADMIN_has_view_permission = UserAdmin.has_view_permission
+_DJANGO_ORIG_USERADMIN_get_actions = UserAdmin.get_actions
+_DJANGO_ORIG_USERADMIN_message_user = UserAdmin.message_user
+_DJANGO_ORIG_USERADMIN_lookup_allowed = UserAdmin.lookup_allowed
+
 from django.db.models import Q, IntegerField, Sum, Count, Value, DecimalField, OuterRef, Subquery, Case, When
 from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
@@ -77,7 +108,6 @@ from .models import (
 )
 from . import signals
 from .tasks import recalculate_tickets_for_fixture
-
 
 # --- Custom Admin Site Definition ---
 class BettingAdminSite(admin.AdminSite):
@@ -277,7 +307,6 @@ class BettingAdminSite(admin.AdminSite):
 
 betting_admin_site = BettingAdminSite(name='betting_admin')
 
-
 class LoginAttemptAdmin(admin.ModelAdmin):
     list_display = ('username_attempted', 'status', 'ip_address', 'timestamp', 'user')
     list_filter = ('status', 'timestamp')
@@ -286,7 +315,6 @@ class LoginAttemptAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
-
 
 # --- Custom User Admin ---
 class CustomUserAdmin(UserAdmin):
@@ -567,7 +595,7 @@ class CustomUserAdmin(UserAdmin):
         ('Hierarchy', {'fields': ('master_agent', 'super_agent', 'agent', 'cashier_prefix')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
         ('Security & Locking', {'fields': ('is_locked', 'failed_login_attempts', 'last_failed_login', 'locked_at', 'lock_reason')}),
-        ('Withdrawal PIN', {'fields': ('withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts', 'withdrawal_pin_new', 'withdrawal_pin_confirm')}),
+        ('Withdrawal Security', {'fields': ('withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts', 'withdrawal_pin', 'withdrawal_pin_new', 'withdrawal_pin_confirm')}),
     )
 
     add_fieldsets = (
@@ -595,7 +623,21 @@ class CustomUserAdmin(UserAdmin):
     # text "First, enter a username and password..." was visible on LIVE.
     add_form_template = 'admin/change_form.html'
     
-    readonly_fields = ('last_login', 'date_joined', 'withdrawal_locked_at')
+    readonly_fields = ('last_login', 'date_joined', 'withdrawal_locked_at', 'withdrawal_pin')
+
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(_DJANGO_ORIG_USERADMIN_get_readonly_fields(self, request, obj) or ())
+        if 'withdrawal_pin' not in ro: ro.append('withdrawal_pin')
+        for vr in ('withdrawal_pin_new', 'withdrawal_pin_confirm'):
+            if vr in ro: ro.remove(vr)
+        return tuple(ro)
+
+    def get_fields(self, request, obj=None):
+        flds = list(_DJANGO_ORIG_USERADMIN_get_fields(self, request, obj) or ())
+        for vf in ('withdrawal_pin_new', 'withdrawal_pin_confirm', 'withdrawal_pin'):
+            if vf not in flds:
+                flds.append(vf)
+        return flds
 
     def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
         if object_id is None:
@@ -604,7 +646,7 @@ class CustomUserAdmin(UserAdmin):
             _saved_cfmt = getattr(self, 'change_form_template', None)
             try:
                 self.change_form_template = 'admin/change_form.html'
-                response = super().changeform_view(request, object_id=object_id, form_url=form_url, extra_context=extra_context)
+                response = _DJANGO_ORIG_USERADMIN_changeform_view(self, request, object_id=object_id, form_url=form_url, extra_context=extra_context)
                 if hasattr(response, 'template_name'):
                     tn = response.template_name
                     if isinstance(tn, (list, tuple)):
@@ -615,7 +657,7 @@ class CustomUserAdmin(UserAdmin):
             finally:
                 if _saved_cfmt is not None:
                     self.change_form_template = _saved_cfmt
-        return super().changeform_view(request, object_id=object_id, form_url=form_url, extra_context=extra_context)
+        return _DJANGO_ORIG_USERADMIN_changeform_view(self, request, object_id=object_id, form_url=form_url, extra_context=extra_context)
 
     def add_view(self, request, form_url='', extra_context=None):
         original_fieldsets_backup = self.fieldsets
@@ -637,9 +679,9 @@ class CustomUserAdmin(UserAdmin):
     disable_withdrawals.short_description = "Disable withdrawals"
 
     def reset_withdrawal_attempts(self, request, queryset):
-        updated = queryset.update(withdrawal_attempts=0)
-        self.message_user(request, f"{updated} user(s) withdrawal attempts reset.")
-    reset_withdrawal_attempts.short_description = "Reset withdrawal attempts"
+        updated = queryset.update(withdrawal_attempts=0, withdrawal_locked=False, withdrawal_locked_at=None)
+        self.message_user(request, f"{updated} user(s) withdrawal attempts reset, withdrawal unlocked.")
+    reset_withdrawal_attempts.short_description = "Reset withdrawal attempts (+ unlock withdrawals)"
 
     def get_phone_number(self, obj):
         if obj.user_type == 'cashier' and obj.agent:
@@ -677,10 +719,10 @@ class CustomUserAdmin(UserAdmin):
             kwargs["queryset"] = User.objects.filter(user_type='master_agent')
         elif db_field.name == "super_agent":
             kwargs["queryset"] = User.objects.filter(user_type='super_agent')
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+        return _DJANGO_ORIG_USERADMIN_formfield_for_foreignkey(self, db_field, request, **kwargs)
 
     def get_fieldsets(self, request, obj=None):
-        base_fieldsets = super().get_fieldsets(request, obj)
+        base_fieldsets = _DJANGO_ORIG_USERADMIN_get_fieldsets(self, request, obj)
         if obj is not None:
             return base_fieldsets
 
@@ -716,7 +758,7 @@ class CustomUserAdmin(UserAdmin):
         else: # Adding a new object
             kwargs['form'] = self.add_form
             
-        FormClass = super().get_form(request, obj, **kwargs)
+        FormClass = _DJANGO_ORIG_USERADMIN_get_form(self, request, obj, **kwargs)
         
         class RequestForm(FormClass):
             def __init__(self, *args, **kwargs):
@@ -728,15 +770,23 @@ class CustomUserAdmin(UserAdmin):
     def save_model(self, request, obj, form, change):
         previous = None
         if change and obj.pk:
-            previous = User.objects.filter(pk=obj.pk).only('is_locked', 'lock_reason').first()
+            previous = User.objects.filter(pk=obj.pk).only(
+                'is_locked', 'lock_reason', 'withdrawal_locked', 'withdrawal_locked_at', 'withdrawal_attempts'
+            ).first()
         action_description = f"User '{obj.email}' {'updated' if change else 'created'}."
         views.log_admin_activity(request, action_description)
+
+        # --- Withdrawal fixes: auto-clear timestamp/attempts when admin unlocks ---
+        if previous and previous.withdrawal_locked and not obj.withdrawal_locked:
+            # Admin unchecked withdrawal_locked: clear stale timestamp + zero out attempts
+            obj.withdrawal_locked_at = None
+            obj.withdrawal_attempts = 0
 
         # The password setting and user type related staff/superuser status
         # are now largely handled within the custom AdminUserCreationForm/AdminUserChangeForm save methods.
         # Call the form's save method explicitly if you need its custom logic to run.
         # Otherwise, super().save_model will call obj.save() and form.save() as needed.
-        super().save_model(request, obj, form, change)
+        _DJANGO_ORIG_USERADMIN_save_model(self, request, obj, form, change)
 
         if previous and previous.is_locked != obj.is_locked:
             if obj.is_locked:
@@ -907,9 +957,8 @@ Password: {password_html}
         if obj.user_type in ['master_agent', 'super_agent', 'agent', 'cashier'] and not obj.is_staff:
             messages.warning(request, f"User {obj.email} is a '{obj.user_type}' but not marked as staff. Please ensure 'staff status' is checked.")
 
-
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
+        qs = _DJANGO_ORIG_USERADMIN_get_queryset(self, request)
         if request.user.is_superuser or request.user.user_type == 'admin':
             return qs
         
@@ -971,7 +1020,6 @@ Password: {password_html}
         
         return request.user.is_superuser or request.user.user_type == 'admin' or request.user.user_type in ['master_agent', 'super_agent', 'agent']
 
-
     def has_delete_permission(self, request, obj=None):
         if request.user.is_superuser:
             return True
@@ -1003,7 +1051,6 @@ Password: {password_html}
         
         return request.user.is_superuser or request.user.user_type == 'admin'
 
-
 # --- Selection Inline for BetTicket Admin ---
 class SelectionInline(admin.TabularInline):
     model = Selection
@@ -1025,7 +1072,6 @@ class SelectionInline(admin.TabularInline):
         return " ".join(parts)
     fixture_display.short_description = 'Fixture'
 
-
 # --- BetTicket Admin (Registered with custom site) ---
 class TicketSelectionCountFilter(admin.SimpleListFilter):
     title = 'Single / Multiple / System'
@@ -1043,7 +1089,6 @@ class TicketSelectionCountFilter(admin.SimpleListFilter):
         if value not in {'single', 'multiple', 'system'}:
             return queryset
         return queryset.filter(bet_type=value)
-
 
 class BetTicketAdmin(admin.ModelAdmin):
     change_list_template = "betting/admin/betticket_change_list.html"
@@ -1459,7 +1504,6 @@ class BetTicketAdmin(admin.ModelAdmin):
             messages.info(request, f"{tickets_already} tickets were already paid (skipped).")
         if tickets_failed > 0:
             messages.warning(request, f"Failed to settle {tickets_failed} bet tickets as WON.")
-
 
 # --- BettingPeriod Admin ---
 class BettingPeriodAdmin(admin.ModelAdmin):
@@ -2061,7 +2105,6 @@ class ResultAdmin(admin.ModelAdmin):
     serial_number_display.short_description = 'Serial Number'
     serial_number_display.admin_order_field = 'serial_number'
 
-
 # --- Wallet Admin ---
 class WalletAdmin(admin.ModelAdmin):
     list_display = ('user', 'balance', 'last_updated')
@@ -2369,7 +2412,6 @@ class UserWithdrawalAdminForm(forms.ModelForm):
             )
 
         return cleaned_data
-
 
 class UserWithdrawalAdmin(admin.ModelAdmin):
     form = UserWithdrawalAdminForm
@@ -3135,7 +3177,6 @@ class AgentBettingLimitOverrideAdmin(admin.ModelAdmin):
         )
         self.message_user(request, f"Disabled custom limits for {updated} overrides.", level=messages.SUCCESS)
 
-
 class UserBettingLimitOverrideAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_active', 'custom_limits_enabled', 'min_stake', 'max_stake', 'max_winning', 'updated_at')
     list_filter = ('is_active', 'custom_limits_enabled')
@@ -3222,7 +3263,6 @@ class UserBettingLimitOverrideAdmin(admin.ModelAdmin):
         )
         self.message_user(request, f"Disabled custom limits for {updated} overrides.", level=messages.SUCCESS)
 
-
 class BettingLimitAuditLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'action_type', 'actor', 'agent', 'affected_user', 'ticket')
     list_filter = ('action_type', 'created_at')
@@ -3239,7 +3279,6 @@ class BettingLimitAuditLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class RetailManagerMasterAgentMappingAdmin(admin.ModelAdmin):
     list_display = ('retail_manager', 'master_agent', 'created_at')
     search_fields = ('retail_manager__email', 'retail_manager__username', 'master_agent__email', 'master_agent__username')
@@ -3247,14 +3286,12 @@ class RetailManagerMasterAgentMappingAdmin(admin.ModelAdmin):
     autocomplete_fields = ('retail_manager', 'master_agent')
     date_hierarchy = 'created_at'
 
-
 class RetailManagerSuperAgentMappingAdmin(admin.ModelAdmin):
     list_display = ('retail_manager', 'super_agent', 'created_at')
     search_fields = ('retail_manager__email', 'retail_manager__username', 'super_agent__email', 'super_agent__username')
     list_filter = ('created_at',)
     autocomplete_fields = ('retail_manager', 'super_agent')
     date_hierarchy = 'created_at'
-
 
 class RetailManagerAgentMappingAdmin(admin.ModelAdmin):
     list_display = ('retail_manager', 'agent', 'created_at')
@@ -3279,7 +3316,6 @@ class FinanceAuditLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class CRMActionLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'action_type', 'actor', 'target_user', 'reason')
     list_filter = ('action_type', 'created_at')
@@ -3296,7 +3332,6 @@ class CRMActionLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class CustomerComplaintAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'complaint_type', 'user', 'subject', 'status', 'priority', 'assigned_to')
     list_filter = ('complaint_type', 'status', 'priority', 'created_at', 'resolved_at')
@@ -3304,7 +3339,6 @@ class CustomerComplaintAdmin(admin.ModelAdmin):
     autocomplete_fields = ('user', 'assigned_to', 'created_by')
     list_select_related = ('user', 'assigned_to', 'created_by')
     date_hierarchy = 'created_at'
-
 
 class CustomerComplaintNoteAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'complaint', 'author', 'is_internal')
@@ -3314,7 +3348,6 @@ class CustomerComplaintNoteAdmin(admin.ModelAdmin):
     list_select_related = ('complaint', 'author')
     date_hierarchy = 'created_at'
 
-
 class BulkMessageTemplateAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'default_channel', 'is_active', 'created_by', 'created_at')
     list_filter = ('category', 'default_channel', 'is_active', 'created_at')
@@ -3322,7 +3355,6 @@ class BulkMessageTemplateAdmin(admin.ModelAdmin):
     autocomplete_fields = ('created_by',)
     list_select_related = ('created_by',)
     date_hierarchy = 'created_at'
-
 
 class BulkMessageCampaignAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'subject', 'channel', 'target_group', 'status', 'recipients_count', 'delivered_count', 'failed_count', 'created_by')
@@ -3332,7 +3364,6 @@ class BulkMessageCampaignAdmin(admin.ModelAdmin):
     list_select_related = ('template', 'created_by')
     date_hierarchy = 'created_at'
 
-
 class BulkMessageDeliveryAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'campaign', 'recipient', 'channel', 'status', 'sent_at')
     list_filter = ('channel', 'status', 'created_at', 'sent_at')
@@ -3340,7 +3371,6 @@ class BulkMessageDeliveryAdmin(admin.ModelAdmin):
     autocomplete_fields = ('campaign', 'recipient')
     list_select_related = ('campaign', 'recipient')
     date_hierarchy = 'created_at'
-
 
 class DashboardTaskAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'title', 'assigned_to', 'audience_label', 'status', 'due_at', 'completed_at', 'created_by')
@@ -3364,7 +3394,6 @@ class DashboardTaskAdmin(admin.ModelAdmin):
             obj.completed_at = timezone.now()
         super().save_model(request, obj, form, change)
 
-
 class CRMOpsAuditLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'module', 'action', 'actor', 'target_user', 'complaint', 'campaign', 'transaction', 'ip_address')
     list_filter = ('module', 'action', 'created_at')
@@ -3383,7 +3412,6 @@ class CRMOpsAuditLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class CRMComplaintInline(admin.TabularInline):
     model = CRMComplaint
     extra = 0
@@ -3392,7 +3420,6 @@ class CRMComplaintInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class CRMCampaignPerformanceInline(admin.TabularInline):
     model = CRMCampaignPerformance
@@ -3406,7 +3433,6 @@ class CRMCampaignPerformanceInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
-
 class CRMChallengeInline(admin.TabularInline):
     model = CRMChallenge
     extra = 0
@@ -3415,7 +3441,6 @@ class CRMChallengeInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class CRMNextDayTaskInline(admin.TabularInline):
     model = CRMNextDayTask
@@ -3426,7 +3451,6 @@ class CRMNextDayTaskInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
-
 class CRMAdminCommentInline(admin.TabularInline):
     model = CRMAdminComment
     extra = 0
@@ -3435,7 +3459,6 @@ class CRMAdminCommentInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class CRMReportAttachmentInline(admin.TabularInline):
     model = CRMReportAttachment
@@ -3452,7 +3475,6 @@ class CRMReportAttachmentInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class CRMDailyReportAdmin(admin.ModelAdmin):
     list_display = (
@@ -3552,7 +3574,6 @@ class CRMDailyReportAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class RetailSupportActivityInline(admin.TabularInline):
     model = RetailSupportActivity
     extra = 0
@@ -3561,7 +3582,6 @@ class RetailSupportActivityInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class RetailCampaignPerformanceInline(admin.TabularInline):
     model = RetailCampaignPerformance
@@ -3575,7 +3595,6 @@ class RetailCampaignPerformanceInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
-
 class RetailChallengeInline(admin.TabularInline):
     model = RetailChallenge
     extra = 0
@@ -3584,7 +3603,6 @@ class RetailChallengeInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class RetailNextDayTaskInline(admin.TabularInline):
     model = RetailNextDayTask
@@ -3595,7 +3613,6 @@ class RetailNextDayTaskInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
-
 class RetailAdminCommentInline(admin.TabularInline):
     model = RetailAdminComment
     extra = 0
@@ -3604,7 +3621,6 @@ class RetailAdminCommentInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class RetailReportAttachmentInline(admin.TabularInline):
     model = RetailReportAttachment
@@ -3621,7 +3637,6 @@ class RetailReportAttachmentInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
-
 
 class RetailDailyReportAdmin(admin.ModelAdmin):
     list_display = (
@@ -3709,7 +3724,6 @@ class RetailDailyReportAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class AgentTransferLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'agent', 'old_super_agent', 'new_super_agent', 'transferred_by')
     list_filter = ('created_at', 'old_super_agent', 'new_super_agent', 'transferred_by')
@@ -3731,7 +3745,6 @@ class AgentTransferLogAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
-
 
 class SuperAgentTransferLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'super_agent', 'old_master_agent', 'new_master_agent', 'transferred_by')
@@ -3755,7 +3768,6 @@ class SuperAgentTransferLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
 
-
 class AccountUnlockAppealAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'locked_user', 'appealed_by', 'status', 'reviewed_at', 'reviewed_by')
     list_filter = ('status', 'created_at', 'reviewed_at')
@@ -3777,7 +3789,6 @@ class AccountUnlockAppealAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
-
 
 class AccountLockAuditLogAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'locked_user', 'action', 'locked_by', 'appealed_by', 'reviewed_by')
@@ -3848,7 +3859,6 @@ betting_admin_site.register(TicketVoidRequest, TicketVoidRequestAdmin)
 betting_admin_site.register(TicketVoidAuditLog, TicketVoidAuditLogAdmin)
 betting_admin_site.register(CashierVoidPermission, CashierVoidPermissionAdmin)
 
-
 class FixtureOddsEditorAssignmentAdmin(admin.ModelAdmin):
     list_display = ("user", "user_type_display", "can_edit_odds", "assigned_by", "assigned_at", "updated_at")
     list_filter = ("can_edit_odds", ("assigned_at", admin.DateFieldListFilter))
@@ -3880,7 +3890,6 @@ class FixtureOddsEditorAssignmentAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return bool(request.user.is_authenticated and (request.user.is_superuser or request.user.user_type == "admin"))
 
-
 @admin.action(description="✅ Approve selected proposals (publish odds)")
 def approve_selected_proposals(modeladmin, request, queryset):
     from django.utils import timezone
@@ -3903,7 +3912,6 @@ def approve_selected_proposals(modeladmin, request, queryset):
     if skipped:
         messages.warning(request, f"Skipped {skipped} proposal(s) that were not pending.")
 
-
 @admin.action(description="❌ Reject selected proposals")
 def reject_selected_proposals(modeladmin, request, queryset):
     from django.utils import timezone
@@ -3924,7 +3932,6 @@ def reject_selected_proposals(modeladmin, request, queryset):
         messages.success(request, f"Rejected {rejected} proposal(s).")
     if skipped:
         messages.warning(request, f"Skipped {skipped} proposal(s) that were not pending.")
-
 
 class FixtureOddsChangeProposalAdmin(admin.ModelAdmin):
     list_display = (
@@ -4149,7 +4156,6 @@ class FixtureOddsChangeProposalAdmin(admin.ModelAdmin):
             except Exception:
                 pass
         return super().change_view(request, object_id, form_url=form_url, extra_context=extra_context)
-
 
 betting_admin_site.register(FixtureOddsEditorAssignment, FixtureOddsEditorAssignmentAdmin)
 betting_admin_site.register(FixtureOddsChangeProposal, FixtureOddsChangeProposalAdmin)
@@ -4637,7 +4643,6 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-
 class CashOutSettingsAdmin(admin.ModelAdmin):
     fieldsets = (
         ('General', {
@@ -4688,7 +4693,6 @@ class CashOutSettingsAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-
 class PaymentGatewaySettingsAdmin(admin.ModelAdmin):
     fieldsets = (
         ('Payment Gateways', {
@@ -4715,7 +4719,6 @@ class PaymentGatewaySettingsAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
-
 
 class BetTicketCashOutAdmin(admin.ModelAdmin):
     list_display = (
@@ -4767,7 +4770,6 @@ class BetTicketCashOutAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
-
 class CashOutAuditLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'action', 'ticket', 'cashout', 'actor', 'ip_address')
     list_filter = ('action', 'created_at')
@@ -4806,7 +4808,6 @@ betting_admin_site.register(PaymentGatewaySettings, PaymentGatewaySettingsAdmin)
 betting_admin_site.register(BetTicketCashOut, BetTicketCashOutAdmin)
 betting_admin_site.register(CashOutAuditLog, CashOutAuditLogAdmin)
 
-
 class FooterPageAdminForm(forms.ModelForm):
     class Meta:
         model = FooterPage
@@ -4815,7 +4816,6 @@ class FooterPageAdminForm(forms.ModelForm):
             'content': CKEditor5Widget(config_name='default'),
         }
 
-
 class FooterPageAdmin(admin.ModelAdmin):
     form = FooterPageAdminForm
     list_display = ('footer_label', 'slug', 'is_active', 'show_in_footer', 'order', 'updated_at')
@@ -4823,12 +4823,10 @@ class FooterPageAdmin(admin.ModelAdmin):
     search_fields = ('footer_label', 'slug', 'title')
     prepopulated_fields = {'slug': ('footer_label',)}
 
-
 class FooterBadgeAdmin(admin.ModelAdmin):
     list_display = ('id', 'alt_text', 'is_active', 'order', 'uploaded_at')
     list_editable = ('is_active', 'order')
     search_fields = ('alt_text', 'link_url')
-
 
 betting_admin_site.register(FooterPage, FooterPageAdmin)
 betting_admin_site.register(FooterBadge, FooterBadgeAdmin)
@@ -4844,7 +4842,6 @@ class CreditRequestAdmin(admin.ModelAdmin):
     list_select_related = ('requester', 'recipient')
     show_full_result_count = False
     list_per_page = 50
-
 
 class CRMWalletApprovalRequestAdmin(admin.ModelAdmin):
     list_display = (
@@ -5109,8 +5106,6 @@ betting_admin_site.register(OverdraftWalletLedgerEntry, OverdraftWalletLedgerEnt
 betting_admin_site.register(LoanRepayment, LoanRepaymentAdmin)
 betting_admin_site.register(LoanAuditLog, LoanAuditLogAdmin)
 betting_admin_site.register(CreditLog, CreditLogAdmin)
-
-
 
 @admin.register(WebAuthnCredential)
 class WebAuthnCredentialAdmin(admin.ModelAdmin):

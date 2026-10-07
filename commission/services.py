@@ -1342,8 +1342,11 @@ def calculate_monthly_network_commission_data(user, period):
     if user.user_type == 'super_agent':
         tickets = BetTicket.objects.filter(
             Q(user=user) |
+            Q(user__master_agent=user) |
             Q(user__super_agent=user) |
-            Q(user__agent__super_agent=user),
+            Q(user__agent=user) |
+            Q(user__agent__super_agent=user) |
+            Q(user__agent__master_agent=user),
             placed_at__date__gte=start_date,
             placed_at__date__lte=end_date,
         ).exclude(status__in=excluded_statuses)
@@ -1351,7 +1354,10 @@ def calculate_monthly_network_commission_data(user, period):
         tickets = BetTicket.objects.filter(
             Q(user=user) |
             Q(user__master_agent=user) |
+            Q(user__super_agent=user) |
+            Q(user__agent=user) |
             Q(user__super_agent__master_agent=user) |
+            Q(user__agent__master_agent=user) |
             Q(user__agent__super_agent__master_agent=user),
             placed_at__date__gte=start_date,
             placed_at__date__lte=end_date,
@@ -1369,13 +1375,24 @@ def calculate_monthly_network_commission_data(user, period):
     # We sum WeeklyAgentCommission for periods ending in this month
     if user.user_type == 'super_agent':
         agent_comms = WeeklyAgentCommission.objects.filter(
-            agent__super_agent=user,
+            Q(agent=user) |
+            Q(agent__master_agent=user) |
+            Q(agent__super_agent=user) |
+            Q(agent__agent=user) |
+            Q(agent__agent__super_agent=user) |
+            Q(agent__agent__master_agent=user),
             period__end_date__gte=start_date,
             period__end_date__lte=end_date
         )
     else: # master_agent
         agent_comms = WeeklyAgentCommission.objects.filter(
-            agent__master_agent=user,
+            Q(agent=user) |
+            Q(agent__master_agent=user) |
+            Q(agent__super_agent=user) |
+            Q(agent__agent=user) |
+            Q(agent__super_agent__master_agent=user) |
+            Q(agent__agent__master_agent=user) |
+            Q(agent__agent__super_agent__master_agent=user),
             period__end_date__gte=start_date,
             period__end_date__lte=end_date
         )

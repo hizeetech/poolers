@@ -580,14 +580,10 @@ class MonthlyNetworkCommissionAdmin(admin.ModelAdmin):
                             'status': existing.get_status_display(),
                             'is_paid': existing.status == 'paid'
                         }
-                        # Show if paid or if amount > 0 (or just show all for networks usually?)
-                        # Weekly logic: if existing.status == 'paid' or existing.commission_total_amount > 0:
-                        if existing.status == 'paid' or existing.commission_amount > 0:
-                            user_data.append(row)
+                        user_data.append(row)
                     else:
-                        # Calculate
                         data = calculate_monthly_network_commission_data(user, period)
-                        if data and data['commission_amount'] > 0:
+                        if data is not None:
                             row = {
                                 'user': user,
                                 'data': data,

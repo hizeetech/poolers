@@ -29,6 +29,7 @@ from betting.models import (
 )
 from betting.utils import logout_user_from_all_active_sessions
 from notifications.services import create_notification, send_sms_ebulksms
+from betting import email_prefs
 
 
 WEEKDAY_NAME_MAP = {
@@ -471,7 +472,9 @@ def notify_loan_event(*, user: User, title: str, message: str, notification_type
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "") or getattr(settings, "EMAIL_HOST_USER", "")
     if user.email and from_email:
         try:
-            send_mail(email_subject or title, message, from_email, [user.email], fail_silently=True)
+            # 2026-10-21 notification governance: per-notification toggle
+            if email_prefs.email_enabled('email_agent_loan_overdraft_events'):
+                send_mail(email_subject or title, message, from_email, [user.email], fail_silently=True)
         except Exception:
             pass
     if getattr(settings, "EBULKSMS_ENABLED", False) and getattr(user, "phone_number", ""):

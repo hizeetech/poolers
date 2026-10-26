@@ -60,12 +60,19 @@ def recalculate_tickets_for_fixture_sync(fixture_id, *, include_correction_backf
         except Exception:
             pass
 
-        ticket_ids = list(
-            BetTicket.objects.filter(selections__fixture=fixture)
-            .exclude(status__in=[*BetTicket.VOIDED_STATUSES, "cashed_out"])
-            .values_list("id", flat=True)
-            .distinct()
-        )
+        if include_correction_backfill:
+            ticket_ids = list(
+                BetTicket.objects.filter(selections__fixture=fixture)
+                .exclude(status__in=[*BetTicket.VOIDED_STATUSES, "cashed_out"])
+                .values_list("id", flat=True)
+                .distinct()
+            )
+        else:
+            ticket_ids = list(
+                BetTicket.objects.filter(selections__fixture=fixture, status="pending")
+                .values_list("id", flat=True)
+                .distinct()
+            )
         count = len(ticket_ids)
         affected_ticket_ids = [str(ticket_id) for ticket_id in ticket_ids]
         logger.info("Starting recalculation for %s tickets for fixture %s", count, fixture)

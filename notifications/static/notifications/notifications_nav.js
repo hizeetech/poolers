@@ -120,14 +120,27 @@
     }
   };
 
+  let refreshCountInFlight = false;
   const refreshCount = async () => {
+    if (refreshCountInFlight) return;
+    if (document.visibilityState === "hidden") return;
+    refreshCountInFlight = true;
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 8000);
     try {
-      const resp = await fetch("/notifications/api/unread-count/", { credentials: "same-origin" });
+      const resp = await fetch("/notifications/api/unread-count/", {
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
       const data = await resp.json();
       const count = (data && typeof data.unread_count === "number") ? data.unread_count : null;
       if (count === null) return;
       setCount(count);
-    } catch (e) {}
+    } catch (e) {
+    } finally {
+      clearTimeout(abortTimer);
+      refreshCountInFlight = false;
+    }
   };
 
   window.addEventListener("notifications:updated", () => {
@@ -138,6 +151,8 @@
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
   let socket;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
 
   const getCsrfToken = () => {
     const name = "csrftoken=";
@@ -191,8 +206,25 @@
     return subscribePush();
   };
 
+  const scheduleReconnect = () => {
+    if (reconnectTimer) return;
+    if (document.hidden) return; // resume on visibilitychange
+    const base = Math.min(30000, 2000 * Math.pow(2, reconnectAttempts));
+    const delay = base + Math.floor(Math.random() * 1000);
+    reconnectAttempts += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
   const connect = () => {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
     socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      reconnectAttempts = 0;
+    };
 
     socket.onmessage = (ev) => {
       try {
@@ -213,9 +245,24 @@
     };
 
     socket.onclose = () => {
-      setTimeout(connect, 2500);
+      scheduleReconnect();
+    };
+
+    socket.onerror = () => {
+      try { socket.close(); } catch (e) {}
     };
   };
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && (!socket || socket.readyState > WebSocket.OPEN)) {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempts = 0;
+      connect();
+    }
+  });
 
   setCount(parseInt(badge.textContent || "0", 10) || 0);
   connect();

@@ -13,6 +13,7 @@ from functools import wraps
 from types import SimpleNamespace
 from collections import defaultdict
 from django.core.mail import send_mail
+from . import email_prefs
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
@@ -160,6 +161,8 @@ def _get_deposit_notification_email():
 
 
 def _notify_admin_deposit_success(user, transaction_record, amount, gateway):
+    if not email_prefs.email_enabled('email_admin_deposit_successful'):
+        return
     admin_email = _get_deposit_notification_email()
     from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
     if not admin_email or not from_email:
@@ -1048,7 +1051,8 @@ def _notify_unlock_appeal_resolution(appeal, *, approved):
         )
         email_targets.append(recipient.email)
 
-    _safe_send_simple_email(email_subject, email_message, email_targets)
+    if email_prefs.email_enabled('email_agent_unlock_appeal_resolution'):
+        _safe_send_simple_email(email_subject, email_message, email_targets)
 
 
 CRM_WALLET_APPROVAL_REQUEST_TYPES = ('crm_credit', 'crm_debit')
@@ -3058,6 +3062,8 @@ def _send_ops_message_to_users(
 
                 if not msg_target.email:
                     raise ValueError("Target user has no email address.")
+                if not email_prefs.email_enabled(email_prefs.crm_message_key(msg_target)):
+                    raise ValueError("CRM message emails are disabled in Site Configuration.")
 
                 html = render_to_string('betting/email/crm_message.html', {
                     'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
@@ -3258,6 +3264,8 @@ def send_bulk_message_campaign_now(campaign_id, *, acting_user=None):
                 from django.core.mail import EmailMultiAlternatives
                 if not recipient.email:
                     raise ValueError('missing_email')
+                if not email_prefs.email_enabled('email_user_crm_campaign'):
+                    raise ValueError('campaign_email_disabled')
                 html = render_to_string('betting/email/crm_message.html', {
                     'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
                     'title': campaign.subject or 'Notification',
@@ -3417,6 +3425,19 @@ def user_login(request):
             is_testing = 'test' in sys.argv
         except Exception:
             is_testing = False
+        # ---- GATE 2 IMPERSONATION SAFETY ----
+        # ALWAYS wipe any stale impersonation flags before attempting a new
+        # login.  These flags only belong to a single impersonation session
+        # and are invalidated the moment a user explicitly types in any
+        # new username/password to the login form.
+        try:
+            from betting.middleware import ImpersonationMiddleware
+            ImpersonationMiddleware.wipe_impersonation_state(request.session)
+        except Exception:
+            for stale_key in ('impersonation_active','original_admin_id','impersonation_started_at','impersonation_log_id','impersonated_user_id'):
+                try: request.session.pop(stale_key, None)
+                except Exception: pass
+        # ---- END GATE 2 ----
         if getattr(request, 'limited', False) and not is_testing:
             messages.error(request, 'Too many login attempts. Please wait and try again.')
             form = LoginForm()
@@ -3429,19 +3450,29 @@ def user_login(request):
             logger.debug(f"Attempting to authenticate user: {getattr(user, 'email', None)}")
             if user is not None:
                 logger.debug(f"Authentication successful for user: {user.email}. User ID: {user.id}")
+                try:
+                    cur_session = request.session
+                    cur_session.flush()
+                except Exception:
+                    pass
                 login(request, user)
+                try:
+                    request.session.cycle_key()
+                except Exception:
+                    pass
                 logger.debug(f"User {user.email} logged in. Redirecting...")
                 messages.success(request, f'Welcome, {user.first_name or user.email}!')
-
-                if user.user_type in ['player', 'cashier', ''] or not getattr(user, 'user_type', ''):
+                # Landing rule: ONLY cashiers go to the fixtures page. Every other
+                # role lands on its dashboard. betting:user_dashboard resolves the
+                # per-role dashboard and renders the player dashboard for players.
+                if user.user_type == 'cashier':
                     return redirect('betting:fixtures')
                 return redirect('betting:user_dashboard')
-            else: # This block is theoretically unreachable if form.is_valid() implies user is not None
+            else:
                 logger.debug("Authentication failed. User is None after form.is_valid().")
                 messages.error(request, 'An unexpected authentication error occurred. Please try again.')
         else:
             logger.debug("LoginForm is NOT valid.")
-            # Errors are handled by the form instance in the template
             pass
     else:
         logger.debug("GET request for login page.")
@@ -3513,6 +3544,15 @@ def forgot_password(request):
                 reverse('betting:reset_password', kwargs={'token': token})
             )
             
+            if not email_prefs.email_enabled('email_user_password_reset'):
+                reset_request.email_sent = False
+                reset_request.send_error = 'Password reset emails are disabled in Site Configuration.'
+                reset_request.save(update_fields=['email_sent', 'send_error'])
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Password reset emails are temporarily unavailable. Please contact support.',
+                })
+
             subject = "Password Reset Request - StakeNaija"
             message = f"Hello {user.first_name},\n\nYou requested to reset your password. Click the link below to set a new password:\n\n{reset_url}\n\nThis link expires in 2 hours.\n\nIf you didn't request this, please ignore this email."
             
@@ -3741,6 +3781,7 @@ def calculate_bonus_amount(potential_winning, stake_amount, selections, bet_type
     bonus_amount = compute_bonus_amount(base_amount, pct, rule.get('cap'))
     return rule, base_amount, bonus_amount, pct
 
+@ensure_csrf_cookie
 def fixtures_view(request, period_id=None):
     fixtures, current_betting_period = _get_fixtures_data(period_id)
 
@@ -3788,8 +3829,55 @@ def fixtures_view(request, period_id=None):
         'bonus_rules_json': json.dumps(bonus_rules_data),
         'show_double_chance_odds': bool(getattr(site_config, 'show_double_chance_odds', False)),
     }
-    return render(request, 'betting/fixtures.html', context)
+    response = render(request, 'betting/fixtures.html', context)
+    # ------------------------------------------------------------------
+    # CSRF + caching safety (Belt + Braces):
+    #   * Always Vary on Cookie (so any cache layer splits entries by the
+    #     visitor's session + csrftoken cookies).
+    #   * For authenticated users: Cache-Control: private, no-store,
+    #     must-revalidate.  No shared cache (Nginx RAMDISK, CDN, proxy,
+    #     shared file cache) is allowed to persist HTML that contains
+    #     per-user context.  Critical because the old fixture-page HTML
+    #     used to contain a literal ``{{ csrf_token }}`` baked into the
+    #     cached JS — served to User A from cache but visited by User B ->
+    #     CSRF 403 on Place Bet.
+    #   * For anonymous users: allow a short 60s public cache (keeps the
+    #     Saturday-thundering-herd protection) BUT csrftoken cookie is
+    #     still issued via @ensure_csrf_cookie so the JS cookie-read at
+    #     click-time still works even when page is cached.
+    # ------------------------------------------------------------------
+    from django.utils.cache import patch_vary_headers, patch_cache_control
+    from django.utils.http import http_date as _htt
+    import time as _t
+    patch_vary_headers(response, ('Cookie',))
+    if request.user.is_authenticated:
+        # 2026-10-09 CRITICAL: delete then re-create cache header, NOT
+        # patch_cache_control alone (it is ADDITIVE and keeps stale public=
+        # directives set upstream by middleware ordering bugs, leading to
+        # HTML navbar/wallet identity cross-leak between users.
+        try:
+            if 'Cache-Control' in response: del response['Cache-Control']
+            if 'Pragma' in response:        del response['Pragma']
+            if 'Expires' in response:       del response['Expires']
+        except Exception:
+            pass
+        patch_cache_control(response,
+                            private=True,
+                            no_store=True,
+                            no_cache=True,
+                            must_revalidate=True,
+                            proxy_revalidate=True,
+                            max_age=0,
+                            s_maxage=0)
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = _htt(_t.time() - 86400)
+        response['X-User-State'] = 'authenticated'
+    else:
+        patch_cache_control(response, public=True, max_age=60, s_maxage=60)
+        response['X-User-State'] = 'anonymous'
+    return response
 
+@ensure_csrf_cookie
 def fixtures_list_partial(request, period_id=None):
     """
     Returns only the HTML for the fixtures list, used for AJAX polling.
@@ -3802,7 +3890,27 @@ def fixtures_list_partial(request, period_id=None):
         'current_betting_period': current_betting_period,
         'show_double_chance_odds': bool(getattr(site_config, 'show_double_chance_odds', False)),
     }
-    return render(request, 'betting/includes/fixtures_list.html', context)
+    response = render(request, 'betting/includes/fixtures_list.html', context)
+    from django.utils.cache import patch_vary_headers, patch_cache_control
+    from django.utils.http import http_date as _htt2
+    import time as _t2
+    patch_vary_headers(response, ('Cookie',))
+    if request.user.is_authenticated:
+        try:
+            if 'Cache-Control' in response: del response['Cache-Control']
+            if 'Pragma' in response:        del response['Pragma']
+            if 'Expires' in response:       del response['Expires']
+        except Exception:
+            pass
+        patch_cache_control(response, private=True, no_store=True,
+                            no_cache=True, must_revalidate=True,
+                            proxy_revalidate=True,
+                            max_age=0, s_maxage=0)
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = _htt2(_t2.time() - 86400)
+    else:
+        patch_cache_control(response, public=True, max_age=60, s_maxage=60)
+    return response
 
 def popular_picks_json(request, period_id=None):
     _, current_betting_period = _get_fixtures_data(period_id)
@@ -12001,13 +12109,14 @@ def agent_create_cashier(request):
                         f"Cashier Phone: {phone_number or '-'}\n"
                         f"Review: {review_url}\n"
                     )
-                    send_mail(
-                        subject=f"New Cashier Request ({cashier_code})",
-                        message=msg,
-                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                        recipient_list=admin_emails,
-                        fail_silently=True,
-                    )
+                    if email_prefs.email_enabled('email_admin_new_cashier_request'):
+                        send_mail(
+                            subject=f"New Cashier Request ({cashier_code})",
+                            message=msg,
+                            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                            recipient_list=admin_emails,
+                            fail_silently=True,
+                        )
             except Exception:
                 pass
 
@@ -12159,8 +12268,17 @@ def api_check_ticket_status(request):
 @login_required
 def api_user_wallet(request):
     try:
-        wallet = request.user.wallet
-        return JsonResponse({'status': 'success', 'balance': float(wallet.balance)})
+        uid = request.user.pk
+        cache_key = f"pb_api_user_wallet_{uid}"
+        def _fetch():
+            wallet = request.user.wallet
+            return {'status': 'success', 'balance': float(wallet.balance)}
+        data = cache.get(cache_key)
+        if data is None:
+            data = _fetch()
+            try: cache.set(cache_key, data, 60)
+            except Exception: pass
+        return JsonResponse(data)
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)})
 
@@ -16340,6 +16458,8 @@ def _notify_crm_daily_report_submitted(report):
             "",
             "-- PoolBetting Admin Bot",
         ])
+        if not email_prefs.email_enabled('email_admin_crm_daily_report'):
+            return
         try:
             send_mail(
                 subject=subject,
@@ -17130,6 +17250,8 @@ def _notify_retail_daily_report_submitted(report):
             "",
             "-- PoolBetting Admin Bot",
         ])
+        if not email_prefs.email_enabled('email_admin_retail_daily_report'):
+            return
         try:
             send_mail(
                 subject=subject,
@@ -20103,6 +20225,10 @@ def finance_dashboard(request):
             start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
             end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
 
+            if not email_prefs.email_enabled('email_admin_finance_scheduled_report'):
+                messages.error(request, 'Finance report emails are disabled in Site Configuration.')
+                return redirect(f"{reverse('betting:finance_dashboard')}?tab=reports")
+
             try:
                 content, title, mime, filename = generate_finance_report_bytes(r.dataset, r.report_format, start_dt, end_dt)
                 subject = f"Finance Report: {r.name} ({start_date.isoformat()} → {end_date.isoformat()})"
@@ -21223,6 +21349,8 @@ def crm_user_detail(request, user_id):
                     from django.utils.html import strip_tags
                     if not msg_target.email:
                         raise ValueError("Target user has no email address.")
+                    if not email_prefs.email_enabled(email_prefs.crm_message_key(msg_target)):
+                        raise ValueError("CRM message emails are disabled in Site Configuration.")
                     html = render_to_string('betting/email/crm_message.html', {
                         'site_name': getattr(getattr(settings, 'SITE_NAME', None), 'strip', lambda: '')() or 'StakeNaija',
                         'title': title,
@@ -21319,6 +21447,8 @@ def crm_user_detail(request, user_id):
             login_url = request.build_absolute_uri(reverse('betting:login'))
             email_error = None
             try:
+                if not email_prefs.email_enabled('email_user_crm_password_reset'):
+                    raise ValueError('Password reset emails are disabled in Site Configuration.')
                 from django.core.mail import EmailMultiAlternatives
                 from django.template.loader import render_to_string
                 from django.utils.html import strip_tags
@@ -21622,13 +21752,15 @@ def crm_cashier_registration_action(request, pk, action):
             f"Password: {raw_password}\n\n"
             f"Login: {login_url}\n"
         )
-        send_mail(
-            subject='Cashier Registration Approved',
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-            recipient_list=[agent.email],
-            fail_silently=True
-        )
+        # 2026-10-21 notification governance: per-notification toggle
+        if email_prefs.email_enabled('email_agent_cashier_registration_approved'):
+            send_mail(
+                subject='Cashier Registration Approved',
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                recipient_list=[agent.email],
+                fail_silently=True
+            )
 
         CRMActionLog.objects.create(
             actor=request.user,
@@ -21747,17 +21879,19 @@ def crm_agent_registration_action(request, pk, action):
             'login_url': login_url,
             'password': raw_password,
         })
-        try:
-            send_mail(
-                subject='Pool Betting Agent Registration Approved',
-                message=strip_tags(html_message),
-                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                recipient_list=[created_user.email],
-                html_message=html_message,
-                fail_silently=False
-            )
-        except Exception:
-            pass
+        # 2026-10-21 notification governance: per-notification toggle
+        if email_prefs.email_enabled('email_agent_registration_approved'):
+            try:
+                send_mail(
+                    subject='Pool Betting Agent Registration Approved',
+                    message=strip_tags(html_message),
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[created_user.email],
+                    html_message=html_message,
+                    fail_silently=False
+                )
+            except Exception:
+                pass
 
         CRMActionLog.objects.create(
             actor=request.user,
@@ -21780,14 +21914,15 @@ def crm_agent_registration_action(request, pk, action):
                 'pending_reg': pending_reg,
                 'reason': reason
             })
-            send_mail(
-                subject='Pool Betting Agent Registration Rejected',
-                message=strip_tags(html_message),
-                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                recipient_list=[pending_reg.email],
-                html_message=html_message,
-                fail_silently=False
-            )
+            if email_prefs.email_enabled('email_agent_registration_rejected'):
+                send_mail(
+                    subject='Pool Betting Agent Registration Rejected',
+                    message=strip_tags(html_message),
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[pending_reg.email],
+                    html_message=html_message,
+                    fail_silently=False
+                )
         except Exception:
             pass
 
@@ -23143,7 +23278,7 @@ def odds_editor_edit_fixture(request, fixture_id):
                     f"Please review in the Django Admin under Betting > Fixture Odds Change Proposals:\n"
                     f"Pending status = {proposal.status.upper()}"
                 )
-                if from_email:
+                if from_email and email_prefs.email_enabled('email_admin_fixture_odds_proposal'):
                     send_mail(subject, message, from_email, targets, fail_silently=True)
         except Exception:
             pass

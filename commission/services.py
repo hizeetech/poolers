@@ -21,6 +21,7 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from notifications.services import create_notification
+from betting import email_prefs
 
 
 User = get_user_model()
@@ -1060,7 +1061,7 @@ def recall_commission(*, commission_type, commission_id, amount, reason, notes, 
         admin_email = User.objects.filter(is_superuser=True, is_active=True).values_list('email', flat=True).first()
         if admin_email and admin_email not in to_emails:
             to_emails.append(admin_email)
-        if to_emails:
+        if to_emails and email_prefs.email_enabled('email_agent_commission_recalled'):
             msg = EmailMultiAlternatives(subject=subject, body=html, to=to_emails)
             msg.attach_alternative(html, "text/html")
             msg.send(fail_silently=True)
@@ -1709,9 +1710,11 @@ class CommissionProfileAssignmentService:
                 </div>
                 </body></html>
                 """
-                msg = EmailMultiAlternatives(subject=subject, body=text, to=[to_email])
-                msg.attach_alternative(html, "text/html")
-                msg.send(fail_silently=True)
+                # 2026-10-21 notification governance: per-notification toggle
+                if email_prefs.email_enabled('email_agent_commission_profile_assigned'):
+                    msg = EmailMultiAlternatives(subject=subject, body=text, to=[to_email])
+                    msg.attach_alternative(html, "text/html")
+                    msg.send(fail_silently=True)
         except Exception:
             pass
 

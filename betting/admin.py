@@ -79,6 +79,7 @@ from .forms import (
     BettingPeriodForm,
 )
 from .services.email_policy import normalize_email_value
+from . import email_prefs
 from django.core.files.storage import FileSystemStorage
 from django.conf import settings
 from datetime import datetime, time, timedelta
@@ -339,6 +340,63 @@ class CustomUserAdmin(UserAdmin):
     ordering = (
         'email',
     )
+
+    list_per_page = 25
+
+    def get_queryset(self, request):
+        qs = _DJANGO_ORIG_USERADMIN_get_queryset(self, request)
+        qs = qs.select_related('state', 'vip_manager', 'master_agent', 'super_agent', 'agent')
+        last_log_sub = (
+            ImpersonationLog.objects.filter(target_user_id=OuterRef('pk'))
+            .order_by('-started_at')
+            .values('started_at', 'admin_user__email')[:1]
+        )
+        qs = qs.annotate(
+            _li_started_at=Subquery(last_log_sub.values('started_at')[:1]),
+            _li_admin_email=Subquery(last_log_sub.values('admin_user__email')[:1]),
+        )
+        return qs
+
+    def changelist_view(self, request, extra_context=None):
+        try:
+            from django.core.cache import cache
+            qs_raw = request.GET.copy()
+            try:
+                qs_raw.pop('csrfmiddlewaretoken', None)
+            except Exception:
+                pass
+            cache_key = 'admin_user_changelist:' + request.path + ':' + ':'.join(
+                f'{k}={v}' for k, v in sorted(qs_raw.items())
+            )[:190]
+            cached = cache.get(cache_key)
+            if cached is not None and request.user.is_authenticated:
+                try:
+                    status_code, content_bytes, content_type = cached
+                    return HttpResponse(content_bytes, status=status_code, content_type=content_type)
+                except Exception:
+                    pass
+        except Exception:
+            cache_key = None
+        response = _DJANGO_ORIG_USERADMIN_changelist_view(self, request, extra_context=extra_context)
+        try:
+            if cache_key is not None and getattr(response, 'status_code', None) == 200 and request.user.is_authenticated:
+                content = b''
+                if hasattr(response, 'render'):
+                    try:
+                        if not response.is_rendered:
+                            response.render()
+                    except Exception:
+                        pass
+                content = bytes(response.content) if hasattr(response, 'content') else b''
+                ct = getattr(response, 'get', lambda k, d=None: response.get(k, d) if hasattr(response, 'get') else d)
+                ct = response.get('Content-Type', 'text/html; charset=utf-8') if hasattr(response, 'get') else 'text/html; charset=utf-8'
+                try:
+                    cache.set(cache_key, (200, content, ct), 300)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return response
     
     actions = ['unlock_accounts', 'lock_accounts', 'lock_all_except_admin_superusers',
                'impersonate_user_action', 'enable_withdrawals', 'disable_withdrawals',
@@ -381,6 +439,15 @@ class CustomUserAdmin(UserAdmin):
     impersonate_button.allow_tags = True
 
     def get_last_impersonated(self, obj):
+        started_at = getattr(obj, '_li_started_at', None)
+        admin_email = getattr(obj, '_li_admin_email', None)
+        if started_at:
+            try:
+                ts = started_at.strftime('%Y-%m-%d %H:%M')
+            except Exception:
+                ts = str(started_at)[:16]
+            ae = str(admin_email) if admin_email else '-'
+            return f"{ts} ({ae})"
         last_log = ImpersonationLog.objects.filter(target_user=obj).order_by('-started_at').first()
         if last_log:
             return f"{last_log.started_at.strftime('%Y-%m-%d %H:%M')} ({last_log.admin_user.email})"
@@ -940,18 +1007,22 @@ Password: {password_html}
                 </div>
                 """
                 from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
-                try:
-                    send_mail(
-                        subject=subject,
-                        message=message,
-                        from_email=from_email,
-                        recipient_list=[obj.email],
-                        html_message=html_message,
-                        fail_silently=False,
-                    )
-                    messages.success(request, f"Login details sent to {obj.email}.")
-                except Exception as e:
-                    messages.warning(request, f"User created but email sending failed: {e}")
+                # 2026-10-21 notification governance: per-notification toggle
+                if not email_prefs.email_enabled('email_user_account_credentials'):
+                    messages.info(request, "Account credentials email is disabled in Site Configuration; no email was sent.")
+                else:
+                    try:
+                        send_mail(
+                            subject=subject,
+                            message=message,
+                            from_email=from_email,
+                            recipient_list=[obj.email],
+                            html_message=html_message,
+                            fail_silently=False,
+                        )
+                        messages.success(request, f"Login details sent to {obj.email}.")
+                    except Exception as e:
+                        messages.warning(request, f"User created but email sending failed: {e}")
 
         # Additional safeguards/messages if needed, but primary logic is in form's clean/save
         if obj.user_type == 'admin' and not obj.is_superuser:
@@ -2048,7 +2119,6 @@ class ResultAdmin(admin.ModelAdmin):
         if obj.home_score is not None and obj.away_score is not None and obj.status in ('scheduled', 'live'):
             obj.status = 'finished'
         super().save_model(request, obj, form, change)
-        recalculate_tickets_for_fixture.delay(obj.id)
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
         extra_context = extra_context or {}
@@ -2331,13 +2401,15 @@ class PendingCashierRegistrationAdmin(admin.ModelAdmin):
                 f"Password: {raw_password}\n\n"
                 f"Login: {login_url}\n"
             )
-            send_mail(
-                subject='Cashier Registration Approved',
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                recipient_list=[agent.email],
-                fail_silently=True
-            )
+            # 2026-10-21 notification governance: per-notification toggle
+            if email_prefs.email_enabled('email_agent_cashier_registration_approved'):
+                send_mail(
+                    subject='Cashier Registration Approved',
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[agent.email],
+                    fail_silently=True
+                )
 
             messages.success(request, f"Cashier {cashier_req.cashier_email} approved and created successfully.")
         except Exception as e:
@@ -4581,6 +4653,53 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
         ('Navbar Customization', {
             'fields': ('navbar_text_type', 'navbar_gradient_start', 'navbar_gradient_end', 'navbar_link_hover_color')
         }),
+        ('Email Notification Governance — Master Controls', {
+            'fields': (
+                'email_notifications_enabled',
+                'email_recipient_allowlist',
+                'email_suppression_list',
+            ),
+            'description': mark_safe(
+                '<div style="padding:10px 12px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;margin-bottom:4px;font-family:system-ui,sans-serif;font-size:13px;color:#065f46;">'
+                '<b style="font-weight:800;">HOW IT WORKS — THREE SAFETY GATES APPLIED TO EVERY EMAIL:</b><br>'
+                '<b>1. MASTER SWITCH</b> — uncheck to stop <b>ALL</b> outbound email instantly (emergency brake). '
+                'Nothing is sent while it is off, whatever the per-notification toggles below say.<br>'
+                '<b>2. RECIPIENT ALLOWLIST</b> (optional hard lock) — when filled, mail is delivered <b>only</b> to these addresses '
+                'and every other recipient is silently dropped site-wide. Leave blank to allow all recipients.<br>'
+                '<b>3. SUPPRESSION LIST</b> — addresses that <b>never</b> receive any email, in any role. Add every address that '
+                'hard-bounces here (dead mailboxes, wrong domains) so the host stops logging failed deliveries and stops suspending the domain.<br>'
+                'Comma-separated in both lists. These gates run at the mail backend, so they cover every notification from every code path.'
+                '</div>'
+            ),
+        }),
+        ('Email Notifications — Admin (Operations)', {
+            'fields': tuple(n for n, _ in email_prefs.ADMIN_TOGGLES),
+            'description': mark_safe(
+                '<div style="font-family:system-ui,sans-serif;font-size:12.5px;color:#475467;">'
+                'Tick to send, untick to silence. Applies to mail sent to your admin / finance operators.</div>'
+            ),
+        }),
+        ('Email Notifications — Users (Players)', {
+            'fields': tuple(n for n, _ in email_prefs.USER_TOGGLES),
+            'description': mark_safe(
+                '<div style="font-family:system-ui,sans-serif;font-size:12.5px;color:#475467;">'
+                'Tick to send, untick to silence. Applies to mail sent to ordinary players / non-agent users.</div>'
+            ),
+        }),
+        ('Email Notifications — Agents', {
+            'fields': tuple(n for n, _ in email_prefs.AGENT_TOGGLES),
+            'description': mark_safe(
+                '<div style="font-family:system-ui,sans-serif;font-size:12.5px;color:#475467;">'
+                'Tick to send, untick to silence. Applies to mail sent to agents, super agents and master agents.</div>'
+            ),
+        }),
+        ('Email Notifications — Cashiers', {
+            'fields': tuple(n for n, _ in email_prefs.CASHIER_TOGGLES),
+            'description': mark_safe(
+                '<div style="font-family:system-ui,sans-serif;font-size:12.5px;color:#475467;">'
+                'Tick to send, untick to silence. Applies to mail sent to cashier accounts only.</div>'
+            ),
+        }),
         ('Notification Email Settings — Admin Recipients', {
             'fields': (
                 'deposit_initiated_notification_emails',
@@ -4635,6 +4754,29 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
                     'style': 'font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 8px 10px; letter-spacing: 0.1px;' if fn != 'withdrawals_pause_message' else 'font-size: 13.5px; line-height: 1.6; padding: 10px 12px;'
                 })
                 form.base_fields[fn].required = False
+        # 2026-10-21 Email notification governance:
+        #   * label the per-notification toggles from the single source of truth
+        #     (betting/email_prefs.py) so the registry and the UI can never drift
+        #   * give the allowlist / suppression list a proper multi-line editor
+        for _reg in (
+            email_prefs.ADMIN_TOGGLES,
+            email_prefs.USER_TOGGLES,
+            email_prefs.AGENT_TOGGLES,
+            email_prefs.CASHIER_TOGGLES,
+        ):
+            for _name, _label in _reg:
+                if _name in form.base_fields:
+                    form.base_fields[_name].label = _label
+                    form.base_fields[_name].required = False
+        for _fn in (email_prefs.ALLOWLIST_FIELD, email_prefs.SUPPRESSION_FIELD):
+            if _fn in form.base_fields:
+                form.base_fields[_fn].widget = _df.Textarea(attrs={
+                    'rows': 3,
+                    'spellcheck': 'false',
+                    'placeholder': 'name@example.com, second@example.com',
+                    'style': 'font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 8px 10px; letter-spacing: 0.1px;'
+                })
+                form.base_fields[_fn].required = False
         return form
 
     def has_add_permission(self, request):

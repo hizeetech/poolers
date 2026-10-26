@@ -1,6 +1,7 @@
 import json
 
 from django.contrib.auth.decorators import login_required
+from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
@@ -41,8 +42,16 @@ def api_notifications_list(request):
 
 @login_required
 def api_unread_count(request):
-    unread = Notification.objects.filter(recipient=request.user, is_read=False).count()
-    return JsonResponse({"unread_count": unread})
+    uid = request.user.pk
+    cache_key = f"pb_notif_unread_{uid}"
+    def _fetch():
+        return {"unread_count": Notification.objects.filter(recipient=request.user, is_read=False).count()}
+    data = cache.get(cache_key)
+    if data is None:
+        data = _fetch()
+        try: cache.set(cache_key, data, 90)
+        except Exception: pass
+    return JsonResponse(data)
 
 
 @login_required
@@ -52,6 +61,8 @@ def api_notifications_mark_read(request):
     ids = payload.get("ids") or []
     now = timezone.now()
     Notification.objects.filter(recipient=request.user, id__in=ids, is_read=False).update(is_read=True, read_at=now)
+    try: cache.delete(f"pb_notif_unread_{request.user.pk}")
+    except Exception: pass
     return JsonResponse({"ok": True})
 
 
@@ -60,6 +71,8 @@ def api_notifications_mark_read(request):
 def api_notifications_mark_all_read(request):
     now = timezone.now()
     Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True, read_at=now)
+    try: cache.delete(f"pb_notif_unread_{request.user.pk}")
+    except Exception: pass
     return JsonResponse({"ok": True})
 
 

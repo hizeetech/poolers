@@ -14,6 +14,7 @@ from .models import PendingAgentRegistration
 from django.contrib.auth import get_user_model
 from betting.models import Wallet, Transaction, State
 from betting.admin import betting_admin_site
+from betting import email_prefs
 import random
 import re
 from betting.services.usernames import (
@@ -102,14 +103,16 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 'login_url': login_url,
                 'password': raw_password,
             })
-            send_mail(
-                subject='Pool Betting Agent Registration Approved',
-                message=strip_tags(html_message),
-                from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                recipient_list=[user.email],
-                html_message=html_message,
-                fail_silently=False
-            )
+            # 2026-10-21 notification governance: per-notification toggle
+            if email_prefs.email_enabled('email_agent_credentials_resend'):
+                send_mail(
+                    subject='Pool Betting Agent Registration Approved',
+                    message=strip_tags(html_message),
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[user.email],
+                    html_message=html_message,
+                    fail_silently=False
+                )
             messages.success(request, f"Credentials resent to {user.email}.")
         except Exception as e:
             messages.error(request, f"Failed to resend credentials: {e}")
@@ -236,14 +239,16 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                     'password': raw_password,
                 })
                 try:
-                    send_mail(
-                        subject='Pool Betting Agent Registration Approved',
-                        message=strip_tags(html_message),
-                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                        recipient_list=[user.email],
-                        html_message=html_message,
-                        fail_silently=False
-                    )
+                    # 2026-10-21 notification governance: per-notification toggle
+                    if email_prefs.email_enabled('email_agent_registration_approved'):
+                        send_mail(
+                            subject='Pool Betting Agent Registration Approved',
+                            message=strip_tags(html_message),
+                            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                            recipient_list=[user.email],
+                            html_message=html_message,
+                            fail_silently=False
+                        )
                 except Exception as e:
                     messages.warning(request, f"Agent created but approval email failed to send: {e}")
                 
@@ -270,14 +275,16 @@ class PendingAgentRegistrationAdmin(admin.ModelAdmin):
                 'reason': reason
             })
             try:
-                send_mail(
-                    subject='Pool Betting Agent Registration Rejected',
-                    message=strip_tags(html_message),
-                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
-                    recipient_list=[pending_reg.email],
-                    html_message=html_message,
-                    fail_silently=False
-                )
+                # 2026-10-21 notification governance: per-notification toggle
+                if email_prefs.email_enabled('email_agent_registration_rejected'):
+                    send_mail(
+                        subject='Pool Betting Agent Registration Rejected',
+                        message=strip_tags(html_message),
+                        from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                        recipient_list=[pending_reg.email],
+                        html_message=html_message,
+                        fail_silently=False
+                    )
             except Exception as e:
                 messages.warning(request, f"Rejection email failed to send: {e}")
             

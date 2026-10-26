@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let refreshQueued = false;
     let socket = null;
     let reconnectTimer = null;
+    let reconnectAttempts = 0;
     let pollTimer = null;
 
     function getRefreshPauseUntil() {
@@ -140,6 +141,18 @@ document.addEventListener('DOMContentLoaded', function () {
         window.setTimeout(refreshUserWithdrawalList, 250);
     }
 
+    // Capped exponential backoff with jitter: a flat 3s retry made every open
+    // admin list reconnect on the same beat after a server restart.
+    function scheduleReconnect() {
+        if (reconnectTimer) return;
+        const base = Math.min(30000, 2000 * Math.pow(2, reconnectAttempts));
+        reconnectAttempts += 1;
+        reconnectTimer = window.setTimeout(function () {
+            reconnectTimer = null;
+            connectSocket();
+        }, base + Math.floor(Math.random() * 1000));
+    }
+
     function connectSocket() {
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
             return;
@@ -150,6 +163,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         socket.addEventListener('open', function () {
             body.dataset.liveRefreshTransport = 'websocket';
+            reconnectAttempts = 0;
             if (reconnectTimer) {
                 window.clearTimeout(reconnectTimer);
                 reconnectTimer = null;
@@ -169,7 +183,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         socket.addEventListener('close', function () {
             body.dataset.liveRefreshTransport = 'disconnected';
-            reconnectTimer = window.setTimeout(connectSocket, 3000);
+            scheduleReconnect();
         });
 
         socket.addEventListener('error', function () {

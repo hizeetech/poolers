@@ -3,9 +3,23 @@ from django.db import transaction
 from django.dispatch import receiver
 from django.core.cache import cache
 
-from .models import SystemAnnouncement, NotificationCampaign
+from .models import SystemAnnouncement, NotificationCampaign, Notification
 from .tasks import broadcast_announcement, send_campaign
 from .services import create_notification
+
+
+def _clear_notif_unread_cache_for_user(user_id):
+    try:
+        if user_id:
+            cache.delete(f"pb_notif_unread_{user_id}")
+    except Exception:
+        pass
+
+
+@receiver(post_save, sender=Notification)
+def _invalidate_unread_cache_on_notification(sender, instance, **kwargs):
+    recipient_id = getattr(instance, 'recipient_id', None)
+    transaction.on_commit(lambda: _clear_notif_unread_cache_for_user(recipient_id))
 
 
 @receiver(post_save, sender=SystemAnnouncement)

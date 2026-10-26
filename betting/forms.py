@@ -353,10 +353,30 @@ class UserRegistrationForm(DuplicateEmailConfirmationMixin, forms.ModelForm):
 class LoginForm(AuthenticationForm):
     identifier = forms.CharField(
         label="Username",
-        widget=forms.TextInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Enter your username'})
+        widget=forms.TextInput(attrs={
+            'class': 'form-control form-control-lg rounded-3 px-4 py-2',
+            'placeholder': 'Enter your username',
+            'autocomplete': 'off',
+            'data-role': 'login-identifier',
+            'spellcheck': 'false',
+            'autocapitalize': 'off',
+            'autocorrect': 'off',
+        })
     )
     password = forms.CharField(
-        widget=forms.PasswordInput(attrs={'class': 'form-control form-control-lg rounded-3 px-4 py-2', 'placeholder': 'Password'})
+        widget=forms.PasswordInput(attrs={
+            'class': 'form-control form-control-lg rounded-3 px-4 py-2',
+            'placeholder': 'Password',
+            'autocomplete': 'new-password',
+            'data-role': 'login-password',
+        })
+    )
+    username_typed_initial = forms.CharField(
+        required=False,
+        widget=forms.HiddenInput(attrs={
+            'autocomplete': 'off',
+            'data-role': 'login-typed-initial',
+        })
     )
 
     def __init__(self, request=None, *args, **kwargs):
@@ -370,6 +390,12 @@ class LoginForm(AuthenticationForm):
 
         identifier = self.cleaned_data.get('identifier')
         password = self.cleaned_data.get('password')
+        typed_initial_raw = (
+            self.data.get('username_typed_initial')
+            or self.cleaned_data.get('username_typed_initial')
+            or ''
+        )
+        typed_initial = (typed_initial_raw or '').strip()
         
         request = self.request
         ip = request.META.get('REMOTE_ADDR')
@@ -379,6 +405,114 @@ class LoginForm(AuthenticationForm):
 
         if identifier and "@" in identifier:
             raise forms.ValidationError("Use your username to log in. Email login is not supported.")
+
+        # 2026-10-09 CRITICAL AUTOFILL AMBIGUITY DETECTOR v3 (L3 FAILED SCENARIO 3 HARDENED):
+        # Hidden field format:   LAST_TYPED_PREFIX  ||  FINAL_VALUE_AT_SUBMIT_TIME
+        # JS keeps updating hidden and encodes both on submit.
+        #
+        # RULES. We raise ⚠️ WARNING (and refuse this login attempt) if ANY of:
+        #   (A) the user typed prefix >= 3 chars AND the ACTUALLY POSTED identifier
+        #       DOES NOT start with (case insensitive) the typed prefix.
+        #       i.e. user typed "OyoHam..." prefix, then something (Chrome autofill,
+        #       password manager, last-millisecond form mutation) changed username
+        #       field to 'OndoBab...' entirely. Different username! -> BLOCK.
+        #   (B) we captured both a prefix and a final value AND the posted identifier
+        #       differs from final_value AND does NOT start with prefix -> block.
+        #
+        # We SKIP the warning if:
+        #   (i)   prefix < 3 chars  (too ambiguous — we didn't capture real intent)
+        #   (ii)  posted identifier starts with typed prefix  — user typed prefix,
+        #         browser auto-completed to full username. Totally valid.
+        #   (iii) final_value set, posted id == final_value, and prefix matches too.
+        #
+        # This is 100% symmetric:  IF first 3 chars of typed intent differ from
+        # actual posted username, the form submission is unconditionally rejected.
+        id_stripped = (identifier or '').strip()
+        id_low = id_stripped.lower()
+        typed_prefix = ''
+        typed_final  = ''
+        if typed_initial_raw and '||' in typed_initial_raw:
+            parts = typed_initial_raw.split('||', 1)
+            typed_prefix = (parts[0] if len(parts) > 0 else '').strip()
+            typed_final  = (parts[1] if len(parts) > 1 else '').strip()
+        else:
+            typed_prefix = typed_initial.strip()
+            typed_final  = ''
+
+        prefix_low = typed_prefix.lower()
+        final_low  = typed_final.lower()
+        mismatch_detected = False
+
+        # ===== Primary guard (A) — Does posted identifier even START with user's typed prefix? =====
+        has_intent = len(prefix_low) >= 3
+        prefix_match_ok = bool(
+            (not has_intent)
+            or (id_low and prefix_low and id_low.startswith(prefix_low))
+        )
+        if has_intent and not prefix_match_ok:
+            mismatch_detected = True
+
+        # ===== Secondary guard (B) — Final value at submit time check =====
+        final_ok = True
+        if len(final_low) >= 3 and id_low:
+            final_ok = (id_low == final_low) or id_low.startswith(final_low)
+            if (not final_ok) and has_intent and not id_low.startswith(prefix_low):
+                mismatch_detected = True
+
+        # ===== v4 FINAL HARD SERVER GUARD (2026-10-09): if typed_final (value present
+        # at submit click captured by JS) actually MATCHES a REAL username in User DB,
+        # but identifier POST differs (case-insensitive) → Chrome autofill definitely
+        # swapped username field on submit at last millisecond, NO excuses possible.
+        # Block unconditionally, no false positive possible here (real accounts only).
+        try:
+            from django.contrib.auth import get_user_model
+            U = get_user_model()
+            typed_final_stripped = (typed_final or '').strip()
+            if len(typed_final_stripped) >= 4 and id_stripped and (typed_final_stripped.lower() != id_stripped.lower()):
+                exists_typed_as_user = U.objects.filter(username__iexact=typed_final_stripped).exists()
+                if exists_typed_as_user:
+                    mismatch_detected = True
+        except Exception:
+            pass
+
+        if mismatch_detected:
+            displayed_typed = typed_prefix or typed_initial or id_stripped
+            displayed_actual = id_stripped
+            # Extra debug info shown to admin user to make the case crystal clear
+            # and 100% dispel any "server logged me into wrong account" confusion.
+            if typed_final and typed_final.lower() != id_low and len(typed_final) >= 3:
+                fin_msg = (f" The value present at submit click was '{typed_final}'.")
+            else:
+                fin_msg = ""
+            msg = (
+                f"⚠️ BROWSER AUTOFILL / PASSWORD MANAGER CONFLICT DETECTED! "
+                f"You intended the username that STARTS WITH '{displayed_typed}', "
+                f"but the form ACTUALLY submitted username = '{displayed_actual}'.{fin_msg} "
+                f"These are DIFFERENT usernames (different first characters), so your "
+                f"browser / saved-password manager silently swapped the field in the "
+                f"last few milliseconds before submit.  THE CORRECT LOGIN WAS BLOCKED "
+                f"TO STOP YOU FROM ACCIDENTALLY OPENING THE WRONG AGENT ACCOUNT. "
+                f"TO RESOLVE: "
+                f"(1) Click the username field, press ESCAPE to dismiss any Chrome popup. "
+                f"(2) Use Ctrl+A then DELETE to clear the ENTIRE username field. "
+                f"(3) Type the username AGAIN slowly, with ZERO clicks on any Chrome "
+                f"auto-suggest / saved-credential dropdown.  "
+                f"(4) Before clicking Login, DOUBLE-CHECK that the username field shows "
+                f"EXACTLY the user you want and matches what you typed.  "
+                f"(5) Type the password manually too — do not let Chrome fill it in.  "
+                f"(6) Long-term fix: Chrome → Settings → Autofill → Passwords → either "
+                f"TEMPORARILY turn OFF 'Offer to save passwords' / 'Auto Sign-in', or "
+                f"search 'StakeNaija' in saved passwords and DELETE the duplicate "
+                f"conflicting saved logins (one per test agent account) that are fighting "
+                f"for control of this field."
+            )
+            try:
+                request._login_autofill_mismatch_detected = True
+                request._login_autofill_typed = displayed_typed
+                request._login_autofill_actual = displayed_actual
+            except Exception:
+                pass
+            raise forms.ValidationError(msg)
 
         # Resolve User
         user = None

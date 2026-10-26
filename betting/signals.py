@@ -695,6 +695,11 @@ def _deposit_status_change_email_enqueue(sender, instance, **kwargs):
 @receiver(post_save, sender=Wallet)
 def wallet_realtime_push_on_save(sender, instance, **kwargs):
     _schedule_wallet_event_for_user(instance.user)
+    try:
+        if getattr(instance, 'user_id', None):
+            cache.delete(f"pb_api_user_wallet_{instance.user_id}")
+    except Exception:
+        pass
 
 
 @receiver(post_save, sender=Loan)

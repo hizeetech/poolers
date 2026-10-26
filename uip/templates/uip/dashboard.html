@@ -629,15 +629,30 @@
 
         // --- WebSocket Connection ---
         const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-        const socket = new WebSocket(protocol + window.location.host + '/ws/dashboard/');
+        let socket = null;
+        let reconnectTimer = null;
+        let reconnectAttempts = 0;
 
-        socket.onopen = function(e) {
+        // Capped exponential backoff with jitter. This socket previously had no
+        // reconnect at all, so the live panel stayed dead after any restart.
+        const scheduleReconnect = function() {
+            if (reconnectTimer) return;
+            const base = Math.min(30000, 2000 * Math.pow(2, reconnectAttempts));
+            reconnectAttempts += 1;
+            reconnectTimer = window.setTimeout(function() {
+                reconnectTimer = null;
+                connect();
+            }, base + Math.floor(Math.random() * 1000));
+        };
+
+        function onOpen(e) {
+            reconnectAttempts = 0;
             console.log('WebSocket Connected');
             liveIndicator.classList.remove('text-muted', 'text-danger');
             liveIndicator.classList.add('text-success');
-        };
+        }
 
-        socket.onmessage = function(e) {
+        function onMessage(e) {
             const data = JSON.parse(e.data);
             
             // 1. Handle Serial Frequency Update
@@ -695,13 +710,25 @@
                     }
                 }
             }
-        };
+        }
 
-        socket.onclose = function(e) {
+        function onClose(e) {
             console.error('Chat socket closed unexpectedly');
             liveIndicator.classList.remove('text-success');
             liveIndicator.classList.add('text-danger');
+            scheduleReconnect();
+        }
+
+        const connect = function() {
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+            socket = new WebSocket(protocol + window.location.host + '/ws/dashboard/');
+            socket.onopen = onOpen;
+            socket.onmessage = onMessage;
+            socket.onclose = onClose;
         };
+        connect();
     });
 </script>
 {% endblock %}

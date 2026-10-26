@@ -235,6 +235,87 @@ class SiteConfiguration(models.Model):
         help_text='Comma-separated list of email addresses that should receive an email notification when a deposit has been pending for longer than the reconciliation threshold (default 30 minutes). Leave blank to use the existing auto-discovered list (superuser/admin/finance).'
     )
 
+    # ============================================================
+    # EMAIL NOTIFICATION GOVERNANCE (2026-10-21)
+    #
+    # Labels + help text for the 37 per-notification toggles below are
+    # supplied at runtime from betting/email_prefs.py (single source of
+    # truth) by SiteConfigurationAdmin.get_form(). Do not rename these
+    # fields without updating the registry in betting/email_prefs.py.
+    # ============================================================
+    email_notifications_enabled = models.BooleanField(
+        default=True,
+        verbose_name='Outbound Email — MASTER SWITCH (uncheck to stop ALL email)',
+        help_text=(
+            'Kill switch. While this is UNCHECKED nothing is emailed at all, no matter what the '
+            'per-notification toggles below say. Use this for emergencies or when the host '
+            'threatens suspension for failed deliveries.'
+        ),
+    )
+    email_recipient_allowlist = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Recipient Allowlist (optional hard lock)',
+        help_text=(
+            'Comma-separated. If filled, mail is ONLY ever delivered to these addresses and every '
+            'other recipient is silently dropped everywhere on the site. Leave blank to allow all recipients.'
+        ),
+    )
+    email_suppression_list = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Suppressed (bounced / dead) Addresses',
+        help_text=(
+            'Comma-separated. These addresses are NEVER emailed by any notification, in any role. '
+            'Add every address that hard-bounces here to protect the sending domain reputation.'
+        ),
+    )
+
+    # --- Administrators ---------------------------------------------------
+    email_admin_deposit_initiated = models.BooleanField(default=True)
+    email_admin_deposit_successful = models.BooleanField(default=True)
+    email_admin_deposit_failed = models.BooleanField(default=True)
+    email_admin_withdrawal_requested = models.BooleanField(default=True)
+    email_admin_withdrawal_approved = models.BooleanField(default=True)
+    email_admin_withdrawal_completed = models.BooleanField(default=True)
+    email_admin_withdrawal_rejected = models.BooleanField(default=True)
+    email_admin_stuck_deposit_alert = models.BooleanField(default=True)
+    email_admin_new_cashier_request = models.BooleanField(default=True)
+    email_admin_crm_daily_report = models.BooleanField(default=True)
+    email_admin_retail_daily_report = models.BooleanField(default=True)
+    email_admin_fixture_odds_proposal = models.BooleanField(default=True)
+    email_admin_uip_alerts = models.BooleanField(default=True)
+    email_admin_finance_scheduled_report = models.BooleanField(default=True)
+
+    # --- Players / non-agent users ---------------------------------------
+    email_user_deposit_initiated = models.BooleanField(default=True)
+    email_user_deposit_successful = models.BooleanField(default=True)
+    email_user_deposit_failed = models.BooleanField(default=True)
+    email_user_withdrawal_requested = models.BooleanField(default=True)
+    email_user_withdrawal_approved = models.BooleanField(default=True)
+    email_user_withdrawal_completed = models.BooleanField(default=True)
+    email_user_withdrawal_rejected = models.BooleanField(default=True)
+    email_user_password_reset = models.BooleanField(default=True)
+    email_user_account_credentials = models.BooleanField(default=True)
+    email_user_crm_direct_message = models.BooleanField(default=True)
+    email_user_crm_campaign = models.BooleanField(default=True)
+    email_user_crm_password_reset = models.BooleanField(default=True)
+
+    # --- Agents / super agents / master agents ---------------------------
+    email_agent_transaction_cc = models.BooleanField(default=True)
+    email_agent_cashier_registration_approved = models.BooleanField(default=True)
+    email_agent_registration_approved = models.BooleanField(default=True)
+    email_agent_registration_rejected = models.BooleanField(default=True)
+    email_agent_credentials_resend = models.BooleanField(default=True)
+    email_agent_commission_profile_assigned = models.BooleanField(default=True)
+    email_agent_commission_recalled = models.BooleanField(default=True)
+    email_agent_loan_overdraft_events = models.BooleanField(default=True)
+    email_agent_unlock_appeal_resolution = models.BooleanField(default=True)
+
+    # --- Cashiers ---------------------------------------------------------
+    email_cashier_withdrawal_updates = models.BooleanField(default=True)
+    email_cashier_crm_messages = models.BooleanField(default=True)
+
     def save(self, *args, **kwargs):
         previous_values = None
         if self.pk:
@@ -4452,29 +4533,17 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
 
     if should_recalculate:
         try:
-            from .services.ticket_results import recalculate_tickets_for_fixture_sync
-            ticket_count = BetTicket.objects.filter(selections__fixture=instance).distinct().count()
             is_test_run = any(arg in ('test', 'pytest') for arg in getattr(sys, 'argv', []) or [])
 
-            def _celery_workers_available():
-                cache_key = "betting:celery_workers_available"
-                cached = cache.get(cache_key)
-                if cached is not None:
-                    return bool(cached)
-                ok = False
-                try:
-                    from celery import current_app
-                    insp = current_app.control.inspect(timeout=0.5)
-                    res = insp.ping() if insp else None
-                    ok = bool(res)
-                except Exception:
-                    ok = False
-                cache.set(cache_key, ok, timeout=15)
-                return ok
+            if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
+                from .services.ticket_results import recalculate_tickets_for_fixture_sync
+                recalculate_tickets_for_fixture_sync(instance.id)
+                return
 
             def _run_in_background():
                 close_old_connections()
                 try:
+                    from .services.ticket_results import recalculate_tickets_for_fixture_sync
                     recalculate_tickets_for_fixture_sync(instance.id)
                 except Exception:
                     return
@@ -4489,25 +4558,16 @@ def update_tickets_on_fixture_change(sender, instance, created, **kwargs):
                 )
                 t.start()
 
-            if is_test_run or getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) or getattr(settings, "CELERY_ALWAYS_EAGER", False):
-                recalculate_tickets_for_fixture_sync(instance.id)
-                return
-
-            use_celery = _celery_workers_available()
-            if use_celery:
+            def _try_celery_then_thread():
                 try:
                     from .tasks import recalculate_tickets_for_fixture
-                    transaction.on_commit(lambda: recalculate_tickets_for_fixture.delay(instance.id))
-                    return
+                    recalculate_tickets_for_fixture.delay(instance.id)
                 except Exception:
-                    pass
+                    _schedule_background_thread()
 
-            transaction.on_commit(_schedule_background_thread)
+            transaction.on_commit(_try_celery_then_thread)
         except Exception:
-            try:
-                recalculate_tickets_for_fixture_sync(instance.id)
-            except Exception:
-                pass
+            pass
 
 class CreditRequest(models.Model):
     STATUS_CHOICES = (

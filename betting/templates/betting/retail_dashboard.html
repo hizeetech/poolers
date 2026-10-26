@@ -1369,9 +1369,26 @@
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
     let socket;
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+
+    // Capped exponential backoff with jitter: a flat retry made every open
+    // dashboard reconnect on the same beat after a server restart.
+    const scheduleReconnect = () => {
+      if (reconnectTimer) return;
+      const base = Math.min(30000, 2000 * Math.pow(2, reconnectAttempts));
+      reconnectAttempts += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, base + Math.floor(Math.random() * 1000));
+    };
 
     const connect = () => {
       socket = new WebSocket(wsUrl);
+      socket.onopen = () => {
+        reconnectAttempts = 0;
+      };
       socket.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
@@ -1392,7 +1409,7 @@
         } catch (e) {}
       };
       socket.onclose = () => {
-        setTimeout(connect, 2500);
+        scheduleReconnect();
       };
     };
 

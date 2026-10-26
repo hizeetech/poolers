@@ -37,6 +37,7 @@ from .models import (
 )
 from .services.ticket_results import recalculate_tickets_for_fixture_sync
 from .services.loan_overdraft import enforce_due_loans
+from . import email_prefs
 import logging
 
 logger = logging.getLogger(__name__)
@@ -327,6 +328,18 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
             to_emails = cc_emails
             cc_emails = []
 
+        # --- 2026-10-21 notification governance (per-notification toggles) ---
+        if not email_prefs.email_enabled(
+            email_prefs.withdrawal_user_key(withdrawal.user, event_key)
+        ):
+            to_emails = []
+        if not email_prefs.email_enabled('email_agent_transaction_cc'):
+            cc_emails = []
+        if not to_emails and not cc_emails:
+            # Switched off by admin: mark the event handled so it does NOT fire
+            # retroactively if the toggle is turned back on later.
+            UserWithdrawal.objects.filter(id=withdrawal.id).update(**{user_field: now})
+
         if to_emails:
             try:
                 html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': False})
@@ -366,7 +379,10 @@ def send_withdrawal_notification_emails(self, withdrawal_id, event):
 
     if getattr(withdrawal, admin_field, None) is None:
         recipients = _withdrawal_admin_recipients_for_event(event_key)
-        if not recipients:
+        if not email_prefs.email_enabled(email_prefs.withdrawal_admin_key(event_key)):
+            # Admin copy switched off: mark handled so it does not fire later.
+            UserWithdrawal.objects.filter(id=withdrawal.id).update(**{admin_field: now})
+        elif not recipients:
             UserWithdrawal.objects.filter(id=withdrawal.id).update(
                 last_email_error="No admin recipients configured for withdrawal notifications."
             )
@@ -569,6 +585,15 @@ def send_deposit_notification_emails(self, transaction_id, event):
             to_emails = cc_emails
             cc_emails = []
 
+        # --- 2026-10-21 notification governance (per-notification toggles) ---
+        if not email_prefs.email_enabled(email_prefs.deposit_user_key(tx.user, event_key)):
+            to_emails = []
+        if not email_prefs.email_enabled('email_agent_transaction_cc'):
+            cc_emails = []
+        if not to_emails and not cc_emails:
+            # Switched off by admin: mark handled so it does not fire retroactively.
+            Transaction.objects.filter(id=tx.id).update(**{user_field: now})
+
         if to_emails:
             try:
                 html = render_to_string(template_name, {**ctx_base, 'is_admin_copy': False})
@@ -584,7 +609,10 @@ def send_deposit_notification_emails(self, transaction_id, event):
     # ---- ADMIN EMAIL ----
     if getattr(tx, admin_field, None) is None:
         recipients = _deposit_admin_recipients_for_event(event_key)
-        if not recipients:
+        if not email_prefs.email_enabled(email_prefs.deposit_admin_key(event_key)):
+            # Admin copy switched off: mark handled so it does not fire later.
+            Transaction.objects.filter(id=tx.id).update(**{admin_field: now})
+        elif not recipients:
             try:
                 Transaction.objects.filter(id=tx.id).update(
                     last_email_error=f"ADMIN {event_key}: No recipients configured."
@@ -621,6 +649,9 @@ def send_stuck_deposit_alert_email(self, transaction_id):
         site_name = (getattr(site, 'site_name', '') or 'StakeNaija').strip() or 'StakeNaija'
     except Exception:
         site_name = 'StakeNaija'
+
+    if not email_prefs.email_enabled('email_admin_stuck_deposit_alert'):
+        return
 
     recipients = _deposit_admin_recipients_for_event('stuck_alert')
     if not recipients:
@@ -950,11 +981,15 @@ def run_scheduled_finance_reports():
             content, title, mime, filename = generate_finance_report_bytes(r.dataset, r.report_format, start_dt, end_dt)
             subject = f"Finance Report: {r.name} ({start_date.isoformat()} → {end_date.isoformat()})"
             body = f"Attached: {title}.{r.report_format}"
-            email = EmailMessage(subject=subject, body=body, to=recipients)
-            email.attach(filename, content, mime)
-            email.send(fail_silently=False)
-            r.last_status = 'sent'
-            r.last_error = ''
+            if not email_prefs.email_enabled('email_admin_finance_scheduled_report'):
+                r.last_status = 'skipped'
+                r.last_error = 'Finance report emails disabled in Site Configuration.'
+            else:
+                email = EmailMessage(subject=subject, body=body, to=recipients)
+                email.attach(filename, content, mime)
+                email.send(fail_silently=False)
+                r.last_status = 'sent'
+                r.last_error = ''
         except Exception as e:
             r.last_status = 'failed'
             r.last_error = str(e)[:255]

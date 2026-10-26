@@ -6,6 +6,12 @@
     <!-- v1.1 Navbar Fix Applied -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    {% if user.is_authenticated %}
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    {% endif %}
     <title>{% block title %}{{ site_config.site_name|default:"Pool Betting Platform" }}{% endblock %}</title>
     
     <!-- Favicon -->
@@ -520,6 +526,16 @@
                         <a class="nav-link {% if user.is_superuser or user.user_type == 'crm' or user.user_type == 'finance' or user.user_type == 'account_user' or user.user_type == 'admin' %}fw-semibold{% endif %}" href="{% url 'betting:ticket_transactions' %}">Ticket Transactions</a>
                     </li>
                     {% endif %}
+                    {% if user.is_authenticated and user.user_type == 'cashier' and request.resolver_match.url_name == 'fixtures' or user.is_authenticated and user.user_type == 'cashier' and request.resolver_match.url_name == 'fixtures_with_period' %}
+                    <li class="nav-item">
+                        <div class="form-check ms-2 my-1 my-lg-0 d-flex align-items-center">
+                            <input class="form-check-input me-2" type="checkbox" id="cashier-smartpick-only-toggle" autocomplete="off">
+                            <label class="form-check-label nav-link px-0" for="cashier-smartpick-only-toggle" style="cursor: pointer;">
+                                Smart Pick only
+                            </label>
+                        </div>
+                    </li>
+                    {% endif %}
                     {% if impersonation_active or request.session.original_admin_id %}
                     <li class="nav-item">
                         <a class="nav-link text-danger fw-bold" href="{% url 'betting:stop_impersonation' %}">Exit Impersonation</a>
@@ -915,8 +931,14 @@
 
             const walletBalanceElement = document.getElementById('live-wallet-balance');
             if (walletBalanceElement) {
-                setInterval(function() {
-                    fetch('{% url "betting:api_user_wallet" %}')
+                let walletPollInFlight = false;
+                const refreshWalletBalance = function() {
+                    if (walletPollInFlight) return;
+                    if (document.visibilityState === 'hidden') return;
+                    walletPollInFlight = true;
+                    const controller = new AbortController();
+                    const abortTimer = setTimeout(function() { controller.abort(); }, 8000);
+                    fetch('{% url "betting:api_user_wallet" %}', { signal: controller.signal })
                         .then(response => {
                             if (!response.ok) {
                                 throw new Error('Network response was not ok');
@@ -931,8 +953,14 @@
                         })
                         .catch(error => {
                             console.log('Error updating wallet balance:', error);
+                        })
+                        .finally(function() {
+                            clearTimeout(abortTimer);
+                            walletPollInFlight = false;
                         });
-                }, 5000);
+                };
+                refreshWalletBalance();
+                setInterval(refreshWalletBalance, 5000);
             }
 
             const clockEl = document.getElementById('serverClock');
@@ -1233,27 +1261,82 @@
         })();
     </script>
 
+    {% if user.is_authenticated and user.user_type == 'cashier' %}
+    <script>
+        (function () {
+            var STORAGE_KEY = 'cashier_smartpick_only';
+            var ROW_CLASS = 'fixtures-compact-mode';
+
+            function applyPreference(enabled) {
+                var rows = document.querySelectorAll('.row.cashier-compact-eligible');
+                for (var i = 0; i < rows.length; i++) {
+                    rows[i].classList.toggle(ROW_CLASS, !!enabled);
+                }
+            }
+
+            function readPreference() {
+                try {
+                    return localStorage.getItem(STORAGE_KEY) === '1';
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            function savePreference(enabled) {
+                try {
+                    localStorage.setItem(STORAGE_KEY, enabled ? '1' : '0');
+                } catch (e) {}
+            }
+
+            applyPreference(readPreference());
+
+            document.addEventListener('DOMContentLoaded', function () {
+                var enabled = readPreference();
+                applyPreference(enabled);
+
+                var toggle = document.getElementById('cashier-smartpick-only-toggle');
+                if (!toggle) {
+                    return;
+                }
+                toggle.checked = enabled;
+                toggle.addEventListener('change', function () {
+                    savePreference(toggle.checked);
+                    applyPreference(toggle.checked);
+                });
+            });
+        })();
+    </script>
+    {% endif %}
+
     {% block extra_js %}{% endblock %}
     
     <script>
-        function switchNotificationTab(event, tabId) {
-            event.preventDefault();
-            event.stopPropagation();
-            
-            // Update tab buttons
-            const tabs = document.querySelectorAll('.notification-tab');
-            tabs.forEach(tab => tab.classList.remove('active'));
-            event.currentTarget.classList.add('active');
-            
-            // Update tab content
-            const contents = document.querySelectorAll('.notification-tab-content');
-            contents.forEach(content => content.classList.add('d-none'));
-            document.getElementById(tabId).classList.remove('d-none');
-        }
+        document.addEventListener('DOMContentLoaded', function () {
+            function switchNotificationTab(event, tabId) {
+                event.preventDefault();
+                event.stopPropagation();
 
-        // Prevent dropdown from closing when clicking inside
-        document.querySelector('.notification-dropdown-menu').addEventListener('click', function (e) {
-            e.stopPropagation();
+                // Update tab buttons
+                const tabs = document.querySelectorAll('.notification-tab');
+                tabs.forEach(tab => tab.classList.remove('active'));
+                event.currentTarget.classList.add('active');
+
+                // Update tab content
+                const contents = document.querySelectorAll('.notification-tab-content');
+                contents.forEach(content => content.classList.add('d-none'));
+                const targetEl = document.getElementById(tabId);
+                if (targetEl) targetEl.classList.remove('d-none');
+            }
+
+            window.switchNotificationTab = switchNotificationTab;
+
+            // Prevent dropdown from closing when clicking inside
+            const dropdownMenu = document.querySelector('.notification-dropdown-menu');
+            if (dropdownMenu) {
+                dropdownMenu.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                });
+            }
         });
     </script>
 </body>

@@ -259,9 +259,29 @@
                 font-size: 12px;
             }
         }
+        /* Cashier compact mode: hide the full fixture list (team names) and keep
+           Smart Pick + Your Betslip + Popular Picks. The fixture list is only
+           hidden with CSS, never removed, so Smart Pick keeps building itself
+           from the fixture list's DOM. Cashiers only. */
+        @media (max-width: 767.98px) {
+            .row.cashier-compact-eligible > .col-md-8 {
+                display: none !important;
+            }
+            .row.cashier-compact-eligible > .col-md-4 {
+                flex: 0 0 100%;
+                max-width: 100%;
+            }
+        }
+        .row.cashier-compact-eligible.fixtures-compact-mode > .col-md-8 {
+            display: none !important;
+        }
+        .row.cashier-compact-eligible.fixtures-compact-mode > .col-md-4 {
+            flex: 0 0 100%;
+            max-width: 100%;
+        }
     </style>
 
-    <div class="row">
+    <div class="row{% if user.is_authenticated and user.user_type == 'cashier' %} cashier-compact-eligible{% endif %}">
         <div class="col-md-8">
             <div id="fixtures-container">
                 {% include 'betting/includes/fixtures_list.html' %}
@@ -515,6 +535,53 @@
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script>
+    // ---------------------------------------------------------------------
+    // CSRF token retrieval  —  RUNTIME (at click-time), NEVER baked into
+    // the page cache.  4 fallbacks so Place Bet NEVER uses the stale-cached HTML
+    // bug where the page HTML (cached at T0) is served to a different user (with a
+    // different cookie at T1).
+    //   1) Django-recommended getCookie('csrftoken')
+    //   2) <meta name="csrf-token"> tag in <head> (belt + braces)
+    //   3) Any inline <form>{% csrf_token %}</form> on the page
+    //   4) Last-resort: window.__BAKED_CSRF which is the literal template
+    //      rendered one. NEVER fail silently — always console.warn + fall back.
+    // ---------------------------------------------------------------------
+    function __djangoGetCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    function __getCsrfToken() {
+        // 1) cookie
+        const fromCookie = __djangoGetCookie('csrftoken');
+        if (fromCookie && fromCookie.length >= 32) return fromCookie;
+        // 2) meta tag
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content && meta.content.length >= 32) return meta.content;
+        // 3) inline csrf form input
+        const inp = document.querySelector('input[name="csrfmiddlewaretoken"]');
+        if (inp && inp.value && inp.value.length >= 32) return inp.value;
+        // 4) last-resort literal token baked at render-time (may be stale for cached pages,
+        //    but better than empty — if we get here, CSRF check will reveal it)
+        if (typeof window.__BAKED_CSRF !== 'undefined' && window.__BAKED_CSRF) {
+            console.warn('[csrf] using baked csrf; csrftoken cookie missing');
+            return window.__BAKED_CSRF;
+        }
+        console.warn('[csrf] all csrf sources empty');
+        return '';
+    }
+    // Keep last-resort literal as a fallback only.
+    window.__BAKED_CSRF = '{{ csrf_token }}';
+
     const canPlaceBet = {{ can_place_bet|yesno:'true,false' }};
     const bonusRules = {{ bonus_rules_json|safe }}; // Injected from backend
     
@@ -1569,7 +1636,7 @@
             formData.append('device_screen', `${window.screen.width}x${window.screen.height}x${window.devicePixelRatio || 1}`);
             formData.append('device_platform', navigator.platform || '');
             formData.append('device_language', navigator.language || '');
-            formData.append('csrfmiddlewaretoken', '{{ csrf_token }}'); // Include CSRF token
+            formData.append('csrfmiddlewaretoken', __getCsrfToken());
 
             try {
                 const response = await fetch('{% url "betting:place_bet" %}', {

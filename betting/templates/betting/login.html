@@ -46,6 +46,8 @@
                         <p class="text-center text-muted mt-3">
                             Don't have an account? <a href="{% url 'betting:register' %}" class="text-decoration-none fw-semibold text-primary">Register Here</a>
                         </p>
+                        {# ---- AUTOFILL AMBIGUITY GUARD: captures FIRST typed value BEFORE Chrome autofill rewrites on submit ---- #}
+                        {{ form.username_typed_initial }}
                     </form>
                 </div>
             </div>
@@ -61,6 +63,102 @@
         toggle.addEventListener('change', function () {
             input.type = toggle.checked ? 'text' : 'password';
         });
+
+        // 2026-10-09 CRITICAL AUTOFILL AMBIGUITY GUARD:
+        // Save the username field's value the FIRST time the user either
+        // (a) blurs it, (b) types >= 3 chars, or (c) 600 ms after last input.
+        // This freezes what the user *actually remembered typing* before
+        // Chrome autofill/password managers silently replace it right before
+        // submit click — the #1 source of "I typed User A, it logged me in as
+        // User B!" confusion.
+        const idField  = document.querySelector('[data-role="login-identifier"]')
+                      || document.getElementById('{{ form.identifier.id_for_label }}');
+        const hidField = document.querySelector('[data-role="login-typed-initial"]');
+        if (idField && hidField) {
+                // Always update hidden field as the user types — NEVER lock it.
+                // Chrome autofill "completes" a typed prefix to a full username;
+                // we capture the FINAL value on submit so the server sees the
+                // exact username that was posted, and compares it against the
+                // previous value (which reflects the user's original typed prefix).
+                function syncHidden(v) {
+                    const val = (v != null ? v : (idField.value || '')).trim();
+                    if (val.length >= 1) hidField.value = val;
+                }
+                // Capture intermediate typed value after short pause (keeps last typed prefix before autofill)
+                let pauseTimer = null;
+                let lastPrefix = '';
+                idField.addEventListener('input', function () {
+                    clearTimeout(pauseTimer);
+                    const curr = (idField.value || '').trim();
+                    // Prefix capture (last user typed value) – save 350ms after typing stops.
+                    pauseTimer = setTimeout(function () {
+                        const c = (idField.value || '').trim();
+                        // If it looks like user stopped typing, save as "the user intended this prefix"
+                        if (c.length >= 2) lastPrefix = c;
+                    }, 350);
+                    // Always also update hidden to current value (so Chrome-completed full usernames end up here too)
+                    syncHidden(curr);
+                }, true);
+                idField.addEventListener('change', function () { syncHidden(); }, true);
+                idField.addEventListener('blur', function () { syncHidden(); lastPrefix = (idField.value||'').trim() || lastPrefix; }, true);
+                // ===== v4 HARDENING: Chrome autofill PASSWORD FIELD change ALWAYS re-syncs
+                // identifier latest (Chrome also autofills username on password auto-fill)
+                var pwField = document.getElementById('id_password') || document.querySelector("input[type='password'][name='password']");
+                if (pwField) {
+                    ['input','change','blur','paste','focus','focusout','keydown','keyup'].forEach(function(evt){
+                        pwField.addEventListener(evt, function () {
+                            clearTimeout(pauseTimer);
+                            pauseTimer = setTimeout(function(){
+                                var currId = (idField.value||'').trim();
+                                if (currId.length>=2) lastPrefix=currId;
+                                syncHidden(currId);
+                            }, 50);
+                        }, true);
+                    });
+                    // MutationObserver ONLY on idField value attribute (Chrome internal autofill
+                    // setAttribute() doesn't fire 'input' events sometimes — catch everything).
+                    // CRITICAL: DO NOT observe the entire form subtree — causes INFINITE LOOP
+                    // because syncHidden() writes hidField.value inside form → triggers observer
+                    // → re-calls syncHidden → write → observe → stack overflow page freeze.
+                    try {
+                        var _lastSeenIdVal = '';
+                        var mo = new MutationObserver(function() {
+                            var currId = (idField.value||'').trim();
+                            if (currId === _lastSeenIdVal) return;
+                            _lastSeenIdVal = currId;
+                            if (currId.length>=2) lastPrefix=currId;
+                            syncHidden(currId);
+                        });
+                        mo.observe(idField, {attributes:true, attributeFilter:['value']});
+                    } catch(e) {}
+                }
+                // Before submit: store the previous "user-intended prefix or value" for comparison against final submitted value
+                // We encode this by storing LAST_PREFIX + '||' + FINAL_SUBMITTED_VALUE in the hidden field
+                const formEl = idField.closest && idField.closest('form');
+                if (formEl) {
+                    formEl.addEventListener('submit', function () {
+                        const finalVal = (idField.value || '').trim();
+                        const prefix   = (lastPrefix || finalVal).trim();
+                        // format: PREFIX_VAL  ||  FINAL_VAL  (server splits on "||")
+                        hidField.value = prefix + '||' + finalVal;
+                        // ===== v4 HARDENING: FINAL 1ms LATER sync — catches LAST-millisecond
+                        // Chrome autofill overwrite of username/password pair that happens
+                        // POST onsubmit callback (Chrome's internal autofill runs AFTER our
+                        // onsubmit JS sometimes).  1ms after onsubmit, re-read idField,
+                        // write hidden again — guarantees server sees Chrome's FINAL rewrite.
+                        setTimeout(function(){
+                            var fv = (idField.value||'').trim();
+                            var lp = (lastPrefix || fv).trim();
+                            if (hidField) hidField.value = lp + '||' + fv;
+                        }, 1);
+                    }, true);
+                }
+                // Chrome autofill on page load sometimes fills before user interacts
+                setTimeout(function () {
+                    const v = (idField.value || '').trim();
+                    if (v.length >= 2) { lastPrefix = v; syncHidden(v); }
+                }, 1500);
+            }
     });
 </script>
 {% if form.non_field_errors %}

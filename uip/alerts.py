@@ -2,6 +2,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
 from betting.models import User
+from betting import email_prefs
 from .services import DashboardService, FraudDetectionService
 from .models import Alert, FraudAlert
 
@@ -110,6 +111,10 @@ class AlertService:
         
         admin_emails = User.objects.filter(user_type='admin').values_list('email', flat=True)
         if not admin_emails:
+            return
+
+        # 2026-10-21 notification governance: per-notification toggle
+        if not email_prefs.email_enabled('email_admin_uip_alerts'):
             return
 
         try:

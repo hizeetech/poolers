@@ -152,6 +152,7 @@ MIDDLEWARE = [
     'poolbetting.views.json_error_server_middleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'betting.middleware.GlobalAuthenticatedResponseCacheSafetyMiddleware',
     'betting.middleware.LowBalanceDepositReminderMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -370,7 +371,13 @@ LOGOUT_REDIRECT_URL = '/' # Where to redirect after logout
 # settings.py
 
 # Email Settings
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# 2026-10-21 EMAIL NOTIFICATION GOVERNANCE (anti-suspension):
+# Routed through a guarded backend that enforces the Site Configuration master
+# switch, suppression list (hard-bounce addresses), optional recipient allowlist
+# and address validation on EVERY outbound message, from any code path.
+# Configure in Admin -> Site Configuration -> Email Notification Governance.
+EMAIL_BACKEND = 'betting.email_backend.GuardedEmailBackend'
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'  # previous value, kept for instant rollback
 EMAIL_HOST = os.getenv('EMAIL_HOST') # Or your email provider's SMTP host
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))             # Or 465 for SSL
 EMAIL_USE_TLS = str(os.getenv('EMAIL_USE_TLS', 'True')).strip().lower() in ('1', 'true', 'yes', 'on')

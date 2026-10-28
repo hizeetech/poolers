@@ -1317,6 +1317,7 @@
         const pollUrl = "{% if current_betting_period %}{% url 'betting:fixtures_list_partial_with_period' current_betting_period.id %}{% else %}{% url 'betting:fixtures_list_partial' %}{% endif %}";
         const picksUrl = "{% if current_betting_period %}{% url 'betting:popular_picks_json_with_period' current_betting_period.id %}{% else %}{% url 'betting:popular_picks_json' %}{% endif %}";
         let lastPopularPicksFingerprint = '';
+        let lastFixturesHtml = null;
 
         const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
             '&': '&amp;',
@@ -1384,6 +1385,9 @@
         };
         
         setInterval(async () => {
+            // Skip background polling for hidden tabs: nobody is looking, and
+            // it only adds server + database load.
+            if (document.hidden) return;
             try {
                 const container = document.getElementById('fixtures-container');
                 const openFixtureIdsSet = new Set();
@@ -1402,17 +1406,23 @@
 
                 if (fixturesResp.ok && container) {
                     const html = await fixturesResp.text();
-                    container.innerHTML = html;
+                    // Only touch the DOM when the fixtures markup really changed.
+                    // Rewriting innerHTML every poll caused needless reflow and
+                    // listener re-binding, which made the page feel sluggish.
+                    if (html !== lastFixturesHtml) {
+                        lastFixturesHtml = html;
+                        container.innerHTML = html;
 
-                    const allDetails = container.querySelectorAll('details.fixture-more-markets');
-                    for (const d of allDetails) {
-                        const fid = d.getAttribute('data-fixture-id');
-                        if (fid && openFixtureIdsSet.has(String(fid))) {
-                            d.open = true;
+                        const allDetails = container.querySelectorAll('details.fixture-more-markets');
+                        for (const d of allDetails) {
+                            const fid = d.getAttribute('data-fixture-id');
+                            if (fid && openFixtureIdsSet.has(String(fid))) {
+                                d.open = true;
+                            }
                         }
-                    }
 
-                    rebuildSmartPickFromFixtures();
+                        rebuildSmartPickFromFixtures();
+                    }
                 }
 
                 if (picksResp.ok) {
@@ -1430,7 +1440,7 @@
             } catch (error) {
                 console.error('Error polling fixtures:', error);
             }
-        }, 2000); // Poll every 2 seconds for faster updates
+        }, 5000); // Poll every 5 seconds (hidden tabs are skipped, unchanged markup is not re-rendered)
     }
 
     // Event listener for adding/removing selections

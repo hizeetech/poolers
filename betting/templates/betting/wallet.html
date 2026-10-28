@@ -1465,6 +1465,7 @@
             const wsUrl = `${protocol}://${window.location.host}/ws/notifications/`;
             let socket = null;
             let reconnectTimer = null;
+            let socketHealthy = false;
 
             const scheduleReconnect = () => {
                 if (reconnectTimer) return;
@@ -1483,6 +1484,7 @@
                 }
 
                 socket.onopen = function () {
+                    socketHealthy = true;
                     fetchWalletOverdraftState();
                 };
 
@@ -1498,10 +1500,12 @@
                 };
 
                 socket.onclose = function () {
+                    socketHealthy = false;
                     scheduleReconnect();
                 };
 
                 socket.onerror = function () {
+                    socketHealthy = false;
                     try {
                         socket.close();
                     } catch (error) {
@@ -1553,7 +1557,10 @@
 
         fetchWalletOverdraftState();
         connectWalletSocket();
-        window.setInterval(fetchWalletOverdraftState, 30000);
+        window.setInterval(() => {
+            if (document.hidden) return;
+            fetchWalletOverdraftState();
+        }, 90000);
     });
 </script>
 

@@ -48,6 +48,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django_ckeditor_5.widgets import CKEditor5Widget
 from django.core.mail import send_mail
+from django.core.cache import cache
 from django.utils.crypto import get_random_string
 
 ENABLE_CELERY_APPS = os.getenv("ENABLE_CELERY_APPS", "").strip().lower() in ("1", "true", "yes", "on")
@@ -78,6 +79,8 @@ from .forms import (
     FixtureUploadForm,
     BettingPeriodForm,
 )
+
+
 from .services.email_policy import normalize_email_value
 from . import email_prefs
 from django.core.files.storage import FileSystemStorage
@@ -109,6 +112,45 @@ from .models import (
 )
 from . import signals
 from .tasks import recalculate_tickets_for_fixture
+
+
+def _refresh_processing_withdrawals_from_paystack(*, actor=None, limit=3, throttle_seconds=60):
+    """Best-effort sync for rows still marked processing locally.
+
+    A browser refresh only reloads the local DB state; it does not ask Paystack
+    again. We opportunistically reconcile a small number of approved/processing
+    rows here so the admin pages stop looking stale after a successful transfer.
+
+    Kept deliberately cheap: only indexed local filters, a per-reference cache
+    throttle, and the loop stops at the first Paystack error so an unreachable
+    API can never stack several timeouts onto one admin page load.
+    """
+    from betting.models import UserWithdrawal
+    from betting.services import paystack_payout as payout
+
+    limit = max(0, int(limit or 0))
+    if not limit:
+        return
+
+    rows = list(
+        UserWithdrawal.objects.filter(status='approved', payout_status='processing')
+        .exclude(payout_reference__isnull=True)
+        .exclude(payout_reference__exact='')
+        .order_by('request_time')[:limit]
+    )
+
+    for withdrawal in rows:
+        cache_key = 'pb:auto-refresh-payout:%s' % withdrawal.payout_reference
+        if not cache.add(cache_key, '1', timeout=throttle_seconds):
+            continue
+        try:
+            payout.refresh_payout_status(withdrawal, actor=actor)
+        except payout.PaystackPayoutError:
+            # Transport/API/config problem: stop instead of stacking timeouts.
+            break
+        except Exception:
+            continue
+
 
 # --- Custom Admin Site Definition ---
 class BettingAdminSite(admin.AdminSite):
@@ -3118,6 +3160,12 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         return str(exc) == "Insufficient funds to reopen withdrawal request."
 
     def changelist_view(self, request, extra_context=None):
+        # Opportunistically reconcile a few stale approved/processing rows with
+        # Paystack so page loads/polls stop showing an outdated payout status.
+        try:
+            _refresh_processing_withdrawals_from_paystack(actor=request.user)
+        except Exception:
+            pass
         try:
             return super().changelist_view(request, extra_context=extra_context)
         except ValueError as exc:
@@ -4595,6 +4643,12 @@ class ProcessedWithdrawalAdmin(admin.ModelAdmin):
         }
 
     def changelist_view(self, request, extra_context=None):
+        # Reconcile a few stale approved/processing rows before rendering so the
+        # "Approved" status reflects a payout that already succeeded at Paystack.
+        try:
+            _refresh_processing_withdrawals_from_paystack(actor=request.user)
+        except Exception:
+            pass
         response = super().changelist_view(request, extra_context)
         try:
             cl = response.context_data['cl']

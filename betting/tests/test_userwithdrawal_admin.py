@@ -85,9 +85,9 @@ class UserWithdrawalAdminTests(TestCase):
         self.assertContains(response, "pauseLiveRefresh()")
         self.assertContains(response, "LIVE_REFRESH_PAUSE_KEY = 'userWithdrawalAdminPauseUntil'")
 
-    def test_userwithdrawal_admin_queryset_only_shows_pending_requests(self):
+    def test_userwithdrawal_admin_queryset_shows_pending_and_approved_requests(self):
         pending_withdrawal = self._create_withdrawal(status="pending")
-        self._create_withdrawal(status="approved")
+        approved_withdrawal = self._create_withdrawal(status="approved")
         self._create_withdrawal(status="rejected")
         self._create_withdrawal(status="completed")
 
@@ -96,7 +96,13 @@ class UserWithdrawalAdminTests(TestCase):
 
         qs = self.admin.get_queryset(request)
 
-        self.assertEqual(list(qs.values_list("id", flat=True)), [pending_withdrawal.id])
+        # Approved-but-unpaid rows stay on this page so the "Send approved
+        # withdrawal to bank" action has a row to run on. Paying a withdrawal
+        # moves it to "completed", which drops it off the list.
+        self.assertCountEqual(
+            list(qs.values_list("id", flat=True)),
+            [pending_withdrawal.id, approved_withdrawal.id],
+        )
 
     def test_processed_withdrawal_admin_queryset_only_shows_updated_requests(self):
         self._create_withdrawal(status="pending")
@@ -145,12 +151,18 @@ class UserWithdrawalAdminTests(TestCase):
             (
                 "short_id",
                 "user",
+                "user_username_display",
                 "amount",
+                "previous_won_amount_display",
+                "previous_approved_withdrawal_total_display",
                 "current_won_amount_display",
+                "current_approved_withdrawal_total_display",
                 "bank_name",
                 "account_number",
                 "account_name",
                 "status",
+                "payout_status",
+                "paid_at",
                 "request_time",
                 "email_request_admin_sent_at",
                 "email_request_user_sent_at",
@@ -441,32 +453,38 @@ class UserWithdrawalAdminTests(TestCase):
         withdrawal.refresh_from_db()
         self.assertEqual(withdrawal.status, "rejected")
 
-    def test_userwithdrawal_changelist_approves_pending_withdrawal_on_first_save(self):
+    def test_userwithdrawal_change_form_approves_and_stamps_audit_fields(self):
+        # Approval now happens on the change form: the changelist has no inline
+        # status dropdown, so nobody can move a withdrawal to "completed" and
+        # skip the payout step from the list view.
+        self.assertEqual(tuple(self.admin.list_editable), ())
+
         withdrawal = self._create_withdrawal(status="pending")
         self.client.force_login(self.admin_user)
 
-        changelist_url = reverse("betting_admin:betting_userwithdrawal_changelist")
-        response = self.client.get(changelist_url)
+        change_url = reverse(
+            "betting_admin:betting_userwithdrawal_change", args=[withdrawal.pk]
+        )
+        response = self.client.get(change_url)
 
         self.assertEqual(response.status_code, 200)
-        formset = response.context["cl"].formset
 
-        post_data = {
-            field.html_name: field.value() or ""
-            for field in formset.management_form
-        }
-        for form in formset.forms:
-            for field in form:
-                post_data[field.html_name] = field.value() or ""
-
-        target_form = next(form for form in formset.forms if form.instance.pk == withdrawal.pk)
-        post_data[f"{target_form.prefix}-status"] = "approved"
+        form = response.context["adminform"].form
+        post_data = {}
+        for field in form:
+            value = field.value()
+            if value is None:
+                value = ""
+            if isinstance(value, (list, tuple)):
+                post_data[field.html_name] = [str(item) for item in value]
+            else:
+                post_data[field.html_name] = str(value)
+        post_data["status"] = "approved"
         post_data["_save"] = "Save"
 
-        post_response = self.client.post(changelist_url, post_data, follow=True)
+        post_response = self.client.post(change_url, post_data, follow=True)
 
         self.assertEqual(post_response.status_code, 200)
-        self.assertContains(post_response, "1 user withdrawal was changed successfully.")
 
         withdrawal.refresh_from_db()
         self.assertEqual(withdrawal.status, "approved")

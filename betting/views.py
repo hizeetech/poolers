@@ -5725,6 +5725,11 @@ def wallet_view(request):
         logger.info(f"Created missing wallet for user {request.user.email} in wallet_view.")
     # #region debug-point A:wallet-entry
     def _dbg_wallet_500(hypothesis_id, message, data=None):
+        # Keep the old helper shape for future targeted debugging, but make it
+        # fully inert unless an operator explicitly opts in. A synchronous
+        # outbound call in the wallet request path adds avoidable latency.
+        if os.getenv('PB_ENABLE_WALLET_DEBUG_PROBE', 'False').strip().lower() not in ('1', 'true', 'yes', 'on'):
+            return
         import urllib.request
         _p = '.dbg/wallet-page-500.env'
         _u, _s = 'http://127.0.0.1:7777/event', 'wallet-page-500'

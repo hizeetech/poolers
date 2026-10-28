@@ -458,7 +458,7 @@ LOGGING = {
     },
     'handlers': {
         'console': {
-            'level': 'DEBUG', # Change to INFO, WARNING, ERROR as needed for production
+            'level': 'INFO', # Keep production logging lighter on request-heavy pages
             'class': 'logging.StreamHandler',
             'formatter': 'simple'
         },
@@ -512,7 +512,7 @@ LOGGING = {
         },
         'betting': { # Custom logger for your app
             'handlers': ['console', 'django_info_file', 'django_error_file'],
-            'level': 'DEBUG',
+            'level': 'INFO', # INFO in production: DEBUG added per-request I/O overhead
             'propagate': False,
         },
     },

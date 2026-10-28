@@ -1,0 +1,64 @@
+{% load i18n %}<!DOCTYPE html>
+{% comment %}
+    Project override of Django's admin/invalid_setup.html.
+
+    Django renders this page (HTTP 400) from
+    django.contrib.admin.options.ModelAdmin.changelist_view when the querystring
+    contains BOTH the "e" error flag AND an unrecognised lookup parameter.
+
+    The upstream template does `{% extends "admin/base_site.html" %}`. With
+    Jazzmin installed that parent chain ends in admin/base.html, which calls
+    `{% sidebar_status request %}`. Django builds this particular response with
+    a bare SimpleTemplateResponse that carries no request, so `request` is
+    absent from the context and the tag receives the empty-string fallback --
+    raising `AttributeError: 'str' object has no attribute 'COOKIES'` and
+    turning a harmless 400 into a 500.
+
+    This override is deliberately standalone: it extends nothing and reads no
+    context variable, so it always renders.
+{% endcomment %}
+<html lang="{{ LANGUAGE_CODE|default:'en' }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% translate 'Invalid page parameters' %}</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 48px 16px;
+            background: #f6f7f9;
+            color: #212529;
+            font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+        }
+        .card {
+            max-width: 620px;
+            margin: 0 auto;
+            padding: 28px 32px;
+            background: #ffffff;
+            border: 1px solid #e3e6ea;
+            border-radius: 8px;
+        }
+        h1 { margin: 0 0 14px; font-size: 20px; }
+        p { margin: 0 0 12px; line-height: 1.55; }
+        .btn {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 9px 18px;
+            border-radius: 5px;
+            background: #417690;
+            color: #ffffff;
+            font-weight: 600;
+            text-decoration: none;
+        }
+        .btn:hover { background: #305868; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>{% translate 'Invalid page parameters' %}</h1>
+        <p>{% translate 'The list could not be built because the link you followed contained filter parameters that this page does not recognise.' %}</p>
+        <p>{% translate 'No data was changed. Clearing the filters will show the full list again.' %}</p>
+        <a class="btn" href="?">{% translate 'Show the full list' %}</a>
+    </div>
+</body>
+</html>

@@ -2774,6 +2774,39 @@ class UserWithdrawal(models.Model):
     email_rejected_admin_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_email_error = models.TextField(blank=True, default="")
 
+    # --- Paystack payout (bank transfer) ---------------------------------
+    # Populated ONLY by the admin "Send to bank" flow. An empty payout_status
+    # means the withdrawal has never been handed to Paystack, so existing rows
+    # stay untouched by this feature.
+    PAYOUT_STATUS_CHOICES = (
+        ('', 'Not sent to bank'),
+        ('processing', 'Processing'),
+        ('success', 'Sent successfully'),
+        ('failed', 'Failed - held for review'),
+        ('reversed', 'Reversed by provider'),
+    )
+    # Paystack transfers need the numeric bank code, but users type a free-text
+    # bank name. bank_code is resolved by the payout service and can be
+    # corrected by hand from the admin.
+    bank_code = models.CharField(
+        max_length=20, blank=True, default='',
+        help_text="Paystack bank code, e.g. 057 = Zenith Bank. Required to send to bank.",
+    )
+    payout_status = models.CharField(
+        max_length=20, choices=PAYOUT_STATUS_CHOICES, blank=True, default='',
+        db_index=True,
+    )
+    # Paystack transfer reference. Unique so a retry can never pay twice.
+    payout_reference = models.CharField(
+        max_length=100, blank=True, null=True, unique=True,
+        help_text="Paystack transfer reference. Guarantees a withdrawal cannot be paid twice.",
+    )
+    # Paystack recipient code for this bank account, reused across attempts.
+    payout_recipient_code = models.CharField(max_length=100, blank=True, default='')
+    payout_error = models.TextField(blank=True, default='')
+    payout_attempts = models.PositiveIntegerField(default=0)
+    paid_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
     def __str__(self):
         return f"Withdrawal {self.id} - {self.user.email} - {self.amount}"
 

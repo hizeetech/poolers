@@ -1,0 +1,134 @@
+{% extends "admin/base_site.html" %}
+{% load admin_urls %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">Home</a>
+    &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+    &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+    &rsaquo; Send to bank
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Send withdrawal {{ withdrawal.pk }} to the bank</h1>
+
+<div style="margin:12px 0;padding:12px 16px;border-left:4px solid #ba2121;background:#fdf3f3;border-radius:4px;">
+    <strong>This moves real money.</strong>
+    It creates a Paystack transfer from your Paystack balance to the account below.
+    There is no undo: if the transfer succeeds, the money is gone.
+</div>
+
+{% if preview.blocking_reason %}
+<div style="margin:12px 0;padding:12px 16px;border-left:4px solid #e8a600;background:#fffaf0;border-radius:4px;">
+    <strong>Action needed:</strong> {{ preview.blocking_reason }}
+</div>
+{% endif %}
+
+<table style="border-collapse:collapse;margin:16px 0;">
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">User</th>
+        <td style="padding:4px 0;">{{ withdrawal.user.username|default:withdrawal.user.email }} &lt;{{ withdrawal.user.email }}&gt;</td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Amount</th>
+        <td style="padding:4px 0;"><strong>&#8358;{{ withdrawal.amount }}</strong></td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Withdrawal status</th>
+        <td style="padding:4px 0;">{{ withdrawal.get_status_display }}</td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Payout status</th>
+        <td style="padding:4px 0;">{{ withdrawal.get_payout_status_display }}</td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Bank name on request</th>
+        <td style="padding:4px 0;">{{ withdrawal.bank_name|default:"-" }}</td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Account name on request</th>
+        <td style="padding:4px 0;">{{ withdrawal.account_name|default:"-" }}</td>
+    </tr>
+    <tr>
+        <th style="text-align:left;padding:4px 16px 4px 0;">Account number</th>
+        <td style="padding:4px 0;"><strong>{{ withdrawal.account_number }}</strong></td>
+    </tr>
+</table>
+
+<h2>Paystack verification</h2>
+
+{% if preview.resolved_account_name %}
+    <table style="border-collapse:collapse;margin:8px 0 16px;">
+        <tr>
+            <th style="text-align:left;padding:4px 16px 4px 0;">Paystack bank</th>
+            <td style="padding:4px 0;">{{ preview.bank.name }} ({{ preview.bank.code }})</td>
+        </tr>
+        <tr>
+            <th style="text-align:left;padding:4px 16px 4px 0;">Name held by the bank</th>
+            <td style="padding:4px 0;"><strong>{{ preview.resolved_account_name }}</strong></td>
+        </tr>
+    </table>
+
+    {% if preview.name_matches %}
+    <div style="margin:12px 0;padding:12px 16px;border-left:4px solid #2e7d32;background:#f1f8f1;border-radius:4px;">
+        The bank confirms this account belongs to <strong>{{ preview.resolved_account_name }}</strong>,
+        which matches the name on the withdrawal request.
+    </div>
+    {% else %}
+    <div style="margin:12px 0;padding:12px 16px;border-left:4px solid #ba2121;background:#fdf3f3;border-radius:4px;">
+        <strong>The names do not match.</strong>
+        The bank says the account belongs to <strong>{{ preview.resolved_account_name }}</strong>,
+        but the withdrawal request says <strong>{{ withdrawal.account_name }}</strong>.
+        Paying this account may send a user's money to somebody else.
+        Only continue if you have independently verified the account number with the user.
+    </div>
+    {% endif %}
+{% else %}
+    <div style="margin:12px 0;padding:12px 16px;border-left:4px solid #0d6efd;background:#f1f7ff;border-radius:4px;">
+        The account name will be verified with Paystack at the moment you send.
+        If it does not match the withdrawal request, nothing is sent and you will be asked again.
+    </div>
+{% endif %}
+
+<form method="post" style="margin-top:24px;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="send_to_bank">
+    <input type="hidden" name="post" value="yes">
+    <input type="hidden" name="pb_confirm" value="yes">
+    <input type="hidden" name="select_across" value="0">
+    {% for obj in queryset %}
+    <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">
+    {% endfor %}
+
+    <p>
+        <label for="id_pb_bank_code"><strong>Paystack bank</strong></label><br>
+        <select name="pb_bank_code" id="id_pb_bank_code" style="min-width:340px;padding:6px;">
+            {% for bank in banks|dictsort:"name" %}
+            <option value="{{ bank.code }}"{% if preview.bank and preview.bank.code == bank.code %} selected{% endif %}>{{ bank.name }} ({{ bank.code }})</option>
+            {% endfor %}
+        </select>
+        {% if preview.bank and preview.bank_confidence < 1 %}
+        <br><span class="help" style="color:#666;">
+            Pre-selected from "{{ withdrawal.bank_name }}" (confidence {{ preview.bank_confidence|floatformat:2 }}).
+            Please confirm this is the right bank.
+        </span>
+        {% endif %}
+    </p>
+
+    <p>
+        <label for="id_pb_ack_name_mismatch">
+            <input type="checkbox" name="pb_ack_name_mismatch" id="id_pb_ack_name_mismatch" value="on">
+            I have checked this account number and account name, and I accept responsibility
+            for paying this account.
+        </label>
+    </p>
+
+    <div style="margin-top:20px;">
+        <input type="submit" value="Send to bank now" class="default"
+               style="padding:8px 16px;background:#ba2121;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+        <a href="{% url opts|admin_urlname:'changelist' %}"
+           style="margin-left:16px;padding:8px 16px;display:inline-block;">Cancel</a>
+    </div>
+</form>
+{% endblock %}

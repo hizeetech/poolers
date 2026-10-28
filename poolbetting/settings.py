@@ -404,6 +404,12 @@ PAYSTACK_PUBLIC_KEY = os.getenv('PAYSTACK_PUBLIC_KEY')
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY')
 PAYSTACK_WEBHOOK_SECRET = os.getenv('PAYSTACK_WEBHOOK_SECRET')
 
+# Paystack PAYOUTS (bank transfers) - separate from collections above.
+# OFF by default: the "Send to bank" admin action refuses to run until this is
+# explicitly switched on. Uses the same PAYSTACK_SECRET_KEY.
+PAYSTACK_PAYOUTS_ENABLED = os.getenv('PAYSTACK_PAYOUTS_ENABLED', 'False').strip().lower() in ('1', 'true', 'yes', 'on')
+PAYSTACK_TIMEOUT_SECONDS = int(os.getenv('PAYSTACK_TIMEOUT_SECONDS', '20') or 20)
+
 PAYSTACK_WEBHOOK_IP_ALLOWLIST = [
     ip.strip()
     for ip in (os.getenv("PAYSTACK_WEBHOOK_IP_ALLOWLIST") or "").split(",")

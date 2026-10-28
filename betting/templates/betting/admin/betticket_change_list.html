@@ -44,9 +44,13 @@ document.addEventListener('DOMContentLoaded', function () {
         body.dataset.liveRefreshState = 'loading';
 
         try {
-            const url = new URL(window.location.href);
-            url.searchParams.set('_live_refresh', String(Date.now()));
-            const response = await fetch(url.toString(), {
+            // Do NOT add a cache-busting query param here. The admin changelist
+            // interprets unknown query params as field lookups, so any extra
+            // param raises IncorrectLookupParameters and the poll gets bounced
+            // through ?e=1 and then to Django's "invalid setup" page -- which
+            // jazzmin then 500s on whenever it is rendered without a request.
+            // cache: 'no-store' below already guarantees a fresh response.
+            const response = await fetch(window.location.href, {
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'text/html'

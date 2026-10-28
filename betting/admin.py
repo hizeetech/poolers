@@ -1206,7 +1206,11 @@ class BetTicketAdmin(admin.ModelAdmin):
         return response
 
     def selection_count(self, obj):
-        return obj.original_selections_count or getattr(obj, 'annotated_selection_count', 0)
+        # original_selections_count is only stored on newer tickets, so fall back
+        # to counting the related Selection rows (same pattern as the ticket
+        # detail payload). changelist_view prefetches "selections__fixture", so
+        # on the list page this reuses that cache instead of one query per row.
+        return obj.original_selections_count or obj.selections.count()
 
     selection_count.short_description = 'No. of Selections'
     selection_count.admin_order_field = 'original_selections_count'
@@ -2519,6 +2523,8 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         'account_number',
         'account_name',
         'status',
+        'payout_status',
+        'paid_at',
         'request_time',
         'email_request_admin_sent_at',
         'email_request_user_sent_at',
@@ -2527,8 +2533,13 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         'email_completed_admin_sent_at',
         'email_completed_user_sent_at',
     )
-    list_editable = ('status',)
-    list_filter = ('status', 'request_time', 'bank_name')
+    # Deliberately NO inline status editing here. A dropdown in the changelist
+    # let anyone move a withdrawal to "approved" or "completed" with no audit
+    # row and no payout, silently bypassing the whole disbursement flow.
+    # Status must now change through the finance dashboard, the withdrawal
+    # action page, or the "Send to bank" action below.
+    list_editable = ()
+    list_filter = ('status', 'payout_status', 'request_time', 'bank_name')
     search_fields = ('user__username', 'user__email', 'account_number', 'account_name')
     readonly_fields = (
         'request_time',
@@ -2544,10 +2555,183 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
         'email_rejected_admin_sent_at',
         'email_rejected_user_sent_at',
         'last_email_error',
+        # Paystack payout state is set only by the payout service. Read-only so
+        # it cannot be hand-edited into a false "success".
+        'payout_status',
+        'payout_reference',
+        'payout_recipient_code',
+        'payout_error',
+        'payout_attempts',
+        'paid_at',
     )
     date_hierarchy = 'request_time'
     list_select_related = ('user',)
-    actions = ['resend_emails_backfill_email_timestamps']
+    actions = [
+        'send_to_bank',
+        'refresh_payout_status',
+        'resend_emails_backfill_email_timestamps',
+    ]
+
+    # ------------------------------------------------------------------
+    # Paystack payouts (bank transfer)
+    # ------------------------------------------------------------------
+
+    @admin.action(description="Send approved withdrawal to bank (Paystack payout)")
+    def send_to_bank(self, request, queryset):
+        """Hand ONE approved withdrawal to Paystack, after a confirmation page.
+
+        Deliberately single-select and human-driven: there is no bulk payout path,
+        so a mis-click can never disburse a batch of real money.
+        """
+        from django.contrib.admin import helpers
+        from django.template.response import TemplateResponse
+        from betting.services import paystack_payout as payout
+
+        if not payout.payouts_enabled():
+            self.message_user(
+                request,
+                "Paystack payouts are switched off. Set PAYSTACK_PAYOUTS_ENABLED=True "
+                "(and restart the service) before sending money to a bank.",
+                level=messages.ERROR,
+            )
+            return None
+
+        selected = list(queryset)
+        if len(selected) != 1:
+            self.message_user(
+                request,
+                "Select exactly ONE withdrawal to send to the bank "
+                "(you selected %d)." % len(selected),
+                level=messages.ERROR,
+            )
+            return None
+
+        withdrawal = selected[0]
+
+        if withdrawal.status != 'approved':
+            self.message_user(
+                request,
+                'Only approved withdrawals can be sent to the bank. Withdrawal %s is "%s".'
+                % (withdrawal.pk, withdrawal.status),
+                level=messages.ERROR,
+            )
+            return None
+
+        if withdrawal.payout_status == 'success':
+            self.message_user(
+                request,
+                'Withdrawal %s has already been paid successfully (reference %s).'
+                % (withdrawal.pk, withdrawal.payout_reference or '-'),
+                level=messages.ERROR,
+            )
+            return None
+
+        confirmed = request.POST.get('pb_confirm') == 'yes'
+        chosen_code = (request.POST.get('pb_bank_code') or '').strip()
+        acknowledge = request.POST.get('pb_ack_name_mismatch') == 'on'
+
+        if confirmed:
+            try:
+                result = payout.send_withdrawal_to_bank(
+                    withdrawal,
+                    actor=request.user,
+                    bank_code=chosen_code or None,
+                    acknowledge_name_mismatch=acknowledge,
+                )
+            except payout.PaystackPayoutError as exc:
+                self.message_user(request, 'Nothing was sent: %s' % exc, level=messages.ERROR)
+                return None
+
+            reference = result.get('reference') or '-'
+            if result.get('ok'):
+                self.message_user(
+                    request,
+                    'Withdrawal %s paid: %s (reference %s)'
+                    % (withdrawal.pk, result.get('message'), reference),
+                    level=messages.SUCCESS,
+                )
+            else:
+                self.message_user(
+                    request,
+                    'Withdrawal %s was NOT paid and is held for review: %s (reference %s)'
+                    % (withdrawal.pk, result.get('message'), reference),
+                    level=messages.ERROR,
+                )
+            return None
+
+        try:
+            banks = payout.fetch_banks()
+        except payout.PaystackPayoutError as exc:
+            self.message_user(
+                request,
+                'Could not load the Paystack bank list: %s' % exc,
+                level=messages.ERROR,
+            )
+            return None
+
+        preview = payout.preview_payout(withdrawal, banks=banks, bank_code=chosen_code or None)
+        if preview['blocking_reason'] and not preview['requires_bank_choice']:
+            self.message_user(request, preview['blocking_reason'], level=messages.ERROR)
+            return None
+
+        request.current_app = self.admin_site.name
+        context = {
+            **self.admin_site.each_context(request),
+            'title': 'Send withdrawal %s to bank' % withdrawal.pk,
+            'withdrawal': withdrawal,
+            'preview': preview,
+            'banks': banks,
+            'opts': self.model._meta,
+            'app_label': self.model._meta.app_label,
+            'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+            'queryset': queryset,
+            'pb_admin_media': self.media,
+        }
+        return TemplateResponse(
+            request,
+            'betting/admin/userwithdrawal_send_to_bank_confirm.html',
+            context,
+        )
+
+    @admin.action(description="Refresh payout status from Paystack")
+    def refresh_payout_status(self, request, queryset):
+        """Re-query Paystack for transfers already linked to these withdrawals.
+
+        Needed because a network timeout does NOT mean a transfer failed. An
+        admin resolves that ambiguity here instead of re-sending the money.
+        """
+        from betting.services import paystack_payout as payout
+
+        sent_ok = failed = processing = no_reference = 0
+
+        for withdrawal in queryset:
+            if not withdrawal.payout_reference:
+                no_reference += 1
+                continue
+            try:
+                result = payout.refresh_payout_status(withdrawal, actor=request.user)
+            except payout.PaystackPayoutError as exc:
+                self.message_user(
+                    request,
+                    'Withdrawal %s: %s' % (withdrawal.pk, exc),
+                    level=messages.ERROR,
+                )
+                continue
+
+            status = result.get('status')
+            if result.get('ok'):
+                sent_ok += 1
+            elif status == 'processing':
+                processing += 1
+            else:
+                failed += 1
+
+        summary = (
+            'Payout refresh: %d paid, %d still processing, %d failed, %d had no '
+            'Paystack transfer.' % (sent_ok, processing, failed, no_reference)
+        )
+        level = messages.SUCCESS if (sent_ok or processing) and not failed else messages.WARNING
+        self.message_user(request, summary, level=level)
 
     def _get_current_betting_period_window(self):
         ref_date = timezone.localdate()
@@ -2754,8 +2938,15 @@ class UserWithdrawalAdmin(admin.ModelAdmin):
             )
             .values('total')[:1]
         )
+        # Pending rows are the approval queue. Approved-but-unpaid rows stay on
+        # this page too, otherwise the "Send approved withdrawal to bank
+        # (Paystack payout)" action has nothing to run on: acting on a pending
+        # row is always refused, and an approved row would already have moved to
+        # the read-only Processed Withdrawals page (which has no actions).
+        # A row drops off once the payout succeeds (status -> "completed") or it
+        # is rejected.
         return (
-            qs.filter(status='pending')
+            qs.filter(status__in=['pending', 'approved'])
             .select_related('user')
             .annotate(
                 previous_won_amount=Case(
